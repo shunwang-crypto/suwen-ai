@@ -14,7 +14,7 @@
 | M1-D3 [LIVE] | 拔主模型 key 走降级链, 日志可见熔断迁移 | 🟡 | 单测已覆盖降级到 stub (`test_live_without_keys_*`); live 档真实熔断演示待录制 | — |
 | M1-D4 [CI] | usage_log 三维归因 (user/feature/model) | ✅ | `make test-integration` | 2026-07-26 |
 | M1-D5 [CI] | 越权测试 (含 RLS 连接池复用路径) + auth 限流用例 | 🟡 | 越权 ✅ (test_tenant_isolation); auth 限流实现完成但缺专项用例 | 2026-07-26 |
-| M2-D1 [LIVE] | 20页 PDF 60秒内 ready(basic) | 🟡 | md 全链路 ✅ (e2e); PDF 解析单测 ✅; 真实 PDF 端到端计时待验 | — |
+| M2-D1 [LIVE] | 20页 PDF 60秒内 ready(basic) | ✅ | 21页 PDF: stub口径 2.54s / live BGE-M3 口径 4.63s (docs/evidence/m2/pdf_ingest_timing.txt) | 2026-07-26 |
 | M2-D2 [LIVE] | 回答带引用定位原文块+公式渲染 | 🟡 | API 层 citation 事件(文档/heading/页码/高亮) ✅ e2e; 前端渲染在 M4 | 2026-07-26 |
 | M2-D3 [LIVE] | 黄金集 recall@5 ≥ 0.8 | ✅ | live 口径 hit_rate@5=1.0 / MRR 0.92 (docs/evidence/m2/retrieval_eval_live_full.md; 小语料近饱和的诚实解读见 ablation_summary.md) | 2026-07-26 |
 | M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
@@ -49,7 +49,7 @@
 | F10 运营面板 | F10-A1..A2 | F10-A1 数据面 ✅ (usage_log 三维); 页面 ⬜ (M4) |
 | KC 体系 | KC-A1..A3 | A1 ✅ (归一化三表述收敛+别名追加); A3 ✅ (DAG 无环+稳定拓扑序, 17 单测); A2 待 live 词表人工抽检 |
 | 数学专项 | M-A1..A2 | ⬜ (M2) |
-| 安全 | S-A1..A3 | ⬜ (M2 上传安全/注入红队) |
+| 安全 | S-A1..A3 | A1 ✅ (5类注入载荷红队集成测试+对照小节零误杀, 13条双语过滤模式39单测); A2 ✅ (伪装/超限/空/非utf8 全拒, test_upload_security_rejections); A3 ⬜ (审核中间件 M4) |
 | 演示工程 | D-A1..A3 | Clock 抽象 ✅ (单测); time-travel API ⬜ (M4) |
 
 ## 基线工程质量 (持续)
