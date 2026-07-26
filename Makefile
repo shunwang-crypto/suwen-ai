@@ -59,3 +59,7 @@ demo-m0:       ## M0 DoD: 从零建库迁移成功
 
 demo-m1:       ## M1 DoD: compose 全绿 + SSE + 降级 + usage + 越权
 	bash scripts/demo_m1.sh
+
+.PHONY: time-travel
+time-travel:   ## make time-travel DAYS=3 (演示: 虚拟时钟前进, §9)
+	$(PY) scripts/time_travel.py $(DAYS)

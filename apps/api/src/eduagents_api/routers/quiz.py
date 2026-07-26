@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import Question, Quiz
@@ -102,4 +103,8 @@ async def submit_attempts(
         quiz = await session.get(Quiz, quiz_id)
         if quiz is None or quiz.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
-    return await record_attempts(ctx, request.app.state.gateway, quiz_id, body.answers)
+    # 业务时间走虚拟时钟 (§9): 错题入本的 FSRS 卡 due 随 time-travel 前进
+    now_dt = await timectl.now(request.app.state.redis)
+    return await record_attempts(
+        ctx, request.app.state.gateway, quiz_id, body.answers, now_dt=now_dt
+    )

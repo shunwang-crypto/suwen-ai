@@ -173,11 +173,20 @@ async def _update_mastery(
 
 
 async def record_attempts(
-    ctx: AuthContext, gateway, quiz_id: uuid.UUID, answers: list[dict]
+    ctx: AuthContext,
+    gateway,
+    quiz_id: uuid.UUID,
+    answers: list[dict],
+    now_dt: datetime | None = None,
 ) -> dict:
-    """作答判分: 客观题本地判 / 简答 LLM 评分附理由; 错题自动入本; BKT 直写 (F5-A3)。"""
-    from eduagents_core.graphs.quiz_graph import grade_objective
+    """作答判分: 客观题本地判 / 简答 LLM 评分附理由; 错题自动入本; BKT 直写 (F5-A3)。
 
+    now_dt: 业务时间 (路由层从 timectl 虚拟时钟取, §9); 缺省回退系统时间保持向后兼容。
+    """
+    from eduagents_core.graphs.quiz_graph import grade_objective
+    from eduagents_core.mastery.scheduler import new_card_json
+
+    business_now = now_dt or datetime.now(UTC)
     results = []
     async with tenant_session(ctx.tenant_id) as session:
         questions = {
@@ -249,12 +258,14 @@ async def record_attempts(
             )
             if not correct:
                 # F6-A1: 错题 100% 自动入本 (错因初值 knowledge_gap, M4 错因分类细化)
+                # F6-A4: 入本即挂 FSRS 卡 (due=业务时间, 当天进复习队列)
                 session.add(
                     ErrorItem(
                         tenant_id=ctx.tenant_id,
                         user_id=ctx.user_id,
                         question_id=q.id,
                         kc_ids=kc_ids,
+                        fsrs_card_json=new_card_json(business_now),
                     )
                 )
             results.append(

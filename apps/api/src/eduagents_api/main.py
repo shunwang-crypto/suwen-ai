@@ -15,7 +15,20 @@ from redis.asyncio import Redis
 from .db import dispose_engine, get_engine
 from .middleware import RequestContextMiddleware, install_error_handlers
 from .ratelimit import RateLimiter
-from .routers import auth, chat, health, kb, plans, quiz, threads
+from .routers import (
+    admin,
+    auth,
+    chat,
+    health,
+    kb,
+    ops,
+    plans,
+    profile,
+    quiz,
+    reports,
+    reviews,
+    threads,
+)
 from .usage import persist_usage
 
 log = get_logger("app")
@@ -106,6 +119,11 @@ def create_app() -> FastAPI:
     app.include_router(quiz.router)
     app.include_router(plans.router)
     app.include_router(plans.tutor_router)
+    app.include_router(profile.router)
+    app.include_router(reports.router)
+    app.include_router(ops.router)
+    app.include_router(reviews.router)
+    app.include_router(admin.router)
     return app
 
 
