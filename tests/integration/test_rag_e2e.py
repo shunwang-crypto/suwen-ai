@@ -146,7 +146,8 @@ async def test_rag_pipeline_end_to_end(client):
         features = set(
             (await session.scalars(select(UsageLog.feature))).all()
         )
-    assert "qa" in features
+    # qa 图按节点细分归因 (qa_generate/qa_grade/...), 成本可下钻到自省环每一步
+    assert any(f.startswith("qa_") for f in features), features
 
 
 async def test_upload_security_rejections(client):
