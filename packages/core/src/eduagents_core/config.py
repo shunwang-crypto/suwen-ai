@@ -47,6 +47,9 @@ class Settings(BaseSettings):
 
     # --- rate limits (token bucket, per minute capacity) ---
     auth_rate_limit_per_minute: int = 5
+    # refresh 单独更宽的桶: 每次整页刷新都会静默续期, 5/min 会把正常刷新用户
+    # 锁出登录态 (UI 巡检实测发现); 撞库风险在 login/register, refresh 仅凭有效 cookie
+    auth_refresh_rate_limit_per_minute: int = 60
     api_rate_limit_per_minute: int = 120
 
     # --- budget ---

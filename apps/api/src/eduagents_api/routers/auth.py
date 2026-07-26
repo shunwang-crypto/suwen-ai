@@ -25,10 +25,13 @@ log = get_logger("auth")
 _REFRESH_COOKIE = "edu_refresh"
 
 
-async def _auth_rate_limit(request: Request, settings: Settings) -> None:
+async def _auth_rate_limit(
+    request: Request, settings: Settings, *, bucket: str = "auth", per_minute: int | None = None
+) -> None:
     limiter = request.app.state.rate_limiter
     ip = request.client.host if request.client else "unknown"
-    if not await limiter.allow(f"ip:{ip}:auth", settings.auth_rate_limit_per_minute):
+    limit = per_minute if per_minute is not None else settings.auth_rate_limit_per_minute
+    if not await limiter.allow(f"ip:{ip}:{bucket}", limit):
         raise HTTPException(
             status_code=429, detail="RATE_LIMITED", headers={"Retry-After": "30"}
         )
@@ -117,7 +120,12 @@ async def refresh(
     response: Response,
     settings: Settings = Depends(get_app_settings),
 ):
-    await _auth_rate_limit(request, settings)
+    # refresh 走独立宽桶: 整页刷新即触发静默续期, 与撞库面 (login/register) 风险不同
+    await _auth_rate_limit(
+        request, settings,
+        bucket="auth_refresh",
+        per_minute=settings.auth_refresh_rate_limit_per_minute,
+    )
     raw = request.cookies.get(_REFRESH_COOKIE)
     if not raw:
         raise HTTPException(status_code=401, detail="REFRESH_INVALID")
