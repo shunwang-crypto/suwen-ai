@@ -15,6 +15,7 @@ from eduagents_core.gateway import (
     Tier,
 )
 from eduagents_core.logging import get_logger
+from eduagents_core.retrieval.sanitize import sanitize_retrieved_text
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, select
 from sse_starlette.sse import EventSourceResponse
@@ -174,6 +175,15 @@ async def chat(
                 source_parts = []
                 for i, c in enumerate(chunks, 1):
                     doc_name = doc_names.get(c.doc_id, "未知文档")
+                    # 防注入第二层 (§8): 资料文本先过指令性内容过滤,
+                    # 再进 <source> 包裹 (第一层) 与引用高亮 (第三层用户可见)
+                    clean_text, injection_hits = sanitize_retrieved_text(c.text)
+                    if injection_hits:
+                        log.warning(
+                            "retrieved_text_sanitized",
+                            chunk_id=c.chunk_id,
+                            patterns=injection_hits,
+                        )
                     citation = {
                         "idx": i,
                         "chunk_id": c.chunk_id,
@@ -181,13 +191,14 @@ async def chat(
                         "doc_name": doc_name,
                         "heading_path": c.heading_path,
                         "page": c.page_start,
-                        "highlight": c.text[:160],
+                        "highlight": clean_text[:160],
+                        "sanitized": bool(injection_hits),
                     }
                     citations.append(citation)
                     yield {"event": "citation", "data": _sse(citation)}
                     source_parts.append(
                         f'<source idx="{i}" doc="{doc_name}" loc="{c.heading_path}" '
-                        f'page="{c.page_start or ""}">\n{c.text}\n</source>'
+                        f'page="{c.page_start or ""}">\n{clean_text}\n</source>'
                     )
                 sources_block = "\n\n".join(source_parts)
             else:

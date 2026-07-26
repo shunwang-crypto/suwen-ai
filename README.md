@@ -30,8 +30,11 @@ make migrate
 # 4) 起 API
 make api          # http://127.0.0.1:8000/api/docs
 # 5) 测试
-make test-unit          # 22 个, 无外部依赖
-make test-integration   # 3 个, 需要 dev-infra
+make test-unit          # 69 个, 无外部依赖
+make test-integration   # 5 个, 需要 dev-infra (含 RAG e2e/越权/认证全链路)
+# 6) 演示数据 + 检索评估
+make seed               # demo 账号 + 高数知识库 + 摄取语料 (输出 tenant/kb id)
+make eval-retrieval TENANT=<tenant_id> KB=<kb_id>   # 黄金集评估 -> docs/evidence/m2/
 ```
 
 ## 模型网关模式（.env `GATEWAY_MODE`）

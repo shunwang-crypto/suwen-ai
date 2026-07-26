@@ -164,17 +164,20 @@ async def run_eval(args: argparse.Namespace) -> str:
 
     items = load_golden(Path(args.golden))
     outcomes: list[QuestionOutcome] = []
-    for item in items:
-        result = await service.retrieve(args.tenant_id, args.kb_id, item.question)
-        flags = [is_relevant(chunk, item) for chunk in result.chunks]
-        top1 = result.chunks[0].heading_path if result.chunks else ""
-        outcomes.append(
-            QuestionOutcome(
-                item=item, flags=flags, top1_heading=top1, confident=result.confident
+    try:
+        for item in items:
+            result = await service.retrieve(args.tenant_id, args.kb_id, item.question)
+            flags = [is_relevant(chunk, item) for chunk in result.chunks]
+            top1 = result.chunks[0].heading_path if result.chunks else ""
+            outcomes.append(
+                QuestionOutcome(
+                    item=item, flags=flags, top1_heading=top1, confident=result.confident
+                )
             )
-        )
-        mark = "✓" if any(flags) else "✗"
-        print(f"[{mark}] {item.qid} {item.question}")
+            mark = "✓" if any(flags) else "✗"
+            print(f"[{mark}] {item.qid} {item.question}")
+    finally:
+        store.close()  # 显式关闭, 避免解释器退出期 qdrant 本地模式 __del__ 噪音
 
     golden_version = items[0].version if items else ""
     return build_report(settings, args, outcomes, golden_version)

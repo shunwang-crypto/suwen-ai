@@ -19,7 +19,7 @@
 | M2-D3 [LIVE] | 黄金集 recall@5 ≥ 0.8 | ✅ | live 口径 hit_rate@5=1.0 / MRR 0.92 (docs/evidence/m2/retrieval_eval_live_full.md; 小语料近饱和的诚实解读见 ablation_summary.md) | 2026-07-26 |
 | M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
 | M2-D5 [LIVE] | 消融开关生效+真实差异报告 | ✅ | 三配置 live 对比 + 如实解读 (rerank 在饱和小集上反降 MRR, 已解释并保留开关): docs/evidence/m2/ablation_summary.md | 2026-07-26 |
-| M2-D6 [CI] | KC-A1 归一化测试通过 | ⬜ | KC 体系 (词表构建/别名归并/先修DAG) 未实现 | — |
+| M2-D6 [CI] | KC-A1 归一化测试通过 | ✅ | 单测: 泰勒公式/Taylor公式/泰勒展开 收敛同一 kc_id (test_kc.py); 集成: enrich 后 chunk.kc_ids 100% 外键有效、成环边被拒 (test_enrichment.py) | 2026-07-26 |
 | M3-D1..D6 | Agent 编排/Langfuse/interrupt/延迟口径 | ⬜ | — | — |
 | M4-D1..D4 | 闭环+前端/黄金路径/重启持久化 | ⬜ | — | — |
 | M5-D1..D5 | 压测/故障注入/闭环实验/15分钟复现 | ⬜ | — | — |
@@ -38,7 +38,7 @@
 | 模块 | 条款 | 状态 |
 |---|---|---|
 | F1 知识问答 | F1-A1..A6 | F1-A6 ✅; F1-A2 拒答路径 ✅ (e2e, 无依据不调模型); 引用链路 API 层 ✅; A1/A3/A5 待 live+前端 |
-| F2 知识库 | F2-A1..A6 | A2 ✅ A3 ✅ A6(公式保留) ✅; A1 Stage1 ✅ / Stage2(enrich) ⬜; A4 双租户隔离 ✅ (≥3库用例待补); A5 待人工抽检 |
+| F2 知识库 | F2-A1..A6 | A2 ✅ A3 ✅ A6 ✅; A1 两阶段状态机全通 ✅ (Stage2 enrich: 词表→KC挂载→前缀→重嵌入, FakeGateway 集成测试; live 运行待录制阶段); A4 双租户隔离 ✅ (≥3库用例待补); A5 待人工抽检 |
 | F3 规划 | F3-A1..A4 | ⬜ (M3) |
 | F4 苏格拉底辅导 | F4-A1..A3 | ⬜ (M3) |
 | F5 出题测评 | F5-A1..A3 | ⬜ (M3) |
@@ -47,7 +47,7 @@
 | F8 画像 | F8-A1..A3 | ⬜ (M4) |
 | F9 评估看板 | F9-A1..A2 | ⬜ (M2 CLI → M3 页面) |
 | F10 运营面板 | F10-A1..A2 | F10-A1 数据面 ✅ (usage_log 三维); 页面 ⬜ (M4) |
-| KC 体系 | KC-A1..A3 | ⬜ (M2) |
+| KC 体系 | KC-A1..A3 | A1 ✅ (归一化三表述收敛+别名追加); A3 ✅ (DAG 无环+稳定拓扑序, 17 单测); A2 待 live 词表人工抽检 |
 | 数学专项 | M-A1..A2 | ⬜ (M2) |
 | 安全 | S-A1..A3 | ⬜ (M2 上传安全/注入红队) |
 | 演示工程 | D-A1..A3 | Clock 抽象 ✅ (单测); time-travel API ⬜ (M4) |

@@ -167,6 +167,10 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
         log.info(
             "ingest_done", doc_id=doc_id, parents=len(parents), children=len(child_rows)
         )
+        # Stage 2 自动串联 (stub 网关下 enrich 无意义, 跳过; 见 enrichment.py)
+        redis = ctx.get("redis")
+        if redis is not None and settings.gateway_mode != "stub":
+            await redis.enqueue_job("enrich_document", tenant_id, doc_id)
         return "ready"
     except ParseError as exc:
         await _set_status(doc_id, tenant_id, "failed", exc.message)

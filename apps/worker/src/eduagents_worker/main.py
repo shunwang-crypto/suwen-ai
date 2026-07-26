@@ -4,6 +4,7 @@ from arq.connections import RedisSettings
 from eduagents_core.config import get_settings
 from eduagents_core.logging import configure_logging, get_logger
 
+from .enrichment import enrich_document
 from .ingestion import cleanup_document, cleanup_kb, ingest_document
 
 log = get_logger("worker")
@@ -30,7 +31,7 @@ def _redis_settings() -> RedisSettings:
 
 
 class WorkerSettings:
-    functions = [ping, ingest_document, cleanup_document, cleanup_kb]
+    functions = [ping, ingest_document, enrich_document, cleanup_document, cleanup_kb]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()
