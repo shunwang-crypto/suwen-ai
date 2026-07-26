@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ErrorBanner, LoadingState, Spinner, fmtDateTime } from "@/components/common";
+import { ErrorBanner, SkeletonList, Spinner, fmtDateTime } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import type { StudyGuide, StudyGuideOut } from "@/lib/types";
 
@@ -123,7 +123,7 @@ export function StudyGuidePanel({
     }
   };
 
-  if (loading) return <LoadingState text="学习指南加载中…" />;
+  if (loading) return <SkeletonList rows={3} />;
 
   return (
     <div className="space-y-4">
@@ -164,7 +164,7 @@ export function StudyGuidePanel({
                 return (
                   <li
                     key={`${item.title}-${idx}`}
-                    className="overflow-hidden rounded-xl border border-slate-200"
+                    className="overflow-hidden rounded-xl border border-slate-200 shadow-[0_2px_10px_-4px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
                   >
                     <button
                       type="button"
@@ -207,15 +207,18 @@ export function StudyGuidePanel({
             </ul>
           </section>
 
-          {/* 术语表 */}
+          {/* 术语表（两栏卡片化） */}
           {guide.glossary.length > 0 && (
             <section>
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                 术语表
               </h3>
-              <dl className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+              <dl className="grid gap-2 sm:grid-cols-2">
                 {guide.glossary.map((g) => (
-                  <div key={g.term} className="px-3 py-2">
+                  <div
+                    key={g.term}
+                    className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-white hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.16)] motion-reduce:hover:translate-y-0"
+                  >
                     <dt className="text-sm font-medium text-slate-800">{g.term}</dt>
                     <dd className="mt-0.5 text-xs leading-relaxed text-slate-500">
                       {g.definition}

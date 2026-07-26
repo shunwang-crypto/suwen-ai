@@ -15,7 +15,8 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
+  PageHeader,
+  SkeletonList,
   Spinner,
 } from "@/components/common";
 import { ChunksDrawer } from "@/components/kb/chunks-drawer";
@@ -269,7 +270,12 @@ export default function KbPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:flex-row lg:items-start">
+    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <PageHeader
+        title="知识库管理"
+        subtitle="上传讲义/教材或导入网页，自动进入 解析 → 切块 → 向量化 → 知识增强 流水线"
+      />
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       {/* 左：库列表 */}
       <aside className="w-full shrink-0 lg:w-64">
         <Card
@@ -318,7 +324,7 @@ export default function KbPage() {
           )}
 
           {kbs === null ? (
-            <LoadingState text="库列表加载中…" />
+            <SkeletonList rows={3} />
           ) : kbs.length === 0 ? (
             <p className="py-4 text-center text-xs text-slate-400">
               还没有知识库，点击「新建」开始
@@ -339,10 +345,10 @@ export default function KbPage() {
                           <button
                             type="button"
                             onClick={() => setSelectedId(kb.id)}
-                            className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                            className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-all duration-200 ${
                               kb.id === selectedId
                                 ? "bg-indigo-50 font-medium text-indigo-700"
-                                : "text-slate-600 hover:bg-slate-100"
+                                : "text-slate-600 hover:-translate-y-0.5 hover:bg-slate-100 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
                             }`}
                           >
                             <span className="flex items-center gap-1.5">
@@ -401,6 +407,7 @@ export default function KbPage() {
           <EmptyState
             title="选择或新建一个知识库"
             description="上传讲义/教材后，对话与出题即可引用溯源"
+            illustration="docs"
           />
         ) : (
           <>
@@ -435,7 +442,7 @@ export default function KbPage() {
                   />
                 )}
                 {docs === null || docsKbId !== selected.id ? (
-                  <LoadingState text="文档列表加载中…" />
+                  <SkeletonList rows={3} />
                 ) : docs.length === 0 ? (
                   <p className="py-2 text-center text-xs text-slate-400">
                     {selected.writable
@@ -496,6 +503,7 @@ export default function KbPage() {
           onClose={() => setPreviewDoc(null)}
         />
       )}
+      </div>
     </div>
   );
 }

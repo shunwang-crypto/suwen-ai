@@ -10,6 +10,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
 } from "react";
 
@@ -436,6 +437,11 @@ function ChatView() {
     [citedKbId],
   );
 
+  // 库徽章配色区分个人/机构（纯展示映射，供引用卡片着色）
+  const kbOwnerTypes = Object.fromEntries(
+    kbs.map((k) => [k.id, k.owner_type]),
+  );
+
   const citationsPanel = (
     <CitationsPanel
       citations={panelCitations}
@@ -444,6 +450,7 @@ function ChatView() {
         setActiveCitation((prev) => (prev === idx ? null : idx))
       }
       onOpenContext={openContext}
+      kbOwnerTypes={kbOwnerTypes}
     />
   );
 
@@ -646,7 +653,7 @@ function ChatView() {
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center gap-4 py-16 text-center">
+              <div className="fx-fade-up flex flex-col items-center gap-4 py-16 text-center">
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500">
                   <svg
                     viewBox="0 0 24 24"
@@ -670,12 +677,13 @@ function ChatView() {
                   </p>
                 </div>
                 <div className="flex flex-wrap justify-center gap-2">
-                  {SAMPLE_QUESTIONS.map((q) => (
+                  {SAMPLE_QUESTIONS.map((q, i) => (
                     <button
                       key={q}
                       type="button"
                       onClick={() => void send(q)}
-                      className="rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-700"
+                      style={{ "--fx-delay": `${120 + i * 90}ms` } as CSSProperties}
+                      className="fx-chip-in rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-700"
                     >
                       {q}
                     </button>
@@ -685,15 +693,15 @@ function ChatView() {
             ) : (
               messages.map((m) =>
                 m.role === "user" ? (
-                  <div key={m.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white">
+                  <div key={m.id} className="fx-msg-in flex justify-end">
+                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm shadow-indigo-600/20">
                       <span className="whitespace-pre-wrap break-words">
                         {m.content}
                       </span>
                     </div>
                   </div>
                 ) : (
-                  <div key={m.id} className="flex justify-start">
+                  <div key={m.id} className="fx-msg-in flex justify-start">
                     <div className="w-full max-w-[95%]">
                       <ProcessTimeline
                         items={m.timeline}
@@ -701,20 +709,45 @@ function ChatView() {
                       />
 
                       {m.done?.refused && (
-                        <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+                        <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50/60 px-3 py-2 text-xs text-amber-700">
+                          {/* 温和插画感小图标：放大镜找不到内容的守护小盾 */}
                           <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className="h-3.5 w-3.5 shrink-0"
+                            viewBox="0 0 40 40"
+                            className="h-8 w-8 shrink-0"
                             aria-hidden
                           >
-                            <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+                            <circle cx="17" cy="16" r="10" fill="#fef3c7" />
+                            <circle
+                              cx="17"
+                              cy="16"
+                              r="10"
+                              fill="none"
+                              stroke="#d97706"
+                              strokeWidth="2"
+                            />
+                            <path
+                              d="M13 16h8"
+                              stroke="#d97706"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                            />
+                            <path
+                              d="m24.5 23.5 7 7"
+                              stroke="#d97706"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                            />
+                            <path
+                              d="M31 9c1.5 1 3 1.2 4.5 1v4.2c0 3-1.8 4.6-4.5 5.8-2.7-1.2-4.5-2.8-4.5-5.8V10c1.5.2 3 0 4.5-1Z"
+                              fill="#fde68a"
+                              stroke="#d97706"
+                              strokeWidth="1.6"
+                              strokeLinejoin="round"
+                            />
                           </svg>
-                          已拒答：知识库中未检索到足够依据，为避免幻觉未调用模型作答。
+                          <span>
+                            已拒答：知识库中未检索到足够依据，为避免幻觉未调用模型作答。
+                          </span>
                         </div>
                       )}
 
@@ -727,19 +760,30 @@ function ChatView() {
                           }`}
                         >
                           {m.content ? (
-                            <MathText
-                              text={m.content}
-                              streaming={Boolean(m.streaming)}
-                              onCitationClick={(idx) =>
-                                handleCitationClick(m.id, idx)
-                              }
-                              activeCitation={
-                                citedMsg?.id === m.id ? activeCitation : null
-                              }
-                            />
+                            <>
+                              <MathText
+                                text={m.content}
+                                streaming={Boolean(m.streaming)}
+                                onCitationClick={(idx) =>
+                                  handleCitationClick(m.id, idx)
+                                }
+                                activeCitation={
+                                  citedMsg?.id === m.id ? activeCitation : null
+                                }
+                              />
+                              {/* token 流式光标：闪烁 + 流光尾迹（纯视觉） */}
+                              {m.streaming && (
+                                <span className="fx-caret" aria-hidden />
+                              )}
+                            </>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5 text-slate-400">
-                              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+                            <span className="inline-flex items-center gap-2 text-slate-400">
+                              {/* 首 token 前的「正在思考」三点跳动指示器 */}
+                              <span className="fx-typing" aria-hidden>
+                                <span />
+                                <span />
+                                <span />
+                              </span>
                               正在思考…
                             </span>
                           )}
@@ -788,13 +832,18 @@ function ChatView() {
                         !m.errorText &&
                         ((m.followups?.length ?? 0) > 0 || m.kbId) && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {(m.followups ?? []).map((q) => (
+                            {(m.followups ?? []).map((q, qi) => (
                               <button
                                 key={q}
                                 type="button"
                                 disabled={streaming}
                                 onClick={() => void send(q)}
-                                className="rounded-full border border-indigo-200 bg-indigo-50/60 px-3 py-1.5 text-xs text-indigo-700 transition-colors hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                style={
+                                  {
+                                    "--fx-delay": `${qi * 80}ms`,
+                                  } as CSSProperties
+                                }
+                                className="fx-chip-in rounded-full border border-indigo-200 bg-indigo-50/60 px-3 py-1.5 text-xs text-indigo-700 transition-colors hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {q}
                               </button>
@@ -807,7 +856,12 @@ function ChatView() {
                                     `/quiz?topic=${encodeURIComponent(m.kbName ?? "")}&kb=${encodeURIComponent(m.kbId ?? "")}`,
                                   )
                                 }
-                                className="flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                                style={
+                                  {
+                                    "--fx-delay": `${(m.followups?.length ?? 0) * 80}ms`,
+                                  } as CSSProperties
+                                }
+                                className="fx-chip-in flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
                               >
                                 <svg
                                   viewBox="0 0 24 24"

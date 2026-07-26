@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { AuthHero, BrandMark } from "@/components/ui/brand";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -38,81 +39,90 @@ export default function LoginPage() {
     }
   };
 
+  const inputCls =
+    "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-slate-50 px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-8 flex flex-col items-center gap-2">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-xl font-bold text-white">
-            E
-          </span>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-            登录 EduAgents
-          </h1>
-          <p className="text-sm text-slate-500">多智能体驱动的个性化学习平台</p>
-        </div>
+    <div className="grid min-h-dvh lg:grid-cols-2">
+      {/* 左侧品牌 hero 区（lg 以上显示） */}
+      <AuthHero />
 
-        <form
-          onSubmit={handleSubmit}
-          className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
-          noValidate
-        >
-          {error && (
-            <div
-              role="alert"
-              className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+      {/* 右侧表单区：浅色 aurora 光晕底 */}
+      <div className="flex items-center justify-center bg-aurora px-4 py-10">
+        <div className="w-full max-w-md animate-fade-up">
+          <div className="mb-8 flex flex-col items-center gap-2">
+            <BrandMark size={48} />
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              登录 EduAgents
+            </h1>
+            <p className="text-sm text-slate-500">
+              多智能体驱动的个性化学习平台
+            </p>
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-slate-900/5"
+            noValidate
+          >
+            {error && (
+              <div
+                role="alert"
+                className="mb-4 animate-pop rounded-control border border-danger-500/25 bg-danger-50 px-3 py-2 text-sm text-danger-700"
+              >
+                {error}
+              </div>
+            )}
+
+            <label className="mb-4 block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                邮箱
+              </span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={inputCls}
+                required
+              />
+            </label>
+
+            <label className="mb-6 block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                密码
+              </span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="至少 8 位"
+                className={inputCls}
+                required
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn-brand w-full rounded-control py-2.5 text-sm font-semibold text-white shadow-card hover:shadow-floating disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {error}
-            </div>
-          )}
+              {submitting ? "登录中…" : "登录"}
+            </button>
+          </form>
 
-          <label className="mb-4 block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">
-              邮箱
-            </span>
-            <input
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-              required
-            />
-          </label>
-
-          <label className="mb-6 block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">
-              密码
-            </span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="至少 8 位"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-              required
-            />
-          </label>
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? "登录中…" : "登录"}
-          </button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-slate-500">
-          还没有账号？
-          <Link
-            href="/register"
-            className="ml-1 font-medium text-indigo-600 hover:text-indigo-700"
-          >
-            立即注册
-          </Link>
-        </p>
+          <p className="mt-6 text-center text-sm text-slate-500">
+            还没有账号？
+            <Link
+              href="/register"
+              className="ml-1 font-medium text-brand-600 transition-colors hover:text-brand-700"
+            >
+              立即注册
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

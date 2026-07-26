@@ -9,9 +9,12 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
+  PageHeader,
+  Skeleton,
+  SkeletonList,
   Spinner,
   fmtDateTime,
+  fmtRelative,
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
@@ -31,6 +34,40 @@ const CAUSE_LABELS: Record<string, string> = {
   knowledge_gap: "知识缺口",
 };
 const CAUSE_ORDER = Object.keys(CAUSE_LABELS);
+
+/** 错因五色语义化（徽章底色 + 分布条颜色，与复习页同一套色）。 */
+const CAUSE_COLORS: Record<string, { badge: string; bar: string; active: string }> = {
+  concept_confusion: {
+    badge: "bg-violet-50 text-violet-700 ring-violet-200/70",
+    bar: "bg-violet-400",
+    active: "bg-violet-600",
+  },
+  formula_error: {
+    badge: "bg-sky-50 text-sky-700 ring-sky-200/70",
+    bar: "bg-sky-400",
+    active: "bg-sky-600",
+  },
+  calc_slip: {
+    badge: "bg-amber-50 text-amber-700 ring-amber-200/70",
+    bar: "bg-amber-400",
+    active: "bg-amber-600",
+  },
+  misread: {
+    badge: "bg-orange-50 text-orange-700 ring-orange-200/70",
+    bar: "bg-orange-400",
+    active: "bg-orange-600",
+  },
+  knowledge_gap: {
+    badge: "bg-rose-50 text-rose-700 ring-rose-200/70",
+    bar: "bg-rose-400",
+    active: "bg-rose-600",
+  },
+};
+const CAUSE_COLOR_FALLBACK = {
+  badge: "bg-slate-100 text-slate-600 ring-slate-200/70",
+  bar: "bg-indigo-400",
+  active: "bg-indigo-600",
+};
 
 const STATE_LABELS: Record<string, { label: string; className: string }> = {
   new: { label: "新错题", className: "bg-red-50 text-red-600" },
@@ -203,21 +240,19 @@ export default function ErrorsPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">错题本</h2>
-          <p className="text-xs text-slate-400">
-            测评与复习中的错题自动归集；错因五分类可随时修正，攻克后自动退出复习队列
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reload}
-          className="rounded-xl border border-slate-300 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
-        >
-          刷新
-        </button>
-      </div>
+      <PageHeader
+        title="错题本"
+        subtitle="测评与复习中的错题自动归集；错因五分类可随时修正，攻克后自动退出复习队列"
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          >
+            刷新
+          </button>
+        }
+      />
 
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
       {error && <ErrorBanner message={error} onRetry={reload} />}
@@ -244,7 +279,7 @@ export default function ErrorsPage() {
               key={card.key}
               type="button"
               onClick={() => pickState(card.state)}
-              className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
+              className={`rounded-2xl border px-4 py-3 text-left shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_26px_-6px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0 ${
                 active
                   ? "border-indigo-300 bg-indigo-50"
                   : "border-slate-200 bg-white hover:border-indigo-200"
@@ -284,12 +319,13 @@ export default function ErrorsPage() {
             <ul className="space-y-2">
               {causeEntries.map((entry) => {
                 const active = causeFilter === entry.key;
+                const color = CAUSE_COLORS[entry.key] ?? CAUSE_COLOR_FALLBACK;
                 return (
                   <li key={entry.key}>
                     <button
                       type="button"
                       onClick={() => pickCause(entry.key)}
-                      className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-xs hover:bg-slate-50"
+                      className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-xs transition-colors hover:bg-slate-50"
                     >
                       <span
                         className={`w-16 shrink-0 truncate text-left ${
@@ -300,8 +336,8 @@ export default function ErrorsPage() {
                       </span>
                       <span className="h-3.5 min-w-0 flex-1 rounded-full bg-slate-100">
                         <span
-                          className={`block h-full rounded-full ${
-                            active ? "bg-indigo-600" : "bg-indigo-400"
+                          className={`block h-full rounded-full transition-[width] duration-300 ${
+                            active ? color.active : color.bar
                           }`}
                           style={{
                             width: `${Math.max((entry.count / causeMax) * 100, 4)}%`,
@@ -373,7 +409,23 @@ export default function ErrorsPage() {
       )}
 
       {loading ? (
-        <LoadingState text="错题加载中…" />
+        <div className="space-y-4">
+          {[0, 1].map((i) => (
+            <div
+              key={i}
+              className="rounded-2xl border border-slate-200 bg-white p-4"
+            >
+              <div className="mb-3 flex gap-2">
+                <Skeleton className="h-5 w-14 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="mb-3 h-4 w-3/4" />
+              <SkeletonList rows={2} />
+            </div>
+          ))}
+          <span className="sr-only">错题加载中…</span>
+        </div>
       ) : !list || list.items.length === 0 ? (
         <EmptyState
           title={filtered ? "没有符合筛选条件的错题" : "错题本还是空的"}
@@ -382,6 +434,7 @@ export default function ErrorsPage() {
               ? "换个状态或错因看看，或清除筛选查看全部"
               : "做一次练习吧——答错的题会 100% 自动收进这里，并按遗忘曲线安排复习"
           }
+          illustration="notebook"
         />
       ) : (
         <>
@@ -390,16 +443,20 @@ export default function ErrorsPage() {
               const busy = busyId === item.id;
               return (
                 <li key={item.id}>
-                  <Card>
+                  <Card className="transition-all duration-200 hover:-translate-y-0.5 motion-reduce:hover:translate-y-0">
                     <div className="mb-2 flex flex-wrap items-center gap-1.5">
                       <StateBadge state={item.state} />
-                      <label className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                      <label
+                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ring-inset ${
+                          (CAUSE_COLORS[item.cause] ?? CAUSE_COLOR_FALLBACK).badge
+                        }`}
+                      >
                         <span>错因</span>
                         <select
                           value={item.cause}
                           onChange={(e) => void changeCause(item, e.target.value)}
                           aria-label="修改错因"
-                          className="bg-transparent text-xs font-medium text-slate-700 outline-none"
+                          className="bg-transparent text-xs font-medium text-current outline-none"
                         >
                           {CAUSE_ORDER.map((c) => (
                             <option key={c} value={c}>
@@ -422,9 +479,12 @@ export default function ErrorsPage() {
                         </span>
                       )}
                       <span className="flex-1" />
-                      <span className="text-xs text-slate-400">
+                      <span
+                        className="text-xs text-slate-400"
+                        title={item.next_due ? fmtDateTime(item.next_due) : undefined}
+                      >
                         错 {item.error_count} 次
-                        {item.next_due && ` · 下次复习 ${fmtDateTime(item.next_due)}`}
+                        {item.next_due && ` · 下次复习 ${fmtRelative(item.next_due)}`}
                       </span>
                     </div>
 

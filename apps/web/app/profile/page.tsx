@@ -10,12 +10,14 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
+  PageHeader,
+  SkeletonPage,
   Spinner,
   fmtDateTime,
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
+import { ProgressRing } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
 
@@ -61,7 +63,10 @@ function CountBars({
   return (
     <ul className="space-y-2">
       {entries.map(([key, n]) => (
-        <li key={key} className="flex items-center gap-2 text-xs">
+        <li
+          key={key}
+          className="flex items-center gap-2 rounded-lg px-1 py-0.5 text-xs transition-colors hover:bg-slate-50"
+        >
           <span className="w-16 shrink-0 truncate text-slate-500" title={key}>
             {labels[key] ?? key}
           </span>
@@ -136,7 +141,7 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <div className="mx-auto w-full max-w-5xl p-4">
-        <LoadingState text="正在加载 AI 眼中的你…" />
+        <SkeletonPage />
       </div>
     );
   }
@@ -153,12 +158,27 @@ export default function ProfilePage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4 p-4">
+      <PageHeader
+        title="AI 眼中的我"
+        subtitle="掌握度画像由每次练习、复习与辅导的真实证据持续更新"
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          >
+            刷新画像
+          </button>
+        }
+      />
+
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
       {mastery.length === 0 && recent_changes.length === 0 ? (
         <EmptyState
           title="AI 还不认识你"
           description="完成一次练习或复习后，这里会生成你的掌握度画像"
+          illustration="chart"
         />
       ) : (
         <>
@@ -180,36 +200,28 @@ export default function ProfilePage() {
                   暂无掌握度记录
                 </p>
               ) : (
-                <ul className="max-h-96 space-y-2.5 overflow-y-auto pr-1">
+                <ul className="max-h-96 space-y-1 overflow-y-auto pr-1">
                   {mastery.map((m) => (
-                    <li key={m.kc_id} className="flex items-center gap-3">
+                    <li
+                      key={m.kc_id}
+                      className="flex items-center gap-3 rounded-xl px-1.5 py-1.5 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-50/50 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
+                    >
+                      <ProgressRing
+                        value={m.p_mastery}
+                        size={44}
+                        strokeWidth={4.5}
+                        title={`${m.name}：掌握度 ${fmtPct(m.p_mastery)}`}
+                      />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span
-                            className="truncate text-sm font-medium text-slate-700"
-                            title={m.name}
-                          >
-                            {m.name}
-                          </span>
-                          <span className="shrink-0 font-mono text-xs text-slate-500">
-                            {fmtPct(m.p_mastery)}
-                            <span className="ml-1.5 text-slate-400">
-                              置信 {fmtPct(m.confidence)}
-                            </span>
-                          </span>
-                        </div>
-                        <div className="mt-1 h-2 rounded-full bg-slate-100">
-                          <div
-                            className={`h-full rounded-full ${
-                              m.p_mastery >= 0.7
-                                ? "bg-emerald-500"
-                                : m.p_mastery >= 0.4
-                                  ? "bg-indigo-500"
-                                  : "bg-amber-500"
-                            }`}
-                            style={{ width: `${Math.max(m.p_mastery * 100, 2)}%` }}
-                          />
-                        </div>
+                        <span
+                          className="block truncate text-sm font-medium text-slate-700"
+                          title={m.name}
+                        >
+                          {m.name}
+                        </span>
+                        <span className="block text-xs text-slate-400">
+                          置信 {fmtPct(m.confidence)}
+                        </span>
                       </div>
                       {m.p_mastery < WEAK_THRESHOLD && (
                         <Link
@@ -250,38 +262,56 @@ export default function ProfilePage() {
             {recent_changes.length === 0 ? (
               <p className="py-3 text-center text-xs text-slate-400">暂无变化记录</p>
             ) : (
-              <ul className="divide-y divide-slate-100">
+              <ol className="ml-1.5 space-y-3 border-l-2 border-slate-100 pl-4">
                 {recent_changes.map((c) => {
                   const up = c.new_p >= c.old_p;
                   return (
-                    <li
-                      key={c.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm"
-                    >
-                      <span className="w-32 shrink-0 text-xs text-slate-400">
-                        {fmtDateTime(c.at)}
-                      </span>
+                    <li key={c.id} className="relative text-sm">
+                      {/* 时间线节点：升绿降橙 */}
                       <span
-                        className="min-w-0 flex-1 truncate font-medium text-slate-700"
-                        title={c.kc_name || c.kc_id}
-                      >
-                        {c.kc_name || `KC ${c.kc_id.slice(0, 8)}`}
-                      </span>
-                      <span
-                        className={`font-mono text-xs ${
-                          up ? "text-emerald-600" : "text-red-600"
+                        aria-hidden
+                        className={`absolute -left-[23px] top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-4 ring-white ${
+                          up ? "bg-emerald-500" : "bg-orange-500"
                         }`}
                       >
-                        {c.old_p.toFixed(2)} → {c.new_p.toFixed(2)}
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className={`h-2 w-2 ${up ? "" : "rotate-180"}`}
+                        >
+                          <path d="M12 19V5m-6 6 6-6 6 6" />
+                        </svg>
                       </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                        {EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type}
-                        {c.weight !== 1 && ` ×${c.weight}`}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="w-32 shrink-0 text-xs text-slate-400">
+                          {fmtDateTime(c.at)}
+                        </span>
+                        <span
+                          className="min-w-0 flex-1 truncate font-medium text-slate-700"
+                          title={c.kc_name || c.kc_id}
+                        >
+                          {c.kc_name || `KC ${c.kc_id.slice(0, 8)}`}
+                        </span>
+                        <span
+                          className={`font-mono text-xs ${
+                            up ? "text-emerald-600" : "text-orange-600"
+                          }`}
+                        >
+                          {c.old_p.toFixed(2)} → {c.new_p.toFixed(2)}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                          {EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type}
+                          {c.weight !== 1 && ` ×${c.weight}`}
+                        </span>
+                      </div>
                     </li>
                   );
                 })}
-              </ul>
+              </ol>
             )}
           </Card>
         </>

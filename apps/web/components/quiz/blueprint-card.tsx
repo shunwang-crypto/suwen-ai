@@ -73,58 +73,57 @@ export function BlueprintCard({
         </p>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-indigo-100 bg-white">
-        <table className="w-full min-w-105 text-left text-sm">
-          <thead>
-            <tr className="border-b border-slate-100 text-xs text-slate-400">
-              <th className="px-3 py-2 font-medium">#</th>
-              <th className="px-3 py-2 font-medium">知识点</th>
-              <th className="px-3 py-2 font-medium">题型</th>
-              <th className="px-3 py-2 font-medium">难度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, i) => (
-              <tr key={i} className="border-b border-slate-50">
-                <td className="px-3 py-1.5 text-xs text-slate-400">{i + 1}</td>
-                <td className="px-3 py-1.5">
-                  <input
-                    value={it.kc_name}
-                    onChange={(e) => patch(i, { kc_name: e.target.value })}
-                    className="w-full min-w-32 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  />
-                </td>
-                <td className="px-3 py-1.5">
-                  <select
-                    value={it.type}
-                    onChange={(e) => patch(i, { type: e.target.value })}
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-indigo-500"
-                  >
-                    {TYPE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-3 py-1.5">
-                  <select
-                    value={it.difficulty}
-                    onChange={(e) => patch(i, { difficulty: e.target.value })}
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-indigo-500"
-                  >
-                    {DIFFICULTY_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {/* 蓝图卡片网格（原表格布局的视觉升级：同字段同交互，逐项成卡） */}
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {items.map((it, i) => (
+          <li
+            key={i}
+            className="rounded-xl border border-indigo-100 bg-white p-2.5 shadow-[0_2px_12px_-4px_rgba(79,70,229,0.12)] transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-[0_6px_18px_-4px_rgba(79,70,229,0.20)] motion-reduce:hover:translate-y-0"
+          >
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md bg-indigo-600 text-[11px] font-bold text-white">
+                {i + 1}
+              </span>
+              <span className="text-xs font-medium text-slate-400">知识点</span>
+            </div>
+            <input
+              value={it.kc_name}
+              onChange={(e) => patch(i, { kc_name: e.target.value })}
+              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            />
+            <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[11px] text-slate-400">题型</span>
+                <select
+                  value={it.type}
+                  onChange={(e) => patch(i, { type: e.target.value })}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-indigo-500"
+                >
+                  {TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[11px] text-slate-400">难度</span>
+                <select
+                  value={it.difficulty}
+                  onChange={(e) => patch(i, { difficulty: e.target.value })}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-indigo-500"
+                >
+                  {DIFFICULTY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </li>
+        ))}
+      </ul>
 
       <div className="mt-3 flex items-center justify-end gap-2">
         <button

@@ -3,20 +3,286 @@
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
+
+  /* 动效时长 tokens（组件内联 CSS 使用） */
+  --dur-fast: 150ms;
+  --dur-base: 250ms;
+  --dur-slow: 400ms;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* 中文字体栈：system-ui 优先（Latin 走 SF/Segoe），中文回落 PingFang/雅黑 */
   --font-sans:
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
-    system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", Roboto, Arial, sans-serif;
+}
+
+/* ============================================================
+   视觉升级·第一路：设计 tokens（Tailwind 4 @theme）
+   只加不改：旧类名（indigo- / slate- / rounded- 等）语义全部保留。
+   ============================================================ */
+@theme {
+  /* 品牌色阶：靛蓝家族（brand-600 与既有 indigo-600 同值，旧页面无感） */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+  --color-brand-950: #1e1b4b;
+
+  /* 温暖强调色：琥珀（成就 / 庆祝 / 星标） */
+  --color-accent-50: #fffbeb;
+  --color-accent-100: #fef3c7;
+  --color-accent-200: #fde68a;
+  --color-accent-300: #fcd34d;
+  --color-accent-400: #fbbf24;
+  --color-accent-500: #f59e0b;
+  --color-accent-600: #d97706;
+
+  /* 语义色 */
+  --color-success-50: #ecfdf5;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+  --color-danger-50: #fef2f2;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-info-50: #f0f9ff;
+  --color-info-500: #0ea5e9;
+  --color-info-600: #0284c7;
+  --color-info-700: #0369a1;
+
+  /* 阴影三级：冷调、带品牌色的阴影 */
+  --shadow-subtle:
+    0 1px 2px 0 rgb(79 70 229 / 0.05), 0 1px 3px 0 rgb(15 23 42 / 0.04);
+  --shadow-card:
+    0 1px 2px 0 rgb(15 23 42 / 0.04), 0 8px 24px -8px rgb(79 70 229 / 0.1);
+  --shadow-floating:
+    0 4px 12px -2px rgb(15 23 42 / 0.06),
+    0 20px 48px -12px rgb(79 70 229 / 0.18);
+
+  /* 圆角体系：卡片 16px（rounded-card）/ 控件 10px（rounded-control） */
+  --radius-card: 1rem;
+  --radius-control: 0.625rem;
+
+  /* 缓动 tokens */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 动效 tokens（生成 animate-fade-up 等工具类，keyframes 见下方全局定义） */
+  --animate-fade-up: fade-up 0.45s var(--ease-out-soft) both;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+  --animate-page-in: page-in 0.35s var(--ease-out-soft) both;
+  --animate-shimmer: shimmer 1.8s linear infinite;
+  --animate-pop: pop 0.35s var(--ease-spring) both;
+  --animate-pulse-soft: pulse-soft 2.2s ease-in-out infinite;
+}
+
+/* keyframes 置于顶层（始终输出，供 @utility 与 animate-* 共用） */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ============ 渐变 / 质感工具类 ============ */
+
+/* 品牌渐变：indigo → violet */
+@utility bg-brand-gradient {
+  background-image: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+}
+
+/* 品牌渐变文字 */
+@utility text-brand-gradient {
+  background-image: linear-gradient(120deg, #4f46e5, #8b5cf6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 渐变按钮：hover 渐变位移 + 按下微沉 */
+@utility btn-brand {
+  background-image: linear-gradient(
+    120deg,
+    #4f46e5 0%,
+    #7c3aed 50%,
+    #4f46e5 100%
+  );
+  background-size: 200% 100%;
+  background-position: 0% 0%;
+  transition:
+    background-position var(--dur-slow) var(--ease-out-soft),
+    box-shadow var(--dur-base) ease,
+    transform var(--dur-fast) ease;
+  &:hover {
+    background-position: 100% 0%;
+  }
+  &:active {
+    transform: translateY(1px);
+  }
+}
+
+/* mesh 光晕背景（浅色页面顶部）：多个超大柔和 radial-gradient 叠加 */
+@utility bg-aurora {
+  background-color: #f8fafc;
+  background-image:
+    radial-gradient(
+      40rem 24rem at 12% -8%,
+      rgb(99 102 241 / 0.14),
+      transparent 60%
+    ),
+    radial-gradient(
+      32rem 22rem at 88% -4%,
+      rgb(139 92 246 / 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      28rem 20rem at 55% 12%,
+      rgb(56 189 248 / 0.08),
+      transparent 65%
+    );
+}
+
+/* mesh 光晕背景（深色 hero 变体：登录/注册左栏） */
+@utility bg-aurora-deep {
+  background-color: #1e1b4b;
+  background-image:
+    radial-gradient(
+      42rem 30rem at 18% 12%,
+      rgb(99 102 241 / 0.55),
+      transparent 62%
+    ),
+    radial-gradient(
+      36rem 28rem at 85% 28%,
+      rgb(139 92 246 / 0.42),
+      transparent 60%
+    ),
+    radial-gradient(
+      30rem 24rem at 62% 88%,
+      rgb(56 189 248 / 0.2),
+      transparent 60%
+    ),
+    radial-gradient(
+      24rem 18rem at 30% 78%,
+      rgb(251 191 36 / 0.12),
+      transparent 60%
+    ),
+    linear-gradient(160deg, #1e1b4b 0%, #312e81 55%, #1e1b4b 100%);
+}
+
+/* 毛玻璃 */
+@utility glass {
+  background-color: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+}
+
+/* 骨架屏 shimmer 基元（components/ui/skeleton.tsx 使用，也可直接挂类） */
+@utility skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background-color: #eef2f6;
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.85) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s linear infinite;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+  font-feature-settings:
+    "kern" 1,
+    "liga" 1;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: #c7d2fe;
+  color: #1e1b4b;
+}
+
+/* 无障碍：偏好减少动效时全局降级（fx- 区块另有专门降级，双保险） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* 细滚动条，贴合干净的教育产品风 */
@@ -30,4 +296,240 @@ body {
   margin: 0.25rem 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* ============================================================
+   视觉升级·第二路（营销落地页 + 对话页动效）局部样式
+   前缀 fx-，与第一路设计 tokens（components/ui/*, .animate-fade-up,
+   aurora 渐变等）互不占名。
+   TODO(合流): 第一路 tokens 落地后，可将 fx-aurora / fx-fade-up 等
+   替换为统一 tokens，删除本区块中的等价实现。
+   ============================================================ */
+
+/* --- 关键帧 --- */
+@keyframes fx-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fx-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fx-aurora-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(2%, 2.5%, 0) scale(1.08);
+  }
+}
+
+@keyframes fx-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(10px, -22px, 0) rotate(10deg);
+  }
+}
+
+@keyframes fx-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes fx-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes fx-dot-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes fx-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* --- 落地页 --- */
+.fx-fade-up {
+  animation: fx-fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* aurora 渐变背景层（TODO: 合流后可换第一路 aurora token） */
+.fx-aurora {
+  background:
+    radial-gradient(38% 45% at 18% 22%, rgba(129, 140, 248, 0.38) 0%, transparent 70%),
+    radial-gradient(32% 40% at 82% 16%, rgba(56, 189, 248, 0.3) 0%, transparent 70%),
+    radial-gradient(46% 52% at 55% 88%, rgba(196, 181, 253, 0.32) 0%, transparent 70%),
+    radial-gradient(28% 34% at 92% 68%, rgba(45, 212, 191, 0.18) 0%, transparent 70%);
+  animation: fx-aurora-drift 16s ease-in-out infinite alternate;
+}
+
+/* 浮动几何粒子：三档慢速漂浮 */
+.fx-float-1 {
+  animation: fx-float 9s ease-in-out infinite;
+}
+.fx-float-2 {
+  animation: fx-float 13s ease-in-out -3s infinite;
+}
+.fx-float-3 {
+  animation: fx-float 17s ease-in-out -7s infinite;
+}
+
+/* 产品示意卡：缓慢上下浮动 */
+.fx-bob {
+  animation: fx-bob 7s ease-in-out infinite;
+}
+
+/* 滚动入场（IntersectionObserver 轻实现，components/landing/reveal.tsx） */
+.fx-reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition:
+    opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--fx-delay, 0ms);
+}
+.fx-reveal.fx-visible {
+  opacity: 1;
+  transform: none;
+}
+/* 打印/存 PDF 不滚动、IO 不触发：直接可见（无 JS 场景由落地页 noscript 兜底） */
+@media print {
+  .fx-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* --- 对话页 --- */
+/* 消息气泡入场：fade-up + 轻缩放 */
+.fx-msg-in {
+  animation: fx-msg-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 「正在思考」三点跳动指示器 */
+.fx-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fx-typing > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #818cf8;
+  animation: fx-dot-bounce 1.2s ease-in-out infinite;
+}
+.fx-typing > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.fx-typing > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* token 流式光标：闪烁 + 流光尾迹 */
+.fx-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #818cf8, #6366f1);
+  box-shadow:
+    0 0 6px rgba(99, 102, 241, 0.65),
+    0 0 14px rgba(99, 102, 241, 0.3);
+  animation: fx-caret-blink 0.9s ease-in-out infinite;
+}
+
+/* 时间线完成项：对勾 draw 动画 */
+.fx-check-draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: fx-check-draw 0.4s ease-out 0.05s forwards;
+}
+
+/* followup chips 逐个延迟入场（延迟由内联 --fx-delay 控制） */
+.fx-chip-in {
+  animation: fx-msg-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--fx-delay, 0ms);
+}
+
+/* 正文引用角标 [N]（lib/katex.tsx 渲染，aria-label 稳定钩子）：hover 放大 */
+button[aria-label^="查看引用"] {
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+button[aria-label^="查看引用"]:hover {
+  transform: scale(1.22);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35);
+}
+
+/* --- 无障碍降级：偏好减少动态效果时全部静止/直接可见 --- */
+@media (prefers-reduced-motion: reduce) {
+  .fx-fade-up,
+  .fx-msg-in,
+  .fx-chip-in,
+  .fx-aurora,
+  .fx-float-1,
+  .fx-float-2,
+  .fx-float-3,
+  .fx-bob,
+  .fx-caret,
+  .fx-typing > span,
+  .fx-check-draw {
+    animation: none !important;
+  }
+  .fx-check-draw {
+    stroke-dashoffset: 0;
+  }
+  .fx-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  button[aria-label^="查看引用"]:hover {
+    transform: none;
+  }
 }

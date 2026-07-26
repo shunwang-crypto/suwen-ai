@@ -41,10 +41,19 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
   const dataPoints = dims.map((d, i) => point(i, radius * Math.max(0.02, d.p_mastery)));
 
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
+      {/* 卡片光晕背景（纯 CSS 径向渐变，不影响 SVG 绘制） */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 mx-auto max-w-90"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 46%, rgba(99,102,241,0.10) 0%, rgba(99,102,241,0.04) 42%, transparent 68%)",
+        }}
+      />
       <svg
         viewBox={`0 0 ${size} ${size}`}
-        className="mx-auto block w-full max-w-90"
+        className="relative mx-auto block w-full max-w-90"
         role="img"
         aria-label={`掌握度雷达图，共 ${n} 个知识点`}
       >
@@ -110,6 +119,24 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
           );
         })}
       </svg>
+      {/* 图例：数据面含义 + 网格环刻度说明 */}
+      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-2.5 rounded-sm border border-indigo-600"
+            style={{ background: "rgba(79, 70, 229, 0.14)" }}
+          />
+          当前掌握度
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-2.5 rounded-sm border border-slate-300"
+          />
+          网格环 25 / 50 / 75 / 100%
+        </span>
+      </div>
     </div>
   );
 }

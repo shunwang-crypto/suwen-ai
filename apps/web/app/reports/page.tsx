@@ -11,7 +11,8 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
+  PageHeader,
+  SkeletonPage,
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
@@ -197,10 +198,129 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
   );
 }
 
+/** 大数字统计卡：渐变数字 + 趋势箭头（近 7 天 vs 前 7 天，均由已拉取的 trend 就地计算）。 */
+function StatTiles({
+  trend,
+  weakCount,
+}: {
+  trend: ReportTrendPoint[];
+  weakCount: number;
+}) {
+  const sumAttempts = (arr: ReportTrendPoint[]) =>
+    arr.reduce((s, t) => s + t.attempts, 0);
+  const accOf = (arr: ReportTrendPoint[]): number | null => {
+    const a = sumAttempts(arr);
+    if (a === 0) return null;
+    return arr.reduce((s, t) => s + t.correct, 0) / a;
+  };
+
+  const total = sumAttempts(trend);
+  const acc = accOf(trend);
+  const activeDays = trend.filter((t) => t.attempts > 0).length;
+  const last7 = trend.slice(-7);
+  const prev7 = trend.slice(-14, -7);
+  const attemptsDelta = sumAttempts(last7) - sumAttempts(prev7);
+  const acc7 = accOf(last7);
+  const accPrev7 = accOf(prev7);
+  const accDelta = acc7 != null && accPrev7 != null ? acc7 - accPrev7 : null;
+
+  const TrendArrow = ({ up }: { up: boolean }) => (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`h-3 w-3 ${up ? "" : "rotate-180"}`}
+      aria-hidden
+    >
+      <path d="M12 19V5m-6 6 6-6 6 6" />
+    </svg>
+  );
+
+  const tiles: {
+    key: string;
+    label: string;
+    value: string;
+    gradient: string;
+    delta?: { up: boolean; text: string } | null;
+  }[] = [
+    {
+      key: "attempts",
+      label: "近 30 天答题",
+      value: String(total),
+      gradient: "from-indigo-600 to-violet-500",
+      delta:
+        attemptsDelta !== 0
+          ? {
+              up: attemptsDelta > 0,
+              text: `${attemptsDelta > 0 ? "+" : ""}${attemptsDelta} 较前 7 天`,
+            }
+          : null,
+    },
+    {
+      key: "accuracy",
+      label: "总体正确率",
+      value: acc != null ? fmtPct(acc) : "—",
+      gradient: "from-emerald-600 to-teal-500",
+      delta:
+        accDelta != null && Math.round(accDelta * 100) !== 0
+          ? {
+              up: accDelta > 0,
+              text: `${accDelta > 0 ? "+" : ""}${Math.round(accDelta * 100)}pp 较前 7 天`,
+            }
+          : null,
+    },
+    {
+      key: "days",
+      label: "活跃天数",
+      value: `${activeDays}`,
+      gradient: "from-sky-600 to-cyan-500",
+      delta: null,
+    },
+    {
+      key: "weak",
+      label: "薄弱知识点",
+      value: String(weakCount),
+      gradient: "from-amber-600 to-orange-500",
+      delta: null,
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {tiles.map((t) => (
+        <div
+          key={t.key}
+          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_26px_-6px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
+        >
+          <p className="text-xs text-slate-500">{t.label}</p>
+          <p
+            className={`mt-0.5 bg-gradient-to-br ${t.gradient} bg-clip-text font-mono text-2xl font-bold text-transparent`}
+          >
+            {t.value}
+          </p>
+          {t.delta && (
+            <p
+              className={`mt-0.5 flex items-center gap-0.5 text-[11px] font-medium ${
+                t.delta.up ? "text-emerald-600" : "text-orange-600"
+              }`}
+            >
+              <TrendArrow up={t.delta.up} />
+              {t.delta.text}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 薄弱点卡片：掌握度 + 错题数 + 归因链（可能源于《前置 KC》未掌握）。 */
 function WeakPointCard({ wp }: { wp: ReportWeakPoint }) {
   return (
-    <li className="rounded-xl border border-slate-200 bg-white p-3">
+    <li className="rounded-2xl border border-slate-200 bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800" title={wp.name}>
           {wp.name}
@@ -230,23 +350,50 @@ function WeakPointCard({ wp }: { wp: ReportWeakPoint }) {
         </Link>
       </div>
       {wp.possible_root_cause.length > 0 && (
-        <div className="mt-2 space-y-1">
+        <div className="mt-2.5 space-y-2 border-t border-dashed border-slate-200 pt-2.5">
           {wp.possible_root_cause.map((rc) => (
-            <p key={rc.kc_id} className="flex items-center gap-1 text-xs text-slate-500">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-3.5 w-3.5 shrink-0 text-violet-500"
-                aria-hidden
-              >
-                <path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-              </svg>
-              可能源于《{rc.name}》未掌握（{fmtPct(rc.p_mastery)}），建议先补前置
-            </p>
+            <div key={rc.kc_id}>
+              {/* 归因可视链条：前置 KC → 当前 KC 箭头卡片 */}
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="flex min-w-0 flex-1 flex-col rounded-lg border border-violet-200 bg-violet-50/70 px-2 py-1"
+                  title={`前置知识点：${rc.name}`}
+                >
+                  <span className="truncate text-xs font-medium text-violet-800">
+                    {rc.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-violet-500">
+                    前置 · {fmtPct(rc.p_mastery)}
+                  </span>
+                </span>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4 shrink-0 text-slate-300"
+                  aria-hidden
+                >
+                  <path d="M5 12h14m-6-6 6 6-6 6" />
+                </svg>
+                <span
+                  className="flex min-w-0 flex-1 flex-col rounded-lg border border-amber-200 bg-amber-50/70 px-2 py-1"
+                  title={`当前薄弱点：${wp.name}`}
+                >
+                  <span className="truncate text-xs font-medium text-amber-800">
+                    {wp.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-amber-500">
+                    当前 · {fmtPct(wp.p_mastery)}
+                  </span>
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                可能源于《{rc.name}》未掌握（{fmtPct(rc.p_mastery)}），建议先补前置
+              </p>
+            </div>
           ))}
         </div>
       )}
@@ -290,7 +437,7 @@ export default function ReportsPage() {
   if (loading) {
     return (
       <div className="mx-auto w-full max-w-6xl p-4">
-        <LoadingState text="正在生成学情报告…" />
+        <SkeletonPage />
       </div>
     );
   }
@@ -309,12 +456,29 @@ export default function ReportsPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <PageHeader
+        title="学情报告"
+        subtitle="近 30 天作答证据聚合：掌握度雷达、趋势、薄弱点归因与可执行建议"
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          >
+            刷新报告
+          </button>
+        }
+      />
+
       {!hasAnyData && (
         <EmptyState
           title="还没有足够的学习数据"
           description="完成几次练习或辅导后，这里会生成你的学情报告"
+          illustration="chart"
         />
       )}
+
+      {hasAnyData && <StatTiles trend={trend} weakCount={weak_points.length} />}
 
       {hasAnyData && (
         <div className="grid gap-4 lg:grid-cols-2">

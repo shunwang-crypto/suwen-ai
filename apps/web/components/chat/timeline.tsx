@@ -61,6 +61,54 @@ function traceDetail(data: TraceEventData): string | null {
   return typeof data.reason === "string" ? data.reason : null;
 }
 
+/* 各阶段 16px 内联小图标（路由/检索/自评/生成 + 相邻别名），纯视觉 */
+const STAGE_ICON_PATHS: Record<string, string> = {
+  // 路由：交叉换轨
+  router: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
+  route: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
+  // 检索：放大镜
+  retrieve: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
+  retrieval: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
+  // 重排：双向箭头
+  rerank: "m3 16 4 4 4-4M7 20V4m14 4-4-4-4 4m4-4v16",
+  // 自评（自省/评估/置信度）：护盾对勾
+  reflect: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  reflection: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  grade: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  confidence: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  // 注入过滤：漏斗
+  sanitize: "M22 3H2l8 9.46V19l4 2v-8.54L22 3Z",
+  sanitizer: "M22 3H2l8 9.46V19l4 2v-8.54L22 3Z",
+  // 生成：星芒
+  generate:
+    "m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z",
+  // 改写：钢笔
+  rewrite: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z",
+  // 学情画像：用户
+  profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0",
+};
+
+function stageIcon(kind: string, className: string) {
+  const d = STAGE_ICON_PATHS[kind];
+  if (!d) return null;
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`inline-block h-4 w-4 shrink-0 align-text-bottom ${className}`}
+      aria-hidden
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+const DONE_STATUSES = new Set(["done", "success", "completed", "finished"]);
+
 function statusDot(status: string) {
   if (status === "running" || status === "pending") {
     return (
@@ -73,7 +121,24 @@ function statusDot(status: string) {
   if (status === "error" || status === "failed") {
     return <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />;
   }
-  return <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />;
+  if (DONE_STATUSES.has(status)) {
+    // 完成项：对勾 draw 动画
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-3 w-3 shrink-0 text-emerald-600"
+        aria-hidden
+      >
+        <path d="M20 6 9 17l-5-5" className="fx-check-draw" />
+      </svg>
+    );
+  }
+  return <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />;
 }
 
 /** 截断展示任意 JSON 值（dense_hits 等 evidences 字段直接透出）。 */
@@ -117,9 +182,17 @@ function TimelineRow({ item }: { item: TimelineItem }) {
     const { node, status, detail } = item.data;
     return (
       <li className="flex items-start gap-2.5">
-        <span className="mt-1.5">{statusDot(status)}</span>
+        <span className="mt-1">{statusDot(status)}</span>
         <div className="min-w-0 flex-1">
           <p className="text-xs text-slate-600">
+            {stageIcon(
+              node,
+              status === "error" || status === "failed"
+                ? "mr-1 text-red-400"
+                : status === "running" || status === "pending"
+                  ? "mr-1 text-indigo-500"
+                  : "mr-1 text-slate-400",
+            )}
             <span className="font-medium text-slate-800">
               {NODE_LABELS[node] ?? node}
             </span>
@@ -153,6 +226,10 @@ function TimelineRow({ item }: { item: TimelineItem }) {
       />
       <div className="min-w-0 flex-1">
         <p className="text-xs text-slate-600">
+          {stageIcon(
+            type,
+            type === "profile" ? "mr-1 text-violet-400" : "mr-1 text-slate-400",
+          )}
           <span className="font-medium text-slate-800">
             {TRACE_LABELS[type] ?? type}
           </span>
@@ -217,7 +294,7 @@ export function ProcessTimeline({
             className="h-3.5 w-3.5 shrink-0 text-emerald-600"
             aria-hidden
           >
-            <path d="M20 6 9 17l-5-5" />
+            <path d="M20 6 9 17l-5-5" className="fx-check-draw" />
           </svg>
         )}
         <span className="min-w-0 flex-1 truncate text-xs text-slate-600">

@@ -11,6 +11,7 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
+  FxStyles,
   MasteryDelta,
   Spinner,
 } from "@/components/common";
@@ -60,39 +61,65 @@ function HintBadge({ level }: { level: number }) {
   );
 }
 
-/** 提示阶梯（Khanmigo 式）：0→3 逐层递进，当前层高亮。 */
+/** 提示阶梯（Khanmigo 式）：垂直步骤条 —— 已过层打勾、当前层放大主色、未达层置灰。 */
 function HintLadder({ level, active }: { level: number; active: boolean }) {
   return (
-    <ol className="space-y-1.5">
+    <ol>
       {HINT_LEVELS.map((label, i) => {
         const reached = active && i <= level;
         const current = active && i === level;
+        const passed = active && i < level;
         return (
-          <li
-            key={label}
-            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs ${
-              current
-                ? "bg-indigo-50 font-semibold text-indigo-700"
-                : reached
-                  ? "text-slate-600"
-                  : "text-slate-400"
-            }`}
-          >
+          <li key={label} className="relative flex items-center gap-2.5 pb-3 last:pb-0">
+            {/* 连接线：已走过的段落染主色 */}
+            {i < HINT_LEVELS.length - 1 && (
+              <span
+                aria-hidden
+                className={`absolute left-[11px] top-7 h-[calc(100%-1.5rem)] w-0.5 rounded-full transition-colors duration-300 ${
+                  passed ? "bg-indigo-300" : "bg-slate-200"
+                }`}
+              />
+            )}
             <span
-              className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
+              className={`z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition-all duration-300 ${
                 current
-                  ? "bg-indigo-600 text-white"
-                  : reached
+                  ? "scale-110 bg-indigo-600 text-white shadow-[0_2px_10px_-2px_rgba(79,70,229,0.6)] ring-4 ring-indigo-100 motion-reduce:scale-100"
+                  : passed
                     ? "bg-indigo-100 text-indigo-600"
                     : "bg-slate-100 text-slate-400"
               }`}
             >
-              {i}
+              {passed ? (
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-3 w-3"
+                  aria-label="已经过"
+                >
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : (
+                i
+              )}
             </span>
-            {label}
-            {i === 3 && (
-              <span className="ml-auto text-[10px] text-slate-400">仅此层给答案</span>
-            )}
+            <span
+              className={`flex min-w-0 flex-1 items-center rounded-lg px-2 py-1 text-xs transition-colors duration-300 ${
+                current
+                  ? "bg-indigo-50 font-semibold text-indigo-700"
+                  : reached
+                    ? "text-slate-600"
+                    : "text-slate-400"
+              }`}
+            >
+              {label}
+              {i === 3 && (
+                <span className="ml-auto text-[10px] text-slate-400">仅此层给答案</span>
+              )}
+            </span>
           </li>
         );
       })}
@@ -111,17 +138,48 @@ function ReviewCard({
   onReset: () => void;
 }) {
   return (
-    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-emerald-800">
-          本次辅导复盘
-        </h3>
-        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-          已解决
-        </span>
+    <div className="edu-fade-up overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-[0_6px_24px_-8px_rgba(16,185,129,0.35)]">
+      <FxStyles />
+      {/* 「本次收获」渐变头图区：纯 CSS 渐变 + 内联 SVG 装饰 */}
+      <div
+        className="relative px-4 pb-3 pt-4"
+        style={{
+          background:
+            "linear-gradient(120deg, #059669 0%, #10b981 45%, #2dd4bf 100%)",
+        }}
+      >
+        <svg
+          viewBox="0 0 320 80"
+          preserveAspectRatio="xMaxYMid slice"
+          className="pointer-events-none absolute inset-0 h-full w-full opacity-25"
+          aria-hidden
+        >
+          <circle cx="270" cy="8" r="34" fill="#fff" opacity=".5" />
+          <circle cx="308" cy="58" r="22" fill="#fff" opacity=".35" />
+          <path d="M20 66 26 54l6 12-6-4-6 4Z" fill="#fff" opacity=".6" />
+          <path
+            d="M245 62l3-8 3 8 8 3-8 3-3 8-3-8-8-3 8-3Z"
+            fill="#fff"
+            opacity=".8"
+          />
+          <path
+            d="M60 20l2-6 2 6 6 2-6 2-2 6-2-6-6-2 6-2Z"
+            fill="#fff"
+            opacity=".7"
+          />
+        </svg>
+        <p className="relative text-[11px] font-semibold uppercase tracking-widest text-emerald-100">
+          本次收获
+        </p>
+        <div className="relative mt-0.5 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-white">本次辅导复盘</h3>
+          <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium text-white ring-1 ring-inset ring-white/40">
+            已解决
+          </span>
+        </div>
       </div>
 
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3 p-4 text-sm">
         <div>
           <p className="mb-1 text-xs font-semibold text-slate-500">
             本次暴露的误解
@@ -170,11 +228,11 @@ function ReviewCard({
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 px-4 pb-4">
         <button
           type="button"
           onClick={onReset}
-          className="rounded-xl bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+          className="rounded-xl bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
         >
           换一道题
         </button>
@@ -347,7 +405,7 @@ export default function TutorPage() {
       </aside>
 
       {/* 右：对话区 */}
-      <div className="flex min-h-[70dvh] min-w-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white">
+      <div className="flex min-h-[70dvh] min-w-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)]">
         <header className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
           <h2 className="text-sm font-semibold text-slate-800">苏格拉底辅导</h2>
           {started && <HintBadge level={hintLevel} />}
@@ -360,17 +418,18 @@ export default function TutorPage() {
             <EmptyState
               title="从一道让你卡住的题开始"
               description="左侧粘贴题目，然后告诉老师你的思路或者卡在哪一步"
+              illustration="chat"
             />
           ) : (
             messages.map((m, i) =>
               m.role === "user" ? (
-                <div key={i} className="flex justify-end">
+                <div key={i} className="edu-fade-up flex justify-end">
                   <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2 text-sm text-white">
                     <MathText text={m.content} />
                   </div>
                 </div>
               ) : (
-                <div key={i} className="flex flex-col items-start gap-1">
+                <div key={i} className="edu-fade-up flex flex-col items-start gap-1">
                   <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-800">
                     <MathText text={m.content} />
                   </div>

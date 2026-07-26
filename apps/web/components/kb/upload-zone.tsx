@@ -9,6 +9,7 @@
 
 import { useCallback, useRef, useState, type DragEvent, type FormEvent } from "react";
 
+import { FxStyles } from "@/components/common";
 import { API_BASE, getAccessToken, refreshAccessToken } from "@/lib/api";
 
 export const ALLOWED_SUFFIXES = [".pdf", ".docx", ".pptx", ".md", ".txt"];
@@ -99,13 +100,25 @@ function FileTab({
       }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
-      className={`flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed px-4 py-8 text-center transition-colors ${
+      className={`relative flex flex-col items-center gap-2 overflow-hidden rounded-2xl border-2 border-dashed px-4 py-8 text-center transition-colors ${
         dragOver
           ? "border-indigo-400 bg-indigo-50/60"
           : "border-slate-300 bg-white hover:border-indigo-300"
       }`}
     >
-      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
+      <FxStyles />
+      {/* 拖入时的边框流光（reduced-motion 下静态高亮边框兜底） */}
+      {dragOver && (
+        <span
+          aria-hidden
+          className="edu-flow-x pointer-events-none absolute inset-0 rounded-2xl"
+          style={{
+            background:
+              "linear-gradient(110deg, rgba(99,102,241,0) 25%, rgba(99,102,241,0.22) 50%, rgba(99,102,241,0) 75%)",
+          }}
+        />
+      )}
+      <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
         {uploading ? (
           <span className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
         ) : (

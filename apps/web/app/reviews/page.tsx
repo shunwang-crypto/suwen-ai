@@ -10,12 +10,16 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
   MasteryDelta,
+  PageHeader,
+  Skeleton,
+  SkeletonList,
   Spinner,
   fmtDateTime,
+  fmtRelative,
 } from "@/components/common";
 import { QuestionAnswer, QuestionMeta } from "@/components/quiz/question-answer";
+import { Celebrate } from "@/components/ui/celebrate";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -33,6 +37,16 @@ const CAUSE_LABELS: Record<string, string> = {
   misread: "审题偏差",
   knowledge_gap: "知识缺口",
 };
+
+/** 错因五色语义化徽章样式（与错题本同一套色）。 */
+const CAUSE_BADGE_STYLES: Record<string, string> = {
+  concept_confusion: "bg-violet-50 text-violet-700 ring-violet-200/70",
+  formula_error: "bg-sky-50 text-sky-700 ring-sky-200/70",
+  calc_slip: "bg-amber-50 text-amber-700 ring-amber-200/70",
+  misread: "bg-orange-50 text-orange-700 ring-orange-200/70",
+  knowledge_gap: "bg-rose-50 text-rose-700 ring-rose-200/70",
+};
+const CAUSE_BADGE_FALLBACK = "bg-slate-100 text-slate-600 ring-slate-200/70";
 
 const STATE_LABELS: Record<string, { label: string; className: string }> = {
   new: { label: "新错题", className: "bg-red-50 text-red-600" },
@@ -167,61 +181,92 @@ export default function ReviewsPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">今日复习</h2>
-          {data && (
-            <p className="text-xs text-slate-400">
-              业务时间 {fmtDateTime(data.now)} · 到期 {data.items.length} 题（每日上限 5 题）
-            </p>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={reload}
-          className="rounded-xl border border-slate-300 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
-        >
-          刷新队列
-        </button>
-      </div>
+      <PageHeader
+        title="今日复习"
+        subtitle={
+          data
+            ? `业务时间 ${fmtDateTime(data.now)} · 到期 ${data.items.length} 题（每日上限 5 题）`
+            : "按遗忘曲线安排的到期错题，答对两次即攻克"
+        }
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          >
+            刷新队列
+          </button>
+        }
+      />
 
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
       {error && <ErrorBanner message={error} onRetry={reload} />}
 
       {loading ? (
-        <LoadingState text="复习队列加载中…" />
+        <div className="space-y-4">
+          {[0, 1].map((i) => (
+            <div
+              key={i}
+              className="rounded-2xl border border-slate-200 bg-white p-4"
+            >
+              <div className="mb-3 flex gap-2">
+                <Skeleton className="h-5 w-14 rounded-full" />
+                <Skeleton className="h-5 w-20 rounded-full" />
+              </div>
+              <Skeleton className="mb-3 h-4 w-4/5" />
+              <SkeletonList rows={2} />
+            </div>
+          ))}
+          <span className="sr-only">复习队列加载中…</span>
+        </div>
       ) : !data || data.items.length === 0 ? (
         <EmptyState
           title="今日无到期复习"
           description="错题会按遗忘曲线安排复习；答错的题也会自动进入错题本"
+          illustration="calendar"
         />
       ) : (
         <ul className="space-y-4">
           {data.items.map((item) => {
             const st = states[item.error_item_id] ?? initialItemState;
             const mastered = st.result?.state === "mastered";
+            const wrong = Boolean(st.result && !st.result.correct);
             return (
               <li key={item.error_item_id}>
                 <Card
-                  className={
+                  className={`relative ${
                     mastered
                       ? "ring-2 ring-emerald-300 transition-shadow duration-500"
-                      : undefined
-                  }
+                      : wrong
+                        ? "edu-shake"
+                        : !st.result
+                          ? "border-l-4 border-l-amber-400"
+                          : ""
+                  }`}
                 >
+                  {/* mastered 庆祝彩带（reduced-motion 降级为静态徽章） */}
+                  {mastered && <Celebrate />}
                   <div className="mb-2 flex flex-wrap items-center gap-1.5">
                     <StateBadge state={st.result?.state ?? item.state} />
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                      {/* 答错后错因由后端自动重新分类，以最新结果为准 */}
-                      错因：
-                      {(() => {
-                        const cause = st.result?.cause ?? item.cause;
-                        return CAUSE_LABELS[cause] ?? cause;
-                      })()}
-                    </span>
+                    {(() => {
+                      const cause = st.result?.cause ?? item.cause;
+                      return (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                            CAUSE_BADGE_STYLES[cause] ?? CAUSE_BADGE_FALLBACK
+                          }`}
+                        >
+                          {/* 答错后错因由后端自动重新分类，以最新结果为准 */}
+                          错因：{CAUSE_LABELS[cause] ?? cause}
+                        </span>
+                      );
+                    })()}
                     {item.due && (
-                      <span className="text-xs text-slate-400">
-                        到期 {fmtDateTime(item.due)}
+                      <span
+                        className="text-xs text-slate-400"
+                        title={fmtDateTime(item.due)}
+                      >
+                        到期 {fmtRelative(item.due)}
                       </span>
                     )}
                     {st.isVariant && (
@@ -255,8 +300,8 @@ export default function ReviewsPage() {
                       }`}
                     >
                       {mastered ? (
-                        <p className="flex items-center gap-2 font-semibold text-emerald-700">
-                          <span className="flex h-6 w-6 animate-bounce items-center justify-center rounded-full bg-emerald-500 text-white">
+                        <p className="flex flex-wrap items-center gap-2 font-semibold text-emerald-700">
+                          <span className="flex h-6 w-6 animate-bounce items-center justify-center rounded-full bg-emerald-500 text-white motion-reduce:animate-none">
                             <svg
                               viewBox="0 0 24 24"
                               fill="none"
@@ -269,6 +314,9 @@ export default function ReviewsPage() {
                             >
                               <path d="M20 6 9 17l-5-5" />
                             </svg>
+                          </span>
+                          <span className="edu-pop inline-flex animate-bounce items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm motion-reduce:animate-none">
+                            已攻克
                           </span>
                           连续答对，这道题已掌握！它将移出复习队列。
                         </p>
@@ -284,7 +332,17 @@ export default function ReviewsPage() {
                         </p>
                       )}
                       <p className="mt-1 text-xs text-slate-600">
-                        下次复习：{fmtDateTime(st.result.next_due)} · 状态：
+                        下次复习：
+                        <span
+                          className="font-medium"
+                          title={fmtDateTime(st.result.next_due)}
+                        >
+                          {fmtRelative(st.result.next_due)}
+                        </span>
+                        <span className="ml-1 text-slate-400">
+                          （{fmtDateTime(st.result.next_due)}）
+                        </span>
+                        · 状态：
                         {STATE_LABELS[st.result.state]?.label ?? st.result.state}
                       </p>
                       {st.result.mastery_changes.length > 0 && (

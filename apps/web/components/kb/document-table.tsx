@@ -3,7 +3,7 @@
 // 文档表格（F2）：文件名/大小/两阶段状态机徽章/失败原因/操作（分块预览、重建索引、删除）。
 // 状态机: pending→parsing→chunking→embedding→ready→enriching→enriched | failed。
 
-import { fmtBytes, fmtDateTime } from "@/components/common";
+import { FxStyles, fmtBytes, fmtDateTime } from "@/components/common";
 import type { DocumentOut } from "@/lib/types";
 
 interface StatusMeta {
@@ -37,10 +37,51 @@ export function DocStatusBadge({ status }: { status: string }) {
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
     >
-      {meta.active && (
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-      )}
+      <FxStyles />
+      {/* 8px 状态圆点：处理中呼吸动画（reduced-motion 静态），终态常亮 */}
+      <span
+        className={`h-2 w-2 rounded-full bg-current ${meta.active ? "edu-breathe" : "opacity-70"}`}
+      />
       {meta.label}
+    </span>
+  );
+}
+
+/** 摄取分段步骤条：解析 → 分块 → 向量化 → 就绪 → 增强（当前步高亮呼吸）。 */
+const INGEST_STEPS = ["解析", "分块", "向量化", "就绪", "增强"];
+/** status → 当前所处步骤下标；5 表示全部完成（enriched）。failed 不渲染步骤条。 */
+const STATUS_STEP: Record<string, number> = {
+  pending: 0,
+  parsing: 0,
+  chunking: 1,
+  embedding: 2,
+  ready: 3,
+  enriching: 4,
+  enriched: 5,
+};
+
+export function IngestSteps({ status }: { status: string }) {
+  const step = STATUS_STEP[status];
+  if (step == null) return null;
+  return (
+    <span
+      className="mt-1 flex items-center gap-0.5"
+      role="img"
+      aria-label={`摄取进度：${INGEST_STEPS.map((s, i) => (i === step ? `${s}（进行中）` : s)).join(" → ")}`}
+    >
+      {INGEST_STEPS.map((label, i) => (
+        <span
+          key={label}
+          title={`${label}${i < step ? "（已完成）" : i === step ? "（进行中）" : ""}`}
+          className={`h-1 w-5 rounded-full ${
+            i < step
+              ? "bg-emerald-400"
+              : i === step
+                ? "edu-breathe bg-indigo-500"
+                : "bg-slate-200"
+          }`}
+        />
+      ))}
     </span>
   );
 }
@@ -77,7 +118,10 @@ export function DocumentTable({
           {documents.map((doc) => {
             const busy = busyDocId === doc.id;
             return (
-              <tr key={doc.id} className="border-b border-slate-100 align-top">
+              <tr
+                key={doc.id}
+                className="border-b border-slate-100 align-top transition-colors hover:bg-indigo-50/40"
+              >
                 <td className="max-w-60 py-2.5 pr-3">
                   <p className="flex items-center gap-1.5 font-medium text-slate-800">
                     <span className="min-w-0 truncate" title={doc.filename}>
@@ -103,6 +147,7 @@ export function DocumentTable({
                 </td>
                 <td className="whitespace-nowrap py-2.5 pr-3">
                   <DocStatusBadge status={doc.status} />
+                  <IngestSteps status={doc.status} />
                 </td>
                 <td className="whitespace-nowrap py-2.5 pr-3 text-xs text-slate-400">
                   {fmtDateTime(doc.updated_at)}

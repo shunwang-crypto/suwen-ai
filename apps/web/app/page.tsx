@@ -1,5 +1,49 @@
-import { redirect } from "next/navigation";
+"use client";
+
+// 营销落地页（未登录首页）。已登录分支保留原跳转逻辑 → /chat
+// （AppShell 将 "/" 视作公开路径，authed 时也会 replace 到 /chat，双保险）。
+
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+
+import { Features } from "@/components/landing/features";
+import { Flow } from "@/components/landing/flow";
+import { Hero } from "@/components/landing/hero";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { Stats } from "@/components/landing/stats";
+import { useAuth } from "@/lib/auth-context";
 
 export default function Home() {
-  redirect("/chat");
+  const { status } = useAuth();
+  const router = useRouter();
+
+  // 已登录仍跳 /chat（原 redirect("/chat") 逻辑保留于此分支）
+  useEffect(() => {
+    if (status === "authed") router.replace("/chat");
+  }, [status, router]);
+
+  if (status === "authed") {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3 text-slate-400">
+          <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+          <span className="text-sm">正在进入对话…</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <main className="min-h-dvh bg-slate-50">
+      {/* 无 JS（SEO 快照/爬虫渲染）时滚动入场不触发，直接全部可见 */}
+      <noscript>
+        <style>{`.fx-reveal{opacity:1;transform:none}`}</style>
+      </noscript>
+      <Hero />
+      <Features />
+      <Flow />
+      <Stats />
+      <SiteFooter />
+    </main>
+  );
 }

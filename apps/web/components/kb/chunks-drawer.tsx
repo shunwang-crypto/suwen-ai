@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 
-import { EmptyState, ErrorBanner, LoadingState } from "@/components/common";
+import { EmptyState, ErrorBanner, SkeletonList } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type { ChunkOut, DocumentOut } from "@/lib/types";
@@ -95,7 +95,7 @@ export function ChunksDrawer({
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {error && <ErrorBanner message={error} onRetry={() => goto(page)} />}
           {loading ? (
-            <LoadingState text="分块加载中…" />
+            <SkeletonList rows={5} />
           ) : chunks && chunks.length === 0 ? (
             <EmptyState
               title={page === 0 ? "该文档暂无分块" : "没有更多分块了"}

@@ -11,7 +11,8 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  LoadingState,
+  PageHeader,
+  SkeletonList,
   Spinner,
   fmtDateTime,
   fmtPct,
@@ -116,7 +117,7 @@ function PlanCalendar({
 }) {
   const days = flattenDays(structure);
   if (days.length === 0) {
-    return <EmptyState title="该计划暂无日程" />;
+    return <EmptyState title="该计划暂无日程" illustration="map" />;
   }
   const weeks: FlatDay[][] = [];
   for (let i = 0; i < days.length; i += 7) {
@@ -150,7 +151,7 @@ function PlanCalendar({
               return (
                 <div
                   key={d.day}
-                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_6px_18px_-6px_rgba(79,70,229,0.20)] motion-reduce:hover:translate-y-0"
                 >
                   <div className={`h-1 ${color.bar}`} />
                   <div className="flex items-center justify-between px-2.5 pt-2">
@@ -168,11 +169,11 @@ function PlanCalendar({
                       return (
                         <li
                           key={key ?? ti}
-                          className={`rounded-lg px-2 py-1.5 transition-colors ${
+                          className={`rounded-lg px-2 py-1.5 transition-all duration-500 ${
                             isNew
-                              ? "bg-amber-50 ring-1 ring-amber-300"
+                              ? "edu-pulse-hl bg-amber-50 ring-1 ring-amber-300"
                               : done
-                                ? "bg-emerald-50/70"
+                                ? "bg-emerald-50/70 opacity-70"
                                 : "bg-slate-50"
                           }`}
                           title={d.stageName}
@@ -189,9 +190,9 @@ function PlanCalendar({
                               />
                             )}
                             <p
-                              className={`min-w-0 flex-1 text-xs leading-snug ${
+                              className={`min-w-0 flex-1 text-xs leading-snug transition-colors duration-500 ${
                                 done
-                                  ? "text-slate-400 line-through"
+                                  ? "text-slate-400 line-through decoration-emerald-500/60"
                                   : "text-slate-700"
                               }`}
                             >
@@ -583,6 +584,20 @@ export default function PlansPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <PageHeader
+        title="学习计划"
+        subtitle="AI 规划分阶段每日任务；计划是活的——勾选完成、按学情插入补强任务"
+        action={
+          <button
+            type="button"
+            onClick={() => void loadPlans()}
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          >
+            刷新列表
+          </button>
+        }
+      />
+
       {flowError && (
         <ErrorBanner message={flowError} onClose={() => setFlowError(null)} />
       )}
@@ -688,7 +703,7 @@ export default function PlansPage() {
               </div>
             )}
             {plans === null ? (
-              <LoadingState text="计划加载中…" />
+              <SkeletonList rows={3} />
             ) : plans.length === 0 ? (
               <p className="py-4 text-center text-xs text-slate-400">
                 还没有学习计划
@@ -700,10 +715,10 @@ export default function PlansPage() {
                     <button
                       type="button"
                       onClick={() => selectPlan(p)}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-all duration-200 ${
                         selected?.id === p.id
                           ? "bg-indigo-50 text-indigo-700"
-                          : "text-slate-700 hover:bg-slate-100"
+                          : "text-slate-700 hover:-translate-y-0.5 hover:bg-slate-100 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
                       }`}
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
@@ -754,7 +769,7 @@ export default function PlansPage() {
                   </span>
                 }
               >
-                {/* 计划头部：任务粒度进度 + 学情调整入口 */}
+                {/* 计划头部：任务粒度进度（分段式，每阶段一段）+ 学情调整入口 */}
                 <div className="mb-3 flex flex-wrap items-center gap-3">
                   <div className="min-w-40 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
@@ -765,14 +780,47 @@ export default function PlansPage() {
                         {fmtPct(detail?.progress.ratio ?? 0)}
                       </span>
                     </div>
-                    <div className="mt-1 h-2 rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full bg-indigo-500 transition-all duration-300"
-                        style={{
-                          width: `${Math.round((detail?.progress.ratio ?? 0) * 100)}%`,
-                        }}
-                      />
-                    </div>
+                    {detail && detail.structure.stages.length > 0 ? (
+                      <div className="mt-1 flex h-2 gap-0.5 overflow-hidden rounded-full">
+                        {detail.structure.stages.map((stage, si) => {
+                          const tasks = (stage.days ?? []).flatMap(
+                            (d) => d.tasks ?? [],
+                          );
+                          const doneCount = tasks.filter((t) =>
+                            Boolean(t.done),
+                          ).length;
+                          const color = STAGE_COLORS[si % STAGE_COLORS.length];
+                          return (
+                            <div
+                              key={si}
+                              className="h-full min-w-2 bg-slate-100"
+                              style={{ flexGrow: Math.max(tasks.length, 1) }}
+                              title={`${stage.name}：${doneCount}/${tasks.length} 个任务`}
+                            >
+                              <div
+                                className={`h-full ${color.bar} transition-all duration-300`}
+                                style={{
+                                  width: `${
+                                    tasks.length
+                                      ? Math.round((doneCount / tasks.length) * 100)
+                                      : 0
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-1 h-2 rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                          style={{
+                            width: `${Math.round((detail?.progress.ratio ?? 0) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -847,9 +895,9 @@ export default function PlansPage() {
                     highlightKeys={highlightKeys}
                   />
                 ) : detailError ? (
-                  <EmptyState title="该计划缺少结构数据" />
+                  <EmptyState title="该计划缺少结构数据" illustration="map" />
                 ) : (
-                  <LoadingState text="计划详情加载中…" />
+                  <SkeletonList rows={4} />
                 )}
               </Card>
 
@@ -866,26 +914,59 @@ export default function PlansPage() {
                     还没有调整记录；低分测评或点击「根据学情调整计划」都会在这里留痕
                   </p>
                 ) : (
-                  <ol className="space-y-3 border-l border-slate-200 pl-4">
-                    {adjustments.map((a) => (
-                      <li key={a.id} className="relative">
-                        <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-indigo-400" />
-                        <p className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-slate-400">
-                            {fmtDateTime(a.at)}
+                  <ol className="ml-1.5 space-y-4 border-l-2 border-slate-100 pl-5">
+                    {adjustments.map((a) => {
+                      const auto = a.trigger === "low_score_attempt";
+                      return (
+                        <li key={a.id} className="relative">
+                          {/* 时间线节点：低分自动触发=琥珀，手动=靛蓝 */}
+                          <span
+                            aria-hidden
+                            className={`absolute -left-[27px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-white ${
+                              auto ? "bg-amber-500" : "bg-indigo-500"
+                            }`}
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="#fff"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-2.5 w-2.5"
+                            >
+                              {auto ? (
+                                <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+                              ) : (
+                                <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z" />
+                              )}
+                            </svg>
                           </span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                            {TRIGGER_LABELS[a.trigger] ?? a.trigger}
-                          </span>
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                            插入 {a.inserted.length} 个任务
-                          </span>
-                        </p>
-                        <p className="mt-1 text-sm leading-relaxed text-slate-700">
-                          {a.reason}
-                        </p>
-                      </li>
-                    ))}
+                          <div className="rounded-xl bg-slate-50/80 px-3 py-2.5 transition-colors hover:bg-slate-50">
+                            <p className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs text-slate-400">
+                                {fmtDateTime(a.at)}
+                              </span>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  auto
+                                    ? "bg-amber-100/70 text-amber-700"
+                                    : "bg-indigo-50 text-indigo-600"
+                                }`}
+                              >
+                                {TRIGGER_LABELS[a.trigger] ?? a.trigger}
+                              </span>
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                插入 {a.inserted.length} 个任务
+                              </span>
+                            </p>
+                            <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                              {a.reason}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </Card>
@@ -896,6 +977,7 @@ export default function PlansPage() {
               <EmptyState
                 title="选择一个计划查看日历"
                 description="或在左侧填写目标，AI 将规划分阶段的每日任务"
+                illustration="map"
               />
             )
           )}
