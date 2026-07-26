@@ -1,0 +1,6 @@
+{
+  "text": "该片段位于文档的同一位置，用于版本对照。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 134,
+  "completion_tokens": 12
+}

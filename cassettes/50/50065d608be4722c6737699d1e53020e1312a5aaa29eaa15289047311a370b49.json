@@ -1,0 +1,6 @@
+{
+  "text": "该片段位于章节开头部分，简要介绍了多项式的的基础特性并引入了泰勒公式的重要性。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 227,
+  "completion_tokens": 22
+}

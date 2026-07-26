@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"数列极限\", \"极限唯一性\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 941,
+  "completion_tokens": 14
+}

@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"泰勒公式\", \"导数\", \"不定积分\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 664,
+  "completion_tokens": 16
+}

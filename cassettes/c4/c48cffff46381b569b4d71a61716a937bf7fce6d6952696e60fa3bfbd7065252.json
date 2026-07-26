@@ -1,0 +1,6 @@
+{
+  "text": "该片段是第四章泰勒公式中介绍拉格朗日余项的定义及其误差估计的部分，位置为4.1节。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 804,
+  "completion_tokens": 30
+}

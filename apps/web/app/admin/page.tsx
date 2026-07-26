@@ -1,9 +1,479 @@
-import type { Metadata } from "next";
+"use client";
 
-import { UnderConstruction } from "@/components/under-construction";
+// 运营面板（F10，仅管理员）：成本/token 大数卡片、按 feature/model/mode 条形（纯 div）、
+// 日趋势折线（纯 SVG polyline）、top 用户表、latency p50/p95 表，
+// 以及 time-travel 虚拟时钟控制卡（演示遗忘曲线的操作台）。
 
-export const metadata: Metadata = { title: "运营" };
+import { useEffect, useState } from "react";
 
-export default function Page() {
-  return <UnderConstruction title="运营" />;
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  LoadingState,
+  Spinner,
+  fmtDateTime,
+} from "@/components/common";
+import { ApiError, apiJson } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
+import type {
+  AdminLatencyResponse,
+  AdminUsageResponse,
+  TimeTravelInfo,
+} from "@/lib/types";
+
+const DAY_OPTIONS = [7, 14, 30];
+
+function fmtCny(v: number): string {
+  return `¥${v.toFixed(v > 0 && v < 1 ? 4 : 2)}`;
+}
+
+function fmtInt(v: number): string {
+  return v.toLocaleString("zh-CN");
+}
+
+/** 大数卡片。 */
+function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+        {value}
+      </p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+    </div>
+  );
+}
+
+/** 分组条形（纯 div 宽度百分比，单一靛蓝系列）。 */
+function BarRows({
+  rows,
+}: {
+  rows: { key: string; label: string; value: number; detail: string }[];
+}) {
+  if (rows.length === 0) {
+    return <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>;
+  }
+  const max = Math.max(...rows.map((r) => r.value), 1e-9);
+  return (
+    <ul className="space-y-2.5">
+      {rows.map((r) => (
+        <li key={r.key} className="text-xs">
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <span className="min-w-0 truncate font-mono text-slate-600" title={r.label}>
+              {r.label}
+            </span>
+            <span className="shrink-0 text-slate-500">{r.detail}</span>
+          </div>
+          <div className="h-3.5 rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-indigo-500"
+              style={{ width: `${Math.max((r.value / max) * 100, 2)}%` }}
+              title={`${r.label}：${fmtCny(r.value)}`}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** 日趋势折线（纯 SVG polyline，成本单轴）。 */
+function DailyTrend({ daily }: { daily: AdminUsageResponse["daily"] }) {
+  if (daily.length === 0) {
+    return <p className="py-3 text-center text-xs text-slate-400">窗口内暂无调用</p>;
+  }
+  const w = 640;
+  const h = 180;
+  const pad = { l: 14, r: 14, t: 12, b: 22 };
+  const max = Math.max(...daily.map((d) => d.cost_cny), 1e-9);
+  const innerW = w - pad.l - pad.r;
+  const innerH = h - pad.t - pad.b;
+  const x = (i: number) =>
+    pad.l + (daily.length === 1 ? innerW / 2 : (i / (daily.length - 1)) * innerW);
+  const y = (v: number) => pad.t + innerH - (v / max) * innerH;
+  const points = daily.map((d, i) => [x(i), y(d.cost_cny)] as const);
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="block min-w-120 w-full"
+        role="img"
+        aria-label="每日成本趋势"
+      >
+        {/* 基线与峰值参考线（递弱网格） */}
+        <line
+          x1={pad.l}
+          y1={pad.t + innerH}
+          x2={w - pad.r}
+          y2={pad.t + innerH}
+          stroke="#e2e8f0"
+          strokeWidth={1}
+        />
+        <line
+          x1={pad.l}
+          y1={pad.t}
+          x2={w - pad.r}
+          y2={pad.t}
+          stroke="#f1f5f9"
+          strokeWidth={1}
+        />
+        <text x={pad.l} y={pad.t - 2} fontSize={10} fill="#94a3b8">
+          峰值 {fmtCny(max)}
+        </text>
+
+        {daily.length > 1 && (
+          <polyline
+            points={points.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" ")}
+            fill="none"
+            stroke="#4f46e5"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+        {points.map(([px, py], i) => (
+          <circle
+            key={daily[i].date}
+            cx={px}
+            cy={py}
+            r={3.2}
+            fill="#4f46e5"
+            stroke="#fff"
+            strokeWidth={1.5}
+          >
+            <title>
+              {daily[i].date}：{fmtCny(daily[i].cost_cny)} · {daily[i].calls} 次调用 ·{" "}
+              {fmtInt(daily[i].tokens)} tokens
+            </title>
+          </circle>
+        ))}
+        {/* 首尾日期标签 */}
+        <text x={pad.l} y={h - 6} fontSize={10} fill="#94a3b8">
+          {daily[0].date}
+        </text>
+        {daily.length > 1 && (
+          <text x={w - pad.r} y={h - 6} fontSize={10} fill="#94a3b8" textAnchor="end">
+            {daily[daily.length - 1].date}
+          </text>
+        )}
+      </svg>
+    </div>
+  );
+}
+
+function NoAccess() {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-8 py-12 text-center">
+        <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-6 w-6"
+            aria-hidden
+          >
+            <path d="M12 15v2m-6 4h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2Zm10-10V7a4 4 0 0 0-8 0v4h8Z" />
+          </svg>
+        </span>
+        <h2 className="text-lg font-semibold text-slate-900">没有访问权限</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          运营面板仅对管理员开放，请使用管理员账号登录。
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const [days, setDays] = useState(7);
+  const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
+  const [latency, setLatency] = useState<AdminLatencyResponse | null>(null);
+  const [timeTravel, setTimeTravel] = useState<TimeTravelInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [travelBusy, setTravelBusy] = useState(false);
+
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // 数据加载：days/reloadKey 变化触发（effect 内联 IIFE，同 chat 页模式）；
+  // 切换时间窗口时保留旧数据展示，新数据到达后整体替换。
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    (async () => {
+      const [usageRes, latencyRes, ttRes] = await Promise.allSettled([
+        apiJson<AdminUsageResponse>(`/api/admin/usage?days=${days}`),
+        apiJson<AdminLatencyResponse>(`/api/admin/usage/latency?days=${days}`),
+        apiJson<TimeTravelInfo>("/api/admin/time-travel"),
+      ]);
+      if (!alive) return;
+      if (usageRes.status === "fulfilled") {
+        setUsage(usageRes.value);
+        setError(null);
+      } else {
+        setError(
+          usageRes.reason instanceof ApiError
+            ? usageRes.reason.message
+            : "用量数据加载失败",
+        );
+      }
+      if (latencyRes.status === "fulfilled") setLatency(latencyRes.value);
+      if (ttRes.status === "fulfilled") setTimeTravel(ttRes.value);
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [isAdmin, days, reloadKey]);
+
+  const reload = () => {
+    setLoading(true);
+    setError(null);
+    setReloadKey((k) => k + 1);
+  };
+
+  const travel = async (deltaDays: number) => {
+    if (travelBusy || deltaDays === 0) return;
+    setTravelBusy(true);
+    setBanner(null);
+    try {
+      await apiJson<TimeTravelInfo>("/api/admin/time-travel", {
+        body: { days: deltaDays },
+      });
+      setTimeTravel(await apiJson<TimeTravelInfo>("/api/admin/time-travel"));
+    } catch (err) {
+      setBanner(err instanceof ApiError ? err.message : "时间偏移操作失败");
+    } finally {
+      setTravelBusy(false);
+    }
+  };
+
+  if (!isAdmin) return <NoAccess />;
+
+  return (
+    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-semibold text-slate-900">运营与成本</h2>
+        <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+          {DAY_OPTIONS.map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setDays(d)}
+              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                days === d
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              近 {d} 天
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
+      {error && <ErrorBanner message={error} onRetry={reload} />}
+
+      {/* time-travel 控制卡：演示遗忘曲线的操作台 */}
+      <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold text-slate-900">
+              虚拟时钟（time-travel）
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500">
+              当前偏移{" "}
+              <span className="font-mono font-semibold text-violet-700">
+                {timeTravel ? `+${timeTravel.offset_days.toFixed(2)} 天` : "—"}
+              </span>
+              {timeTravel?.virtual_now && (
+                <>
+                  {" "}· 虚拟当前时间{" "}
+                  <span className="font-mono">{fmtDateTime(timeTravel.virtual_now)}</span>
+                </>
+              )}
+              　推进后 FSRS 到期与复习队列随之前进，可现场演示遗忘曲线。
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {travelBusy && <Spinner />}
+            <button
+              type="button"
+              disabled={travelBusy}
+              onClick={() => void travel(1)}
+              className="rounded-xl bg-violet-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              +1 天
+            </button>
+            <button
+              type="button"
+              disabled={travelBusy}
+              onClick={() => void travel(3)}
+              className="rounded-xl bg-violet-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              +3 天
+            </button>
+            <button
+              type="button"
+              disabled={travelBusy || !timeTravel || timeTravel.offset_days === 0}
+              onClick={() => timeTravel && void travel(-timeTravel.offset_days)}
+              className="rounded-xl border border-violet-300 bg-white px-3.5 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              清零
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <LoadingState text="运营数据加载中…" />
+      ) : !usage ? (
+        <EmptyState title="暂无用量数据" />
+      ) : (
+        <>
+          {/* 大数卡片 */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile
+              label={`总成本（近 ${usage.days} 天）`}
+              value={fmtCny(usage.totals.cost_cny)}
+              sub={`${fmtInt(usage.totals.calls)} 次模型调用`}
+            />
+            <StatTile
+              label="输入 tokens"
+              value={fmtInt(usage.totals.prompt_tokens)}
+            />
+            <StatTile
+              label="输出 tokens"
+              value={fmtInt(usage.totals.completion_tokens)}
+            />
+            <StatTile
+              label="缓存命中 tokens"
+              value={fmtInt(usage.totals.cached_tokens)}
+              sub="命中前缀缓存的部分按折扣计价"
+            />
+          </div>
+
+          <Card title="日趋势 · 成本">
+            <DailyTrend daily={usage.daily} />
+          </Card>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Card title="按功能（成本）">
+              <BarRows
+                rows={usage.by_feature.map((f) => ({
+                  key: f.feature,
+                  label: f.feature,
+                  value: f.cost_cny,
+                  detail: `${fmtCny(f.cost_cny)} · ${f.calls} 次`,
+                }))}
+              />
+            </Card>
+            <Card title="按模型（成本）">
+              <BarRows
+                rows={usage.by_model.map((m) => ({
+                  key: `${m.model}-${m.tier}`,
+                  label: `${m.model}（${m.tier}）`,
+                  value: m.cost_cny,
+                  detail: `${fmtCny(m.cost_cny)} · ${m.calls} 次`,
+                }))}
+              />
+            </Card>
+            <Card title="按模式（成本）">
+              <BarRows
+                rows={usage.by_mode.map((m) => ({
+                  key: m.mode,
+                  label: m.mode,
+                  value: m.cost_cny,
+                  detail: `${fmtCny(m.cost_cny)} · ${m.calls} 次`,
+                }))}
+              />
+            </Card>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card title="Top 用户（按成本，ID 已脱敏）">
+              {usage.top_users.length === 0 ? (
+                <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+              ) : (
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-72 text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-xs text-slate-400">
+                      <th className="py-1.5 font-medium">用户</th>
+                      <th className="py-1.5 text-right font-medium">调用次数</th>
+                      <th className="py-1.5 text-right font-medium">成本</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.top_users.map((u) => (
+                      <tr key={u.user} className="border-b border-slate-50">
+                        <td className="py-1.5 font-mono text-xs text-slate-600">
+                          {u.user}…
+                        </td>
+                        <td className="py-1.5 text-right text-slate-600">
+                          {fmtInt(u.calls)}
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-slate-700">
+                          {fmtCny(u.cost_cny)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              )}
+            </Card>
+
+            <Card title="延迟分位 · 按功能">
+              {!latency || latency.by_feature.length === 0 ? (
+                <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+              ) : (
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-80 text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-xs text-slate-400">
+                      <th className="py-1.5 font-medium">功能</th>
+                      <th className="py-1.5 text-right font-medium">调用次数</th>
+                      <th className="py-1.5 text-right font-medium">p50 (ms)</th>
+                      <th className="py-1.5 text-right font-medium">p95 (ms)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latency.by_feature.map((f) => (
+                      <tr key={f.feature} className="border-b border-slate-50">
+                        <td className="py-1.5 font-mono text-xs text-slate-600">
+                          {f.feature}
+                        </td>
+                        <td className="py-1.5 text-right text-slate-600">
+                          {fmtInt(f.calls)}
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-slate-700">
+                          {f.p50_ms != null ? f.p50_ms.toFixed(0) : "—"}
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-slate-700">
+                          {f.p95_ms != null ? f.p95_ms.toFixed(0) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }

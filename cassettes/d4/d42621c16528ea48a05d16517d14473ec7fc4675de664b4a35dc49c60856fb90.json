@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"微分中中值定理\", \"函数的的的连续性\" , \"导数\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 685,
+  "completion_tokens": 25
+}

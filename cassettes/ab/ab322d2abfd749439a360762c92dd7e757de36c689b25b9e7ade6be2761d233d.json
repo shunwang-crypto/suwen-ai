@@ -1,0 +1,6 @@
+{
+  "text": "{\n  \"items\": [\n    {\"kc_name\": \"泰勒公式\", \"type\": \"single\", \"difficulty\": \"easy\"},\n    {\"kc_name\": \"泰勒公式\", \"type\": \"blank\", \"difficulty\": \"mid\"},\n    {\"kc_name\": \"泰勒公式\", \"type\": \"short\", \"difficulty\": \"hard\"}\n  ],\n  \"summary\": \"覆盖泰勒公式的基本形式、展开与余项应用，难度从易到难，包括单选、填空和简答。\"\n}",
+  "model": "deepseek-v4-flash",
+  "prompt_tokens": 408,
+  "completion_tokens": 107
+}

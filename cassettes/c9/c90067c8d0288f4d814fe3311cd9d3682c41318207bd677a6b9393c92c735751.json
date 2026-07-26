@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"拉格朗日中值定理\", \"罗尔定理\" , \"单调性的理论依据\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 863,
+  "completion_tokens": 26
+}

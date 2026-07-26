@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"数列极限\", \"函数级极限\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 537,
+  "completion_tokens": 14
+}

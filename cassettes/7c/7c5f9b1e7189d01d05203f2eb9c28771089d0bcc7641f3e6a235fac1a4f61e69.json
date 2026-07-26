@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"导数\"]}",
+  "model": "deepseek-v4-flash",
+  "prompt_tokens": 405,
+  "completion_tokens": 8
+}

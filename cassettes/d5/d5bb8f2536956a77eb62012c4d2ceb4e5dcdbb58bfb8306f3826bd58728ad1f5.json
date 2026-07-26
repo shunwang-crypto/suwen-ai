@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"泰勒公式\", \"多项式逼近\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 551,
+  "completion_tokens": 13
+}

@@ -1,0 +1,6 @@
+{
+  "text": "该片段位于《高等数学讲义》三章 �微商中值定理》 3.4 洛必达法则》节，详细阐述了洛必达法则的适用条件和使用要点。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 985,
+  "completion_tokens": 45
+}

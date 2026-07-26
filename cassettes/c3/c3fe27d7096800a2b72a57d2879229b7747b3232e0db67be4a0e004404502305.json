@@ -1,0 +1,6 @@
+{
+  "text": "{\" json.loads(\"\n\n        \n        \n\n\n        \n        \n\n        \n        \n\n        :[\"链式法则\", \"导数\", \"反函数求导法则\"]\n        \n\n        \n\n        \n\n\n\n\n        }",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 766,
+  "completion_tokens": 54
+}

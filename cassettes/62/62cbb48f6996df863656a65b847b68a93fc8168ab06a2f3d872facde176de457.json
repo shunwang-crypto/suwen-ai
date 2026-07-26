@@ -1,0 +1,6 @@
+{
+  "text": "这是文档的摘要部分，概述了讲义的内容范围和结构作用关键词：摘要、内容概述",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 257,
+  "completion_tokens": 21
+}

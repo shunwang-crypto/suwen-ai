@@ -1,0 +1,6 @@
+{
+  "text": "该片段位于“第三章 微分中值定理”章节的开头，概述了微分中值定理在微积分中的地位和作用，并\n字。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 292,
+  "completion_tokens": 40
+}

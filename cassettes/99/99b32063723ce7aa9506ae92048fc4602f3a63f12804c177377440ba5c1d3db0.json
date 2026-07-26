@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"拉格朗日中值定理\", \"高阶导数\", \"隐函数求导\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 912,
+  "completion_tokens": 25
+}

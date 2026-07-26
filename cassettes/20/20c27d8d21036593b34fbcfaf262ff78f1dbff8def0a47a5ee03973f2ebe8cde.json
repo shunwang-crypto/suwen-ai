@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"泰勒公式\", \"洛必达法则\", \"导数\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 854,
+  "completion_tokens": 19
+}

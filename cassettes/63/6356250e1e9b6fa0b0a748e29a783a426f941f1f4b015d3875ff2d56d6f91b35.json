@@ -1,0 +1,6 @@
+{
+  "text": "该片段详细列出了常见被积函数及其不定积分，位于第五章不定积分与基本积分表的核心内容，用于提供基本积分表的参考。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 691,
+  "completion_tokens": 33
+}

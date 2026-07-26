@@ -1,0 +1,6 @@
+{
+  "text": "在1.2节中，该片段给出了函数极限的ε-δ定义，并引出两个重要极限，是理解极限概念的核心内容。",
+  "model": "deepseek-v4-flash",
+  "prompt_tokens": 967,
+  "completion_tokens": 31
+}

@@ -1,0 +1,6 @@
+{
+  "text": "该片段位于章节开头，概述了即将详细介绍的基本函数的麦克劳林展开列表，提醒读者熟记这些展开式。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 666,
+  "completion_tokens": 27
+}

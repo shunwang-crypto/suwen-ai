@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"麦克劳林展开\"]}",
+  "model": "deepseek-v4-flash",
+  "prompt_tokens": 471,
+  "completion_tokens": 11
+}

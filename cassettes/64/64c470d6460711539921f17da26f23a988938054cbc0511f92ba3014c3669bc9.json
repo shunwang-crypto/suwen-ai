@@ -1,0 +1,6 @@
+{
+  "text": "该x \\to  0 时的一个实例说明在乘除运算中如何使用等价无穷小而不改变极限值 pérdida\n",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 674,
+  "completion_tokens": 29
+}

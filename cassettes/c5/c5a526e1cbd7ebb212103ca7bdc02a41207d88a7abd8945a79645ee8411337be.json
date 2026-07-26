@@ -1,0 +1,6 @@
+{
+  "text": "该片段是罗尔定理的定义及其证明思路和应用方法的详细阐述，位于第三章 微分中值定理 节点罗3罗尔定理 的起始部分，作为该章节的核心内容。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 723,
+  "completion_tokens": 50
+}

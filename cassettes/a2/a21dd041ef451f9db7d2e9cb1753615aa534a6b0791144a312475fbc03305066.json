@@ -1,0 +1,6 @@
+{
+  "text": "该片段是章节的主体内容，阐述了柯西中值定理的条件、结论及其证明思想，并指出其应用 kuk",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 621,
+  "completion_tokens": 28
+}

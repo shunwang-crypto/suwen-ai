@@ -1,0 +1,6 @@
+{
+  "text": "{\"queries\": [\"拉格朗日余项的形式是什么\", \"拉格朗日余项的表达式是什么\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 253,
+  "completion_tokens": 25
+}

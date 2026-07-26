@@ -1,0 +1,6 @@
+{
+  "text": "该片段详细列出了五个基本函数的麦克劳林展开式，位于泰勒公式章节中常考查函数的^^x,, sin^x^,, cos^x^,, ln(^x^ 与 (e^^x^)^α 的展开式，有助于读者熟记这些基本展开式。",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 939,
+  "completion_tokens": 70
+}

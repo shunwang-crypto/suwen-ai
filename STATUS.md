@@ -26,7 +26,10 @@
 | M3-D4 [LIVE] | 辅导前3轮不给答案 | 🟡 | 结构性防线 ✅ (hint_level 状态机+代码注入禁答令, 单测逐轮断言实收 prompt); LIVE 效果脚本待录制阶段 | — |
 | M3-D5 [LIVE] | 拒答用例正确拒答 | ✅ | qa 图: 检索空+web 空→refused (单测); API 层无依据拒答 (rag e2e) | 2026-07-26 |
 | M3-D6 [LIVE] | 延迟三档口径达标 | ⬜ | 测量脚本待 M5 压测阶段 (stub 口径下无意义) | — |
-| M4-D1..D4 | 闭环+前端/黄金路径/重启持久化 | ⬜ | — | — |
+| M4-D1 [LIVE] | 黄金路径 6.5 分钟 GUI 一镜到底 | 🟡 | HTTP 层黄金路径 record 口径 8 PASS (scripts/smoke_golden_path.py, 真实模型+三进程栈); GUI 一镜到底待前端联调+Playwright | 2026-07-26 |
+| M4-D2 [LIVE] | 答错→time-travel→针对性出题 e2e | 🟡 | 答错→错题入队→time-travel+3天→到期重现 ✅ (test_reviews_flow); "针对薄弱点出题"的画像联动待接 quiz kc_names 自动填充 | 2026-07-26 |
+| M4-D3 [LIVE] | 重启后状态完整+新会话引用历史 | 🟡 | PG 持久化+U-A2 已验; "新会话主动引用历史卡点"待 Reflection/开场注入 (F8-A2) | — |
+| M4-D4 [CI] | 画像更新日志与作答记录核对一致 | ✅ | mastery_log 逐条 evidence_id 关联 attempt (test_reviews_flow/test_profile_reports) | 2026-07-26 |
 | M5-D1..D5 | 压测/故障注入/闭环实验/15分钟复现 | ⬜ | — | — |
 
 ## 用户体系 (§3.0)

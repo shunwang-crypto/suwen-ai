@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"柯西中值定理\", \"洛必达法则\", \"拉格朗日中值定理\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 633,
+  "completion_tokens": 27
+}

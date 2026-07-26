@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"泰勒公式\"]}",
+  "model": "deepseek-v4-flash",
+  "prompt_tokens": 380,
+  "completion_tokens": 9
+}

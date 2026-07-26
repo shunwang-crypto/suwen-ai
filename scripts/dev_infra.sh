@@ -23,6 +23,21 @@ if ! "$ENV_BIN/psql" -U edu -h 127.0.0.1 -p 5432 -lqt 2>/dev/null | cut -d'|' -f
   "$ENV_BIN/createdb" -U edu -h 127.0.0.1 -p 5432 eduagents
 fi
 
+# ---------- Qdrant (musl 静态二进制服务端, 解除本地模式单进程限制 D11) ----------
+QDRANT_BIN="$DATA_ROOT/qdrant-server/qdrant"
+if [ -x "$QDRANT_BIN" ]; then
+  if ! curl -s --max-time 2 http://127.0.0.1:6333/healthz >/dev/null 2>&1; then
+    echo "[dev-infra] starting qdrant server ..."
+    mkdir -p "$DATA_ROOT/qdrant-server/storage"
+    (cd "$DATA_ROOT/qdrant-server" && nohup ./qdrant >"$DATA_ROOT/qdrant.log" 2>&1 &)
+    for _ in $(seq 1 20); do
+      curl -s --max-time 1 http://127.0.0.1:6333/healthz >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+  fi
+  curl -s --max-time 2 http://127.0.0.1:6333/healthz >/dev/null || echo "[dev-infra] 警告: qdrant 未就绪"
+fi
+
 # ---------- Redis ----------
 if ! "$ENV_BIN/redis-cli" -p 6379 ping >/dev/null 2>&1; then
   echo "[dev-infra] starting redis ..."
