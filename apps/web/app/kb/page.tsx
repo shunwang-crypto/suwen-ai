@@ -21,6 +21,7 @@ import {
 import { ChunksDrawer } from "@/components/kb/chunks-drawer";
 import { DocumentTable, isDocActive } from "@/components/kb/document-table";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
+import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import type { DocumentOut, KbOut } from "@/lib/types";
@@ -33,6 +34,15 @@ const UPLOAD_ERROR_MESSAGES: Record<string, string> = {
   FILE_SIGNATURE_MISMATCH: "文件签名与后缀不符（疑似伪装文件），已拦截",
   DOC_QUOTA_EXCEEDED: "文档数量已达配额上限",
   STORAGE_QUOTA_EXCEEDED: "存储空间已达配额上限",
+  // URL 网页导入（parsing/web.py 的 WebFetchError.code；后端信封已带中文，这里兜底）
+  URL_INVALID: "网址格式不合法",
+  URL_SCHEME_NOT_ALLOWED: "仅支持 http/https 网址",
+  URL_HOST_NOT_ALLOWED: "该地址指向内网或本机，已拒绝",
+  URL_HOST_UNRESOLVABLE: "域名无法解析，请检查网址",
+  URL_FETCH_FAILED: "网页抓取失败，请稍后重试或换一个网址",
+  URL_CONTENT_UNSUPPORTED: "该网址不是网页正文（仅支持 HTML/文本）",
+  URL_CONTENT_TOO_LARGE: "网页内容过大，已拒绝",
+  URL_EXTRACT_EMPTY: "未能从该网页提取到正文内容",
 };
 
 function friendlyError(err: unknown, fallback: string): string {
@@ -58,6 +68,7 @@ export default function KbPage() {
   const [docsKbId, setDocsKbId] = useState<string | null>(null);
   const [docsError, setDocsError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<DocumentOut | null>(null);
@@ -202,6 +213,23 @@ export default function KbPage() {
     setUploading(false);
     if (failures.length > 0) setBanner(failures.join("；"));
     await loadDocs(selectedId, true);
+  };
+
+  // 从网址导入：后端抓正文 → 建文档行 → 复用两阶段摄取（新行由既有轮询接管）
+  const importUrl = async (url: string) => {
+    if (!selectedId || importing) return;
+    setBanner(null);
+    setImporting(true);
+    try {
+      await apiJson<DocumentOut>(`/api/kb/${selectedId}/documents/from-url`, {
+        body: { url },
+      });
+      await loadDocs(selectedId, true);
+    } catch (err) {
+      setBanner(friendlyError(err, "网页导入失败"));
+    } finally {
+      setImporting(false);
+    }
   };
 
   const reindexDoc = async (doc: DocumentOut) => {
@@ -389,7 +417,12 @@ export default function KbPage() {
             >
               <div className="space-y-4">
                 {selected.writable ? (
-                  <UploadZone uploading={uploading} onFiles={(f) => void uploadFiles(f)} />
+                  <UploadZone
+                    uploading={uploading}
+                    importing={importing}
+                    onFiles={(f) => void uploadFiles(f)}
+                    onImportUrl={(u) => void importUrl(u)}
+                  />
                 ) : (
                   <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
                     机构库由管理员统一维护；你可以在对话页勾选该库进行联合检索问答。
@@ -420,6 +453,23 @@ export default function KbPage() {
                   />
                 )}
               </div>
+            </Card>
+
+            {/* 学习指南（对标 NotebookLM Source guide）：摄取完成后「下一步干嘛」 */}
+            <Card
+              title="学习指南"
+              extra={
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                  摄取后自动生成
+                </span>
+              }
+            >
+              <StudyGuidePanel
+                key={selected.id}
+                kbId={selected.id}
+                kbName={selected.name}
+                writable={selected.writable}
+              />
             </Card>
 
             {/* 检索调试与写操作同权限：机构库仅 admin 可见（后端同样 403 兜底） */}

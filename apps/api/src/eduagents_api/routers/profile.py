@@ -1,6 +1,8 @@
 """F8 "AI 眼中的我": 画像全量读取 + 用户纠正 (最终解释权)。
 
 - GET /api/profile: 掌握度全量 (join KC 名) + 错题分布 + 最近 10 条掌握度变化流水 (F8-A3)。
+- GET /api/profile/weak-points: 定向出题将要覆盖的薄弱点预览 (与 POST /api/quiz
+  的 from_weak_points 走同一函数, 预览即所得)。
 - POST /api/profile/kc/{kc_id}/override: 用户直改 p_mastery, 确定性直写
   mastery_record + mastery_log(evidence_type="user_override", weight=1.0)。
 """
@@ -18,6 +20,7 @@ from sqlalchemy import func, select
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ErrorItem, KnowledgeComponent, MasteryLog, MasteryRecord
+from ..profile_summary import QUIZ_WEAK_THRESHOLD, QUIZ_WEAK_TOP, weak_point_kcs
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -112,6 +115,23 @@ async def get_profile(ctx: AuthContext = Depends(api_rate_limited)):
         "mastery": mastery,
         "error_distribution": {"by_cause": by_cause, "by_state": by_state},
         "recent_changes": recent_changes,
+    }
+
+
+@router.get("/weak-points")
+async def get_weak_points(
+    kb_id: uuid.UUID | None = None, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """薄弱点预览 (M4-D2): 前端"针对我的薄弱点出题"按钮下方展示将要练的 KC 名。
+
+    与 POST /api/quiz (from_weak_points=true) 共用 weak_point_kcs, 预览与实际一致;
+    返回空列表即"数据不足", 前端据此禁用按钮。
+    """
+    items = await weak_point_kcs(ctx.tenant_id, ctx.user_id, [kb_id] if kb_id else [])
+    return {
+        "threshold": QUIZ_WEAK_THRESHOLD,
+        "limit": QUIZ_WEAK_TOP,
+        "weak_points": items,
     }
 
 

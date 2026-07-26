@@ -64,6 +64,24 @@ class CircuitBreaker:
             return True
         return False
 
+    def trip(self) -> None:
+        """强制拉开断路器 (M5-D2 演示: "一键熔断主模型")。
+
+        清空窗口样本, 否则 open_seconds 后半开探测成功回到 closed 时, 旧的失败样本
+        还留在窗口里会立刻把它再次拉开, 演示看起来像"恢复不了"。
+        """
+        self._events.clear()
+        self._probe_in_flight = False
+        self._state = BreakerState.open
+        self._opened_at = self._now()
+
+    def reset(self) -> None:
+        """强制闭合 (演示收尾/一键恢复)。"""
+        self._events.clear()
+        self._probe_in_flight = False
+        self._state = BreakerState.closed
+        self._opened_at = 0.0
+
     def record(self, ok: bool) -> None:
         self._maybe_transition()
         if self._state == BreakerState.half_open:

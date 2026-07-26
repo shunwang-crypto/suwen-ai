@@ -12,6 +12,7 @@ from .base import (
     UsageSink,
 )
 from .circuit import BreakerState, CircuitBreaker
+from .faults import FaultInjector, FaultState, get_fault_injector
 from .openai_gateway import OpenAIGateway
 from .recorder import Cassette
 
@@ -29,6 +30,9 @@ __all__ = [
     "UsageSink",
     "BreakerState",
     "CircuitBreaker",
+    "FaultInjector",
+    "FaultState",
+    "get_fault_injector",
     "OpenAIGateway",
     "Cassette",
 ]

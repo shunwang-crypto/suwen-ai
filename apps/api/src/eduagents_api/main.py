@@ -13,12 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
 from .db import dispose_engine, get_engine
-from .middleware import RequestContextMiddleware, install_error_handlers
+from .middleware import (
+    ContentModerationMiddleware,
+    RequestContextMiddleware,
+    install_error_handlers,
+)
 from .ratelimit import RateLimiter
 from .routers import (
     admin,
     auth,
     chat,
+    evals,
     health,
     kb,
     ops,
@@ -28,6 +33,7 @@ from .routers import (
     quiz,
     reports,
     reviews,
+    teacher,
     threads,
 )
 from .usage import persist_usage
@@ -121,6 +127,8 @@ def create_app() -> FastAPI:
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
+    # 先 add 的在栈内层: 审核中间件跑在 RequestContext 之内, 拿得到 request_id
+    app.add_middleware(ContentModerationMiddleware)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -143,7 +151,10 @@ def create_app() -> FastAPI:
     app.include_router(reports.router)
     app.include_router(ops.router)
     app.include_router(reviews.router)
+    app.include_router(reviews.errors_router)  # 错题本 /api/errors (F6)
     app.include_router(admin.router)
+    app.include_router(evals.router)  # F9 评估看板
+    app.include_router(teacher.router)  # U-A4 教师组卷导出
     return app
 
 

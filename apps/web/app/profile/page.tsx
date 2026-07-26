@@ -3,6 +3,7 @@
 // AI 眼中的我（F8）：掌握度雷达图（共享组件 components/radar.tsx）+ 掌握度列表（进度条+confidence）
 // + 错题分布条形（纯 div）+ 最近掌握度变化流水；每行「我已掌握」→ POST override 后即时刷新。
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
@@ -37,7 +38,12 @@ const EVIDENCE_LABELS: Record<string, string> = {
   review: "复习作答",
   user_override: "用户纠正",
   tutor_summary: "辅导小结",
+  // §5.5 画像写入双通道之二：后台 Reflection 从对话里抽取的洞察（权重 0.3）
+  chat_reflection: "对话洞察",
 };
+
+/** 掌握度低于此值视为薄弱点（与后端 profile_summary.QUIZ_WEAK_THRESHOLD 同口径）。 */
+const WEAK_THRESHOLD = 0.6;
 
 /** 计数条形行（纯 div 宽度百分比）。 */
 function CountBars({
@@ -205,6 +211,15 @@ export default function ProfilePage() {
                           />
                         </div>
                       </div>
+                      {m.p_mastery < WEAK_THRESHOLD && (
+                        <Link
+                          href="/quiz?weak=1"
+                          title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
+                          className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
+                        >
+                          针对此点练习
+                        </Link>
+                      )}
                       <button
                         type="button"
                         disabled={overridingId !== null || m.p_mastery >= 0.9}

@@ -5,6 +5,7 @@ annotated-types==0.8.0
 anyio==4.14.2
 arq==0.28.0
 asyncpg==0.31.0
+babel==2.18.0
 backoff==2.2.1
 bcrypt==5.0.0
 bidict==0.23.1
@@ -15,7 +16,9 @@ charset-normalizer==3.4.9
 click==8.4.2
 ConfigArgParse==1.7.5
 contourpy==1.3.3
+courlan==1.4.0
 cycler==0.12.1
+dateparser==1.4.1
 distro==1.9.0
 dnspython==2.8.0
 email-validator==2.3.0
@@ -36,6 +39,7 @@ h11==0.16.0
 h2==4.4.0
 hiredis==3.4.0
 hpack==4.2.0
+htmldate==1.10.0
 httpcore==1.0.9
 httptools==0.8.0
 httpx==0.28.1
@@ -48,6 +52,7 @@ Jinja2==3.1.6
 jiter==0.16.0
 jsonpatch==1.33
 jsonpointer==3.1.1
+jusText==3.0.2
 kiwisolver==1.5.0
 langchain-core==1.5.1
 langchain-protocol==0.0.18
@@ -60,6 +65,7 @@ langgraph-sdk==0.4.2
 langsmith==0.10.10
 locust==2.46.2
 lxml==6.1.1
+lxml_html_clean==0.4.5
 Mako==1.3.12
 MarkupSafe==3.0.3
 matplotlib==3.11.1
@@ -103,10 +109,12 @@ python-engineio==4.13.3
 python-multipart==0.0.32
 python-pptx==1.0.2
 python-socketio==5.16.3
+pytz==2026.3.post1
 PyYAML==6.0.3
 pyzmq==27.1.0
 qdrant-client==1.18.0
 redis==5.3.1
+regex==2026.7.19
 requests==2.34.2
 requests-toolbelt==1.0.0
 ruff==0.16.0
@@ -121,9 +129,12 @@ starlette==1.3.1
 structlog==26.1.0
 tabulate==0.10.0
 tenacity==9.1.4
+tld==0.13.2
 tqdm==4.69.1
+trafilatura==2.1.0
 typing-inspection==0.4.2
 typing_extensions==4.16.0
+tzlocal==5.4.4
 urllib3==2.7.0
 uuid_utils==0.17.0
 uvicorn==0.51.0

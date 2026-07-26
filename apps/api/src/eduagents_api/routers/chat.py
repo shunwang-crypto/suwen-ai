@@ -24,11 +24,17 @@ from sse_starlette.sse import EventSourceResponse
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ChatMessage, ChatSession, Document, KnowledgeBase
+from ..profile_summary import ProfileContext, build_profile_context
 from ..schemas import ChatRequestIn, MessageOut, SessionOut, SessionRename
 from ..usage import persist_usage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 log = get_logger("chat")
+
+# Reflection 触发节流 (§5.5 画像写入双通道之二): 每会话每 N 轮入队一次后台洞察抽取,
+# 计数走 Redis (key: reflect:{session_id}), 满 N 归零并 enqueue — 避免每轮都调 LLM。
+_REFLECT_EVERY_TURNS = 5
+_REFLECT_COUNTER_TTL = 7 * 24 * 3600
 
 _SYSTEM_PROMPT = (
     "你是 EduAgents 平台的 AI 助教，面向自学者与学生。"
@@ -42,6 +48,36 @@ _HISTORY_LIMIT = 20  # M3 接入 LangGraph checkpointer 后由滚动摘要接管
 
 def _sse(data: dict) -> str:
     return orjson.dumps(data).decode()
+
+
+async def _maybe_enqueue_reflection(request: Request, ctx: AuthContext, session_id) -> bool:
+    """本轮结束计数; 满 _REFLECT_EVERY_TURNS 轮则入队 reflect_session 并归零。
+
+    任何失败 (Redis/arq 不可用) 只记日志: 画像洞察是增强项, 绝不影响已完成的问答。
+    """
+    redis = getattr(request.app.state, "redis", None)
+    arq = getattr(request.app.state, "arq", None)
+    if redis is None or arq is None:
+        return False
+    try:
+        key = f"reflect:{session_id}"
+        turns = await redis.incr(key)
+        if turns == 1:
+            await redis.expire(key, _REFLECT_COUNTER_TTL)
+        if turns < _REFLECT_EVERY_TURNS:
+            return False
+        await redis.set(key, 0, ex=_REFLECT_COUNTER_TTL)
+        await arq.enqueue_job(
+            "reflect_session",
+            str(ctx.tenant_id),
+            str(ctx.user_id),
+            str(session_id),
+        )
+        log.info("reflection_enqueued", session_id=str(session_id), turns=turns)
+        return True
+    except Exception:  # noqa: BLE001 — 反思入队失败不影响本轮回答
+        log.exception("reflection_enqueue_failed", session_id=str(session_id))
+        return False
 
 
 @router.post("")
@@ -116,6 +152,20 @@ async def chat(
         if row.role in ("user", "assistant")
     ]
 
+    # 画像注入 (F8-A2): kb 路径按绑定库读画像摘要, 空摘要 = 该用户尚无画像。
+    # 读画像失败一律降级为"无画像"继续问答, 不让画像故障拖垮主链路。
+    profile = ProfileContext()
+    if kb_ids:
+        try:
+            profile = await build_profile_context(
+                ctx.tenant_id,
+                ctx.user_id,
+                [str(k) for k in kb_ids],
+                redis=getattr(request.app.state, "redis", None),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("profile_summary_failed")
+
     async def _persist_assistant(
         text: str,
         final: ChatResult | None,
@@ -151,6 +201,8 @@ async def chat(
             cacheable = (
                 len(kb_ids) == 1 and not history
                 and cache is not None and cache_embedder is not None
+                # 有画像 = 答案已按该学生的薄弱点个性化, 跨用户复用即错答案 (F8-A2)
+                and not profile.summary
             )
             if cacheable:
                 try:
@@ -202,6 +254,7 @@ async def chat(
                             "usage": {"mode": "cache", "cost_cny": 0.0},
                         }),
                     }
+                    await _maybe_enqueue_reflection(request, ctx, session_id)
                     return
 
             thread = runtime.thread_id("qa", str(ctx.user_id), uuid.uuid4().hex)
@@ -217,6 +270,9 @@ async def chat(
                 "kb_id": str(kb_ids[0]),
                 "kb_ids": [str(k) for k in kb_ids],
                 "owner_ids": owner_ids,
+                # 画像摘要进 generate 的 system prompt; 薄弱点名单进 trace (前端可见)
+                "profile_summary": profile.summary,
+                "profile_weak_points": profile.weak_points,
             }
             state: dict = {}
             answer_parts: list[str] = []  # 当前 attempt 已下发的 token 累积
@@ -359,6 +415,8 @@ async def chat(
                     }
                 ),
             }
+            # done 之后再入队 Reflection (§5.5 双通道之二): 不占本轮 SSE 时延
+            await _maybe_enqueue_reflection(request, ctx, session_id)
             return
 
         # ---- 通用路径: 直连网关, 真 token 流 ----
@@ -410,6 +468,7 @@ async def chat(
                 }
             ),
         }
+        await _maybe_enqueue_reflection(request, ctx, session_id)
 
     return EventSourceResponse(event_stream())
 

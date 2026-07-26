@@ -89,3 +89,38 @@ orgs 凭邀请码查询）。org 库**写**路径不走 org_ids：service 层校
 `kb_ids: list[UUID]`（不做 scope=all，保回放确定性），PG 先逐库校验可见性（不可见 403），
 Qdrant 单次查询 kb_id/tenant_id 双 MatchAny 只作纵深兜底。机构配额用 `orgs.storage_quota_mb`
 + 上传事务内 SUM 预检（与个人路径同构，不引入计数列，避免计数漂移；库量级演示场景 SUM 足够）。
+
+## D16 · 学习指南存 kb.config_json；输出侧审核留待 M5 流式分段（2026-07-27）
+本条覆盖同一批落地的三件事（URL 网页导入 / 摄取后学习指南 / 内容审核中间件 S-A3）。
+
+**① 学习指南不建表，落 `knowledge_bases.config_json["study_guide"]`。**
+指南是**库级单例**（不是文档级）：用户要的是"这个库整体讲什么、从哪读起"，文档级会
+碎成 N 份互不衔接的摘要，且首个文档就该有指南。它整体读写、不参与检索、不需要索引，
+JSONB 一列足够；建表要多付迁移 + RLS 策略 + 级联清理三份成本却零收益。
+触发：`enrich_document` 成功后统计该 kb 的 `status='enriched'` 文档数，**==1 时**入队
+`build_study_guide`（后续文档不重复烧 standard 档），需要刷新走
+`POST /api/kb/{id}/study-guide/rebuild`。stub 网关跳过（沿用 D2：stub 不产生可入库内容），
+LLM 输出的 `kc_names` 与库内 `knowledge_components` 求交后才落库——指南上的知识点标签
+必须能对上真实 KC，否则是伪造展示（§14）。
+
+**② URL 导入的 SSRF 防线在 `parsing/web.py`，不在路由层。**
+服务端代抓外链是典型 SSRF 面，四道闸：协议白名单（`file://` 拒）→ 主机 DNS 解析后
+逐 IP 校验（回环/私网/链路本地含 `169.254.169.254`/保留/组播，IPv4-mapped IPv6 拆开再验）
+→ 重定向**手动**跟随且每跳重验（httpx 自动跟随会绕过首次校验）→ 5MB + 20s + Content-Type
+上限。抓下来的 markdown 走**现有**两阶段流水线（filename 以 `.md` 结尾即复用
+MarkdownParser），`documents.parse_backend='web'` 标记来源，权限/配额与文件上传完全同构。
+已知残余风险：DNS rebinding（校验用的解析结果与 httpx 实际连接的解析可能不同）；彻底修
+需要把已校验 IP 钉进自定义 transport 或走出网代理白名单，生产部署建议后者，本期记档不做。
+`WEB_IMPORT_ALLOW_PRIVATE_HOSTS` 仅供集成测试（本地临时 http server）打开，生产必须 False。
+
+**③ 内容审核（S-A3）走中间件，且本期只做输入侧。**
+审核是横切关注点，做成 `ContentModerationMiddleware` 而非在各 router 里散落调用：
+对 `POST /api/chat` 与 `POST /api/tutor` 的 `message` 字段做 `check_input`，命中直接回
+400 `CONTENT_REJECTED` 信封——chat 是 SSE，**在第一个字节前**拦下比在流里另造一种拒绝
+事件干净得多，前端沿用既有 ApiError 分支。无 `Authorization` 头的请求跳过审核（端点自身
+返回 401），免得匿名者拿这个端点当敏感词探测器。
+**输出侧审核（`check_output`）本期只提供函数，不接入链路**：SSE 逐 token 下发，要审核就得
+按句/按段缓冲后再放行，会实打实增加首字延迟并改动流式契约，成本与本期收益不匹配——
+**留待 M5 做流式分段审核**（缓冲到标点或 N 字符 → 审核 → 放行，命中则截断流并补发
+error 事件）。规则实现（词表 + allowlist 学术豁免 + soft 词上下文长度规则）只为可演示，
+生产接云审核服务时实现 `ContentModerator` 协议整体替换，调用方一行不改。

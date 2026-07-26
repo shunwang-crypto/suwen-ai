@@ -12,6 +12,7 @@ export type FlowItem =
   | { kind: "trace"; data: GraphTraceData };
 
 const NODE_LABELS: Record<string, string> = {
+  weak_points: "画像定向",
   make_blueprint: "生成蓝图",
   confirm_blueprint: "蓝图确认",
   generate: "生成题目",
@@ -24,6 +25,7 @@ const NODE_LABELS: Record<string, string> = {
 };
 
 const EVENT_LABELS: Record<string, string> = {
+  weak_points_selected: "已按画像选中薄弱点",
   blueprint_ready: "蓝图就绪",
   approved: "已确认",
   rejected: "已取消",

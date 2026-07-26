@@ -211,7 +211,12 @@ export default function ReviewsPage() {
                   <div className="mb-2 flex flex-wrap items-center gap-1.5">
                     <StateBadge state={st.result?.state ?? item.state} />
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                      错因：{CAUSE_LABELS[item.cause] ?? item.cause}
+                      {/* 答错后错因由后端自动重新分类，以最新结果为准 */}
+                      错因：
+                      {(() => {
+                        const cause = st.result?.cause ?? item.cause;
+                        return CAUSE_LABELS[cause] ?? cause;
+                      })()}
                     </span>
                     {item.due && (
                       <span className="text-xs text-slate-400">

@@ -341,4 +341,17 @@ async def record_attempts(
             )
     total = len(results)
     n_correct = sum(1 for r in results if r["correct"])
-    return {"total": total, "correct": n_correct, "results": results}
+    # F3-A3 联动 (尾部追加, 判分主流程一行未改): 本次正确率 <0.6 且存在活跃计划时,
+    # 自动按当前学情插入补强任务并写 plan_adjustments; 失败只记日志, 不影响判分返回。
+    from .plan_adjust import LOW_SCORE_THRESHOLD, adjust_on_low_score
+
+    plan_adjustment = None
+    accuracy = (n_correct / total) if total else 1.0
+    if total and accuracy < LOW_SCORE_THRESHOLD:
+        plan_adjustment = await adjust_on_low_score(ctx, accuracy)
+    return {
+        "total": total,
+        "correct": n_correct,
+        "results": results,
+        "plan_adjustment": plan_adjustment,  # 新增键, 老调用方忽略即可
+    }

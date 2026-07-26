@@ -46,7 +46,20 @@ const TRACE_LABELS: Record<string, string> = {
   reflect: "自省",
   sanitizer: "注入过滤",
   confidence: "置信度",
+  profile: "学情画像",
 };
+
+/** 已知 trace 事件的一句话描述；未知类型回退到 reason 字段。 */
+function traceDetail(data: TraceEventData): string | null {
+  if (data.type === "profile") {
+    const raw = Array.isArray(data.weak_points) ? data.weak_points : [];
+    const names = raw.filter((x): x is string => typeof x === "string");
+    return names.length > 0
+      ? `已加载学情画像：${names.length} 个薄弱点（${names.join("、")}）`
+      : "已加载学情画像";
+  }
+  return typeof data.reason === "string" ? data.reason : null;
+}
 
 function statusDot(status: string) {
   if (status === "running" || status === "pending") {
@@ -129,10 +142,15 @@ function TimelineRow({ item }: { item: TimelineItem }) {
       </li>
     );
   }
-  const { type, route, reason } = item.data;
+  const { type, route } = item.data;
+  const detail = traceDetail(item.data);
   return (
     <li className="flex items-start gap-2.5">
-      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full border border-indigo-400 bg-white" />
+      <span
+        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full border bg-white ${
+          type === "profile" ? "border-violet-500" : "border-indigo-400"
+        }`}
+      />
       <div className="min-w-0 flex-1">
         <p className="text-xs text-slate-600">
           <span className="font-medium text-slate-800">
@@ -145,8 +163,15 @@ function TimelineRow({ item }: { item: TimelineItem }) {
             </span>
           )}
         </p>
-        {reason && <p className="text-xs text-slate-500">{reason}</p>}
-        <ExtraFields data={item.data} known={["type", "route", "reason"]} />
+        {detail && <p className="text-xs text-slate-500">{detail}</p>}
+        <ExtraFields
+          data={item.data}
+          known={
+            type === "profile"
+              ? ["type", "route", "reason", "weak_points"]
+              : ["type", "route", "reason"]
+          }
+        />
       </div>
     </li>
   );
@@ -169,7 +194,7 @@ export function ProcessTimeline({
           last.data.detail ? `：${last.data.detail}` : ""
         }`
       : `${TRACE_LABELS[last.data.type] ?? last.data.type}${
-          last.data.reason ? `：${last.data.reason}` : ""
+          traceDetail(last.data) ? `：${traceDetail(last.data)}` : ""
         }`;
 
   return (

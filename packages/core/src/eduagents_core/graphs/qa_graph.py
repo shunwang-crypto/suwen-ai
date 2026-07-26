@@ -63,6 +63,17 @@ STRICT_REGEN_INSTRUCTION = (
     "宁可说明知识库资料不足，也不要推测或补充资料之外的内容。"
 )
 
+# 画像注入 (F8-A2 "新会话主动关联历史卡点" + "回答深度由画像调制")。
+# 摘要文本由 API 层 profile_summary.py 确定性拼装 (不经 LLM), 空串即不注入。
+PROFILE_SECTION_TEMPLATE = (
+    "\n\n## 学生画像（来自该学生的历史作答与掌握度记录，非本次提问内容）\n"
+    "{{PROFILE}}\n"
+    "【个性化指令】若本次问题涉及该学生的薄弱点，主动点明并关联其历史卡点"
+    "（如“这正是你之前在 X 上失分的地方”）；回答深度按其掌握程度调整：薄弱知识点"
+    "从基础与前置概念讲起并补充例子，已掌握的部分点到为止不赘述。"
+    "画像仅用于调整讲法，不得替代资料作为事实依据，也不要罗列画像原文。"
+)
+
 
 class _QaGraphState(QaState, total=False):
     """构图私有扩展通道: 多查询计划与 verify 重生成控制, 不进 QaState 公共契约。"""
@@ -411,6 +422,10 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             )
         else:
             system = DIRECT_SYSTEM_PROMPT
+        # 画像注入: 三条生成路径通吃 (kb/web/direct), 摘要为空即完全不改 prompt
+        profile_summary = (state.get("profile_summary") or "").strip()
+        if profile_summary:
+            system += PROFILE_SECTION_TEMPLATE.replace("{{PROFILE}}", profile_summary)
         history = [
             ChatMessage(role=m["role"], content=str(m.get("content", "")))
             for m in state.get("messages") or []
@@ -456,17 +471,27 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                         "attempt": attempt,
                     }
                 )
-        return {
-            "answer": answer,
-            "trace": [
+        trace: list[dict] = []
+        if profile_summary and not regen:
+            # 前端时间线据此显示"已加载学情画像: N 个薄弱点" (画像可见 = 可核对);
+            # verify 重生成时不重复上报
+            trace.append(
                 {
-                    "type": "generate",
-                    "path": path,
-                    "regen": regen,
-                    "degraded": bool(result.degraded) if result is not None else False,
+                    "type": "profile",
+                    "weak_points": list(state.get("profile_weak_points") or []),
+                    "chars": len(profile_summary),
                 }
-            ],
-        }
+            )
+        trace.append(
+            {
+                "type": "generate",
+                "path": path,
+                "regen": regen,
+                "degraded": bool(result.degraded) if result is not None else False,
+                "profile_injected": bool(profile_summary),
+            }
+        )
+        return {"answer": answer, "trace": trace}
 
     async def verify_support(state: _QaGraphState) -> dict:
         answer = state.get("answer", "")

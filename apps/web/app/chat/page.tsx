@@ -3,8 +3,9 @@
 // 主对话界面：会话列表 / 流式消息（token 增量 + 过程时间线）/ 引用面板。
 // SSE 走 fetch+ReadableStream（lib/sse.ts），支持契约七类事件。
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -64,15 +65,24 @@ function genId(): string {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export default function ChatPage() {
+/**
+ * 对话页主体。使用 useSearchParams（读 ?kb=&q=），生产构建要求包在 Suspense 里，
+ * 因此默认导出是下面的 ChatPage 壳（Next 16 文档 use-search-params#prerendering）。
+ */
+function ChatView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   // 会话与知识库
   const [sessions, setSessions] = useState<SessionOut[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [kbs, setKbs] = useState<KbOut[]>([]);
-  // Wave3 联合检索：多选（checkbox 列表，个人库与机构库分组），发送 kb_ids
-  const [kbIds, setKbIds] = useState<string[]>([]);
+  // Wave3 联合检索：多选（checkbox 列表，个人库与机构库分组），发送 kb_ids。
+  // 初值取 ?kb=（学习指南 chip 带过来的目标库），保证首帧的 send 闭包就绑定了它。
+  const [kbIds, setKbIds] = useState<string[]>(() => {
+    const kb = searchParams.get("kb");
+    return kb ? [kb] : [];
+  });
   const [kbPickerOpen, setKbPickerOpen] = useState(false);
 
   // 消息与流式状态
@@ -95,6 +105,8 @@ export default function ChatPage() {
   const [citationsOpen, setCitationsOpen] = useState(false);
 
   const [banner, setBanner] = useState<string | null>(null);
+  /** ?q= 自动发问只做一次（router.replace 清参数后 effect 会重跑） */
+  const autoAskedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const patchMsg = useCallback(
@@ -342,6 +354,22 @@ export default function ChatPage() {
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  // 学习指南推荐问题 chip 跳转：/chat?kb=<id>&q=<question> —— 自动发问一次。
+  // kb 参数在首帧就写进 kbIds 初值（见 useState 初始化），所以这里的 send 闭包
+  // 已经带上目标知识库；发完把参数从地址栏清掉，刷新不会重复发问。
+  useEffect(() => {
+    if (autoAskedRef.current) return;
+    const q = searchParams.get("q");
+    if (!q) return;
+    autoAskedRef.current = true;
+    // 让位到微任务再发：send 会同步 setState，直接在 effect 体里调用等于在提交阶段
+    // 触发级联渲染。不挂 cleanup —— 这是一次性动作，被 send 身份变化打断反而会丢发问。
+    queueMicrotask(() => {
+      void send(q);
+      router.replace("/chat");
+    });
+  }, [searchParams, send, router]);
 
   const handleComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -867,5 +895,19 @@ export default function ChatPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center text-sm text-slate-400">
+          对话加载中…
+        </div>
+      }
+    >
+      <ChatView />
+    </Suspense>
   );
 }

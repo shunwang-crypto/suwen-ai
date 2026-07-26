@@ -19,6 +19,7 @@ import {
   MasteryDelta,
   Spinner,
   fmtDateTime,
+  fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
 import { BlueprintCard } from "@/components/quiz/blueprint-card";
@@ -42,6 +43,7 @@ import type {
   QuizDetail,
   QuizListItem,
   QuizQuestion,
+  WeakPointsResponse,
 } from "@/lib/types";
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
@@ -66,10 +68,14 @@ export default function QuizPage() {
   const urlParams = new URLSearchParams(search);
   const prefillTopic = urlParams.get("topic") ?? "";
   const prefillKb = urlParams.get("kb") ?? "";
+  // /quiz?weak=1（画像页/学情报告页的「针对此点练习」）：高亮薄弱点定向出题卡片
+  const fromWeakLink = urlParams.get("weak") === "1";
 
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [quizzes, setQuizzes] = useState<QuizListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  // 画像联动出题（M4-D2）：预览与实际出题共用后端 weak_point_kcs，所见即所练
+  const [weak, setWeak] = useState<WeakPointsResponse | null>(null);
 
   // SSE 出题流
   const [phase, setPhase] = useState<Phase>("idle");
@@ -99,13 +105,14 @@ export default function QuizPage() {
     }
   }, []);
 
-  // 首屏并行拉取历史练习与知识库列表（effect 内联 IIFE，同 chat 页模式）
+  // 首屏并行拉取历史练习 / 知识库 / 薄弱点预览（effect 内联 IIFE，同 chat 页模式）
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [quizzesRes, kbsRes] = await Promise.allSettled([
+      const [quizzesRes, kbsRes, weakRes] = await Promise.allSettled([
         apiJson<QuizListItem[]>("/api/quiz"),
         apiJson<KbOut[]>("/api/kb"),
+        apiJson<WeakPointsResponse>("/api/profile/weak-points"),
       ]);
       if (!alive) return;
       if (quizzesRes.status === "fulfilled") setQuizzes(quizzesRes.value);
@@ -114,6 +121,11 @@ export default function QuizPage() {
         setListError("历史练习加载失败");
       }
       setKbs(kbsRes.status === "fulfilled" ? kbsRes.value : []);
+      setWeak(
+        weakRes.status === "fulfilled"
+          ? weakRes.value
+          : { threshold: 0.6, limit: 5, weak_points: [] },
+      );
     })();
     return () => {
       alive = false;
@@ -212,6 +224,27 @@ export default function QuizPage() {
     [consume],
   );
 
+  /** 画像定向出题：kc_names 由后端按掌握度填充，前端只声明意图（M4-D2）。 */
+  const startWeakQuiz = useCallback(() => {
+    const points = weak?.weak_points ?? [];
+    if (points.length === 0) return;
+    // §5.6 掌握度驱动出题：P(L)<0.4 出基础题，0.4–0.6 出变式题
+    const easy = points.filter((p) => p.p_mastery < 0.4).length;
+    topicRef.current = "薄弱点强化练习";
+    setTimeline([]);
+    setInterruptData(null);
+    setFlowError(null);
+    setNotice(null);
+    setQuiz(null);
+    setAttempt(null);
+    setPhase("streaming");
+    void consume("/api/quiz", {
+      from_weak_points: true,
+      num_questions: points.length,
+      difficulty_mix: { easy, mid: points.length - easy, hard: 0 },
+    });
+  }, [weak, consume]);
+
   const resume = useCallback(
     (approved: boolean, blueprint?: Blueprint) => {
       if (!interruptData) return;
@@ -258,6 +291,12 @@ export default function QuizPage() {
         },
       });
       setAttempt(result);
+      try {
+        // 判分即写 BKT，薄弱点随之变化：立刻刷新预览（"上午答错，下午就在卷子上"）
+        setWeak(await apiJson<WeakPointsResponse>("/api/profile/weak-points"));
+      } catch {
+        // 薄弱点刷新失败不影响判分结果展示
+      }
     } catch (err) {
       setFlowError(err instanceof ApiError ? err.message : "提交失败，请重试");
     } finally {
@@ -419,6 +458,76 @@ export default function QuizPage() {
         /* ---- 发起 + 历史视图 ---- */
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1 space-y-4">
+            {/* 画像联动出题（M4-D2）：主按钮 + 将要练的 KC 预览 */}
+            <section
+              className={`rounded-2xl border bg-white p-4 ${
+                fromWeakLink
+                  ? "border-indigo-400 ring-2 ring-indigo-100"
+                  : "border-slate-200"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-slate-800">
+                    针对我的薄弱点出题
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    知识点由学情画像自动选取（掌握度
+                    {weak ? ` < ${fmtPct(weak.threshold)}` : "偏低"}
+                    ，近 7 天错过的优先）
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy || !weak || weak.weak_points.length === 0}
+                  onClick={startWeakQuiz}
+                  className="flex shrink-0 items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy && (
+                    <Spinner className="h-4 w-4 border-white/40 border-t-white" />
+                  )}
+                  针对我的薄弱点出题
+                </button>
+              </div>
+
+              {weak === null ? (
+                <p className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                  <Spinner className="h-3.5 w-3.5" /> 正在读取学情画像…
+                </p>
+              ) : weak.weak_points.length === 0 ? (
+                <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。
+                </p>
+              ) : (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-xs text-slate-500">
+                    将要练的 {weak.weak_points.length} 个知识点：
+                  </p>
+                  <ul className="flex flex-wrap gap-1.5">
+                    {weak.weak_points.map((wp) => (
+                      <li
+                        key={wp.kc_id}
+                        className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800"
+                        title={`掌握度 ${fmtPct(wp.p_mastery)}`}
+                      >
+                        <span className="max-w-40 truncate font-medium">
+                          {wp.name}
+                        </span>
+                        <span className="font-mono text-amber-600">
+                          {fmtPct(wp.p_mastery)}
+                        </span>
+                        {wp.recent_error && (
+                          <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
+                            近期错过
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+
             <Card title="发起练习">
               <QuizForm
                 key={`${prefillTopic}|${prefillKb}`}

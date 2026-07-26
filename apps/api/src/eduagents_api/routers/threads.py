@@ -22,12 +22,24 @@ def _sse(data: dict) -> str:
 
 
 async def stream_graph_run(
-    runtime, kind: str, thread_id: str, ctx: AuthContext, payload: dict | None, resume=None
+    runtime,
+    kind: str,
+    thread_id: str,
+    ctx: AuthContext,
+    payload: dict | None,
+    resume=None,
+    trace_prelude: list[dict] | None = None,
 ):
     """图执行 → SSE 事件流 (§6 协议): node_update/trace_event/interrupt/done。
-    quiz/plan 完成时在 done 前落库并回传结果。M3-D2 的 interrupt→resume 协议载体。"""
+    quiz/plan 完成时在 done 前落库并回传结果。M3-D2 的 interrupt→resume 协议载体。
+
+    trace_prelude: 入图前由路由层决策产生的 trace 事件 (如画像定向出题选中的薄弱点),
+    原样先行下发, 让"这卷题为什么是这些知识点"在前端时间线里可核对。
+    """
 
     async def gen():
+        for tr in trace_prelude or []:
+            yield {"event": "trace_event", "data": _sse(tr)}
         try:
             async for ev in runtime.astream_updates(kind, thread_id, payload, resume=resume):
                 if ev["kind"] == "token":

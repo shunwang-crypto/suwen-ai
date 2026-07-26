@@ -21,6 +21,9 @@ import { useAuth } from "@/lib/auth-context";
 import type {
   AdminLatencyResponse,
   AdminUsageResponse,
+  BreakerState,
+  FaultPatch,
+  FaultState,
   KbOut,
   TimeTravelInfo,
 } from "@/lib/types";
@@ -252,6 +255,289 @@ function RetrievalTestSection() {
   );
 }
 
+// ---- 故障注入（M5-D2）：演示降级链路与熔断器，现场制造 provider 故障 ----
+
+const BREAKER_TIER_LABEL: Record<string, string> = {
+  cheap: "cheap · 低成本档",
+  standard: "standard · 主模型",
+  strong: "strong · 强模型",
+};
+
+const BREAKER_STATE_META: Record<
+  BreakerState,
+  { text: string; cls: string; dot: string }
+> = {
+  closed: {
+    text: "闭合 · 正常放行",
+    cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    dot: "bg-emerald-500",
+  },
+  half_open: {
+    text: "半开 · 试探恢复",
+    cls: "border-amber-300 bg-amber-50 text-amber-700",
+    dot: "bg-amber-500",
+  },
+  open: {
+    text: "断开 · 已熔断",
+    cls: "border-red-300 bg-red-50 text-red-700",
+    dot: "bg-red-500",
+  },
+};
+
+/** 故障注入控制台：provider 宕机 / 附加延迟 / 错误率 + 熔断器一键操作与状态。 */
+function FaultInjectionSection() {
+  const [state, setState] = useState<FaultState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // 滑块本地态：拖动只改本地，松手/失焦或点「应用」才发请求（避免每帧打接口）
+  const [latency, setLatency] = useState(0);
+  const [errorRate, setErrorRate] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const s = await apiJson<FaultState>("/api/admin/faults");
+        if (!alive) return;
+        setState(s);
+        setLatency(s.latency_ms);
+        setErrorRate(s.error_rate);
+        setError(null);
+      } catch (err) {
+        if (!alive) return;
+        setError(err instanceof ApiError ? err.message : "故障注入状态加载失败");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const patch = async (body: FaultPatch) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await apiJson<FaultState>("/api/admin/faults", { body });
+      setState(s);
+      setLatency(s.latency_ms);
+      setErrorRate(s.error_rate);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "故障注入设置失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) return <LoadingState text="故障注入状态加载中…" />;
+
+  const dirty =
+    state != null &&
+    (latency !== state.latency_ms ||
+      Math.abs(errorRate - state.error_rate) > 1e-9);
+  const commitSliders = () => {
+    if (!dirty) return;
+    void patch({ latency_ms: latency, error_rate: errorRate });
+  };
+
+  const mode = state?.gateway_mode ?? "unknown";
+  const inert = mode === "stub" || mode === "replay";
+  const active = state?.active === true;
+
+  return (
+    <section
+      className={`rounded-2xl border bg-white ${
+        active ? "border-red-400 ring-1 ring-red-200" : "border-slate-200"
+      }`}
+    >
+      {active && (
+        <div className="flex items-center gap-2 rounded-t-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-white" aria-hidden />
+          故障注入生效中 —— 当前所有 live/record 网关调用都会被人为劣化
+        </div>
+      )}
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
+        <h2 className="text-sm font-semibold text-slate-800">故障注入</h2>
+        <span className="flex items-center gap-2 text-xs">
+          {busy && <Spinner />}
+          <span className="text-slate-400">当前网关模式</span>
+          <span
+            className={`rounded-full px-2 py-0.5 font-mono font-semibold ${
+              inert ? "bg-amber-100 text-amber-800" : "bg-indigo-100 text-indigo-700"
+            }`}
+          >
+            {mode}
+          </span>
+        </span>
+      </header>
+
+      <div className="space-y-4 p-4">
+        {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+        {inert && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+            当前网关模式为 <span className="font-mono font-semibold">{mode}</span>
+            ，故障注入不生效（stub/replay 是演示兜底通道，按设计不受影响）。
+            要现场演示降级与熔断，请把网关切到 live 或 record。
+          </div>
+        )}
+
+        {state?.note && <p className="text-xs text-slate-400">{state.note}</p>}
+
+        {/* provider 宕机开关 */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-800">模拟 provider 宕机</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              打开后上游一律直接失败，用于演示重试 → 降级档位 → 熔断的完整链路。
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={state?.provider_down === true}
+            disabled={busy}
+            onClick={() => void patch({ provider_down: !(state?.provider_down === true) })}
+            className={`relative h-7 w-13 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+              state?.provider_down ? "bg-red-500" : "bg-slate-300"
+            }`}
+          >
+            <span
+              className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${
+                state?.provider_down ? "left-7" : "left-1"
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* 延迟 / 错误率滑块 */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 px-4 py-3">
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <span className="text-sm font-medium text-slate-800">附加延迟</span>
+              <span className="font-mono text-sm font-semibold text-indigo-700">
+                {latency} ms
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={5000}
+              step={100}
+              value={latency}
+              disabled={busy}
+              onChange={(e) => setLatency(Number(e.target.value))}
+              onPointerUp={commitSliders}
+              onBlur={commitSliders}
+              className="w-full accent-indigo-600"
+              aria-label="附加延迟（毫秒）"
+            />
+            <p className="mt-1 text-[11px] text-slate-400">
+              每次上游调用额外 sleep 这么久，用来触发超时与 p95 抬升。
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 px-4 py-3">
+            <div className="mb-2 flex items-baseline justify-between gap-2">
+              <span className="text-sm font-medium text-slate-800">随机错误率</span>
+              <span className="font-mono text-sm font-semibold text-indigo-700">
+                {Math.round(errorRate * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={errorRate}
+              disabled={busy}
+              onChange={(e) => setErrorRate(Number(e.target.value))}
+              onPointerUp={commitSliders}
+              onBlur={commitSliders}
+              className="w-full accent-indigo-600"
+              aria-label="随机错误率"
+            />
+            <p className="mt-1 text-[11px] text-slate-400">
+              按该概率随机抛错，用来演示重试与熔断阈值的累积过程。
+            </p>
+          </div>
+        </div>
+
+        {dirty && (
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs text-amber-700">滑块有未应用的改动</span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={commitSliders}
+              className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              应用
+            </button>
+          </div>
+        )}
+
+        {/* 熔断器 */}
+        <div className="rounded-xl border border-slate-200 px-4 py-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium text-slate-800">熔断器状态</span>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void patch({ trip_breaker: "standard" })}
+                className="rounded-xl border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                一键熔断主模型
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void patch({
+                    reset_breakers: true,
+                    provider_down: false,
+                    latency_ms: 0,
+                    error_rate: 0,
+                  })
+                }
+                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                恢复全部
+              </button>
+            </span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(state?.breakers ?? []).map((b) => {
+              const meta = BREAKER_STATE_META[b.state] ?? BREAKER_STATE_META.closed;
+              return (
+                <div
+                  key={b.tier}
+                  className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${meta.cls}`}
+                >
+                  <span className="min-w-0 truncate font-mono text-xs">
+                    {BREAKER_TIER_LABEL[b.tier] ?? b.tier}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
+                    <span className={`h-2 w-2 rounded-full ${meta.dot}`} aria-hidden />
+                    {meta.text}
+                  </span>
+                </div>
+              );
+            })}
+            {(state?.breakers ?? []).length === 0 && (
+              <p className="py-2 text-xs text-slate-400">暂无熔断器信息</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function NoAccess() {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -283,7 +569,7 @@ export default function AdminPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
-  const [tab, setTab] = useState<"ops" | "retrieval">("ops");
+  const [tab, setTab] = useState<"ops" | "retrieval" | "faults">("ops");
   const [days, setDays] = useState(7);
   const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
   const [latency, setLatency] = useState<AdminLatencyResponse | null>(null);
@@ -358,6 +644,7 @@ export default function AdminPage() {
           [
             ["ops", "运营与成本"],
             ["retrieval", "检索命中测试"],
+            ["faults", "故障注入"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -376,6 +663,8 @@ export default function AdminPage() {
       </div>
 
       {tab === "retrieval" && <RetrievalTestSection />}
+
+      {tab === "faults" && <FaultInjectionSection />}
 
       {tab === "ops" && (
         <>

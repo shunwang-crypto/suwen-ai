@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     chunk_parent_chars: int = 2400
     chunk_overlap_chars: int = 80
 
+    # --- web import (URL 网页导入) ---
+    # 仅本地集成测试打开 (临时 http server 在 127.0.0.1); 生产必须 False,
+    # 否则 SSRF 防护 (内网/回环/元数据地址拦截) 被整体旁路, 见 parsing/web.py
+    web_import_allow_private_hosts: bool = False
+
     # --- upload constraints ---
     max_upload_mb: int = 50
     max_docs_per_user: int = 200

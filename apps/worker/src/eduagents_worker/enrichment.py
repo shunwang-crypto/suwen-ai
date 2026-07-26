@@ -7,7 +7,7 @@ from pathlib import Path
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import ChatMessage, ChatRequest, ModelGateway, Tier
 from eduagents_core.logging import get_logger
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 log = get_logger("enrichment")
 
@@ -294,6 +294,22 @@ async def enrich_document(
             with_prefix=len(with_prefix),
             vocab_size=len(normalizer.vocab.entries),
         )
+        # 学习指南自动生成 (对标 NotebookLM Source guide): 该库**首个**文档 enriched
+        # 时触发一次, 后续文档不重复烧钱 —— 需要刷新走手动 rebuild 端点。
+        redis = ctx.get("redis")
+        if redis is not None:
+            async with tenant_session(tenant_id) as session:
+                enriched_count = await session.scalar(
+                    select(func.count())
+                    .select_from(Document)
+                    .where(
+                        Document.kb_id == uuid.UUID(kb_id),
+                        Document.status == "enriched",
+                    )
+                )
+            if enriched_count == 1:
+                await redis.enqueue_job("build_study_guide", tenant_id, kb_id)
+                log.info("study_guide_enqueued", kb_id=kb_id)
         return "enriched"
     except Exception as exc:  # noqa: BLE001 — enriching 失败仅降级为 ready, 不回退 Stage1
         log.exception("enrich_failed", doc_id=doc_id)

@@ -33,6 +33,7 @@ from .base import (
     UsageSink,
 )
 from .circuit import CircuitBreaker
+from .faults import FaultInjector, get_fault_injector
 from .recorder import Cassette
 from .stub import estimate_tokens, stub_text
 
@@ -62,10 +63,13 @@ class OpenAIGateway:
         settings: Settings,
         usage_sink: UsageSink | None = None,
         budget_guard: BudgetGuard | None = None,
+        faults: FaultInjector | None = None,
     ):
         self._s = settings
         self._sink = usage_sink
         self._guard = budget_guard
+        # 故障注入 (M5-D2): 默认取进程内单例 -> admin 端点改开关立刻作用于本网关。
+        self._faults = faults or get_fault_injector()
         self._cassette = Cassette(settings.gateway_cassette_dir)
         self._clients: dict[Tier, AsyncOpenAI] = {}
         self._breakers: dict[Tier, CircuitBreaker] = {
@@ -131,6 +135,24 @@ class OpenAIGateway:
 
     def breaker_state(self, tier: Tier) -> str:
         return self._breakers[tier].state.value
+
+    def breaker_states(self) -> dict[str, str]:
+        """三档位熔断器快照 (admin 故障注入面板展示用)。"""
+        return {t.value: self._breakers[t].state.value for t in Tier}
+
+    def trip_breaker(self, tier: Tier) -> None:
+        """M5-D2: 一键熔断某一档 (不真的打 provider, 直接把断路器拉开)。"""
+        self._breakers[tier].trip()
+        log.warning("breaker_tripped_manually", tier=tier.value)
+
+    def reset_breakers(self) -> None:
+        for breaker in self._breakers.values():
+            breaker.reset()
+        log.warning("breakers_reset_manually")
+
+    @property
+    def faults(self) -> FaultInjector:
+        return self._faults
 
     # ---------- internals ----------
 
@@ -257,6 +279,9 @@ class OpenAIGateway:
             reraise=True,
         ):
             with attempt:
+                # 故障注入 (M5-D2): 只在真正要发网络请求的这一刻生效。抛的是
+                # _RETRYABLE 里的 APIConnectionError -> 重试→熔断→降级链完整可演示。
+                await self._faults.apply(tier.value, cfg.base_url)
                 resp = await self._client(tier).chat.completions.create(
                     **self._completion_kwargs(req, cfg)
                 )
@@ -323,6 +348,7 @@ class OpenAIGateway:
                 breaker.record(False)
                 continue
             try:
+                await self._faults.apply(tier.value, cfg.base_url)  # M5-D2
                 kwargs = self._completion_kwargs(req, cfg)
                 stream = await self._client(tier).chat.completions.create(
                     stream=True, stream_options={"include_usage": True}, **kwargs

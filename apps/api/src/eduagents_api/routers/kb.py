@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 import uuid
 
 import xxhash
 from eduagents_core.logging import get_logger
+from eduagents_core.parsing.web import WebFetchError, fetch_and_extract
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy import delete, func, select
 
@@ -18,6 +20,7 @@ from ..schemas import (
     KbCreate,
     KbOut,
     RetrieveDebugIn,
+    UrlImportIn,
 )
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
@@ -199,6 +202,95 @@ async def upload_document(
     return doc_out
 
 
+# ---- URL 网页导入 (对标 ima/元宝网页剪藏; 抓取→对象存储→复用两阶段摄取流水线) ----
+
+_FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_md_filename(title: str) -> str:
+    """网页标题 -> 安全的 .md 文件名 (路径分隔符/控制字符剔除, 截断防超长)。"""
+    cleaned = _FILENAME_UNSAFE_RE.sub(" ", title or "")
+    cleaned = " ".join(cleaned.split()).strip(". ")
+    if not cleaned:
+        cleaned = "网页剪藏"
+    return f"{cleaned[:120]}.md"
+
+
+@router.post("/{kb_id}/documents/from-url", response_model=DocumentOut, status_code=201)
+async def import_document_from_url(
+    kb_id: uuid.UUID,
+    body: UrlImportIn,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+    settings=Depends(get_app_settings),
+):
+    """粘贴网址导入: SSRF 校验后抓正文转 markdown, 建 Document 行入 ARQ 摄取队列。
+
+    权限/配额与文件上传路径完全一致 (机构库仅 org admin 可导入)。
+    """
+    kb = await _resolve_kb(ctx, kb_id)
+    _require_kb_write(ctx, kb)
+    owner_id = kb.tenant_id
+
+    try:
+        title, markdown = await fetch_and_extract(
+            body.url, allow_private=settings.web_import_allow_private_hosts
+        )
+    except WebFetchError as exc:
+        log.warning("web_import_rejected", code=exc.code, url=body.url[:200])
+        raise HTTPException(status_code=400, detail=exc.code) from None
+
+    data = markdown.encode("utf-8")
+    if len(data) > settings.max_upload_mb * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="FILE_TOO_LARGE")
+    filename = _safe_md_filename(title)
+    content_hash = xxhash.xxh64_hexdigest(data)
+
+    quota_mb = settings.max_storage_mb_per_user
+    if kb.owner_type == "org":
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+            org = await session.get(Org, owner_id)
+            if org is not None:
+                quota_mb = org.storage_quota_mb
+
+    async with tenant_session(owner_id) as session:
+        doc_count = await session.scalar(select(func.count()).select_from(Document))
+        if doc_count >= settings.max_docs_per_user:
+            raise HTTPException(status_code=400, detail="DOC_QUOTA_EXCEEDED")
+        used_bytes = (
+            await session.scalar(select(func.coalesce(func.sum(Document.size_bytes), 0)))
+        ) or 0
+        if used_bytes + len(data) > quota_mb * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="STORAGE_QUOTA_EXCEEDED")
+        # 同库同哈希幂等 (重复粘同一网址且正文未变 -> 返回已有文档)
+        existing = await session.scalar(
+            select(Document).where(
+                Document.kb_id == kb_id, Document.content_hash == content_hash
+            )
+        )
+        if existing is not None:
+            return DocumentOut.model_validate(existing, from_attributes=True)
+        doc = Document(
+            tenant_id=owner_id,
+            kb_id=kb_id,
+            filename=filename,
+            content_hash=content_hash,
+            size_bytes=len(data),
+            status="pending",
+            parse_backend="web",  # 来源标记: 与文件上传路径区分
+            uploaded_by=ctx.user_id,
+        )
+        session.add(doc)
+        await session.flush()
+        doc_out = DocumentOut.model_validate(doc, from_attributes=True)
+
+    storage = request.app.state.storage
+    await storage.save(f"{owner_id}/{kb_id}/{doc_out.id}/{filename}", data)
+    await request.app.state.arq.enqueue_job("ingest_document", str(owner_id), str(doc_out.id))
+    log.info("document_imported_from_url", doc_id=str(doc_out.id), size=len(data))
+    return doc_out
+
+
 @router.get("/{kb_id}/documents", response_model=list[DocumentOut])
 async def list_documents(
     kb_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)
@@ -329,6 +421,33 @@ async def preview_chunks(
             )
         ).all()
         return [ChunkOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+# ---- 学习指南 (对标 NotebookLM Source guide / Studio: 摄取完成后"下一步干嘛") ----
+# 存储决策 (D16): 不加新表, 聚合到 kb 级 —— knowledge_bases.config_json["study_guide"]。
+
+
+@router.get("/{kb_id}/study-guide")
+async def get_study_guide(kb_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+    """读取该库的学习指南; 未生成时 guide=None (前端据此显示"生成学习指南")。"""
+    kb = await _resolve_kb(ctx, kb_id)
+    guide = (kb.config_json or {}).get("study_guide")
+    writable = kb.owner_type == "user" or str(kb.tenant_id) in ctx.admin_org_ids
+    return {"kb_id": str(kb_id), "guide": guide, "writable": writable}
+
+
+@router.post("/{kb_id}/study-guide/rebuild", status_code=202)
+async def rebuild_study_guide(
+    kb_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """手动重建 (自动触发在 enrich 完成后, 见 worker/enrichment.py)。"""
+    kb = await _resolve_kb(ctx, kb_id)
+    _require_kb_write(ctx, kb)
+    await request.app.state.arq.enqueue_job(
+        "build_study_guide", str(kb.tenant_id), str(kb_id)
+    )
+    log.info("study_guide_rebuild_queued", kb_id=str(kb_id))
+    return {"status": "queued"}
 
 
 def _context_item(c: Chunk) -> ChunkContextItem:

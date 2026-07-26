@@ -7,7 +7,10 @@ from eduagents_core.config import get_settings
 from eduagents_core.logging import configure_logging, get_logger
 
 from .enrichment import enrich_document
+from .evals import run_retrieval_eval_task
 from .ingestion import cleanup_document, cleanup_kb, ingest_document
+from .reflection import reflect_session
+from .study_guide import build_study_guide
 
 log = get_logger("worker")
 
@@ -40,6 +43,9 @@ class WorkerSettings:
         cleanup_document,
         cleanup_kb,
         cleanup_answer_cache,
+        run_retrieval_eval_task,
+        reflect_session,
+        build_study_guide,
     ]
     # 语义缓存 L2 无原生 TTL: 每日凌晨清 7 天前点位 (L1 Redis 自带 24h TTL)
     cron_jobs = [

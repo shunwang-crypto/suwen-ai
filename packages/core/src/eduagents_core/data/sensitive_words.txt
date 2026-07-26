@@ -1,0 +1,88 @@
+# EduAgents 内容审核词表 (S-A3 stub 实现, §8 第 4 条)
+#
+# 格式 (制表符或多空格分隔):
+#   <分类>  <词条>  [soft]
+#   allow   <学术/技术语境豁免短语>
+#
+# 分类: illegal 违法犯罪 / violence 暴力恐怖 / adult 成人色情 / political 政治敏感
+#
+# soft 标记: 该词在正常学术语境中歧义大 (如"暴力"既指暴力行为也指暴力枚举算法),
+#   仅在"短文本" (词条占据整条消息语义) 或"求教意图" 上下文中才判定命中;
+#   allow 行的豁免短语优先级最高, 命中位置被豁免短语覆盖时一律放行。
+#
+# 生产环境替换: 本表仅用于演示与离线测试。接入云审核服务时整表停用,
+#   见 eduagents_core/moderation.py 的 ContentModerator 协议与替换点说明。
+
+# ---- 违法犯罪 ----
+illegal	制毒
+illegal	贩毒
+illegal	毒品交易
+illegal	冰毒
+illegal	海洛因
+illegal	摇头丸
+illegal	办假证
+illegal	假身份证
+illegal	假发票
+illegal	洗钱
+illegal	走私军火
+illegal	贩卖人口
+illegal	网络赌博
+illegal	开设赌场
+illegal	信用卡套现
+illegal	盗刷银行卡
+illegal	盗号软件
+illegal	代考枪手
+
+# ---- 暴力恐怖 ----
+violence	制造炸弹
+violence	自制炸药
+violence	枪支制造
+violence	私藏枪支
+violence	恐怖袭击
+violence	自杀方法
+violence	砍人	soft
+violence	杀人	soft
+violence	暴力	soft
+violence	血腥	soft
+violence	自残	soft
+violence	虐待	soft
+
+# ---- 成人色情 ----
+adult	色情
+adult	淫秽
+adult	裸聊
+adult	成人影片
+adult	卖淫
+adult	嫖娼
+adult	情色	soft
+
+# ---- 政治敏感 ----
+political	颠覆国家政权
+political	煽动颠覆
+political	分裂国家
+political	恐怖组织
+political	极端组织
+political	邪教组织
+political	暴恐
+
+# ---- 学术/技术语境豁免 (allowlist, 优先级最高) ----
+allow	暴力法
+allow	暴力破解
+allow	暴力枚举
+allow	暴力搜索
+allow	暴力求解
+allow	暴力匹配
+allow	暴力递归
+allow	反暴力
+allow	校园暴力预防
+allow	家庭暴力防治
+allow	暴力美学分析
+allow	血腥玛丽鸡尾酒
+allow	虐待动物罪
+allow	虐待罪
+allow	情色文学史
+allow	政治经济学
+allow	思想政治
+allow	国际政治
+allow	政治制度
+allow	政治学

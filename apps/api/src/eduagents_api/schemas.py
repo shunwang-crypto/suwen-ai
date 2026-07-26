@@ -41,6 +41,12 @@ class RetrieveDebugIn(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
 
 
+class UrlImportIn(BaseModel):
+    """URL 网页导入 (对标 ima 剪藏): 协议/内网校验在 parsing/web.py 侧完成。"""
+
+    url: str = Field(min_length=8, max_length=2048)
+
+
 class SessionOut(BaseModel):
     id: uuid.UUID
     title: str

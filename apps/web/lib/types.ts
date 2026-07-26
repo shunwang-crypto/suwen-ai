@@ -149,6 +149,35 @@ export interface ChunkOut {
   embedding_status: string;
 }
 
+// ---- 学习指南（GET /api/kb/{kb_id}/study-guide，对齐 worker/study_guide.py）----
+
+export interface StudyGuideOutlineItem {
+  title: string;
+  summary: string;
+  kc_names: string[];
+}
+
+export interface StudyGuideTerm {
+  term: string;
+  definition: string;
+}
+
+export interface StudyGuide {
+  outline: StudyGuideOutlineItem[];
+  glossary: StudyGuideTerm[];
+  suggested_questions: string[];
+  version: number;
+  generated_at: string;
+  doc_count: number;
+}
+
+export interface StudyGuideOut {
+  kb_id: string;
+  /** 未生成时为 null（前端据此显示「生成学习指南」按钮） */
+  guide: StudyGuide | null;
+  writable: boolean;
+}
+
 /** 引用回原文定位（GET /api/kb/{kb_id}/chunks/{chunk_id}/context）。 */
 export interface ChunkContextItem {
   id: string;
@@ -267,6 +296,8 @@ export interface AttemptResult {
   total: number;
   correct: number;
   results: AttemptResultItem[];
+  /** F3-A3：正确率 <0.6 且存在活跃计划时，后端自动插入补强任务的结果（否则 null） */
+  plan_adjustment?: (PlanAdjustResult & { plan_id: string }) | null;
 }
 
 // ---- 图工作流 SSE（stream_graph_run：interrupt 负载平铺在顶层）----
@@ -306,6 +337,11 @@ export interface PlanTask {
   minutes: number;
   kc_names: string[];
   resource_ref: number | null;
+  /** 计划详情接口下发：stages/days/tasks 三层 0 基下标组成的任务键（前端只回传不自造） */
+  task_key?: string;
+  done?: boolean;
+  /** "adjust" = 学情调整插入的补强任务 */
+  source?: string;
 }
 
 export interface PlanDay {
@@ -336,6 +372,57 @@ export interface PlanListItem {
   budget_hours: number;
   structure: PlanStructure | null;
   created_at: string;
+}
+
+/** 任务粒度完成进度（GET /api/plans/{id}）。 */
+export interface PlanProgress {
+  total: number;
+  done: number;
+  ratio: number;
+}
+
+export interface PlanDetail {
+  id: string;
+  goal: string;
+  budget_hours: number;
+  version: number;
+  structure: PlanStructure;
+  progress: PlanProgress;
+  created_at: string;
+}
+
+export interface PlanToggleResult {
+  task_key: string;
+  done: boolean;
+  progress: PlanProgress;
+}
+
+/** 学情调整插入的补强任务。 */
+export interface PlanInsertedTask {
+  task_key: string;
+  day: number;
+  stage_name: string;
+  title: string;
+  minutes: number;
+  kc_id: string;
+  kc_names: string[];
+  p_mastery: number;
+}
+
+export interface PlanAdjustResult {
+  inserted: PlanInsertedTask[];
+  reason: string;
+  adjustment_id: string | null;
+  progress?: PlanProgress;
+}
+
+export interface PlanAdjustmentItem {
+  id: string;
+  reason: string;
+  /** manual | low_score_attempt */
+  trigger: string;
+  inserted: PlanInsertedTask[];
+  at: string;
 }
 
 // ---- 辅导（F4，对齐 routers/plans.py tutor_turn）----
@@ -419,6 +506,8 @@ export interface ReviewTodayResponse {
 export interface ReviewAnswerResult {
   correct: boolean;
   state: string;
+  /** 答错时由错因自动分类刷新（stub 网关不分类，保留原值） */
+  cause: string;
   next_due: string;
   mastery_changes: MasteryChange[];
 }
@@ -427,6 +516,54 @@ export interface ReviewVariantResult {
   error_item_id: string;
   variant_of: string;
   question: QuizQuestion;
+}
+
+// ---- 错题本（F6，对齐 routers/reviews.py 的 errors_router）----
+
+export interface ErrorQuestion {
+  id: string;
+  type: string;
+  stem: string;
+  options: string[];
+  answer: string;
+  explanation: string;
+  difficulty: string;
+}
+
+export interface ErrorItemOut {
+  id: string;
+  state: string;
+  cause: string;
+  kc_ids: string[];
+  kc_names: string[];
+  next_due: string | null;
+  /** 该题在 attempts 里的错误作答次数 */
+  error_count: number;
+  my_answer: string;
+  is_variant: boolean;
+  created_at: string;
+  question: ErrorQuestion | null;
+}
+
+export interface ErrorListResponse {
+  items: ErrorItemOut[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}
+
+export interface ErrorKcCount {
+  kc_id: string;
+  name: string;
+  count: number;
+}
+
+export interface ErrorStatsResponse {
+  total: number;
+  by_cause: Record<string, number>;
+  by_state: Record<string, number>;
+  by_kc: ErrorKcCount[];
 }
 
 // ---- 画像（F8，对齐 routers/profile.py）----
@@ -458,6 +595,21 @@ export interface ProfileResponse {
     by_state: Record<string, number>;
   };
   recent_changes: MasteryLogItem[];
+}
+
+/** 定向出题薄弱点（GET /api/profile/weak-points，与出题后端同源）。 */
+export interface WeakPointItem {
+  kc_id: string;
+  name: string;
+  p_mastery: number;
+  /** 近 7 天真的错过（排序优先级更高，前端标「近期错过」） */
+  recent_error: boolean;
+}
+
+export interface WeakPointsResponse {
+  threshold: number;
+  limit: number;
+  weak_points: WeakPointItem[];
 }
 
 export interface OverrideResult {
@@ -537,4 +689,341 @@ export interface TimeTravelInfo {
   offset_days: number;
   offset_seconds: number;
   virtual_now?: string;
+}
+
+// ---- 评估看板（F9，对齐 routers/evals.py）----
+// 历史报告字段口径不一（M2 老报告只有 hit@5/mrr/ndcg@10），故指标一律 optional。
+
+export type EvalKind = "retrieval" | "simulation";
+
+/** 列表页的关键指标缩略（0..5 条，后端已格式化好 display）。 */
+export interface EvalSummaryMetric {
+  key: string;
+  value: number;
+  display: string;
+}
+
+export interface EvalRunListItem {
+  id: string;
+  kind: EvalKind;
+  label: string;
+  source: string;
+  at: string;
+  generated_at?: string | null;
+  corpus_version?: string | null;
+  golden_set_version?: string | null;
+  /** 数据口径速览，如 "embedding live / rerank live" */
+  data_basis?: string | null;
+  summary: EvalSummaryMetric[];
+}
+
+export interface EvalRunsResponse {
+  runs: EvalRunListItem[];
+}
+
+/** 报告自带的检索参数快照（值全是字符串，键随版本可能增减）。 */
+export type EvalReportConfig = Record<string, string | undefined>;
+
+export interface EvalRunConfig {
+  kind?: string;
+  source?: string;
+  content_sha256?: string;
+  label?: string;
+  imported_at?: string;
+  report_config?: EvalReportConfig;
+}
+
+export type RetrievalHeadlineKey =
+  | "hit@1"
+  | "hit@3"
+  | "hit@5"
+  | "mrr"
+  | "ndcg@5"
+  | "ndcg@10";
+
+export type RetrievalHeadline = Partial<Record<RetrievalHeadlineKey, number>>;
+
+export interface RetrievalCategoryRow {
+  category: string;
+  n: number;
+  "hit@1"?: number;
+  "hit@3"?: number;
+  "hit@5"?: number;
+  mrr?: number;
+}
+
+export interface RetrievalRefusalRow {
+  qid: string;
+  question: string;
+  n_chunks: number;
+  top1_score: number;
+  top1_heading?: string | null;
+  /** false = 该拒答题被高置信命中（误报），需红标 */
+  ok: boolean;
+}
+
+export interface RetrievalRefusal {
+  correct: number;
+  total: number;
+  rate: number;
+  rows?: RetrievalRefusalRow[];
+}
+
+export interface RetrievalEvalMetrics {
+  kind: "retrieval";
+  generated_at?: string;
+  golden_set?: string;
+  golden_set_version?: string;
+  n_questions?: number;
+  n_answerable?: number;
+  n_refusal?: number;
+  headline?: RetrievalHeadline;
+  confident?: { n: number; total: number };
+  by_category?: RetrievalCategoryRow[];
+  refusal?: RetrievalRefusal;
+  report_config?: EvalReportConfig;
+}
+
+export interface SimulationEstimatorConfig {
+  p_l0?: number;
+  p_t?: number;
+  slip?: number;
+  guess?: number;
+}
+
+export interface SimulationConfig {
+  n_students?: number;
+  n_kcs?: number;
+  t_rounds?: number;
+  threshold?: number;
+  max_questions?: number;
+  learning_rate?: number;
+  theta_max?: number;
+  estimator?: SimulationEstimatorConfig;
+}
+
+/** 实验 A：掌握度估计精度（每臂一组）。 */
+export interface SimulationArmEstimation {
+  r2?: number;
+  spearman?: number;
+  convergence_round?: number | null;
+  min_mae?: number;
+  min_mae_round?: number;
+  final_mae?: number;
+  mae_curve_mean?: number[];
+}
+
+/** 实验 B：毕业所需题量（每臂一组）。 */
+export interface SimulationArmEfficiency {
+  mean: number;
+  ci95?: number[];
+  grad_rate?: number;
+  final_theta_mean?: number;
+  seed_mean_questions?: number[];
+}
+
+export interface SimulationComparison {
+  mean_diff: number;
+  diff_ci95?: number[];
+  wilcoxon_w?: number;
+  p_value: number;
+  method?: string;
+  cohens_d?: number;
+}
+
+export interface SimulationSensitivityRow {
+  variant: string;
+  mean_adaptive: number;
+  mean_random: number;
+  mean_ladder: number;
+  mean_diff_a_vs_r: number;
+  p_value: number;
+  cohens_d: number;
+  direction_holds: boolean;
+}
+
+export interface SimulationEvalMetrics {
+  kind: "simulation";
+  generated_at?: string;
+  elapsed_seconds?: number;
+  seeds?: number[];
+  config?: SimulationConfig;
+  experiment_a?: Record<string, SimulationArmEstimation>;
+  experiment_b?: {
+    arms?: Record<string, SimulationArmEfficiency>;
+    comparisons?: Record<string, SimulationComparison>;
+  };
+  sensitivity?: SimulationSensitivityRow[];
+}
+
+export interface EvalRunDetail {
+  id: string;
+  kind: EvalKind;
+  label: string;
+  source: string;
+  at: string;
+  corpus_version?: string | null;
+  golden_set_version?: string | null;
+  config?: EvalRunConfig;
+  metrics: RetrievalEvalMetrics | SimulationEvalMetrics;
+}
+
+export interface EvalCompareSide {
+  id: string;
+  label: string;
+  kind: EvalKind;
+  at: string;
+  source: string;
+}
+
+export interface EvalCompareDelta {
+  metric: string;
+  left: number;
+  right: number;
+  delta: number;
+  /** left 为 0 时后端给 null */
+  pct: number | null;
+}
+
+export interface EvalCompareResponse {
+  left: EvalCompareSide;
+  right: EvalCompareSide;
+  same_kind: boolean;
+  deltas: EvalCompareDelta[];
+  left_only: string[];
+  right_only: string[];
+}
+
+export interface EvalImportItem {
+  source: string;
+  kind: string;
+  status: "imported" | "skipped" | "error";
+  id?: string | null;
+  error?: string | null;
+}
+
+export interface EvalImportResponse {
+  imported: number;
+  skipped: number;
+  items: EvalImportItem[];
+}
+
+export interface EvalRunRequest {
+  kb_id: string;
+  tenant_id?: string;
+  golden?: string;
+  no_sparse?: boolean;
+  no_rerank?: boolean;
+  label?: string;
+}
+
+export interface EvalRunJobStart {
+  job_id: string;
+  status: string;
+}
+
+export type EvalJobStatus = "queued" | "in_progress" | "complete" | "not_found";
+
+export interface EvalJobInfo {
+  job_id: string;
+  status: EvalJobStatus;
+  success: boolean | null;
+  eval_run_id: string | null;
+  error: string | null;
+}
+
+// ---- 故障注入（M5-D2，对齐 routers/admin.py）----
+
+export type BreakerState = "closed" | "open" | "half_open";
+
+export interface FaultBreaker {
+  tier: string;
+  state: BreakerState;
+}
+
+export interface FaultState {
+  provider_down: boolean;
+  latency_ms: number;
+  error_rate: number;
+  /** live / record / stub / replay；stub 与 replay 不受故障注入影响 */
+  gateway_mode: string;
+  active: boolean;
+  note: string;
+  breakers: FaultBreaker[];
+}
+
+export interface FaultPatch {
+  provider_down?: boolean;
+  latency_ms?: number;
+  error_rate?: number;
+  trip_breaker?: "cheap" | "standard" | "strong" | "all";
+  reset_breakers?: boolean;
+}
+
+// ---- 教师组卷导出（U-A4，对齐 routers/teacher.py）----
+
+export interface TeacherQuizItem {
+  id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  kb_id: string | null;
+  num_questions: number;
+  /** easy/mid/hard → 题数 */
+  difficulty_counts: Record<string, number>;
+}
+
+export interface TeacherExportQuestion {
+  index: number;
+  id: string;
+  type: string;
+  type_label: string;
+  stem: string;
+  options: string[];
+  answer: string;
+  explanation: string;
+  difficulty: string;
+  difficulty_label: string;
+  kc_ids: string[];
+}
+
+export interface TeacherExportJson {
+  format: "json";
+  exported_at: string;
+  exported_by: string;
+  quiz: {
+    id: string;
+    title: string;
+    status: string;
+    created_at: string;
+    kb_id: string | null;
+    blueprint: Record<string, unknown>;
+  };
+  questions: TeacherExportQuestion[];
+}
+
+export interface TeacherPrintItem {
+  index: number;
+  type: string;
+  type_label: string;
+  stem: string;
+  options: string[];
+  difficulty: string;
+  difficulty_label: string;
+  points: number;
+}
+
+export interface TeacherPrintAnswer {
+  index: number;
+  answer: string;
+  explanation: string;
+}
+
+export interface TeacherExportPrint {
+  format: "print";
+  exported_at: string;
+  exported_by: string;
+  quiz: { id: string; title: string; created_at: string; total: number };
+  paper: { title: string; instructions: string; items: TeacherPrintItem[] };
+  answer_key: { title: string; items: TeacherPrintAnswer[] };
 }

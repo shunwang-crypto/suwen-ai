@@ -16,6 +16,8 @@ interface NavItem {
   label: string;
   icon: ReactNode;
   adminOnly?: boolean;
+  /** teacher 或 admin 可见 */
+  teacherOnly?: boolean;
 }
 
 function icon(d: string): ReactNode {
@@ -72,6 +74,11 @@ const NAV_ITEMS: NavItem[] = [
     icon: icon("M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"),
   },
   {
+    href: "/errors",
+    label: "错题本",
+    icon: icon("M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Zm7 5-4 6m0-6 4 6"),
+  },
+  {
     href: "/reports",
     label: "学情报告",
     icon: icon("M3 3v18h18M8 17V9m4 8V5m4 12v-6"),
@@ -82,10 +89,22 @@ const NAV_ITEMS: NavItem[] = [
     icon: icon("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"),
   },
   {
+    href: "/teacher",
+    label: "组卷导出",
+    teacherOnly: true,
+    icon: icon("M4 4h11l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm10 0v6h6M8 14h8M8 18h5"),
+  },
+  {
     href: "/admin",
     label: "运营",
     adminOnly: true,
     icon: icon("M12 3v2m0 14v2M5.2 5.2l1.4 1.4m10.8 10.8 1.4 1.4M3 12h2m14 0h2M5.2 18.8l1.4-1.4M17.4 6.6l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"),
+  },
+  {
+    href: "/evals",
+    label: "评估看板",
+    adminOnly: true,
+    icon: icon("M4 20h16M7 20V10m5 10V4m5 16v-7"),
   },
 ];
 
@@ -97,23 +116,31 @@ const TITLE_MAP: Record<string, string> = {
   "/tutor": "辅导",
   "/plans": "学习计划",
   "/reviews": "复习",
+  "/errors": "错题本",
   "/reports": "学情报告",
   "/profile": "我的画像",
+  "/teacher": "组卷导出",
   "/admin": "运营",
+  "/evals": "评估看板",
 };
 
 function NavLinks({
   isAdmin,
+  isTeacher,
   pathname,
   onNavigate,
 }: {
   isAdmin: boolean;
+  isTeacher: boolean;
   pathname: string;
   onNavigate?: () => void;
 }) {
   return (
     <nav className="flex flex-1 flex-col gap-1 p-3">
-      {NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).map((item) => {
+      {NAV_ITEMS.filter(
+        (item) =>
+          (!item.adminOnly || isAdmin) && (!item.teacherOnly || isTeacher),
+      ).map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (
@@ -184,6 +211,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   const isAdmin = user?.role === "admin";
+  const isTeacher = user?.role === "teacher" || isAdmin;
   const title =
     Object.entries(TITLE_MAP).find(
       ([p]) => pathname === p || pathname.startsWith(`${p}/`),
@@ -200,7 +228,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* 桌面端侧边导航 */}
       <aside className="hidden w-60 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
         <Brand />
-        <NavLinks isAdmin={isAdmin} pathname={pathname} />
+        <NavLinks isAdmin={isAdmin} isTeacher={isTeacher} pathname={pathname} />
         <div className="border-t border-slate-100 p-4 text-xs text-slate-400">
           多智能体学习平台
         </div>
@@ -219,6 +247,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Brand />
             <NavLinks
               isAdmin={isAdmin}
+              isTeacher={isTeacher}
               pathname={pathname}
               onNavigate={() => setDrawerOpen(false)}
             />
@@ -278,7 +307,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       {user?.email}
                     </p>
                     <p className="text-xs text-slate-400">
-                      {isAdmin ? "管理员" : "学习者"}
+                      {isAdmin ? "管理员" : isTeacher ? "教师" : "学习者"}
                     </p>
                   </div>
                   <div className="my-1 border-t border-slate-100" />

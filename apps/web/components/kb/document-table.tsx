@@ -79,8 +79,18 @@ export function DocumentTable({
             return (
               <tr key={doc.id} className="border-b border-slate-100 align-top">
                 <td className="max-w-60 py-2.5 pr-3">
-                  <p className="truncate font-medium text-slate-800" title={doc.filename}>
-                    {doc.filename}
+                  <p className="flex items-center gap-1.5 font-medium text-slate-800">
+                    <span className="min-w-0 truncate" title={doc.filename}>
+                      {doc.filename}
+                    </span>
+                    {doc.parse_backend === "web" && (
+                      <span
+                        className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700"
+                        title="从网址导入"
+                      >
+                        网页
+                      </span>
+                    )}
                   </p>
                   {doc.status === "failed" && doc.error_msg && (
                     <p className="mt-0.5 break-words text-xs text-red-600">
