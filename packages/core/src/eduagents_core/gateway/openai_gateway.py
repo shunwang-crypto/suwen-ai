@@ -42,11 +42,24 @@ log = get_logger("gateway")
 _RETRYABLE = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
 
 # Degradation chain per requested tier: real different endpoints, tried in order.
+# P1-10: cheap 不得降级到 standard (降级即涨价 5.7~23 倍, 高峰抖动时成本反向放大);
+# cheap 失败直接走 cassette/stub 兜底。standard/strong 链只降不升。
 _DEGRADE: dict[Tier, list[Tier]] = {
-    Tier.cheap: [Tier.cheap, Tier.standard],
+    Tier.cheap: [Tier.cheap],
     Tier.standard: [Tier.standard, Tier.cheap],
     Tier.strong: [Tier.strong, Tier.standard, Tier.cheap],
 }
+
+# 档位价格序 (P1-10 升价降级告警用): 任何未来改动 _DEGRADE 引入"降级到更贵档"
+# 都会打出 degraded_upcost 告警, 供成本看板报警。
+_TIER_RANK: dict[Tier, int] = {Tier.cheap: 0, Tier.standard: 1, Tier.strong: 2}
+
+
+def _warn_if_upcost(requested: Tier, used: Tier) -> None:
+    if _TIER_RANK[used] > _TIER_RANK[requested]:
+        log.warning(
+            "degraded_upcost", requested=requested.value, used=used.value
+        )
 
 
 class OpenAIGateway:
@@ -92,8 +105,13 @@ class OpenAIGateway:
         elif mode == "replay":
             result = self._replay_result(req, started)
         else:  # live / record
-            req = await self._budget_precheck(req)
-            result = await self._live_chat(req, started)
+            req, reserved_tier = await self._budget_precheck(req)
+            try:
+                result = await self._live_chat(req, started)
+            except BaseException:
+                # 全链失败/取消: 返还预算预扣 (P1-12), 否则失败请求也占额度
+                await self._refund_reservation(req, reserved_tier)
+                raise
             if mode == "record":
                 self._cassette.put(
                     self._cassette_key(req),
@@ -104,6 +122,8 @@ class OpenAIGateway:
                         "completion_tokens": result.completion_tokens,
                     },
                 )
+            await self._emit_usage(req, result, reserved_tier=reserved_tier)
+            return result
         await self._emit_usage(req, result)
         return result
 
@@ -129,9 +149,16 @@ class OpenAIGateway:
             yield result
             return
 
-        req = await self._budget_precheck(req)
-        async for item in self._live_stream(req):
-            yield item
+        req, reserved_tier = await self._budget_precheck(req)
+        inner = self._live_stream(req, reserved_tier)
+        try:
+            async for item in inner:
+                yield item
+        finally:
+            # P0-6: async-for 提前退出 (客户端断开 aclose 本生成器) 不会自动关闭
+            # 内层生成器 —— 显式 aclose 让 _live_stream 的 finally 立即执行
+            # (部分消耗结算/预扣返还), 而不是等 GC 异步兜底。
+            await inner.aclose()
 
     def breaker_state(self, tier: Tier) -> str:
         return self._breakers[tier].state.value
@@ -156,23 +183,29 @@ class OpenAIGateway:
 
     # ---------- internals ----------
 
-    async def _budget_precheck(self, req: ChatRequest) -> ChatRequest:
+    async def _budget_precheck(self, req: ChatRequest) -> tuple[ChatRequest, str | None]:
         """live/record 入口预检 (预算强制唯一 choke point; stub/replay 零成本不预检)。
+
+        返回 (req, reserved_tier): reserved_tier 非 None 表示 guard 已按该档位原子
+        预扣估算额 (P1-12), 网关必须在结算/失败路径把它带给 settle 以差额返还。
 
         - None: 正常放行
         - "cheap": 软限降档 — tier 压到 cheap 且 max_tokens 加硬上限 (防降档后长回答穿透预算)
         - BudgetExceeded: 直接向上传播 (API 层转 429 + Retry-After)
-        - guard 自身故障 (如 Redis 抖动) fail-open, 预算功能不放大不可用性
+        - guard 自身故障 (如 Redis 抖动) fail-open (无预扣), 预算功能不放大不可用性
         """
         if self._guard is None:
-            return req
+            return req, None
+        reserved_tier = req.tier.value
         try:
-            verdict = await self._guard.precheck(req.tenant_id, req.user_id)
+            verdict = await self._guard.precheck(
+                req.tenant_id, req.user_id, tier=reserved_tier
+            )
         except BudgetExceeded:
             raise
         except Exception:  # noqa: BLE001 — 预算预检故障不阻断业务, 只记日志
             log.exception("budget_precheck_failed_open")
-            return req
+            return req, None
         if verdict == "cheap":
             cap = self._s.budget_cheap_max_tokens
             max_tokens = min(req.max_tokens, cap) if req.max_tokens else cap
@@ -183,7 +216,32 @@ class OpenAIGateway:
                     requested_tier=req.tier.value,
                 )
                 req = replace(req, tier=Tier.cheap, max_tokens=max_tokens)
-        return req
+        return req, reserved_tier
+
+    async def _refund_reservation(
+        self, req: ChatRequest, reserved_tier: str | None
+    ) -> None:
+        """调用彻底失败时返还 precheck 的预扣额 (settle 收到零成本事件即整额返还)。"""
+        if self._guard is None or reserved_tier is None:
+            return
+        refund_event = UsageEvent(
+            request_id=req.request_id,
+            tenant_id=req.tenant_id,
+            user_id=req.user_id,
+            feature=req.feature,
+            model="",
+            tier=reserved_tier,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cached_tokens=0,
+            cost_cny=0.0,
+            latency_ms=0,
+            mode="error",
+        )
+        try:
+            await self._guard.settle(refund_event, reserved_tier=reserved_tier)
+        except Exception:  # noqa: BLE001 — 返还失败只记日志 (方向是多扣, 安全侧)
+            log.exception("budget_refund_failed")
 
     def _cassette_key(self, req: ChatRequest) -> str:
         return Cassette.key(
@@ -314,6 +372,7 @@ class OpenAIGateway:
                     log.warning(
                         "tier_degraded", requested=req.tier.value, used=tier.value
                     )
+                    _warn_if_upcost(req.tier, tier)
                 return result
             except Exception as exc:  # noqa: BLE001 — 每个 provider 失败都要继续降级链
                 breaker.record(False)
@@ -336,74 +395,146 @@ class OpenAIGateway:
         )
 
     async def _live_stream(
-        self, req: ChatRequest
+        self, req: ChatRequest, reserved_tier: str | None = None
     ) -> AsyncIterator[StreamDelta | ChatResult]:
         started = perf_counter()
-        for tier in _DEGRADE[req.tier]:
-            breaker = self._breakers[tier]
-            if not breaker.allow():
-                continue
-            cfg = self._s.tier(tier.value)
-            if not cfg.api_key:
-                breaker.record(False)
-                continue
-            try:
-                await self._faults.apply(tier.value, cfg.base_url)  # M5-D2
-                kwargs = self._completion_kwargs(req, cfg)
-                stream = await self._client(tier).chat.completions.create(
-                    stream=True, stream_options={"include_usage": True}, **kwargs
-                )
-                parts: list[str] = []
-                p_tok = c_tok = 0
-                async for chunk in stream:
-                    if chunk.usage:
-                        p_tok = chunk.usage.prompt_tokens
-                        c_tok = chunk.usage.completion_tokens
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        delta = chunk.choices[0].delta.content
-                        parts.append(delta)
-                        yield StreamDelta(delta)
-                breaker.record(True)
-                text = "".join(parts)
-                if not p_tok:
-                    p_tok = sum(estimate_tokens(m.content) for m in req.messages)
-                    c_tok = estimate_tokens(text)
-                result = ChatResult(
-                    text=text,
-                    model=cfg.model,
-                    tier=tier.value,
-                    prompt_tokens=p_tok,
-                    completion_tokens=c_tok,
-                    cost_cny=self._cost(cfg, p_tok, c_tok),
-                    latency_ms=int((perf_counter() - started) * 1000),
-                    mode="live",
-                    degraded=tier != req.tier,
-                )
-                if self._s.gateway_mode == "record":
-                    self._cassette.put(
-                        self._cassette_key(req),
-                        {
-                            "text": text,
-                            "model": result.model,
-                            "prompt_tokens": p_tok,
-                            "completion_tokens": c_tok,
-                        },
+        # P0-6 (计费半段): 客户端断开时 sse_starlette 关闭本生成器 (GeneratorExit/
+        # CancelledError 落在 yield 点), 上游 token 已消耗必须照样结算 —— 记录
+        # 流式进行中的 tier 与已收内容, finally 里对未结算的部分兜底计费。
+        settled = False
+        streaming_tier: Tier | None = None
+        parts: list[str] = []
+        try:
+            for tier in _DEGRADE[req.tier]:
+                breaker = self._breakers[tier]
+                if not breaker.allow():
+                    continue
+                cfg = self._s.tier(tier.value)
+                if not cfg.api_key:
+                    breaker.record(False)
+                    continue
+                try:
+                    await self._faults.apply(tier.value, cfg.base_url)  # M5-D2
+                    kwargs = self._completion_kwargs(req, cfg)
+                    stream = await self._client(tier).chat.completions.create(
+                        stream=True, stream_options={"include_usage": True}, **kwargs
                     )
-                await self._emit_usage(req, result)
-                yield result
-                return
-            except Exception as exc:  # noqa: BLE001
-                breaker.record(False)
-                log.error("stream_tier_failed", tier=tier.value, error=str(exc))
-        # degrade to non-stream fallback path (cassette/stub), chunked out
-        fallback = await self._live_chat(req, started)
-        chunk_n = max(1, self._s.gateway_stream_chunk_chars)
-        for i in range(0, len(fallback.text), chunk_n):
-            yield StreamDelta(fallback.text[i : i + chunk_n])
-        await self._emit_usage(req, fallback)
-        yield fallback
+                    parts = []
+                    streaming_tier = tier
+                    p_tok = c_tok = 0
+                    async for chunk in stream:
+                        if chunk.usage:
+                            p_tok = chunk.usage.prompt_tokens
+                            c_tok = chunk.usage.completion_tokens
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            delta = chunk.choices[0].delta.content
+                            parts.append(delta)
+                            yield StreamDelta(delta)
+                    breaker.record(True)
+                    if tier != req.tier:
+                        _warn_if_upcost(req.tier, tier)
+                    text = "".join(parts)
+                    if not p_tok:
+                        p_tok = sum(estimate_tokens(m.content) for m in req.messages)
+                        c_tok = estimate_tokens(text)
+                    result = ChatResult(
+                        text=text,
+                        model=cfg.model,
+                        tier=tier.value,
+                        prompt_tokens=p_tok,
+                        completion_tokens=c_tok,
+                        cost_cny=self._cost(cfg, p_tok, c_tok),
+                        latency_ms=int((perf_counter() - started) * 1000),
+                        mode="live",
+                        degraded=tier != req.tier,
+                    )
+                    if self._s.gateway_mode == "record":
+                        self._cassette.put(
+                            self._cassette_key(req),
+                            {
+                                "text": text,
+                                "model": result.model,
+                                "prompt_tokens": p_tok,
+                                "completion_tokens": c_tok,
+                            },
+                        )
+                    await self._emit_usage(req, result, reserved_tier=reserved_tier)
+                    settled = True
+                    yield result
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    streaming_tier = None  # 本档已失败计入降级链, 不再按部分消耗结算
+                    breaker.record(False)
+                    log.error("stream_tier_failed", tier=tier.value, error=str(exc))
+            # degrade to non-stream fallback path (cassette/stub), chunked out
+            streaming_tier = None
+            try:
+                fallback = await self._live_chat(req, started)
+            except BaseException:
+                await self._refund_reservation(req, reserved_tier)
+                settled = True  # 预扣已返还, finally 无需再兜底
+                raise
+            chunk_n = max(1, self._s.gateway_stream_chunk_chars)
+            for i in range(0, len(fallback.text), chunk_n):
+                yield StreamDelta(fallback.text[i : i + chunk_n])
+            await self._emit_usage(req, fallback, reserved_tier=reserved_tier)
+            settled = True
+            yield fallback
+        finally:
+            if not settled:
+                if streaming_tier is not None:
+                    # 半途中断 (断网/切后台/切会话): 按已收内容估算结算, 不再漏计费。
+                    coro = self._settle_partial_stream(
+                        req, streaming_tier, "".join(parts), started, reserved_tier
+                    )
+                else:
+                    # 中断发生在降级兜底分块输出期间 (无真实消耗): 只返还预扣
+                    coro = self._refund_reservation(req, reserved_tier)
+                # ensure_future + shield: 即便本生成器正被取消, 结算协程也跑完
+                task = asyncio.ensure_future(coro)
+                try:
+                    await asyncio.shield(task)
+                except BaseException:  # noqa: BLE001 — 取消传播中, 结算任务后台完成
+                    pass
 
-    async def _emit_usage(self, req: ChatRequest, result: ChatResult) -> None:
+    async def _settle_partial_stream(
+        self,
+        req: ChatRequest,
+        tier: Tier,
+        text: str,
+        started: float,
+        reserved_tier: str | None,
+    ) -> None:
+        """客户端断流的部分消耗结算 (P0-6): token 用估算 (上游 usage 帧未到达),
+        degraded=True 标记这是部分/非常规结果; 走 _emit_usage 统一进预算与 usage_log。"""
+        cfg = self._s.tier(tier.value)
+        p_tok = sum(estimate_tokens(m.content) for m in req.messages)
+        c_tok = estimate_tokens(text)
+        partial = ChatResult(
+            text=text,
+            model=cfg.model,
+            tier=tier.value,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            cost_cny=self._cost(cfg, p_tok, c_tok),
+            latency_ms=int((perf_counter() - started) * 1000),
+            mode="live",
+            degraded=True,  # partial: 客户端中断, token 为估算值
+        )
+        log.warning(
+            "stream_partial_settled",
+            tier=tier.value,
+            chars=len(text),
+            feature=req.feature,
+        )
+        await self._emit_usage(req, partial, reserved_tier=reserved_tier)
+
+    async def _emit_usage(
+        self,
+        req: ChatRequest,
+        result: ChatResult,
+        reserved_tier: str | None = None,
+    ) -> None:
         event = UsageEvent(
             request_id=req.request_id,
             tenant_id=req.tenant_id,
@@ -418,11 +549,14 @@ class OpenAIGateway:
             latency_ms=result.latency_ms,
             mode=result.mode,
         )
-        # 预算结算: 只有真实产生成本的 live 结果计数 (stub/replay/降级兜底 cost=0 不计,
-        # 否则跑测试会把演示账号预算烧光)。结算失败只记日志, 不打断已完成的响应。
-        if self._guard is not None and result.mode == "live":
+        # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
+        # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。
+        # 结算失败只记日志, 不打断已完成的响应。
+        if self._guard is not None and (
+            result.mode == "live" or reserved_tier is not None
+        ):
             try:
-                await self._guard.settle(event)
+                await self._guard.settle(event, reserved_tier=reserved_tier)
             except Exception:  # noqa: BLE001
                 log.exception("budget_settle_failed")
         if self._sink is None:

@@ -182,14 +182,16 @@ async def build_study_guide(
     """
     from eduagents_api.db import tenant_session
     from eduagents_api.models import Chunk, Document, KnowledgeBase, KnowledgeComponent
-    from eduagents_core.gateway import OpenAIGateway
+
+    from .enrichment import get_worker_gateway
 
     settings = get_settings()
     if gateway is None:
         if settings.gateway_mode == "stub":
             log.info("study_guide_skipped_stub_mode", kb_id=kb_id)
             return "skipped"
-        gateway = OpenAIGateway(settings)
+        # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造
+        gateway = get_worker_gateway(settings)
 
     try:
         async with tenant_session(tenant_id) as session:

@@ -4,6 +4,7 @@
 产品直接不可用。因此负例覆盖面刻意大于正例。
 """
 
+import pytest
 from eduagents_core.moderation import CATEGORY_LABELS, Moderator, get_moderator
 
 
@@ -42,7 +43,7 @@ def test_political_category_hit():
 
 
 def test_all_categories_have_labels():
-    assert set(CATEGORY_LABELS) == {"illegal", "violence", "adult", "political"}
+    assert set(CATEGORY_LABELS) == {"illegal", "violence", "adult", "political", "crisis"}
 
 
 # ---- 负例: 正常学习内容零误杀 ----
@@ -119,10 +120,11 @@ def test_check_output_respects_allowlist():
     assert _mod().check_output("这道题先写暴力枚举，再考虑剪枝优化").allowed
 
 
-def test_missing_wordlist_fails_open(tmp_path):
-    """词表缺失时放行而非全拦 (审核不可用不该让平台不可用)。"""
-    moderator = Moderator(tmp_path / "not-exists.txt")
-    assert moderator.check_input("怎么制造炸弹").allowed
+def test_missing_wordlist_fails_closed(tmp_path):
+    """词表缺失时构造抛 RuntimeError (P2-6 fail-closed): 审核不可用 = 启动即炸,
+    绝不静默放行; 详尽用例见 test_moderation_stream.py。"""
+    with pytest.raises(RuntimeError):
+        Moderator(tmp_path / "not-exists.txt")
 
 
 def test_get_moderator_is_singleton():

@@ -3,17 +3,33 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+
+def _validate_bcrypt_password_bytes(v: str) -> str:
+    """P2-16: bcrypt 上限 72 字节, 超限在 schema 层 422 (中文提示),
+    而非 hash 时 ValueError 变 500 (25 个汉字即触发)。"""
+    if len(v.encode("utf-8")) > 72:
+        raise ValueError("密码过长: 折算后超过 72 字节 (约 24 个汉字或 72 个英文字符), 请缩短")
+    return v
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
+    _password_bytes = field_validator("password")(_validate_bcrypt_password_bytes)
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class AccountDeleteIn(BaseModel):
+    """注销 (P0-4): 必须重输密码确认, 防拿到落锁电脑/被盗 token 的人一键销号。"""
+
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -63,6 +79,9 @@ class MessageOut(BaseModel):
     role: str
     content: str
     created_at: datetime
+    # P0-6: meta_json 透出 (truncated/blocked/mode/citations 等), 前端据
+    # truncated 显示"回答未完成"角标与重问入口
+    meta: dict = Field(default_factory=dict)
 
 
 class ErrorEnvelope(BaseModel):

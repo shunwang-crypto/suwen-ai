@@ -40,6 +40,12 @@ def _created_at() -> Mapped[datetime]:
     )
 
 
+# user_id 外键 (0003, P0-4 注销可执行): attempts/chat_sessions/error_items/mastery_log/
+# mastery_records/plans/quizzes/org_members 的 user_id 在 DB 层有 FK(users.id)
+# ON DELETE CASCADE; usage_log 为 ON DELETE SET NULL (审计留档, 决策见 0003 迁移头注释)。
+# ORM 列保持裸 UUID 不声明 ForeignKey: 0001 从零重放用 create_all(当前元数据),
+# 若在 ORM 声明会在 0001 就建出约束, 与 0003 的 create_foreign_key 重复。
+
 # RLS 生效表清单 (owner_id 语义): 迁移脚本据此启用 ENABLE + FORCE ROW LEVEL SECURITY。
 # orgs/org_members 也启用 RLS, 但策略形状不同 (无 tenant_id 列), 由 0002 单独建。
 TENANT_TABLES = [
@@ -114,6 +120,20 @@ class User(Base):
     org_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True
     )
+    # 账号生命周期 (0003, P1-3 封禁): active|disabled; 非 active 一律 403 ACCOUNT_DISABLED
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    # 未成年人保护 (0003, P0-5 未成年线消费): 出生年份声明 + 监护人同意
+    birth_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    guardian_consent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # 套餐骨架 (0003, P2-14 预算线消费): free|pilot|...; override 非空时覆盖全局日预算
+    plan: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="free", server_default="free"
+    )
+    daily_budget_cny_override: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -364,7 +384,10 @@ class UsageLog(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    # 0003: FK(users.id) ON DELETE SET NULL — 注销后成本行留档但断开用户关联 (可空)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), index=True, nullable=True
+    )
     feature: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     tier: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -375,6 +398,26 @@ class UsageLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="live")
     at: Mapped[datetime] = _created_at()
+
+
+class PendingCleanup(Base):
+    """删除 outbox (0003, P1-5): 业务删除与清理任务同事务提交, 消灭"PG 已删、
+    ARQ 没入队"的永久孤儿。worker cron (process_pending_cleanup) 每分钟消费。
+
+    kind: doc (删文档) | kb (删库) | tenant (注销)。payload 按 kind 携带
+    tenant_id/kb_id/doc_id/filename/session_ids。无 RLS: 内部运维表, API 只在
+    删除事务内写入, worker 全表扫描, 无任何用户读路径。
+    """
+
+    __tablename__ = "pending_cleanup"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = _created_at()
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    done: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
 
 
 class EvalRun(Base):

@@ -35,6 +35,16 @@ def _new_invite_code() -> str:
     return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LEN))
 
 
+async def _admin_count(session, org_id: uuid.UUID) -> int:
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(OrgMember)
+            .where(OrgMember.org_id == org_id, OrgMember.role == "admin")
+        )
+    ) or 0
+
+
 async def _member_counts(session, org_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
     if not org_ids:
         return {}
@@ -165,6 +175,97 @@ async def list_members(org_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_li
             )
             for m, email in rows
         ]
+
+
+# ---- 成员生命周期 (P1-4: 只能进不能出 -> 踢人/退出/邀请码轮换) ----
+
+
+@router.delete("/{org_id}/members/{user_id}", status_code=204)
+async def remove_member(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """踢人: 仅 org admin; 禁删最后一个 admin (机构不能失去管理员)。"""
+    if str(org_id) not in ctx.org_ids:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    if str(org_id) not in ctx.admin_org_ids:
+        raise HTTPException(status_code=403, detail="ORG_ADMIN_REQUIRED")
+    # is_admin GUC: org_members_delete 策略放行删他人行 (0003, D7 惯例);
+    # service 层已先校验发起者是本 org 的 admin
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids, is_admin=True) as session:
+        member = await session.get(OrgMember, (org_id, user_id))
+        if member is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if member.role == "admin" and await _admin_count(session, org_id) <= 1:
+            raise HTTPException(status_code=400, detail="LAST_ADMIN")
+        await session.delete(member)
+    # 被移除者的机构缓存立即失效 (不等 60s TTL): 下一请求即看不到机构库
+    await invalidate_org_cache(request.app.state.redis, user_id)
+    log.info(
+        "org_member_removed", org_id=str(org_id), target=str(user_id), by=str(ctx.user_id)
+    )
+
+
+@router.post("/{org_id}/leave", status_code=204)
+async def leave_org(
+    org_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """主动退出。最后一个 admin 在还有其他成员时不能退 (须先另设 admin);
+    机构只剩自己时允许退出 (机构成为空壳, 解散接口是后续项)。"""
+    if str(org_id) not in ctx.org_ids:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        member = await session.get(OrgMember, (org_id, ctx.user_id))
+        if member is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if member.role == "admin" and await _admin_count(session, org_id) <= 1:
+            total = (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(OrgMember)
+                    .where(OrgMember.org_id == org_id)
+                )
+            ) or 0
+            if total > 1:
+                raise HTTPException(status_code=400, detail="LAST_ADMIN")
+        # RLS: org_members_delete 放行 user_id = 本人 (0003), 无需 is_admin
+        await session.delete(member)
+    await invalidate_org_cache(request.app.state.redis, ctx.user_id)
+    log.info("org_left", org_id=str(org_id), user=str(ctx.user_id))
+
+
+@router.post("/{org_id}/invite-code/rotate")
+async def rotate_invite_code(
+    org_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """邀请码轮换 (泄露止血): 仅 org admin; 旧码立即失效。"""
+    if str(org_id) not in ctx.org_ids:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    if str(org_id) not in ctx.admin_org_ids:
+        raise HTTPException(status_code=403, detail="ORG_ADMIN_REQUIRED")
+    code = ""
+    for attempt in range(2):
+        code = _new_invite_code()
+        try:
+            # orgs_update 策略 (0003): is_admin GUC 放行 (service 层已校验 org admin)
+            async with tenant_session(
+                ctx.tenant_id, org_ids=ctx.org_ids, is_admin=True
+            ) as session:
+                org = await session.get(Org, org_id)
+                if org is None:
+                    raise HTTPException(status_code=404, detail="NOT_FOUND")
+                org.invite_code = code
+            break
+        except IntegrityError:
+            if attempt == 1:
+                raise HTTPException(
+                    status_code=500, detail="INVITE_CODE_COLLISION"
+                ) from None
+    await invalidate_org_cache(request.app.state.redis, ctx.user_id)
+    log.info("org_invite_code_rotated", org_id=str(org_id), by=str(ctx.user_id))
+    return {"org_id": str(org_id), "invite_code": code}
 
 
 @router.post("/{org_id}/kb", response_model=KbOut, status_code=201)

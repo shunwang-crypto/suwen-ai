@@ -147,11 +147,14 @@ async def build_vocabulary(
     kb_summary_text: str,
     *,
     tier: Tier = Tier.strong,
+    tenant_id: str = "",
+    user_id: str = "",
 ) -> tuple[KcVocabulary, list[PrereqEdge]]:
     """知识库级 KC 受控词表构建 (两遍式第一遍)。
 
     返回 (词表, 先修边列表); 边引用归一后的 kc_id 且保证无环。
     embedding 留空, 由 KcNormalizer 惰性补算; 持久化由调用方负责。
+    tenant_id/user_id 必须透传 (P0-2a): 缺省空串会被 usage sink 丢弃 = 不计量不扣预算。
     """
     prompt = _load_prompt("kc_vocab_build.md").replace(
         "{{KB_SUMMARY_TEXT}}", kb_summary_text
@@ -162,6 +165,8 @@ async def build_vocabulary(
         temperature=0.2,
         json_mode=True,
         feature="kc_vocab_build",
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await gateway.chat(request)
@@ -180,10 +185,13 @@ async def extract_chunk_kcs(
     vocab_names: list[str],
     *,
     tier: Tier = Tier.cheap,
+    tenant_id: str = "",
+    user_id: str = "",
 ) -> list[str]:
     """chunk 级知识点名称抽取 (≤3 个), 优先复用受控词表已有名称。
 
     只返回名称列表; kc_id 归并由调用方经 KcNormalizer.match_or_create 完成。
+    tenant_id/user_id 必须透传 (P0-2a): 缺省空串会被 usage sink 丢弃 = 不计量不扣预算。
     """
     names_block = "\n".join(f"- {name}" for name in vocab_names) or "(词表暂为空)"
     prompt = (
@@ -197,6 +205,8 @@ async def extract_chunk_kcs(
         temperature=0.0,
         json_mode=True,
         feature="kc_extract_chunk",
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await gateway.chat(request)

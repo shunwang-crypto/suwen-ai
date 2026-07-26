@@ -313,6 +313,8 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 tenant_id=state.get("tenant_id", ""),
                 user_id=state.get("user_id", ""),
                 request_id=state.get("request_id", ""),
+                # P1-15: 输出上限按题数动态 (单题含解析约 300-400 token)
+                max_tokens=400 * int(state.get("num_questions", 5)) + 300,
             )
         )
         raw = _parse_json_object(result.text)

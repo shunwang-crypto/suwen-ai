@@ -1,14 +1,75 @@
 "use client";
 
-// 上传区（F2）：两个 tab —— 「本地文件」拖拽/选择 multipart POST；
-// 「从网址导入」粘贴 URL 后端抓正文（对标 ima 网页剪藏）。
-// 两条路径都只负责把内容交给后端，进度由父组件轮询文档状态呈现。
+// 上传区（F2 + P2-17）：两个 tab —— 「本地文件」拖拽/选择上传；「从网址导入」
+// 粘贴 URL 后端抓正文（对标 ima 网页剪藏）。
+// P2-17 上传体验：
+// - file.size 前端预校验：> MAX_UPLOAD_MB 直接提示，不发请求（不再白等 50 秒）；
+// - 传入 uploadTo 时本组件自行上传并显示真实进度条；否则回落 onFiles 旧路径
+//   （由父组件上传，无进度）。主线接线见文件末尾注释。
 
 import { useCallback, useRef, useState, type DragEvent, type FormEvent } from "react";
 
+import { API_BASE, getAccessToken, refreshAccessToken } from "@/lib/api";
+
 export const ALLOWED_SUFFIXES = [".pdf", ".docx", ".pptx", ".md", ".txt"];
+/** 与后端 max_upload_mb 同值（config.py）；超限文件不发请求直接拦下。 */
+export const MAX_UPLOAD_MB = 50;
 
 type Tab = "file" | "url";
+
+interface UploadProgress {
+  filename: string;
+  /** 0-100；null = 总大小未知（lengthComputable=false） */
+  pct: number | null;
+  index: number;
+  total: number;
+}
+
+interface XhrResult {
+  ok: boolean;
+  status: number;
+  message: string;
+}
+
+// fetch 不暴露上传进度事件，仅此组件改用 XMLHttpRequest 以拿到 upload.onprogress。
+function xhrUpload(
+  url: string,
+  file: File,
+  onProgress: (pct: number | null) => void,
+): Promise<XhrResult> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    const token = getAccessToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      onProgress(e.lengthComputable ? Math.round((e.loaded / e.total) * 100) : null);
+    };
+    xhr.onload = () => {
+      let message = "";
+      try {
+        const body = JSON.parse(xhr.responseText || "{}") as {
+          message?: string;
+          code?: string;
+        };
+        message = body.message || body.code || "";
+      } catch {
+        // 非 JSON 响应体：保留空串，走兜底文案
+      }
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        message: message || (xhr.status >= 400 ? `上传失败（HTTP ${xhr.status}）` : ""),
+      });
+    };
+    xhr.onerror = () =>
+      resolve({ ok: false, status: 0, message: "网络异常，上传失败" });
+    const form = new FormData();
+    form.append("file", file);
+    xhr.send(form);
+  });
+}
 
 function FileTab({
   uploading,
@@ -79,7 +140,8 @@ function FileTab({
         )}
       </p>
       <p className="text-xs text-slate-400">
-        支持 {ALLOWED_SUFFIXES.join(" / ")}，上传后自动解析、切块并向量化
+        支持 {ALLOWED_SUFFIXES.join(" / ")}，单文件不超过 {MAX_UPLOAD_MB}MB，
+        上传后自动解析、切块并向量化
       </p>
       <input
         ref={inputRef}
@@ -152,17 +214,76 @@ export function UploadZone({
   importing = false,
   onFiles,
   onImportUrl,
+  uploadTo,
+  onUploaded,
 }: {
   uploading: boolean;
   importing?: boolean;
   onFiles: (files: File[]) => void;
   onImportUrl?: (url: string) => void;
+  /**
+   * P2-17：传入文档上传端点（如 `/api/kb/{kbId}/documents`）时，本组件用 XHR
+   * 自行上传并显示真实进度；不传则回落 onFiles（父组件上传，无进度）。
+   */
+  uploadTo?: string;
+  /** XHR 路径全部文件处理完后回调（父组件刷新文档列表用）。 */
+  onUploaded?: (failures: string[]) => void;
 }) {
   const [tab, setTab] = useState<Tab>("file");
+  const [xhrBusy, setXhrBusy] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   const tabs: { key: Tab; label: string }[] = [
     { key: "file", label: "本地文件" },
     { key: "url", label: "从网址导入" },
   ];
+
+  const uploadViaXhr = useCallback(
+    async (files: File[], failures: string[]) => {
+      if (!uploadTo) return;
+      setXhrBusy(true);
+      try {
+        for (let i = 0; i < files.length; i += 1) {
+          const file = files[i];
+          const report = (pct: number | null) =>
+            setProgress({ filename: file.name, pct, index: i + 1, total: files.length });
+          report(0);
+          let result = await xhrUpload(`${API_BASE}${uploadTo}`, file, report);
+          if (result.status === 401 && (await refreshAccessToken())) {
+            result = await xhrUpload(`${API_BASE}${uploadTo}`, file, report);
+          }
+          if (!result.ok) failures.push(`${file.name}：${result.message}`);
+        }
+      } finally {
+        setXhrBusy(false);
+        setProgress(null);
+      }
+      if (failures.length > 0) setLocalError(failures.join("；"));
+      onUploaded?.(failures);
+    },
+    [uploadTo, onUploaded],
+  );
+
+  /** 体积预校验（P2-17）：超限文件直接提示、不发请求；其余按模式分发。 */
+  const handleFiles = useCallback(
+    (files: File[]) => {
+      setLocalError(null);
+      const oversized = files.filter((f) => f.size > MAX_UPLOAD_MB * 1024 * 1024);
+      const valid = files.filter((f) => f.size <= MAX_UPLOAD_MB * 1024 * 1024);
+      const failures = oversized.map(
+        (f) =>
+          `${f.name}：${(f.size / 1024 / 1024).toFixed(1)}MB 超过 ${MAX_UPLOAD_MB}MB 上限，未上传`,
+      );
+      if (failures.length > 0) setLocalError(failures.join("；"));
+      if (valid.length === 0) {
+        if (failures.length > 0) onUploaded?.(failures);
+        return;
+      }
+      if (uploadTo) void uploadViaXhr(valid, failures);
+      else onFiles(valid);
+    },
+    [uploadTo, uploadViaXhr, onFiles, onUploaded],
+  );
 
   return (
     <div className="space-y-2">
@@ -188,8 +309,44 @@ export function UploadZone({
       {tab === "url" && onImportUrl ? (
         <UrlTab importing={importing} onImportUrl={onImportUrl} />
       ) : (
-        <FileTab uploading={uploading} onFiles={onFiles} />
+        <>
+          <FileTab uploading={uploading || xhrBusy} onFiles={handleFiles} />
+          {progress && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-3 py-2">
+              <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
+                <span className="min-w-0 truncate text-slate-600">
+                  {progress.filename}
+                  {progress.total > 1 && (
+                    <span className="text-slate-400">
+                      （{progress.index}/{progress.total}）
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 font-mono font-semibold text-indigo-700">
+                  {progress.pct != null ? `${progress.pct}%` : "上传中…"}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100">
+                <div
+                  className={`h-full rounded-full bg-indigo-500 transition-[width] duration-200 ${
+                    progress.pct == null ? "w-1/3 animate-pulse" : ""
+                  }`}
+                  style={progress.pct != null ? { width: `${progress.pct}%` } : undefined}
+                />
+              </div>
+            </div>
+          )}
+          {localError && (
+            <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {localError}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
 }
+
+// 主线接线（kb/page.tsx，两个属性即可启用进度条模式；不接则行为与旧版一致）：
+//   <UploadZone ... uploadTo={selectedId ? `/api/kb/${selectedId}/documents` : undefined}
+//               onUploaded={() => void loadDocs(selectedId!, true)} />

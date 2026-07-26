@@ -16,10 +16,10 @@ RLS=$("$B/psql" -U edu -h 127.0.0.1 -d $DB -tAc "SELECT count(*) FROM pg_class W
 POLICIES=$("$B/psql" -U edu -h 127.0.0.1 -d $DB -tAc "SELECT count(*) FROM pg_policies")
 ROLE=$("$B/psql" -U edu -h 127.0.0.1 -d $DB -tAc "SELECT count(*) FROM pg_roles WHERE rolname='edu_app' AND NOT rolsuper AND NOT rolbypassrls")
 
-echo "== M0-D1 从零迁移验证 (0002 机构库后: 23表/18 RLS/23策略) =="
-check "23 张表建成 (实际 $TABLES)" "[ $TABLES -eq 23 ]"
-check "18 张表 RLS ENABLE+FORCE (实际 $RLS)" "[ $RLS -eq 18 ]"
-check "23 条策略 (实际 $POLICIES)" "[ $POLICIES -eq 23 ]"
+echo "== M0-D1 从零迁移验证 (0003 数据生命周期 + 0004 feedback 后: 25表/19 RLS/29策略) =="
+check "25 张表建成 (实际 $TABLES)" "[ $TABLES -eq 25 ]"
+check "19 张表 RLS ENABLE+FORCE (实际 $RLS)" "[ $RLS -eq 19 ]"
+check "29 条策略 (实际 $POLICIES)" "[ $POLICIES -eq 29 ]"
 check "edu_app 角色存在且非超级用户/不可绕过RLS" "[ $ROLE -eq 1 ]"
 
 "$B/psql" -U edu -h 127.0.0.1 -d postgres -q -c "DROP DATABASE $DB"

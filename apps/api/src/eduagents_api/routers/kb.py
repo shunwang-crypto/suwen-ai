@@ -7,11 +7,11 @@ import xxhash
 from eduagents_core.logging import get_logger
 from eduagents_core.parsing.web import WebFetchError, fetch_and_extract
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
-from ..models import Chunk, Document, KnowledgeBase, Org
+from ..models import Chunk, Document, KnowledgeBase, Org, PendingCleanup
 from ..schemas import (
     ChunkContextItem,
     ChunkContextOut,
@@ -38,6 +38,28 @@ _MAGIC = {
 def _suffix(filename: str) -> str:
     idx = filename.rfind(".")
     return filename[idx:].lower() if idx >= 0 else ""
+
+
+async def _read_upload_capped(file: UploadFile, max_mb: int) -> bytes:
+    """分块读上传体 (P1-1): 每 1MB 累计, 超过 max_upload_mb 立即 413 断开,
+    不再把任意大的 multipart 先全量吞进内存再判大小。"""
+    max_bytes = max_mb * 1024 * 1024
+    buf = bytearray()
+    while True:
+        part = await file.read(1024 * 1024)
+        if not part:
+            break
+        buf.extend(part)
+        if len(buf) > max_bytes:
+            raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+    return bytes(buf)
+
+
+def _quota_used_bytes_stmt():
+    """配额占用 = 非 failed 文档的字节和 (P1-6): 摄取失败的文件不再永久吃配额。"""
+    return select(func.coalesce(func.sum(Document.size_bytes), 0)).where(
+        Document.status != "failed"
+    )
 
 
 def _validate_upload(filename: str, head: bytes, size: int, max_mb: int) -> str:
@@ -129,10 +151,21 @@ async def delete_kb(
     owner_id = kb.tenant_id  # owner_id 语义 (D14): 个人=user_id, 机构=org_id
     async with tenant_session(owner_id) as session:
         await session.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
-    # 向量与对象清理走后台 (删除语义: 立即不可见, 物理清理异步)
-    await request.app.state.arq.enqueue_job(
-        "cleanup_kb", str(owner_id), str(kb_id)
-    )
+        # P1-5 outbox: 物理清理任务与删除同事务提交 (worker 每分钟消费),
+        # 替代"先 COMMIT 后 enqueue" —— Redis 抖动不再产生永久孤儿
+        session.add(
+            PendingCleanup(
+                kind="kb", payload={"tenant_id": str(owner_id), "kb_id": str(kb_id)}
+            )
+        )
+    # P0-3: L2 语义缓存立即清该库点位 (L1 键含 kb_version 且查缓存前有 PG 可见性
+    # 校验, 库已删 -> 404 到不了缓存, 无需清)。缓存栈缺失/异常不阻断删除。
+    cache = getattr(request.app.state, "answer_cache", None)
+    if cache is not None:
+        try:
+            await cache.delete_by_kb(str(owner_id), str(kb_id))
+        except Exception:  # noqa: BLE001 — 点位仍受可见性校验保护, 只记日志
+            log.exception("answer_cache_delete_by_kb_failed", kb_id=str(kb_id))
 
 
 @router.post("/{kb_id}/documents", response_model=DocumentOut, status_code=201)
@@ -143,7 +176,7 @@ async def upload_document(
     ctx: AuthContext = Depends(api_rate_limited),
     settings=Depends(get_app_settings),
 ):
-    data = await file.read()
+    data = await _read_upload_capped(file, settings.max_upload_mb)
     filename = file.filename or "unnamed"
     _validate_upload(filename, data[:16], len(data), settings.max_upload_mb)
     content_hash = xxhash.xxh64_hexdigest(data)
@@ -167,9 +200,7 @@ async def upload_document(
         )
         if doc_count >= settings.max_docs_per_user:
             raise HTTPException(status_code=400, detail="DOC_QUOTA_EXCEEDED")
-        used_bytes = (
-            await session.scalar(select(func.coalesce(func.sum(Document.size_bytes), 0)))
-        ) or 0
+        used_bytes = (await session.scalar(_quota_used_bytes_stmt())) or 0
         if used_bytes + len(data) > quota_mb * 1024 * 1024:
             raise HTTPException(status_code=400, detail="STORAGE_QUOTA_EXCEEDED")
         # 文件级去重 (§5.1): 同库同哈希 -> 幂等返回已有文档
@@ -257,9 +288,7 @@ async def import_document_from_url(
         doc_count = await session.scalar(select(func.count()).select_from(Document))
         if doc_count >= settings.max_docs_per_user:
             raise HTTPException(status_code=400, detail="DOC_QUOTA_EXCEEDED")
-        used_bytes = (
-            await session.scalar(select(func.coalesce(func.sum(Document.size_bytes), 0)))
-        ) or 0
+        used_bytes = (await session.scalar(_quota_used_bytes_stmt())) or 0
         if used_bytes + len(data) > quota_mb * 1024 * 1024:
             raise HTTPException(status_code=400, detail="STORAGE_QUOTA_EXCEEDED")
         # 同库同哈希幂等 (重复粘同一网址且正文未变 -> 返回已有文档)
@@ -320,10 +349,26 @@ async def delete_document(
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         filename = doc.filename
         await session.execute(delete(Document).where(Document.id == doc_id))
-    # F2-A3: 删除后立即从向量库清理, 相关引用不再出现
-    await request.app.state.arq.enqueue_job(
-        "cleanup_document", str(owner_id), str(kb_id), str(doc_id), filename
-    )
+        # P0-3: kb_version 自增 -> 答案缓存 L1 键与 L2 filter 同时落空,
+        # 被删文档的原文摘录不可能再从缓存吐出
+        await session.execute(
+            update(KnowledgeBase)
+            .where(KnowledgeBase.id == kb_id)
+            .values(kb_version=KnowledgeBase.kb_version + 1)
+        )
+        # P1-5 outbox: 向量/对象存储清理与删除同事务提交 (F2-A3 语义不变:
+        # 行删除即立即不可见, 物理清理由 worker 每分钟消费)
+        session.add(
+            PendingCleanup(
+                kind="doc",
+                payload={
+                    "tenant_id": str(owner_id),
+                    "kb_id": str(kb_id),
+                    "doc_id": str(doc_id),
+                    "filename": filename,
+                },
+            )
+        )
 
 
 @router.post("/{kb_id}/documents/{doc_id}/reindex", status_code=202)
@@ -343,6 +388,12 @@ async def reindex_document(
         doc.status = "pending"
         doc.error_msg = None
         await session.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
+        # P0-3: 重建索引会改变分块/向量, 旧答案缓存必须随之失效
+        await session.execute(
+            update(KnowledgeBase)
+            .where(KnowledgeBase.id == kb_id)
+            .values(kb_version=KnowledgeBase.kb_version + 1)
+        )
     await request.app.state.arq.enqueue_job(
         "ingest_document", str(owner_id), str(doc_id)
     )

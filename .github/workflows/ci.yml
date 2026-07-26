@@ -1,0 +1,130 @@
+# EduAgents CI (§10: lint + test + web build)
+#
+# 说明:
+# - CI 环境 (ubuntu-latest) 无国内网络问题, pip/npm 一律官方源。
+# - conda libstdc++ 预加载 (decisions.md D10) 在 runner 上不需要:
+#   tests/conftest.py 只在 {sys.prefix}/lib/libstdc++.so.6 存在时才预加载,
+#   官方 setup-python 的 prefix 下无该文件, 自动跳过。
+# - requirements.lock 由 conda 环境 pip freeze 生成, 含一行
+#   `packaging @ file:///home/conda/...` 本地路径, CI 安装前过滤并显式补装 packaging。
+# - 网关/嵌入/重排在测试中默认 stub (tests/conftest.py setdefault), 零 API 成本。
+# - 集成测试的迁移由 tests/integration/conftest.py 的 _migrated fixture 执行
+#   (alembic 读 MIGRATION_DATABASE_URL, 用 postgres 超级用户 edu; 应用连接走
+#   迁移 0001 创建的 edu_app 非超级角色, RLS 才真实生效, 见 decisions.md D9)。
+# - Qdrant 不起容器: QDRANT_LOCAL_PATH 非空时 qdrant-client 走本地文件模式 (D11)。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff (版本与 requirements.lock 对齐)
+        run: pip install "$(grep -i '^ruff==' requirements.lock)"
+      - name: ruff check
+        run: ruff check .
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install locked deps + 三个 editable 包
+        run: |
+          grep -v 'file:///' requirements.lock > /tmp/requirements-ci.txt
+          pip install -r /tmp/requirements-ci.txt packaging
+          pip install -e packages/core -e apps/api -e apps/worker --no-deps
+      - name: Unit tests
+        run: python -m pytest tests/unit -q
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: edu
+          POSTGRES_PASSWORD: edu
+          POSTGRES_DB: eduagents
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edu -d eduagents"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      # 应用连接: edu_app (迁移 0001 创建的 NOSUPERUSER NOBYPASSRLS 角色, dev 默认密码 edu)
+      DATABASE_URL: postgresql+asyncpg://edu_app:edu@127.0.0.1:5432/eduagents
+      # 迁移连接: postgres 超级用户 (建表 + RLS 策略 + 建 edu_app 角色)
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://edu:edu@127.0.0.1:5432/eduagents
+      REDIS_URL: redis://127.0.0.1:6379/0
+      # Qdrant 本地文件模式 (无容器; qdrant-client 内嵌, 见 decisions.md D11)
+      QDRANT_LOCAL_PATH: /tmp/qdrant
+      INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install locked deps + 三个 editable 包
+        run: |
+          grep -v 'file:///' requirements.lock > /tmp/requirements-ci.txt
+          pip install -r /tmp/requirements-ci.txt packaging
+          pip install -e packages/core -e apps/api -e apps/worker --no-deps
+      - name: Integration tests (迁移由 conftest 的 _migrated fixture 执行)
+        run: python -m pytest tests/integration -q
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: eslint
+        run: npm run lint
+      - name: next build
+        run: npm run build

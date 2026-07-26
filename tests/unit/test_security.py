@@ -67,3 +67,38 @@ def test_refresh_token_hash_is_stable_and_raw_unstored():
     assert hashed == hash_refresh_token(raw)
     assert raw not in hashed
     assert len(hashed) == 64
+
+
+# ---- 修正#2: prod 弱密钥 fail-fast ----
+
+
+def test_assert_production_secrets_rejects_default_secret_in_prod():
+    from eduagents_api.security import assert_production_secrets
+
+    bad = Settings(_env_file=None, app_env="prod", jwt_secret="dev-secret-change-me")
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        assert_production_secrets(bad)
+
+
+def test_assert_production_secrets_rejects_short_secret_in_prod():
+    from eduagents_api.security import assert_production_secrets
+
+    with pytest.raises(RuntimeError):
+        assert_production_secrets(
+            Settings(_env_file=None, app_env="prod", jwt_secret="short-but-not-default")
+        )
+
+
+def test_assert_production_secrets_accepts_strong_secret_in_prod():
+    from eduagents_api.security import assert_production_secrets
+
+    assert_production_secrets(
+        Settings(_env_file=None, app_env="prod", jwt_secret="x" * 48)
+    )  # 不抛即通过
+
+
+def test_assert_production_secrets_noop_outside_prod():
+    from eduagents_api.security import assert_production_secrets
+
+    assert_production_secrets(Settings(_env_file=None, app_env="dev"))
+    assert_production_secrets(Settings(_env_file=None, app_env="test"))

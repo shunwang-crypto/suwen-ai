@@ -284,6 +284,32 @@ class AnswerCache:
 
     # ---------- cleanup ----------
 
+    async def delete_by_kb(self, tenant_id: str, kb_id: str) -> None:
+        """删除该 (tenant, kb) 的全部 L2 点位 — 删库路径调用 (P0-3)。
+
+        L1 (Redis) 不在此清理: 键是 sha256 不可枚举, 且问答路径查缓存前有 PG
+        可见性校验 (库已删 -> 404 到不了缓存), 24h TTL 自净; 删文档路径靠
+        kb_version 自增让 L1 键与 L2 filter 同时落空。
+        """
+        await asyncio.to_thread(self._delete_by_kb_sync, str(tenant_id), str(kb_id))
+
+    def _delete_by_kb_sync(self, tenant_id: str, kb_id: str) -> None:
+        if not self._client.collection_exists(COLLECTION):
+            return
+        scope = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="tenant_id", match=models.MatchValue(value=tenant_id)
+                ),
+                models.FieldCondition(key="kb_id", match=models.MatchValue(value=kb_id)),
+            ]
+        )
+        self._client.delete(
+            COLLECTION,
+            points_selector=models.FilterSelector(filter=scope),
+            wait=True,
+        )
+
     async def cleanup_older_than(self, cutoff: datetime) -> int:
         """删除 at 早于 cutoff 的 L2 点位, 返回删除数量 (L1 有 24h TTL 自净)。"""
         return await asyncio.to_thread(self._cleanup_sync, cutoff.timestamp())

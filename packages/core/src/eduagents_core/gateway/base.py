@@ -91,16 +91,23 @@ UsageSink = Callable[[UsageEvent], Awaitable[None]]
 
 
 class BudgetGuard(Protocol):
-    """用户日预算强制 — 挂在网关入口, LLM 调用唯一 choke point (ACTION_PLAN 技术决策表)。
+    """用户日预算 + 全局日成本熔断 — 挂在网关入口, LLM 调用唯一 choke point。
 
     precheck 返回值语义: None=正常; "cheap"=软限降档 (网关将请求降为 cheap 档并压
-    max_tokens); 预算 ≥100% 抛 BudgetExceeded。settle 在调用完成后按实际成本累加;
-    网关只对 mode=live 的结果调用 settle, stub/replay 零成本不预检不计数。
+    max_tokens); 超限抛 BudgetExceeded。契约 (P1-12 原子预扣):
+    - precheck 正常返回 (不抛) 即视为已按 tier 档位原子预扣估算额;
+    - settle 在调用完成后按实际成本与预扣差额结算 (reserved_tier=precheck 时的档位);
+    - 调用失败/无实际成本时网关仍须以 reserved_tier 调 settle 返还预扣。
+    stub/replay 零成本不预检不计数。
     """
 
-    async def precheck(self, tenant_id: str, user_id: str) -> str | None: ...
+    async def precheck(
+        self, tenant_id: str, user_id: str, tier: str = "standard"
+    ) -> str | None: ...
 
-    async def settle(self, event: UsageEvent) -> None: ...
+    async def settle(
+        self, event: UsageEvent, reserved_tier: str | None = None
+    ) -> None: ...
 
 
 class ModelGateway(Protocol):

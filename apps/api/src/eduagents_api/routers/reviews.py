@@ -4,7 +4,10 @@
 - 判分规则与 services.record_attempts 同款: 客观题 grade_objective, short 题 LLM 评分;
 - 状态机: new→reviewing→mastered (连对 2 次), 答错 streak 清零回 reviewing, 可手动 archived;
 - BKT 同步直写 (客观 1.0 / 主观 0.5 权重) + mastery_log 审计 (evidence_type="review");
-- 错题本 (errors_router, 前缀 /api/errors): 列表筛选 / 聚合统计 / 归档 / 错因修正。
+- 错题本 (errors_router, 前缀 /api/errors): 列表筛选 / 聚合统计 / 归档 / 错因修正;
+- 判分申诉 (appeals_router, 前缀 /api/appeals, P2-3): 主观题 LLM 复核, 分差 ≥0.3 修正
+  并按 mastery_log 回滚重写掌握度; stub 网关下如实 202 登记待人工复核。
+  主线接线 (main.py 一行): app.include_router(reviews.appeals_router)
 """
 
 from __future__ import annotations
@@ -22,7 +25,8 @@ from eduagents_core.logging import get_logger
 from eduagents_core.mastery import scheduler
 from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError
+from fastapi.responses import ORJSONResponse
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import func, select
 
 from .. import timectl
@@ -42,6 +46,7 @@ log = get_logger("reviews")
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 errors_router = APIRouter(prefix="/api/errors", tags=["errors"])
+appeals_router = APIRouter(prefix="/api/appeals", tags=["appeals"])
 
 _TODAY_LIMIT = 5  # F6-A4: 每日复习队列 ≤5 条
 _ACTIVE_STATES = ("new", "reviewing")
@@ -570,3 +575,227 @@ async def update_cause(
         item = await _load_error_item(session, error_item_id, ctx)
         item.cause = body.cause
         return {"id": str(item.id), "cause": item.cause}
+
+
+# ---------------------------------------------------------------- 判分申诉 (P2-3: /api/appeals)
+
+_APPEAL_ADJUST_DELTA = 0.3  # 复核分与原分差 ≥0.3 才修正 (LLM 评分天然抖动, 小差维持原判)
+_APPEAL_REASON_MAX = 2000
+
+
+class AppealIn(BaseModel):
+    """attempt_id 与 question_id 二选一:
+
+    quiz 判分结果与错题本都不下发 attempt_id (历史契约), 故支持传 question_id,
+    由后端解析该用户在此题上最近一次 LLM 判分的作答 —— 这是唯一可申诉对象。
+    """
+
+    attempt_id: uuid.UUID | None = None
+    question_id: uuid.UUID | None = None
+    reason: str = Field(min_length=1, max_length=_APPEAL_REASON_MAX)
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> AppealIn:
+        if (self.attempt_id is None) == (self.question_id is None):
+            raise ValueError("attempt_id 与 question_id 必须恰好传一个")
+        return self
+
+
+async def _load_appeal_attempt(session, body: AppealIn, ctx: AuthContext) -> Attempt:
+    """定位可申诉的 attempt: 必须属于本人; question_id 路径取最近一次 LLM 判分作答。"""
+    if body.attempt_id is not None:
+        attempt = await session.get(Attempt, body.attempt_id)
+        if attempt is None or attempt.user_id != ctx.user_id:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        return attempt
+    attempt = await session.scalar(
+        select(Attempt)
+        .where(
+            Attempt.user_id == ctx.user_id,
+            Attempt.question_id == body.question_id,
+            Attempt.llm_score.is_not(None),
+        )
+        .order_by(Attempt.at.desc())
+        .limit(1)
+    )
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return attempt
+
+
+@appeals_router.post("")
+async def appeal_score(
+    body: AppealIn, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """主观题判分申诉 (P2-3): 重调一次 LLM 复核判分 (温度 0)。
+
+    - 仅 llm_score 非空的作答可申诉 (客观题是规则匹配, 无复核空间 -> 422);
+    - 复核结果非 live (stub/replay 桩) 或解析失败 -> 202 如实登记待人工复核, 不假复核;
+    - |新分-原分| ≥ 0.3 -> 修正 attempt (llm_score/scored_reason 加复核修正标记);
+      若跨越 0.6 及格线 -> 按 mastery_log 里该 evidence 的 old_p 回滚掌握度,
+      再以新判定走 services._update_mastery 重写 (evidence_type="appeal_regrade");
+    - 分差 <0.3 -> 维持原判, scored_reason 追加复核说明。响应始终含前后分数。
+    """
+    request_id = getattr(request.state, "request_id", "")
+    async with tenant_session(ctx.tenant_id) as session:
+        attempt = await _load_appeal_attempt(session, body, ctx)
+        if attempt.llm_score is None:
+            # 客观题规则判分, 不存在"评分主观误差", 申诉无对象
+            raise HTTPException(status_code=422, detail="APPEAL_NOT_ALLOWED")
+        question = await session.get(Question, attempt.question_id)
+        if question is None:
+            raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
+        attempt_id = attempt.id
+        old_score = float(attempt.llm_score)
+        old_correct = attempt.is_correct is True
+        stem, answer, response = question.stem, question.answer, attempt.response
+        kc_ids = [str(k) for k in (question.kc_ids or [])]
+
+    # LLM 复核在事务外进行 (不给慢调用挂长事务); 温度 0 + 明示"仔细复核"
+    result = await request.app.state.gateway.chat(
+        GwRequest(
+            messages=(
+                GwMessage(
+                    role="user",
+                    content=(
+                        "你是评分复核助手。学生对之前的评分提出申诉, 请仔细复核: "
+                        "逐点对照参考答案独立重新打分, 不要参考或迁就任何已有分数。\n"
+                        f"题目: {stem}\n参考答案: {answer}\n"
+                        f"学生作答: {response}\n"
+                        f"学生申诉理由: {body.reason}\n"
+                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}'
+                    ),
+                ),
+            ),
+            tier=Tier.standard,
+            temperature=0.0,
+            json_mode=True,
+            feature="appeal_regrade",
+            tenant_id=str(ctx.tenant_id),
+            user_id=str(ctx.user_id),
+            request_id=request_id,
+        )
+    )
+    new_score: float | None = None
+    new_reason = ""
+    if result.mode == "live":
+        parsed = _parse_json_object(result.text)
+        if parsed is not None and "score" in parsed:
+            try:
+                new_score = max(0.0, min(1.0, float(parsed.get("score", 0))))
+                new_reason = str(parsed.get("reason", ""))[:2000]
+            except (TypeError, ValueError):
+                new_score = None
+
+    if new_score is None:
+        # stub/replay 桩 或 复核输出不可解析: 不假装复核过, 如实登记待人工 (§14)
+        async with tenant_session(ctx.tenant_id) as session:
+            attempt = await session.get(Attempt, attempt_id)
+            note = f"[申诉已登记待人工复核: {body.reason[:200]}]"
+            if attempt is not None and note not in (attempt.scored_reason or ""):
+                attempt.scored_reason = f"{attempt.scored_reason or ''}\n{note}".strip()
+        log.info("appeal_pending_manual", attempt_id=str(attempt_id), mode=result.mode)
+        return ORJSONResponse(
+            status_code=202,
+            content={
+                "status": "pending_manual_review",
+                "message": "当前无法自动复核，申诉已登记，将由人工复核处理",
+                "attempt_id": str(attempt_id),
+                "old_score": old_score,
+                "new_score": None,
+                "adjusted": False,
+                "crossed": False,
+                "mastery_changes": [],
+            },
+        )
+
+    if abs(new_score - old_score) < _APPEAL_ADJUST_DELTA:
+        async with tenant_session(ctx.tenant_id) as session:
+            attempt = await session.get(Attempt, attempt_id)
+            if attempt is not None:
+                attempt.scored_reason = (
+                    f"{attempt.scored_reason or ''}\n"
+                    f"[申诉复核维持原判: 复核分 {new_score:.2f}, 原分 {old_score:.2f}]"
+                ).strip()
+        log.info(
+            "appeal_kept", attempt_id=str(attempt_id),
+            old_score=old_score, new_score=new_score,
+        )
+        return {
+            "status": "kept",
+            "message": f"复核分 {new_score:.2f} 与原分差异小于 {_APPEAL_ADJUST_DELTA}，维持原判",
+            "attempt_id": str(attempt_id),
+            "old_score": old_score,
+            "new_score": new_score,
+            "adjusted": False,
+            "crossed": False,
+            "mastery_changes": [],
+        }
+
+    # 分差 ≥0.3: 修正判分; 跨越及格线时回滚并重写掌握度
+    from ..services import _update_mastery  # 只调用不改 (P2-3 所有权约定)
+
+    new_correct = new_score >= _SHORT_PASS_SCORE
+    crossed = new_correct != old_correct
+    changes: list[dict] = []
+    async with tenant_session(ctx.tenant_id) as session:
+        attempt = await session.get(Attempt, attempt_id)
+        if attempt is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        attempt.llm_score = new_score
+        attempt.scored_reason = (
+            f"{new_reason}\n[申诉复核修正: 原分 {old_score:.2f} → {new_score:.2f}]"
+        ).strip()
+        if crossed:
+            attempt.is_correct = new_correct
+            # 回滚: 该 attempt 写入的 mastery_log 里最早一条的 old_p = 判分前状态
+            entries = (
+                await session.scalars(
+                    select(MasteryLog)
+                    .where(
+                        MasteryLog.evidence_id == attempt_id,
+                        MasteryLog.evidence_type == "quiz_attempt",
+                        MasteryLog.user_id == ctx.user_id,
+                    )
+                    .order_by(MasteryLog.at.asc())
+                )
+            ).all()
+            pre_p: dict[str, float] = {}
+            for entry in entries:
+                pre_p.setdefault(str(entry.kc_id), entry.old_p)
+            for kc_id, old_p in pre_p.items():
+                record = await session.scalar(
+                    select(MasteryRecord).where(
+                        MasteryRecord.user_id == ctx.user_id,
+                        MasteryRecord.kc_id == uuid.UUID(kc_id),
+                    )
+                )
+                if record is not None:
+                    record.p_mastery = old_p  # confidence 无法精确还原, 如实保留
+            # 重写: 以复核后的判定作为新证据 (审计链保留原始行 + 新增 appeal_regrade 行)
+            changes = await _update_mastery(
+                session,
+                ctx,
+                kc_ids,
+                new_correct,
+                _SHORT_ANSWER_WEIGHT,
+                attempt_id,
+                evidence_type="appeal_regrade",
+            )
+    log.info(
+        "appeal_adjusted", attempt_id=str(attempt_id),
+        old_score=old_score, new_score=new_score, crossed=crossed,
+    )
+    return {
+        "status": "adjusted",
+        "message": (
+            f"复核修正: {old_score:.2f} → {new_score:.2f}"
+            + ("，判定结果已更新并同步掌握度" if crossed else "")
+        ),
+        "attempt_id": str(attempt_id),
+        "old_score": old_score,
+        "new_score": new_score,
+        "adjusted": True,
+        "crossed": crossed,
+        "mastery_changes": changes,
+    }

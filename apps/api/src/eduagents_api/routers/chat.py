@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Coroutine
 
 import orjson
 from eduagents_core.gateway import (
@@ -18,7 +20,7 @@ from eduagents_core.gateway import (
 )
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sse_starlette.sse import EventSourceResponse
 
 from ..db import tenant_session
@@ -27,6 +29,22 @@ from ..models import ChatMessage, ChatSession, Document, KnowledgeBase
 from ..profile_summary import ProfileContext, build_profile_context
 from ..schemas import ChatRequestIn, MessageOut, SessionOut, SessionRename
 from ..usage import persist_usage
+
+# P0-5 输出侧流式审核 (moderation 线提供 StreamModerationBuffer):
+# feed(text)->list[str] 放行块 / flush()->str / tripped:bool / safe_message:str。
+# 类缺失时直通降级 (mod_buf=None), 本线功能与测试不受阻塞。
+try:
+    from eduagents_core.moderation import (
+        StreamModerationBuffer,
+        get_moderator,
+        is_minor,
+    )
+except ImportError:  # pragma: no cover — moderation 线未合入时的守护
+    StreamModerationBuffer = None  # type: ignore[assignment]
+    get_moderator = None  # type: ignore[assignment]
+
+    def is_minor(birth_year):  # type: ignore[misc]
+        return False
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 log = get_logger("chat")
@@ -44,6 +62,52 @@ _SYSTEM_PROMPT = (
 
 # kb 路径的 RAG 防注入/引用/拒答文案由 qa 子图内联维护 (graphs/qa_graph.py)
 _HISTORY_LIMIT = 20  # M3 接入 LangGraph checkpointer 后由滚动摘要接管
+
+# 内容拦截兜底文案 (StreamModerationBuffer.safe_message 为空时使用)
+_BLOCKED_FALLBACK = (
+    "抱歉，这个话题不适合在这里继续展开。"
+    "如果你正在经历困扰，请与信任的成年人聊聊，或拨打心理援助热线寻求帮助。"
+)
+
+# P0-6: 断流 (客户端取消) 时 finally 里不能安全 await (anyio 取消域会在每个
+# await 点重新抛 CancelledError), 持久化 spawn 成独立任务; 强引用挂在模块级
+# 集合防 GC 提前回收, 完成即自移除。
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro: Coroutine) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+def _new_mod_buffer(strict: bool = False):
+    """strict=True (未成年用户): soft 词直接拦、危机豁免关闭 (内容安全线契约)。"""
+    if StreamModerationBuffer is None or get_moderator is None:
+        return None
+    try:
+        return StreamModerationBuffer(get_moderator(), strict=strict)
+    except Exception:  # noqa: BLE001 — 审核缓冲构造失败直通, 不阻塞问答
+        log.exception("moderation_buffer_init_failed")
+        return None
+
+
+async def _load_minor_flag(user_id) -> bool:
+    """按 users.birth_year 判定未成年 (未知按成年); 查询失败按成年降级。"""
+    try:
+        from sqlalchemy import select as _select
+
+        from ..db import plain_session
+        from ..models import User
+
+        async with plain_session() as session:
+            birth_year = await session.scalar(
+                _select(User.birth_year).where(User.id == user_id)
+            )
+        return bool(is_minor(birth_year))
+    except Exception:  # noqa: BLE001
+        log.exception("minor_flag_load_failed")
+        return False
 
 
 def _sse(data: dict) -> str:
@@ -67,11 +131,13 @@ async def _maybe_enqueue_reflection(request: Request, ctx: AuthContext, session_
         if turns < _REFLECT_EVERY_TURNS:
             return False
         await redis.set(key, 0, ex=_REFLECT_COUNTER_TTL)
+        # P1-7: _job_id 天然去重 — 同会话同轮次的重复投递被 ARQ 拒绝, 防重复扣费/重复写画像
         await arq.enqueue_job(
             "reflect_session",
             str(ctx.tenant_id),
             str(ctx.user_id),
             str(session_id),
+            _job_id=f"reflect:{session_id}:{turns}",
         )
         log.info("reflection_enqueued", session_id=str(session_id), turns=turns)
         return True
@@ -146,6 +212,17 @@ async def chat(
                 content=body.message,
             )
         )
+        await session.flush()
+        # P0-4 (checkpoint 绑定): qa thread 用 "{session_id}:{turn_seq}" 作
+        # local_id — 按 session 前缀可整批清理 (删会话联动删 checkpoint),
+        # 按 turn 分隔避免 QaState 的 append reducer (evidences/trace) 跨问残留。
+        turn_seq = (
+            await session.scalar(
+                select(func.count())
+                .select_from(ChatMessage)
+                .where(ChatMessage.session_id == session_id)
+            )
+        ) or 0
     history: list[GwMessage] = [
         GwMessage(role=row.role, content=row.content)
         for row in reversed(history_rows)
@@ -165,6 +242,9 @@ async def chat(
             )
         except Exception:  # noqa: BLE001
             log.exception("profile_summary_failed")
+
+    # P0-5: 未成年判定 (birth_year, 未知按成年) — 决定审核 strict 档与 prompt 安全段
+    minor = await _load_minor_flag(ctx.user_id)
 
     async def _persist_assistant(
         text: str,
@@ -191,166 +271,351 @@ async def chat(
 
     async def event_stream():
         citations: list[dict] = []
+        answer_parts: list[str] = []  # 已下发给客户端的 token 累积 (断流落库依据)
+        final: ChatResult | None = None
+        persisted = False  # P0-6: 本轮助手消息是否已落库
+        route_label = "kb" if kb_ids else "chat"
 
-        # ---- 知识库路径: qa 子图 (Agentic RAG 自省环 §5.3, M3 起唯一实现) ----
-        if kb_ids:
-            # ---- 两级语义缓存 (包B, §7): 仅单库+首轮 (缓存键不含会话历史,
-            # 多轮上下文相关答案禁止缓存) ----
-            cache = getattr(request.app.state, "answer_cache", None)
-            cache_embedder = getattr(request.app.state, "embedder", None)
-            cacheable = (
-                len(kb_ids) == 1 and not history
-                and cache is not None and cache_embedder is not None
-                # 有画像 = 答案已按该学生的薄弱点个性化, 跨用户复用即错答案 (F8-A2)
-                and not profile.summary
-            )
-            if cacheable:
+        try:
+            # ---- 知识库路径: qa 子图 (Agentic RAG 自省环 §5.3, M3 起唯一实现) ----
+            if kb_ids:
+                # ---- 两级语义缓存 (包B, §7): 仅单库+首轮 (缓存键不含会话历史,
+                # 多轮上下文相关答案禁止缓存) ----
+                cache = getattr(request.app.state, "answer_cache", None)
+                cache_embedder = getattr(request.app.state, "embedder", None)
+                cacheable = (
+                    len(kb_ids) == 1 and not history
+                    and cache is not None and cache_embedder is not None
+                    # 有画像 = 答案已按该学生的薄弱点个性化, 跨用户复用即错答案 (F8-A2)
+                    and not profile.summary
+                )
+                # P1-11: 缓存作用域 = 该 kb 的 owner (个人库 owner=本人语义不变;
+                # 机构库 owner=org id, 成员间即共享命中)。cacheable 已限单库,
+                # owner_ids 恰一个元素。
+                cache_scope = owner_ids[0] if owner_ids else str(ctx.tenant_id)
+                if cacheable:
+                    try:
+                        hit = await cache.get(
+                            cache_scope, str(kb_ids[0]),
+                            kb_versions[str(kb_ids[0])], body.message, cache_embedder,
+                        )
+                    except Exception:  # noqa: BLE001 — 缓存故障不阻塞主链路
+                        log.exception("answer_cache_get_failed")
+                        hit = None
+                    if hit is not None:
+                        # P0-6: 命中答案先落库再下发, 中途断流也不丢
+                        await _persist_assistant(
+                            hit.answer, None, hit.citations,
+                            extra_meta={"route": "kb", "cache": hit.source,
+                                        "followups": hit.followups},
+                        )
+                        persisted = True
+                        # 命中计量 (F10 缓存节省口径, 见 ops.py):
+                        # cached_tokens=原答案输出量
+                        await persist_usage(UsageEvent(
+                            request_id=request_id, tenant_id=str(ctx.tenant_id),
+                            user_id=str(ctx.user_id), feature="qa_cache",
+                            model=hit.model, tier=hit.tier, prompt_tokens=0,
+                            completion_tokens=0, cached_tokens=hit.completion_tokens,
+                            cost_cny=0.0, latency_ms=0, mode="cache",
+                        ))
+                        yield {
+                            "event": "trace_event",
+                            "data": _sse({
+                                "type": "cache", "source": hit.source,
+                                "matched_query": hit.matched_query, "score": hit.score,
+                            }),
+                        }
+                        for i, c in enumerate(hit.citations, 1):
+                            yield {"event": "citation", "data": _sse({**c, "idx": i})}
+                        for i in range(0, len(hit.answer), 24):
+                            yield {
+                                "event": "token",
+                                "data": _sse(
+                                    {"text": hit.answer[i : i + 24], "attempt": 0}
+                                ),
+                            }
+                        yield {
+                            "event": "followups",
+                            "data": _sse({"items": hit.followups}),
+                        }
+                        yield {
+                            "event": "done",
+                            "data": _sse({
+                                "session_id": str(session_id),
+                                "citations": len(hit.citations),
+                                "refused": False, "route": "kb",
+                                "usage": {"mode": "cache", "cost_cny": 0.0},
+                            }),
+                        }
+                        await _maybe_enqueue_reflection(request, ctx, session_id)
+                        return
+
+                # P0-4: 会话级 thread 前缀 + 轮次隔离 (见上 turn_seq 注释)
+                thread = runtime.thread_id(
+                    "qa", str(ctx.user_id), f"{session_id}:{turn_seq}"
+                )
+                payload = {
+                    "messages": [
+                        {"role": m.role, "content": m.content} for m in history
+                    ],
+                    "query": body.message,
+                    "tenant_id": str(ctx.tenant_id),
+                    "user_id": str(ctx.user_id),
+                    "request_id": request_id,
+                    # kb_id 保留为首库 (路由判定/旧路径兼容); 检索层用 kb_ids+owner_ids
+                    "kb_id": str(kb_ids[0]),
+                    "kb_ids": [str(k) for k in kb_ids],
+                    "owner_ids": owner_ids,
+                    # 画像摘要进 generate 的 system prompt; 薄弱点名单进 trace
+                    "profile_summary": profile.summary,
+                    "profile_weak_points": profile.weak_points,
+                    # P0-5: 未成年标志 -> generate 追加安全约束段 (qa_graph 契约)
+                    "minor": minor,
+                }
+                state: dict = {}
+                attempt = 0
+                mod_buf = _new_mod_buffer(strict=minor)
+                blocked = False
                 try:
-                    hit = await cache.get(
-                        str(ctx.tenant_id), str(kb_ids[0]),
-                        kb_versions[str(kb_ids[0])], body.message, cache_embedder,
-                    )
-                except Exception:  # noqa: BLE001 — 缓存故障不阻塞主链路
-                    log.exception("answer_cache_get_failed")
-                    hit = None
-                if hit is not None:
+                    async for ev in runtime.astream_updates("qa", thread, payload):
+                        if ev["kind"] == "token":
+                            # 图内真流式 token (generate 节点 get_stream_writer 写出);
+                            # attempt 变化 = verify 触发重生成, 前端按此清空重排
+                            ev_attempt = int(ev.get("attempt", 0))
+                            if ev_attempt != attempt:
+                                attempt = ev_attempt
+                                answer_parts = []
+                                mod_buf = _new_mod_buffer(strict=minor)  # 新 attempt 重新计审
+                            piece = ev["text"]
+                            if mod_buf is None:
+                                answer_parts.append(piece)
+                                yield {
+                                    "event": "token",
+                                    "data": _sse(
+                                        {"text": piece, "attempt": ev_attempt}
+                                    ),
+                                }
+                            else:
+                                for chunk in mod_buf.feed(piece):
+                                    answer_parts.append(chunk)
+                                    yield {
+                                        "event": "token",
+                                        "data": _sse(
+                                            {"text": chunk, "attempt": ev_attempt}
+                                        ),
+                                    }
+                                if mod_buf.tripped:
+                                    blocked = True
+                                    break  # 停止消费图流, 不再下发原文
+                        elif ev["kind"] == "node":
+                            delta = ev["delta"]
+                            yield {
+                                "event": "node_update",
+                                "data": _sse({"node": ev["node"], "status": "done"}),
+                            }
+                            for tr in delta.get("trace") or []:
+                                yield {"event": "trace_event", "data": _sse(tr)}
+                            evidences = delta.get("evidences") or []
+                            if evidences:
+                                doc_ids = {
+                                    e["doc_id"] for e in evidences if e.get("doc_id")
+                                }
+                                # org_ids 注入: 机构库文档行在 org 只读策略下可见
+                                async with tenant_session(
+                                    ctx.tenant_id, org_ids=ctx.org_ids
+                                ) as session:
+                                    rows = (
+                                        await session.scalars(
+                                            select(Document).where(
+                                                Document.id.in_(
+                                                    [uuid.UUID(d) for d in doc_ids]
+                                                )
+                                            )
+                                        )
+                                    ).all()
+                                    doc_names = {str(r.id): r.filename for r in rows}
+                                citations = []
+                                for i, e in enumerate(evidences, 1):
+                                    citation = {
+                                        "idx": i,
+                                        "chunk_id": e.get("chunk_id", ""),
+                                        "doc_id": e.get("doc_id", ""),
+                                        "doc_name": doc_names.get(
+                                            e.get("doc_id", ""), "未知文档"
+                                        ),
+                                        # 联合检索: 标注引用来自哪个库
+                                        "kb_id": e.get("kb_id", ""),
+                                        "kb_name": kb_names.get(e.get("kb_id", ""), ""),
+                                        "heading_path": e.get("heading_path", ""),
+                                        "page": e.get("page_start"),
+                                        "highlight": (e.get("text") or "")[:160],
+                                        "sanitized": bool(e.get("sanitized")),
+                                    }
+                                    citations.append(citation)
+                                    yield {"event": "citation", "data": _sse(citation)}
+                        elif ev["kind"] == "end":
+                            state = ev["state"]
+                        # 其余 kind (custom 等) 向前兼容: 忽略
+                except BudgetExceeded:
                     yield {
-                        "event": "trace_event",
+                        "event": "error",
                         "data": _sse({
-                            "type": "cache", "source": hit.source,
-                            "matched_query": hit.matched_query, "score": hit.score,
+                            "code": "BUDGET_EXCEEDED",
+                            "message": "今日 AI 用量已达上限，明天再来或联系管理员",
                         }),
                     }
-                    for i, c in enumerate(hit.citations, 1):
-                        yield {"event": "citation", "data": _sse({**c, "idx": i})}
-                    for i in range(0, len(hit.answer), 24):
+                    return
+                except Exception:
+                    log.exception("qa_graph_failed")
+                    yield {
+                        "event": "error",
+                        "data": _sse(
+                            {"code": "GENERATION_FAILED", "message": "回答生成失败，请重试"}
+                        ),
+                    }
+                    return
+
+                # 审核缓冲收尾: 正常结束冲残块; flush 后仍可能触发拦截
+                if not blocked and mod_buf is not None:
+                    tail_chunk = mod_buf.flush()
+                    if getattr(mod_buf, "tripped", False):
+                        blocked = True
+                    elif tail_chunk:
+                        answer_parts.append(tail_chunk)
                         yield {
                             "event": "token",
-                            "data": _sse({"text": hit.answer[i : i + 24], "attempt": 0}),
+                            "data": _sse({"text": tail_chunk, "attempt": attempt}),
                         }
-                    await _persist_assistant(
-                        hit.answer, None, hit.citations,
-                        extra_meta={"route": "kb", "cache": hit.source,
-                                    "followups": hit.followups},
-                    )
-                    # 命中计量 (F10 缓存节省口径, 见 ops.py): cached_tokens=原答案输出量
-                    await persist_usage(UsageEvent(
-                        request_id=request_id, tenant_id=str(ctx.tenant_id),
-                        user_id=str(ctx.user_id), feature="qa_cache",
-                        model=hit.model, tier=hit.tier, prompt_tokens=0,
-                        completion_tokens=0, cached_tokens=hit.completion_tokens,
-                        cost_cny=0.0, latency_ms=0, mode="cache",
-                    ))
+                if blocked:
+                    safe = getattr(mod_buf, "safe_message", "") or _BLOCKED_FALLBACK
+                    attempt += 1  # attempt 跳变: 前端清掉已下发的原文片段
                     yield {
-                        "event": "followups",
-                        "data": _sse({"items": hit.followups}),
+                        "event": "error",
+                        "data": _sse({
+                            "code": "CONTENT_BLOCKED",
+                            "message": "本次回答包含不适宜内容，已被安全策略拦截",
+                        }),
                     }
+                    yield {
+                        "event": "token",
+                        "data": _sse({"text": safe, "attempt": attempt}),
+                    }
+                    answer_parts = [safe]
+                    await _persist_assistant(
+                        safe, None, [], extra_meta={"route": "kb", "blocked": True}
+                    )
+                    persisted = True
                     yield {
                         "event": "done",
                         "data": _sse({
-                            "session_id": str(session_id),
-                            "citations": len(hit.citations),
-                            "refused": False, "route": "kb",
-                            "usage": {"mode": "cache", "cost_cny": 0.0},
+                            "session_id": str(session_id), "citations": 0,
+                            "refused": False, "route": "kb", "usage": {},
                         }),
                     }
-                    await _maybe_enqueue_reflection(request, ctx, session_id)
                     return
 
-            thread = runtime.thread_id("qa", str(ctx.user_id), uuid.uuid4().hex)
-            payload = {
-                "messages": [
-                    {"role": m.role, "content": m.content} for m in history
-                ],
-                "query": body.message,
-                "tenant_id": str(ctx.tenant_id),
-                "user_id": str(ctx.user_id),
-                "request_id": request_id,
-                # kb_id 保留为首库 (路由判定/旧路径兼容); 检索层用 kb_ids+owner_ids
-                "kb_id": str(kb_ids[0]),
-                "kb_ids": [str(k) for k in kb_ids],
-                "owner_ids": owner_ids,
-                # 画像摘要进 generate 的 system prompt; 薄弱点名单进 trace (前端可见)
-                "profile_summary": profile.summary,
-                "profile_weak_points": profile.weak_points,
-            }
-            state: dict = {}
-            answer_parts: list[str] = []  # 当前 attempt 已下发的 token 累积
-            attempt = 0
-            try:
-                async for ev in runtime.astream_updates("qa", thread, payload):
-                    if ev["kind"] == "token":
-                        # 图内真流式 token (generate 节点 get_stream_writer 写出);
-                        # attempt 变化 = verify 触发重生成, 前端按此清空重排
-                        ev_attempt = int(ev.get("attempt", 0))
-                        if ev_attempt != attempt:
-                            attempt = ev_attempt
-                            answer_parts = []
-                        answer_parts.append(ev["text"])
+                answer = state.get("answer", "")
+                # 图内已真流式; 这里只补差量: 拒答路径不经 generate (streamed 为空),
+                # verify 二次仍不支持时免责声明追加在答案尾部
+                streamed = "".join(answer_parts)
+                if answer != streamed:
+                    if not answer.startswith(streamed):
+                        attempt += 1  # 流内容与终态不一致 (罕见): 换 attempt 整段重发
+                        streamed = ""
+                        answer_parts = []
+                    tail = answer[len(streamed) :]
+                    for i in range(0, len(tail), 24):
+                        chunk = tail[i : i + 24]
+                        answer_parts.append(chunk)
                         yield {
                             "event": "token",
-                            "data": _sse({"text": ev["text"], "attempt": ev_attempt}),
+                            "data": _sse({"text": chunk, "attempt": attempt}),
                         }
-                    elif ev["kind"] == "node":
-                        delta = ev["delta"]
-                        yield {
-                            "event": "node_update",
-                            "data": _sse({"node": ev["node"], "status": "done"}),
-                        }
-                        for tr in delta.get("trace") or []:
-                            yield {"event": "trace_event", "data": _sse(tr)}
-                        evidences = delta.get("evidences") or []
-                        if evidences:
-                            doc_ids = {
-                                e["doc_id"] for e in evidences if e.get("doc_id")
-                            }
-                            # org_ids 注入: 机构库文档行在 org 只读策略下可见
-                            async with tenant_session(
-                                ctx.tenant_id, org_ids=ctx.org_ids
-                            ) as session:
-                                rows = (
-                                    await session.scalars(
-                                        select(Document).where(
-                                            Document.id.in_(
-                                                [uuid.UUID(d) for d in doc_ids]
-                                            )
-                                        )
-                                    )
-                                ).all()
-                                doc_names = {str(r.id): r.filename for r in rows}
-                            citations = []
-                            for i, e in enumerate(evidences, 1):
-                                citation = {
-                                    "idx": i,
-                                    "chunk_id": e.get("chunk_id", ""),
-                                    "doc_id": e.get("doc_id", ""),
-                                    "doc_name": doc_names.get(
-                                        e.get("doc_id", ""), "未知文档"
-                                    ),
-                                    # 联合检索: 标注引用来自哪个库
-                                    "kb_id": e.get("kb_id", ""),
-                                    "kb_name": kb_names.get(e.get("kb_id", ""), ""),
-                                    "heading_path": e.get("heading_path", ""),
-                                    "page": e.get("page_start"),
-                                    "highlight": (e.get("text") or "")[:160],
-                                    "sanitized": bool(e.get("sanitized")),
-                                }
-                                citations.append(citation)
-                                yield {"event": "citation", "data": _sse(citation)}
-                    elif ev["kind"] == "end":
-                        state = ev["state"]
-                    # 其余 kind (custom 等) 向前兼容: 忽略
-            except BudgetExceeded:
+                await _persist_assistant(
+                    answer,
+                    None,
+                    citations,
+                    extra_meta={
+                        "route": state.get("route", ""),
+                        "refused": state.get("refused", False),
+                        "followups": state.get("followups") or [],
+                    },
+                )
+                persisted = True
+                # 缓存写入: 仅自省环通过的最终答案 (非拒答/无免责段/单库/首轮, 包B约定)
+                if (
+                    cacheable and answer and not state.get("refused")
+                    and "⚠️" not in answer and state.get("route") == "kb"
+                ):
+                    try:
+                        await cache.put(
+                            cache_scope, str(kb_ids[0]),
+                            kb_versions[str(kb_ids[0])], body.message, cache_embedder,
+                            answer=answer, citations=citations,
+                            followups=state.get("followups") or [],
+                            model=state.get("model", ""), tier="standard",
+                            completion_tokens=len(answer),
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("answer_cache_put_failed")
+                # 追问 chips (包A): done 前固定下发; 生成失败降级为空列表, 不阻塞
                 yield {
-                    "event": "error",
-                    "data": _sse({
-                        "code": "BUDGET_EXCEEDED",
-                        "message": "今日 AI 用量已达上限，明天再来或联系管理员",
-                    }),
+                    "event": "followups",
+                    "data": _sse({"items": state.get("followups") or []}),
                 }
+                yield {
+                    "event": "done",
+                    "data": _sse(
+                        {
+                            "session_id": str(session_id),
+                            "citations": len(citations),
+                            "refused": state.get("refused", False),
+                            "route": state.get("route", ""),
+                            "usage": {},
+                        }
+                    ),
+                }
+                # done 之后再入队 Reflection (§5.5 双通道之二): 不占本轮 SSE 时延
+                await _maybe_enqueue_reflection(request, ctx, session_id)
                 return
+
+            # ---- 通用路径: 直连网关, 真 token 流 ----
+            messages = [GwMessage(role="system", content=_SYSTEM_PROMPT), *history,
+                        GwMessage(role="user", content=body.message)]
+            gw_req = GwRequest(
+                messages=tuple(messages),
+                tier=Tier.standard,
+                feature="chat",
+                tenant_id=str(ctx.tenant_id),
+                user_id=str(ctx.user_id),
+                request_id=request_id,
+            )
+            yield {
+                "event": "node_update",
+                "data": _sse(
+                    {"node": "generate", "status": "running", "detail": "生成回答中"}
+                ),
+            }
+            mod_buf = _new_mod_buffer(strict=minor)
+            blocked = False
+            try:
+                async for item in gateway.stream_chat(gw_req):
+                    if isinstance(item, StreamDelta):
+                        if mod_buf is None:
+                            answer_parts.append(item.text)
+                            yield {"event": "token", "data": _sse({"text": item.text})}
+                        else:
+                            for chunk in mod_buf.feed(item.text):
+                                answer_parts.append(chunk)
+                                yield {"event": "token", "data": _sse({"text": chunk})}
+                            if mod_buf.tripped:
+                                blocked = True
+                                break  # 停止消费上游流, 不再下发原文
+                    else:
+                        final = item
             except Exception:
-                log.exception("qa_graph_failed")
+                log.exception("chat_stream_failed")
                 yield {
                     "event": "error",
                     "data": _sse(
@@ -358,117 +623,76 @@ async def chat(
                     ),
                 }
                 return
-            answer = state.get("answer", "")
-            # 图内已真流式; 这里只补差量: 拒答路径不经 generate (streamed 为空),
-            # verify 二次仍不支持时免责声明追加在答案尾部
-            streamed = "".join(answer_parts)
-            if answer != streamed:
-                if not answer.startswith(streamed):
-                    attempt += 1  # 流内容与终态不一致 (罕见): 换 attempt 整段重发
-                    streamed = ""
-                tail = answer[len(streamed) :]
-                for i in range(0, len(tail), 24):
-                    yield {
-                        "event": "token",
-                        "data": _sse({"text": tail[i : i + 24], "attempt": attempt}),
-                    }
-            await _persist_assistant(
-                answer,
-                None,
-                citations,
-                extra_meta={
-                    "route": state.get("route", ""),
-                    "refused": state.get("refused", False),
-                    "followups": state.get("followups") or [],
-                },
-            )
-            # 缓存写入: 仅自省环通过的最终答案 (非拒答/无免责段/单库/首轮, 包B约定)
-            if (
-                cacheable and answer and not state.get("refused")
-                and "⚠️" not in answer and state.get("route") == "kb"
-            ):
-                try:
-                    await cache.put(
-                        str(ctx.tenant_id), str(kb_ids[0]),
-                        kb_versions[str(kb_ids[0])], body.message, cache_embedder,
-                        answer=answer, citations=citations,
-                        followups=state.get("followups") or [],
-                        model=state.get("model", ""), tier="standard",
-                        completion_tokens=len(answer),
-                    )
-                except Exception:  # noqa: BLE001
-                    log.exception("answer_cache_put_failed")
-            # 追问 chips (包A): done 前固定下发; 生成失败降级为空列表, 不阻塞
-            yield {
-                "event": "followups",
-                "data": _sse({"items": state.get("followups") or []}),
-            }
+            if not blocked and mod_buf is not None:
+                tail_chunk = mod_buf.flush()
+                if getattr(mod_buf, "tripped", False):
+                    blocked = True
+                elif tail_chunk:
+                    answer_parts.append(tail_chunk)
+                    yield {"event": "token", "data": _sse({"text": tail_chunk})}
+            if blocked:
+                safe = getattr(mod_buf, "safe_message", "") or _BLOCKED_FALLBACK
+                yield {
+                    "event": "error",
+                    "data": _sse({
+                        "code": "CONTENT_BLOCKED",
+                        "message": "本次回答包含不适宜内容，已被安全策略拦截",
+                    }),
+                }
+                # attempt=1 跳变: 前端按 attempt 变化清掉已下发的原文片段
+                yield {
+                    "event": "token",
+                    "data": _sse({"text": safe, "attempt": 1}),
+                }
+                answer_parts = [safe]
+                await _persist_assistant(
+                    safe, final, citations, extra_meta={"blocked": True}
+                )
+                persisted = True
+                yield {
+                    "event": "done",
+                    "data": _sse({
+                        "session_id": str(session_id),
+                        "citations": len(citations),
+                        "usage": {},
+                    }),
+                }
+                return
+            answer = "".join(answer_parts)
+            await _persist_assistant(answer, final, citations)
+            persisted = True
             yield {
                 "event": "done",
                 "data": _sse(
                     {
                         "session_id": str(session_id),
                         "citations": len(citations),
-                        "refused": state.get("refused", False),
-                        "route": state.get("route", ""),
-                        "usage": {},
+                        "usage": {
+                            "cost_cny": final.cost_cny if final else 0.0,
+                            "mode": final.mode if final else "unknown",
+                            "latency_ms": final.latency_ms if final else 0,
+                        },
                     }
                 ),
             }
-            # done 之后再入队 Reflection (§5.5 双通道之二): 不占本轮 SSE 时延
             await _maybe_enqueue_reflection(request, ctx, session_id)
-            return
-
-        # ---- 通用路径: 直连网关, 真 token 流 ----
-        messages = [GwMessage(role="system", content=_SYSTEM_PROMPT), *history,
-                    GwMessage(role="user", content=body.message)]
-        gw_req = GwRequest(
-            messages=tuple(messages),
-            tier=Tier.standard,
-            feature="chat",
-            tenant_id=str(ctx.tenant_id),
-            user_id=str(ctx.user_id),
-            request_id=request_id,
-        )
-        yield {
-            "event": "node_update",
-            "data": _sse({"node": "generate", "status": "running", "detail": "生成回答中"}),
-        }
-        parts: list[str] = []
-        final: ChatResult | None = None
-        try:
-            async for item in gateway.stream_chat(gw_req):
-                if isinstance(item, StreamDelta):
-                    parts.append(item.text)
-                    yield {"event": "token", "data": _sse({"text": item.text})}
-                else:
-                    final = item
-        except Exception:
-            log.exception("chat_stream_failed")
-            yield {
-                "event": "error",
-                "data": _sse(
-                    {"code": "GENERATION_FAILED", "message": "回答生成失败，请重试"}
-                ),
-            }
-            return
-        answer = "".join(parts)
-        await _persist_assistant(answer, final, citations)
-        yield {
-            "event": "done",
-            "data": _sse(
-                {
-                    "session_id": str(session_id),
-                    "citations": len(citations),
-                    "usage": {
-                        "cost_cny": final.cost_cny if final else 0.0,
-                        "mode": final.mode if final else "unknown",
-                        "latency_ms": final.latency_ms if final else 0,
-                    },
-                }
-            ),
-        }
-        await _maybe_enqueue_reflection(request, ctx, session_id)
+        finally:
+            # P0-6: 断流不丢答案 — 客户端断开 (GeneratorExit/CancelledError) 或
+            # 持久化前异常退出时, 已下发的部分落库并标 truncated (前端据此显示
+            # "回答未完成"角标 + 重问入口)。finally 里禁止 yield; 取消上下文中
+            # await 会被再次打断, 故 spawn 独立任务完成落库 (见 _spawn)。
+            if not persisted:
+                partial = "".join(answer_parts)
+                if partial:
+                    persisted = True
+                    _spawn(
+                        _persist_assistant(
+                            partial,
+                            final,
+                            citations,
+                            extra_meta={"route": route_label, "truncated": True},
+                        )
+                    )
 
     return EventSourceResponse(event_stream())
 
@@ -508,7 +732,13 @@ async def session_messages(
             )
         ).all()
         return [
-            MessageOut(id=r.id, role=r.role, content=r.content, created_at=r.created_at)
+            MessageOut(
+                id=r.id,
+                role=r.role,
+                content=r.content,
+                created_at=r.created_at,
+                meta=r.meta_json or {},
+            )
             for r in rows
         ]
 
@@ -539,3 +769,16 @@ async def delete_session(
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         await session.execute(delete(ChatSession).where(ChatSession.id == session_id))
+        # P0-4 (checkpoint 绑定): qa thread_id = "qa:{uid}:{sid}:{turn}", 删会话
+        # 同事务按前缀清 LangGraph 三表, 明文问答不残留。表由 checkpointer.setup()
+        # 建 (不在 Alembic), 环境未启用图运行时可能不存在 — to_regclass 先探。
+        has_ckpt = await session.scalar(
+            text("SELECT to_regclass('public.checkpoints') IS NOT NULL")
+        )
+        if has_ckpt:
+            pattern = f"qa:{ctx.user_id}:{session_id}:%"
+            for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                await session.execute(
+                    text(f"DELETE FROM {table} WHERE thread_id LIKE :pat"),  # noqa: S608 — 表名白名单常量
+                    {"pat": pattern},
+                )

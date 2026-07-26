@@ -5,6 +5,7 @@
 #   allow   <学术/技术语境豁免短语>
 #
 # 分类: illegal 违法犯罪 / violence 暴力恐怖 / adult 成人色情 / political 政治敏感
+#       crisis 危机干预 (自残/轻生语义: 输入侧只标记不拦截, 输出侧必拦并给热线)
 #
 # soft 标记: 该词在正常学术语境中歧义大 (如"暴力"既指暴力行为也指暴力枚举算法),
 #   仅在"短文本" (词条占据整条消息语义) 或"求教意图" 上下文中才判定命中;
@@ -56,6 +57,39 @@ adult	卖淫
 adult	嫖娼
 adult	情色	soft
 
+# ---- 危机干预 (P0-5): 自残/轻生的常见口语表达 ----
+# 处置方向与其他分类相反: check_input 命中不拦截只置 crisis=True (对话继续,
+# API 层注入关怀提示); check_output 命中必拦, 兜底文案换危机干预文案 (含热线)。
+# 降误杀: 紧邻夸张前缀 ("累得不想活") 默认豁免 (moderation.py _HYPERBOLE_PREFIXES),
+# allow 短语 ("想死你了") 依然生效; 其余边界情形宁可多标/多拦 + 给热线。
+crisis	不想活
+crisis	不想再活
+crisis	活不下去
+crisis	活着没意思
+crisis	活着没有意思
+crisis	活着没意义
+crisis	活着没有意义
+crisis	想死
+crisis	想寻死
+crisis	寻短见
+crisis	想自杀
+crisis	自杀
+crisis	自我了断
+crisis	了结自己
+crisis	结束自己的生命
+crisis	想结束生命
+crisis	轻生
+crisis	割腕
+crisis	跳楼
+crisis	想不开
+crisis	想消失
+crisis	一了百了
+crisis	不如死了算了
+crisis	撑不下去了
+crisis	想伤害自己
+crisis	自残
+crisis	自伤
+
 # ---- 政治敏感 ----
 political	颠覆国家政权
 political	煽动颠覆
@@ -86,3 +120,9 @@ allow	思想政治
 allow	国际政治
 allow	政治制度
 allow	政治学
+allow	想死你了
+allow	自杀论
+allow	跳楼价
+allow	跳楼机
+allow	细胞自杀
+allow	自杀式防守

@@ -1,9 +1,11 @@
 """预算强制端到端 (INTEGRATION=1, 真 Redis)。
 
-- RedisBudgetGuard + 真 Redis 验三档阈值与 settle 累加;
+- RedisBudgetGuard + 真 Redis 验三档阈值与 settle 累加 (Lua 预扣在真 Redis 上跑通);
 - OpenAIGateway(live 模式 + 不可达端点 + guard): 超预算时 BudgetExceeded 在
   chat/stream_chat 两条路径都向上传播 (未发出任何网络调用即被拦截);
-- 软限 (80-100%) 时请求被降为 cheap 档; 降级兜底 stub 结果不结算, 计数器不动。
+- 软限 (80-100%) 时请求被降为 cheap 档; 降级兜底 stub 结果不结算, 预扣被整额
+  返还, 计数器净变化为零 (P1-12);
+- 全局 150% 熔断: 个人额度未满也全档拒绝 (P0-2b)。
 """
 
 from __future__ import annotations
@@ -94,6 +96,7 @@ async def test_three_thresholds_and_settle_on_real_redis(redis):
     user = f"e2e-{uuid.uuid4().hex[:12]}"
     key = f"budget:{user}:{DAY}"
     created.append(key)
+    created.append(f"budget:global:{DAY}")  # settle/预扣 同步累加全局键 (P0-2b)
 
     # <80%: settle 累加后仍正常放行
     def live_event(cost: float) -> UsageEvent:
@@ -153,11 +156,33 @@ async def test_gateway_soft_limit_downgrades_to_cheap(redis, tmp_path):
     gw = OpenAIGateway(settings, budget_guard=guard)
     user = f"e2e-{uuid.uuid4().hex[:12]}"
     key = await _seed(r, created, user, ratio=0.9)
+    created.append(f"budget:global:{DAY}")
     before = float(await r.get(key))
 
     result = await gw.chat(_req(user, tier=Tier.standard))
     # 端点全部不可达 -> 降级链落到 stub 兜底; tier 已被预算降档为 cheap
     assert result.tier == "cheap"
     assert result.mode == "stub"
-    # stub 兜底 (mode!=live) 不结算: 计数器纹丝不动
+    # stub 兜底 (mode!=live) 零成本结算: 预扣整额返还, 计数器净变化为零 (P1-12)
     assert float(await r.get(key)) == pytest.approx(before)
+
+
+async def test_global_kill_switch_blocks_even_fresh_user(redis, tmp_path):
+    """P0-2b: 全局 ≥150% 全档熔断 — 个人额度全空的新用户也被拒。"""
+    r, created = redis
+    settings = _gateway_settings(tmp_path)
+    guard = RedisBudgetGuard(r, settings, now_fn=_fixed_now)
+    gw = OpenAIGateway(settings, budget_guard=guard)
+    gkey = f"budget:global:{DAY}"
+    created.append(gkey)
+    await r.set(
+        gkey, 1.5 * settings.global_daily_budget_cny * MICRO_PER_CNY
+    )
+
+    user = f"e2e-{uuid.uuid4().hex[:12]}"
+    with pytest.raises(BudgetExceeded):
+        await gw.chat(_req(user))
+    # 拒绝路径不预扣: 全局键数值不变
+    assert float(await r.get(gkey)) == pytest.approx(
+        1.5 * settings.global_daily_budget_cny * MICRO_PER_CNY
+    )

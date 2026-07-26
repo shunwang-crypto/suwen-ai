@@ -25,6 +25,8 @@ export interface MessageOut {
   role: string;
   content: string;
   created_at: string;
+  /** 服务端 meta_json 透出：truncated（断流未完成）/blocked/mode/citations 等 */
+  meta?: Record<string, unknown>;
 }
 
 export interface KbOut {
@@ -1026,4 +1028,44 @@ export interface TeacherExportPrint {
   quiz: { id: string; title: string; created_at: string; total: number };
   paper: { title: string; instructions: string; items: TeacherPrintItem[] };
   answer_key: { title: string; items: TeacherPrintAnswer[] };
+}
+
+// ---- 用户反馈（P2-1，对齐 routers/feedback.py）----
+
+export type FeedbackCategory = "bug" | "answer_wrong" | "abuse" | "other";
+
+export interface FeedbackOut {
+  id: string;
+  request_id: string;
+  category: FeedbackCategory | string;
+  content: string;
+  page_url: string;
+  status: "open" | "closed";
+  created_at: string;
+  /** admin 列表附带（GET /api/admin/feedback）；用户自查接口无此二字段 */
+  user_id?: string;
+  email?: string | null;
+}
+
+export interface FeedbackListResponse {
+  items: FeedbackOut[];
+  total: number;
+  page?: number;
+  page_size?: number;
+  pages?: number;
+}
+
+// ---- 判分申诉（P2-3，对齐 routers/reviews.py appeals_router）----
+
+export interface AppealResult {
+  /** adjusted（复核修正）| kept（维持原判）| pending_manual_review（202 登记待人工） */
+  status: "adjusted" | "kept" | "pending_manual_review" | string;
+  message: string;
+  attempt_id: string;
+  old_score: number | null;
+  new_score: number | null;
+  adjusted: boolean;
+  /** 是否跨越 0.6 及格线（跨线时后端已回滚并重写掌握度） */
+  crossed: boolean;
+  mastery_changes: MasteryChange[];
 }

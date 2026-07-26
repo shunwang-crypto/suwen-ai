@@ -14,4 +14,4 @@ COPY alembic/ alembic/
 RUN pip install --no-cache-dir -e packages/core -e apps/api -e apps/worker
 
 EXPOSE 8000
-CMD ["uvicorn", "eduagents_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "eduagents_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=172.16.0.0/12"]

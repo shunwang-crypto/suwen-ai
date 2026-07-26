@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway import ChatMessage as GwMessage
@@ -20,6 +20,7 @@ from eduagents_core.gateway import GatewayError, Tier
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import Date, cast, func, select
 
+from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings, get_gateway
 from ..models import Attempt, ErrorItem, KcEdge, KnowledgeComponent, MasteryLog, MasteryRecord
@@ -67,12 +68,15 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
         for r, name in ranked
     ]
 
-    # trend: 近 30 天每日答题数与正确率, 无数据日补零 (前端折线连续)
-    today = datetime.now(UTC).date()
-    since = datetime(today.year, today.month, today.day, tzinfo=UTC) - timedelta(
+    # trend: 近 30 天每日答题数与正确率, 无数据日补零 (前端折线连续)。
+    # P2-11 唯一决定: 日切在 SQL 侧 AT TIME ZONE 'Asia/Shanghai' (timestamptz ->
+    # 沪时本地时间再取日期), 与预算日界 (budget.py CN_TZ) 同一口径 —— 北京时间
+    # 凌晨刷题计入"今天", 打卡/趋势不再因 UTC 日切断签。
+    today = datetime.now(CN_TZ).date()
+    since = datetime(today.year, today.month, today.day, tzinfo=CN_TZ) - timedelta(
         days=_TREND_DAYS - 1
     )
-    day_col = cast(func.timezone("UTC", Attempt.at), Date)
+    day_col = cast(func.timezone("Asia/Shanghai", Attempt.at), Date)
     daily = {
         day: (int(total), int(correct))
         for day, total, correct in (

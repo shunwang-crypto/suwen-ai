@@ -11,6 +11,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { AppealEntry } from "@/components/appeal-entry";
 import {
   Card,
   EmptyState,
@@ -429,6 +430,10 @@ export default function QuizPage() {
                               <MasteryDelta key={c.kc_id} change={c} />
                             ))}
                           </p>
+                        )}
+                        {/* 判分申诉（P2-3）：仅 LLM 评分的主观题可复核 */}
+                        {q.type === "short" && result.llm_score != null && (
+                          <AppealEntry questionId={q.id} />
                         )}
                       </div>
                     )}

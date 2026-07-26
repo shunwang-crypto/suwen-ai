@@ -21,8 +21,16 @@ from typing import Any
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
-from ..gateway.base import ChatMessage, ChatRequest, GatewayError, StreamDelta, Tier
+from ..gateway.base import (
+    BudgetExceeded,
+    ChatMessage,
+    ChatRequest,
+    GatewayError,
+    StreamDelta,
+    Tier,
+)
 from ..logging import get_logger
+from ..moderation import get_moderator, minor_system_guard
 from ..retrieval.base import rrf_fuse
 from ..retrieval.sanitize import sanitize_retrieved_text
 from .state import GraphDeps, QaState
@@ -176,6 +184,10 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         try:
             result = await deps.gateway.chat(req)
         except GatewayError as exc:
+            if isinstance(exc, BudgetExceeded):
+                # P1-9: 预算熔断必须冒头到 API 层转 429 (SSE 发 BUDGET_EXCEEDED),
+                # 不许当解析失败静默降级继续跑后续节点烧钱
+                raise
             log.warning("qa_llm_call_failed", feature=feature, error=str(exc))
             return None
         return _parse_json_object(result.text)
@@ -381,21 +393,40 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             raw_results, from_cache = raw
         else:  # GraphDeps 文档形状: list | None
             raw_results = raw or []
-        results = [
-            {
+        # 外部内容过审 (P0-5): web 结果与模型输出同标准 (check_output), 命中整条丢弃 —
+        # sanitize 只防指令注入, 不防违法/成人内容被"洗"成带引用的可信答案。
+        moderator = get_moderator()
+        strict = bool(state.get("minor"))
+        results = []
+        dropped = 0
+        for r in raw_results:
+            if not isinstance(r, dict):
+                continue
+            item = {
                 "title": str(r.get("title", "")),
                 "url": str(r.get("url", "")),
                 "content": str(r.get("content", "")),
             }
-            for r in raw_results
-            if isinstance(r, dict)
+            verdict = moderator.check_output(
+                f"{item['title']}\n{item['content']}", strict=strict
+            )
+            if not verdict.allowed:
+                dropped += 1
+                log.warning(
+                    "qa_web_result_moderated",
+                    url=item["url"],
+                    category=verdict.category,
+                    matched=verdict.matched,
+                )
+                continue
+            results.append(item)
+        trace_events: list[dict] = [
+            {"type": "web_search", "returned": len(results), "from_cache": from_cache}
         ]
-        return {
-            "web_results": results,
-            "trace": [
-                {"type": "web_search", "returned": len(results), "from_cache": from_cache}
-            ],
-        }
+        if dropped:
+            trace_events.append({"type": "moderation", "dropped": dropped})
+        # 全部被丢弃时 web_results 为空, after_web_fallback 按原空结果路径走拒答
+        return {"web_results": results, "trace": trace_events}
 
     def _gen_path(state: _QaGraphState) -> str:
         """生成路径判定: web_results 优先 (kb 路径 grade 失败后 web 兜底也走此分支)。"""
@@ -426,6 +457,8 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         profile_summary = (state.get("profile_summary") or "").strip()
         if profile_summary:
             system += PROFILE_SECTION_TEMPLATE.replace("{{PROFILE}}", profile_summary)
+        if state.get("minor"):  # 未成年模式 (P0-5): 安全约束段追加在 system 末尾
+            system += "\n\n" + minor_system_guard()
         history = [
             ChatMessage(role=m["role"], content=str(m.get("content", "")))
             for m in state.get("messages") or []
@@ -440,6 +473,9 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 ChatMessage(role="user", content=query),
             ),
             tier=Tier.standard,
+            # P1-15: 主回答上限 1500 token — 最坏路径 (9~10 次调用) 不再可能
+            # 单次问答打满 8000 token 输出穿透成本模型
+            max_tokens=1500,
             feature="qa_generate",
             tenant_id=state.get("tenant_id", ""),
             user_id=state.get("user_id", ""),

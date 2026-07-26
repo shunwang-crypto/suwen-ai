@@ -141,10 +141,28 @@ async def _update_mastery(
     """BKT 直写 (确定性, 不经 LLM) + mastery_log 审计 (F8-A3)。
 
     evidence_type 区分证据来源 (quiz_attempt | tutor_summary | ...), 默认值保持向后兼容。
+
+    幂等 (P1-7): 同一 (user_id, kc_id, evidence_type, evidence_id) 已有 mastery_log
+    即跳过 — worker 重试/重复入队 (如 reflect_session) 不会重复推 BKT 污染画像。
+    evidence_id=None (tutor_summary) 无去重键, 保持原样。
     """
     changes = []
     params = BktParams()
+    applied: set[str] = set()
+    if evidence_id is not None and kc_ids:
+        existing_logs = (
+            await session.scalars(
+                select(MasteryLog.kc_id).where(
+                    MasteryLog.user_id == ctx.user_id,
+                    MasteryLog.evidence_type == evidence_type,
+                    MasteryLog.evidence_id == evidence_id,
+                )
+            )
+        ).all()
+        applied = {str(k) for k in existing_logs}
     for kc_id in kc_ids:
+        if str(kc_id) in applied:
+            continue
         record = await session.scalar(
             select(MasteryRecord).where(
                 MasteryRecord.user_id == ctx.user_id,

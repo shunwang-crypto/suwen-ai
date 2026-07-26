@@ -26,6 +26,33 @@ async def invalidate_org_cache(redis, user_id: uuid.UUID | str) -> None:
     await redis.delete(_org_cache_key(user_id))
 
 
+# 账号状态检查 (P1-3 封禁): disabled:{uid} 缓存 users.status 快照, 60s TTL,
+# miss 时查库回填。封禁/注销路径 (admin.py / account.py) 主动写标记立即生效。
+_ACCOUNT_STATUS_TTL = 60
+
+
+def account_status_key(user_id: uuid.UUID | str) -> str:
+    return f"disabled:{user_id}"
+
+
+async def _ensure_account_active(redis, user_id: uuid.UUID) -> None:
+    """status != 'active' -> 403 ACCOUNT_DISABLED (用户行已删按 'deleted' 处理)。"""
+    key = account_status_key(user_id)
+    status = await redis.get(key)
+    if status is None:
+        from sqlalchemy import select
+
+        from .db import plain_session
+        from .models import User
+
+        async with plain_session() as session:
+            status = await session.scalar(select(User.status).where(User.id == user_id))
+        status = status or "deleted"
+        await redis.setex(key, _ACCOUNT_STATUS_TTL, status)
+    if status != "active":
+        raise HTTPException(status_code=403, detail="ACCOUNT_DISABLED")
+
+
 async def _load_org_memberships(
     redis, user_id: uuid.UUID
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -106,6 +133,8 @@ async def current_user(
     if jti and await redis.exists(f"bl:{jti}"):
         raise HTTPException(status_code=401, detail="TOKEN_REVOKED")
     user_id = uuid.UUID(payload["sub"])
+    # P1-3: 封禁/注销的账号即使持有效 token 也拒绝 (60s 缓存窗口内立即生效)
+    await _ensure_account_active(redis, user_id)
     org_ids, admin_org_ids = await _load_org_memberships(redis, user_id)
     ctx = AuthContext(
         user_id=user_id,

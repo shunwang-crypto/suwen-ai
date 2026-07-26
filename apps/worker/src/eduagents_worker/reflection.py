@@ -111,14 +111,16 @@ async def reflect_session(
     from eduagents_api.models import ChatMessage as ChatMessageRow
     from eduagents_api.models import ChatSession, KnowledgeComponent
     from eduagents_api.services import _update_mastery
-    from eduagents_core.gateway import OpenAIGateway
+
+    from .enrichment import get_worker_gateway
 
     settings = get_settings()
     if gateway is None:
         if settings.gateway_mode == "stub":
             log.info("reflect_skipped_stub_mode", session_id=session_id)
             return "skipped"
-        gateway = OpenAIGateway(settings)
+        # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造
+        gateway = get_worker_gateway(settings)
 
     async with tenant_session(tenant_id) as session:
         chat_session = await session.get(ChatSession, uuid.UUID(session_id))

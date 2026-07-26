@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
+from zoneinfo import ZoneInfo
 
 import orjson
 import structlog
+from eduagents_core.gateway import BudgetExceeded
 from eduagents_core.logging import get_logger
-from eduagents_core.moderation import get_moderator
+from eduagents_core.moderation import SAFE_MESSAGE_CRISIS, get_moderator
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import ORJSONResponse
@@ -14,6 +17,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 log = get_logger("api")
+
+# 预算 Retry-After 与 budget.py 同口径: 沪时日界, 真实系统时钟
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
@@ -48,56 +54,80 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# 审核范围: 用户自由输入的两个入口 (对话 / 辅导)。子路径 (会话增删改查) 不参与。
-_MODERATED_PATHS = frozenset({"/api/chat", "/api/tutor"})
+# 审核范围 (P2-4): 用户自由输入入口 → 需过审的顶层字符串字段, 配置驱动。
+# 按 rstrip("/") 后的完整路径精确匹配, 子路径 (会话增删改查/{id}/attempts 等) 不参与。
+_MODERATED_FIELDS: dict[str, tuple[str, ...]] = {
+    "/api/chat": ("message",),
+    "/api/tutor": ("problem", "message"),
+    "/api/quiz": ("topic",),
+    "/api/plans": ("goal",),
+}
 
 
 class ContentModerationMiddleware(BaseHTTPMiddleware):
-    """内容审核中间件 (S-A3, §8 第 4 条): 对话/辅导入参 message 的输入侧审核。
+    """内容审核中间件 (S-A3, §8 第 4 条): 自由文本入参的输入侧审核 (路径→字段表驱动)。
 
     做成中间件而非在各 router 里散落调用 —— 审核是横切关注点, 且 chat 走 SSE
     流式响应, 在中间件拦下可以在**第一个字节前**直接返回标准错误信封 (400),
     前端沿用既有 ApiError 分支, 不必给流里再造一种拒绝事件。
 
     未带 Authorization 的请求直接放行 (端点自身返回 401): 避免匿名者拿这个端点
-    当敏感词探测器。输出侧审核见 moderation.check_output 与 decisions.md D16。
+    当敏感词探测器。body 解析失败也放行 (交给 pydantic 返 422)。
+
+    危机语义 (P0-5): check_input 命中危机类**不拦截**, 在 request.state 上置
+    ``moderation_crisis=True``, 下游端点 (chat.py) 据此注入关怀提示; 若同时命中
+    其他分类被拦截, 拒绝文案换成含心理援助热线的危机干预文案。
+    输出侧审核见 moderation.StreamModerationBuffer (SSE 分句缓冲)。
     """
 
     async def dispatch(self, request: Request, call_next):
+        fields = _MODERATED_FIELDS.get(request.url.path.rstrip("/"))
         if (
             request.method != "POST"
-            or request.url.path.rstrip("/") not in _MODERATED_PATHS
+            or fields is None
             or not request.headers.get("authorization")
         ):
             return await call_next(request)
         # starlette 的 BaseHTTPMiddleware 用 _CachedRequest 缓存 body, 这里读取
         # 不会把下游 endpoint 的请求体吃掉。
+        payload = None
         raw = await request.body()
-        message = ""
         if raw:
             try:
                 payload = orjson.loads(raw)
             except orjson.JSONDecodeError:
-                payload = None
-            if isinstance(payload, dict) and isinstance(payload.get("message"), str):
-                message = payload["message"]
-        if message:
-            verdict = get_moderator().check_input(message)
-            if not verdict.allowed:
-                log.warning(
-                    "content_rejected",
-                    category=verdict.category,
-                    matched=verdict.matched,
-                    path=request.url.path,
-                )
-                return ORJSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "CONTENT_REJECTED",
-                        "message": "内容不符合平台规范，请修改后再试",
-                        "request_id": getattr(request.state, "request_id", ""),
-                    },
-                )
+                payload = None  # 解析失败放行: 端点侧 pydantic 会返 422
+        if isinstance(payload, dict):
+            moderator = get_moderator()
+            for field in fields:
+                value = payload.get(field)
+                if not isinstance(value, str) or not value:
+                    continue
+                verdict = moderator.check_input(value)
+                if verdict.crisis:
+                    # 危机不拦截只标记 (P0-5): 下游端点注入关怀提示/热线
+                    request.state.moderation_crisis = True
+                if not verdict.allowed:
+                    log.warning(
+                        "content_rejected",
+                        category=verdict.category,
+                        matched=verdict.matched,
+                        path=request.url.path,
+                        field=field,
+                        crisis=verdict.crisis,
+                    )
+                    return ORJSONResponse(
+                        status_code=400,
+                        content={
+                            "code": "CONTENT_REJECTED",
+                            "message": (
+                                SAFE_MESSAGE_CRISIS
+                                if verdict.crisis
+                                else "内容不符合平台规范，请修改后再试"
+                            ),
+                            "request_id": getattr(request.state, "request_id", ""),
+                        },
+                    )
         return await call_next(request)
 
 
@@ -130,6 +160,10 @@ def install_error_handlers(app: FastAPI) -> None:
             "URL_CONTENT_UNSUPPORTED": "该网址不是网页正文（仅支持 HTML/文本）",
             "URL_CONTENT_TOO_LARGE": "网页内容过大，已拒绝",
             "URL_EXTRACT_EMPTY": "未能从该网页提取到正文内容",
+            # P2-15: 补齐信封映射, 前端不再显示英文裸码
+            "KB_FORBIDDEN": "没有权限访问该知识库",
+            "RETRIEVAL_UNAVAILABLE": "检索服务暂时不可用，请稍后重试",
+            "ORG_READONLY": "机构知识库为只读，仅管理员可修改",
         }
         return ORJSONResponse(
             status_code=exc.status_code,
@@ -139,6 +173,29 @@ def install_error_handlers(app: FastAPI) -> None:
                 "request_id": getattr(request.state, "request_id", ""),
             },
             headers=getattr(exc, "headers", None) or {},
+        )
+
+    @app.exception_handler(BudgetExceeded)
+    async def budget_exceeded_error(request: Request, exc: BudgetExceeded):
+        # P1-9: BudgetExceeded 是 GatewayError(Exception) 非 HTTPException, 旧代码
+        # 落 except Exception 变 500。这里统一转 429 + Retry-After (距沪时次日零点),
+        # 非流式入口 (quiz/plans/reports 等) 全部适用; SSE 入口在 chat.py 内自行发
+        # event:error BUDGET_EXCEEDED (首字节前抛出的仍走本 handler)。
+        retry_after = exc.retry_after_seconds
+        if not retry_after:
+            cn_now = datetime.now(UTC).astimezone(CN_TZ)
+            midnight = (cn_now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            retry_after = max(1, int((midnight - cn_now).total_seconds()))
+        return ORJSONResponse(
+            status_code=429,
+            content={
+                "code": "BUDGET_EXCEEDED",
+                "message": exc.message or "今日 AI 用量已达上限，明天再来或联系管理员",
+                "request_id": getattr(request.state, "request_id", ""),
+            },
+            headers={"Retry-After": str(retry_after)},
         )
 
     @app.exception_handler(RequestValidationError)

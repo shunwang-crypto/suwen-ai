@@ -51,6 +51,7 @@ class QaState(TypedDict, total=False):
     followups: list[str]  # 末节点追问建议 (至多 3 条, 失败降级为空; API 层发 followups 事件)
     profile_summary: str  # 学生画像摘要 (≤300 字, API 层 profile_summary.py 产出; 空=无画像)
     profile_weak_points: list[str]  # 上述摘要中的薄弱 KC 名 (进 trace, 供前端可见)
+    minor: bool  # 未成年模式 (P0-5): generate 追加安全约束段, web 结果过审用 strict 阈值
     trace: Annotated[list[dict], operator.add]
 
 

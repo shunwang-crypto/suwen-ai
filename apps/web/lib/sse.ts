@@ -29,6 +29,21 @@ export const SSE_EVENT_NAMES = [
 
 export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 
+/** 软超时（P2-18）：连续 N 毫秒收不到任何服务端事件时，产出一条客户端合成的
+ *  `stall` 事件（非契约事件，服务端永远不会发），随后继续等待。上游恢复推送后
+ *  正常事件继续产出。默认 45 秒。 */
+const DEFAULT_IDLE_TIMEOUT_MS = 45_000;
+
+export interface StreamSseOptions {
+  signal?: AbortSignal;
+  /** 无事件软超时毫秒数；<=0 关闭。默认 45000。 */
+  idleTimeoutMs?: number;
+}
+
+export interface StallEventData {
+  idle_ms: number;
+}
+
 function parseBlock(block: string): SseMessage | null {
   let eventName = "message";
   const dataLines: string[] = [];
@@ -61,7 +76,7 @@ function parseBlock(block: string): SseMessage | null {
 export async function* streamSse(
   path: string,
   body: unknown,
-  options: { signal?: AbortSignal } = {},
+  options: StreamSseOptions = {},
 ): AsyncGenerator<SseMessage, void, unknown> {
   const doFetch = () => {
     const headers: Record<string, string> = {
@@ -95,10 +110,40 @@ export async function* streamSse(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const idleMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   let buffer = "";
+  // 软超时实现要点：reader.read() 的 Promise 一旦发起就不能丢弃（ReadableStream
+  // 不允许并发 read），超时后保留 pending 继续下一轮 race。
+  let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+  let stallNotified = false;
+  const STALL = Symbol("stall");
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      pending = pending ?? reader.read();
+      let result: ReadableStreamReadResult<Uint8Array>;
+      if (idleMs > 0) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const winner = await Promise.race([
+          pending,
+          new Promise<typeof STALL>((resolve) => {
+            timer = setTimeout(() => resolve(STALL), idleMs);
+          }),
+        ]);
+        clearTimeout(timer);
+        if (winner === STALL) {
+          if (!stallNotified) {
+            stallNotified = true;
+            yield { event: "stall", data: { idle_ms: idleMs } };
+          }
+          continue; // pending 保留，继续等上游
+        }
+        result = winner;
+      } else {
+        result = await pending;
+      }
+      pending = null;
+      stallNotified = false;
+      const { done, value } = result;
       if (done) break;
       // 统一换行符，避免 \r\n 分隔的事件块解析失败
       buffer = (buffer + decoder.decode(value, { stream: true })).replace(

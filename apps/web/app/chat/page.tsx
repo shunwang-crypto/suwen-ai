@@ -51,7 +51,20 @@ interface ChatMsg {
   /** 发送时绑定的知识库（「考考我」chip 跳转 /quiz 用） */
   kbId?: string;
   kbName?: string;
+  /** 回答未完成（断流/手动停止；历史消息读 meta.truncated）→ 角标 + 重问入口 */
+  truncated?: boolean;
+  /** 45s 无事件软超时（客户端合成 stall 事件）：仍在等待上游 */
+  stalled?: boolean;
 }
+
+/** done.usage.mode 中文化（P2-18）：内部枚举不直接暴露给用户 */
+const MODE_LABELS: Record<string, string> = {
+  cache: "缓存命中",
+  replay: "离线回放",
+  live: "真实调用",
+  record: "真实调用",
+  stub: "演示模式",
+};
 
 const SAMPLE_QUESTIONS = [
   "用泰勒展开解释 $e^x$ 的近似计算",
@@ -170,6 +183,7 @@ function ChatView() {
           content: m.content,
           timeline: [],
           citations: [],
+          truncated: Boolean(m.meta?.truncated),
         })),
       );
     } catch (err) {
@@ -265,9 +279,14 @@ function ChatView() {
               patchMsg(asstId, (m) =>
                 attempt !== (m.attempt ?? 0)
                   ? // verify 触发重生成：attempt 变化即清空重排，防拼接双答案
-                    { ...m, content: d.text, attempt }
-                  : { ...m, content: m.content + d.text },
+                    { ...m, content: d.text, attempt, stalled: false }
+                  : { ...m, content: m.content + d.text, stalled: false },
               );
+              break;
+            }
+            case "stall": {
+              // 客户端合成事件（lib/sse.ts）：45s 无任何服务端事件，软超时提示
+              patchMsg(asstId, (m) => ({ ...m, stalled: true }));
               break;
             }
             case "node_update": {
@@ -310,7 +329,7 @@ function ChatView() {
             }
             case "done": {
               const d = msg.data as DoneData;
-              patchMsg(asstId, (m) => ({ ...m, done: d }));
+              patchMsg(asstId, (m) => ({ ...m, done: d, stalled: false }));
               if (d.session_id) setActiveSessionId(d.session_id);
               void loadSessions();
               break;
@@ -329,10 +348,9 @@ function ChatView() {
         }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
-          patchMsg(asstId, (m) => ({
-            ...m,
-            content: m.content ? `${m.content}\n（已停止生成）` : "（已停止生成）",
-          }));
+          // 手动停止：服务端 finally 会把已下发部分落库并标 truncated（P0-6），
+          // 本地同步标记，展示「回答未完成」角标 + 重问入口
+          patchMsg(asstId, (m) => ({ ...m, truncated: true, stalled: false }));
         } else {
           const msg =
             err instanceof ApiError
@@ -354,6 +372,20 @@ function ChatView() {
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /** truncated 消息的「重新提问」：回溯到该助手消息之前最近的用户消息重发 */
+  const retryFrom = useCallback(
+    (assistantId: string) => {
+      const idx = messages.findIndex((m) => m.id === assistantId);
+      for (let i = (idx === -1 ? messages.length : idx) - 1; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          void send(messages[i].content);
+          return;
+        }
+      }
+    },
+    [messages, send],
+  );
 
   // 学习指南推荐问题 chip 跳转：/chat?kb=<id>&q=<question> —— 自动发问一次。
   // kb 参数在首帧就写进 kbIds 初值（见 useState 初始化），所以这里的 send 闭包
@@ -714,6 +746,42 @@ function ChatView() {
                         </div>
                       )}
 
+                      {/* 软超时提示（P2-18）：45s 无事件仍在等待 */}
+                      {m.streaming && m.stalled && (
+                        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+                          服务响应较慢：已较长时间未收到新内容，仍在等待…可点「停止」后重试。
+                        </div>
+                      )}
+
+                      {/* 断流角标（P0-6）：服务端已保存半截答案，可一键重问 */}
+                      {!m.streaming && m.truncated && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-3 w-3"
+                              aria-hidden
+                            >
+                              <path d="M12 8v4m0 4h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z" />
+                            </svg>
+                            回答未完成
+                          </span>
+                          <button
+                            type="button"
+                            disabled={streaming}
+                            onClick={() => retryFrom(m.id)}
+                            className="rounded-full border border-indigo-200 bg-indigo-50/60 px-3 py-1 text-xs text-indigo-700 transition-colors hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            重新提问
+                          </button>
+                        </div>
+                      )}
+
                       {/* 追问 chips + 固定「考考我」chip（kb 路径回答完成后） */}
                       {!m.streaming &&
                         m.done &&
@@ -782,7 +850,8 @@ function ChatView() {
                             `耗时 ${m.done.usage.latency_ms}ms`}
                           {m.done.usage.cost_cny != null &&
                             ` · ¥${m.done.usage.cost_cny}`}
-                          {m.done.usage.mode && ` · ${m.done.usage.mode}`}
+                          {m.done.usage.mode &&
+                            ` · ${MODE_LABELS[m.done.usage.mode] ?? m.done.usage.mode}`}
                           {m.citations.length > 0 &&
                             ` · ${m.citations.length} 条引用`}
                         </p>

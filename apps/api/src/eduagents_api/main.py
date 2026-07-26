@@ -20,10 +20,12 @@ from .middleware import (
 )
 from .ratelimit import RateLimiter
 from .routers import (
+    account,
     admin,
     auth,
     chat,
     evals,
+    feedback,
     health,
     kb,
     ops,
@@ -36,6 +38,7 @@ from .routers import (
     teacher,
     threads,
 )
+from .security import assert_production_secrets
 from .usage import persist_usage
 
 log = get_logger("app")
@@ -44,6 +47,8 @@ log = get_logger("app")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # 修正#2: prod 弱/默认 JWT secret 启动即炸, 不给"忘了改"留活路
+    assert_production_secrets(settings)
     configure_logging(settings.log_level)
     app.state.settings = settings
     get_engine()
@@ -152,9 +157,13 @@ def create_app() -> FastAPI:
     app.include_router(ops.router)
     app.include_router(reviews.router)
     app.include_router(reviews.errors_router)  # 错题本 /api/errors (F6)
+    app.include_router(reviews.appeals_router)  # P2-3 判分申诉
     app.include_router(admin.router)
     app.include_router(evals.router)  # F9 评估看板
     app.include_router(teacher.router)  # U-A4 教师组卷导出
+    app.include_router(account.router)  # P0-4 注销 + P1-8 数据导出
+    app.include_router(feedback.router)  # P2-1 用户反馈
+    app.include_router(feedback.admin_router)
     return app
 
 

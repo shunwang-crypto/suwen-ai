@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 
+import { AppealEntry } from "@/components/appeal-entry";
 import {
   Card,
   EmptyState,
@@ -292,6 +293,11 @@ export default function ReviewsPage() {
                             <MasteryDelta key={c.kc_id} change={c} />
                           ))}
                         </p>
+                      )}
+                      {/* 判分申诉（P2-3）：主观题行入口；复习作答本身不写 attempts，
+                          申诉对象是该题最近一次测评的 LLM 判分，后端按 question_id 定位 */}
+                      {item.question.type === "short" && (
+                        <AppealEntry questionId={item.question.id} />
                       )}
                     </div>
                   ) : (

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     user_daily_budget_cny: float = 5.0
     # 软限 (80-100%) 降档到 cheap 后的 max_tokens 硬上限, 防降档后一条长回答仍穿透预算
     budget_cheap_max_tokens: int = 1024
+    # 全站日成本熔断 (P0-2b): ≥80% 全站强制 cheap / ≥100% 拒非 admin / ≥150% 全档熔断;
+    # <=0 关闭全局熔断 (仅保留用户日预算)
+    global_daily_budget_cny: float = 50.0
 
     # --- model gateway ---
     # live: real API calls; record: live + save cassette; replay: cassette only;
@@ -138,6 +141,10 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     max_docs_per_user: int = 200
     max_storage_mb_per_user: int = 1024
+    # 摄取 chunk 配额 (P0-2c): 成本按 chunk 走 (enrich 每 chunk 2~3 次 LLM),
+    # 配额必须与成本同单位; 超限置 failed 而非静默截断。<=0 关闭对应配额。
+    max_chunks_per_doc: int = 3000
+    max_chunks_per_user: int = 20000
 
     def tier(self, name: str) -> TierConfig:
         return TierConfig(

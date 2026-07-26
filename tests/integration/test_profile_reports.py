@@ -7,6 +7,7 @@ main.py 接线由集成方完成, 本测试自行挂载三个 router。
 """
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
@@ -218,10 +219,10 @@ async def test_reports_learning(api):
     assert body["radar"][0]["kc_id"] == ids["kc_b"]
     assert body["radar"][0]["p_mastery"] == pytest.approx(0.35)
 
-    # trend: 恰好 30 天, 与作答记录可核对 (F7-A1)
+    # trend: 恰好 30 天, 与作答记录可核对 (F7-A1); P2-11 后日切按 Asia/Shanghai
     trend = body["trend"]
     assert len(trend) == 30
-    today = datetime.now(UTC).date()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
     by_date = {t["date"]: t for t in trend}
     assert trend[-1]["date"] == today.isoformat()
     assert by_date[today.isoformat()]["attempts"] == 2

@@ -78,13 +78,18 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)\""]
+      # P1-2: 打就绪探针 — PG/Redis/Qdrant 任一挂时 /ready 返 503, urlopen 抛
+      # HTTPError, 实例被标 unhealthy, Caddy (depends_on: service_healthy) 摘流量
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=3)\""]
       interval: 10s
       timeout: 5s
       retries: 12
+    # P0-1: --proxy-headers 信任 Caddy 注入的 X-Forwarded-For, 限流按真实客户端
+    # IP 分桶; --forwarded-allow-ips 收敛到 compose 默认网段 (不要用 *, 否则 XFF
+    # 变攻击者可控 → 撞库防护旁路)
     command: >
       sh -c "alembic upgrade head &&
-             uvicorn eduagents_api.main:app --host 0.0.0.0 --port 8000"
+             uvicorn eduagents_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=172.16.0.0/12"
 
   worker:
     build:

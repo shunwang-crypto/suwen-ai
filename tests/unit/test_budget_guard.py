@@ -1,12 +1,14 @@
-"""RedisBudgetGuard 单测 (fakeredis + 注入时间)。
+"""RedisBudgetGuard 单测 (fakeredis[lua] + 注入时间/注入 admin 判定)。
 
-覆盖: 三档阈值 (<80% / 80-100% / ≥100%), Asia/Shanghai 日界 (UTC 晚间跨天),
-日界翻转 (注入时间推进), settle 厘级累加, stub/replay/cache 不计数, TTL 48h,
-无用户主体放行, Retry-After 秒数。
+覆盖: 用户三档阈值 (<80% / 80-100% / ≥100%), 全局熔断三档 (80% 强制 cheap /
+100% 拒非 admin / 150% 全档拒绝含 admin), Lua 原子预扣 + settle 差额返还 (P1-12),
+20 并发不超发, 预算日期用真实时钟不随 timectl 偏移, Asia/Shanghai 日界,
+stub/replay/cache 不计数, TTL 48h, 无用户主体放行, Retry-After 秒数。
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,17 +16,24 @@ from eduagents_api.budget import (
     CN_TZ,
     KEY_TTL_SECONDS,
     MICRO_PER_CNY,
+    RESERVE_CNY_PER_TIER,
     RedisBudgetGuard,
     budget_key,
     create_budget_guard,
+    global_budget_key,
 )
 from eduagents_core.config import Settings
 from eduagents_core.gateway import BudgetExceeded, UsageEvent
 from fakeredis import FakeAsyncRedis
 
 DAILY_CNY = 5.0
+GLOBAL_CNY = 50.0
 # UTC 2026-07-26 12:00 = 沪时 2026-07-26 20:00 -> key 日期 20260726
 NOON_UTC = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+DAY = "20260726"
+# 档位预扣额 (厘)
+EST_STANDARD = RESERVE_CNY_PER_TIER["standard"] * MICRO_PER_CNY  # 20
+EST_CHEAP = RESERVE_CNY_PER_TIER["cheap"] * MICRO_PER_CNY  # 5
 
 
 @pytest.fixture
@@ -34,15 +43,32 @@ async def redis():
     await r.aclose()
 
 
-def make_guard(redis, now: datetime = NOON_UTC):
-    """返回 (guard, clock): clock["now"] 可改, 模拟虚拟时钟推进。"""
-    settings = Settings(_env_file=None, user_daily_budget_cny=DAILY_CNY)
+def make_guard(
+    redis,
+    now: datetime = NOON_UTC,
+    *,
+    is_admin: bool = False,
+    global_cny: float = GLOBAL_CNY,
+    daily_cny: float = DAILY_CNY,
+):
+    """返回 (guard, clock): clock["now"] 可改, 模拟日界推进 (注入时间, 非 timectl)。"""
+    settings = Settings(
+        _env_file=None,
+        user_daily_budget_cny=daily_cny,
+        global_daily_budget_cny=global_cny,
+    )
     clock = {"now": now}
 
     async def now_fn() -> datetime:
         return clock["now"]
 
-    return RedisBudgetGuard(redis, settings, now_fn=now_fn), clock
+    async def is_admin_fn(user_id: str) -> bool:
+        return is_admin
+
+    return (
+        RedisBudgetGuard(redis, settings, now_fn=now_fn, is_admin_fn=is_admin_fn),
+        clock,
+    )
 
 
 def event(cost: float, mode: str = "live", user: str = "user-1") -> UsageEvent:
@@ -62,8 +88,15 @@ def event(cost: float, mode: str = "live", user: str = "user-1") -> UsageEvent:
     )
 
 
-async def _spend(redis, user: str, cny: float, day: str = "20260726") -> None:
+async def _spend(redis, user: str, cny: float, day: str = DAY) -> None:
     await redis.set(f"budget:{user}:{day}", cny * MICRO_PER_CNY)
+
+
+async def _spend_global(redis, cny: float, day: str = DAY) -> None:
+    await redis.set(f"budget:global:{day}", cny * MICRO_PER_CNY)
+
+
+# ---------- 用户三档 ----------
 
 
 async def test_below_soft_threshold_returns_none(redis):
@@ -90,14 +123,135 @@ async def test_hard_threshold_raises_with_retry_after(redis):
     assert exc_info.value.retry_after_seconds == 4 * 3600
 
 
+# ---------- 全局熔断三档 (P0-2b) ----------
+
+
+async def test_global_soft_forces_cheap_for_everyone(redis):
+    guard, _ = make_guard(redis)
+    await _spend_global(redis, 0.8 * GLOBAL_CNY)
+    # 全新用户 (个人 0 支出) 也被全站强制 cheap
+    assert await guard.precheck("tenant-1", "fresh-user") == "cheap"
+
+
+async def test_global_hard_rejects_non_admin(redis):
+    guard, _ = make_guard(redis, is_admin=False)
+    await _spend_global(redis, GLOBAL_CNY)
+    with pytest.raises(BudgetExceeded) as exc_info:
+        await guard.precheck("tenant-1", "fresh-user")
+    assert exc_info.value.code == "BUDGET_EXCEEDED"
+    assert exc_info.value.retry_after_seconds == 4 * 3600
+    # 拒绝路径不预扣: 全局键纹丝不动
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(
+        GLOBAL_CNY * MICRO_PER_CNY
+    )
+
+
+async def test_global_hard_allows_admin_as_cheap(redis):
+    guard, _ = make_guard(redis, is_admin=True)
+    await _spend_global(redis, GLOBAL_CNY)
+    assert await guard.precheck("tenant-1", "admin-user") == "cheap"
+    # admin 放行后完成预扣
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(
+        GLOBAL_CNY * MICRO_PER_CNY + EST_STANDARD
+    )
+
+
+async def test_global_kill_switch_rejects_admin_too(redis):
+    guard, _ = make_guard(redis, is_admin=True)
+    await _spend_global(redis, 1.5 * GLOBAL_CNY)
+    with pytest.raises(BudgetExceeded):
+        await guard.precheck("tenant-1", "admin-user")
+
+
+async def test_global_disabled_when_zero(redis):
+    guard, _ = make_guard(redis, global_cny=0.0)
+    await _spend_global(redis, 10 * GLOBAL_CNY)  # 键存在但熔断关闭
+    assert await guard.precheck("tenant-1", "user-1") is None
+
+
+# ---------- Lua 原子预扣 + 差额返还 (P1-12) ----------
+
+
+async def test_precheck_reserves_estimate_on_both_keys(redis):
+    guard, _ = make_guard(redis)
+    assert await guard.precheck("tenant-1", "user-1", tier="cheap") is None
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(EST_CHEAP)
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(EST_CHEAP)
+    ttl = await redis.ttl(f"budget:user-1:{DAY}")
+    assert 0 < ttl <= KEY_TTL_SECONDS
+
+
+async def test_settle_reconciles_reservation_delta(redis):
+    guard, _ = make_guard(redis)
+    await guard.precheck("tenant-1", "user-1", tier="standard")  # 预扣 20 厘
+    # 实际成本 0.008 元 = 8 厘 -> 返还 12 厘
+    await guard.settle(event(0.008), reserved_tier="standard")
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(8.0)
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(8.0)
+
+
+async def test_failed_call_refunds_full_reservation(redis):
+    guard, _ = make_guard(redis)
+    await guard.precheck("tenant-1", "user-1", tier="standard")
+    # 调用彻底失败: 网关以零成本非 live 事件返还整笔预扣
+    await guard.settle(event(0.0, mode="error"), reserved_tier="standard")
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(0.0)
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(0.0)
+
+
+async def test_concurrent_precheck_no_overspend(redis):
+    """20 并发同时 precheck: 原子预扣下放行数恰等于剩余额度容量, 不再超发。
+
+    预算 0.1 元 = 100 厘, standard 预扣 20 厘 -> 容量恰 5 个;
+    旧 check-then-act 实现下 20 个会全部读到 spent=0 全放行。
+    """
+    guard, _ = make_guard(redis, daily_cny=0.1)
+
+    async def attempt() -> bool:
+        try:
+            await guard.precheck("tenant-1", "user-1", tier="standard")
+            return True
+        except BudgetExceeded:
+            return False
+
+    outcomes = await asyncio.gather(*(attempt() for _ in range(20)))
+    assert sum(outcomes) == 5
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(100.0)
+    # 各自按实际成本 = 预扣额结算 -> 总额不变 (预扣与结算闭环)
+    for _ in range(sum(outcomes)):
+        await guard.settle(event(0.02), reserved_tier="standard")
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(100.0)
+
+
+async def test_concurrent_at_edge_only_one_passes(redis):
+    guard, _ = make_guard(redis)
+    await _spend(redis, "user-1", 0.998 * DAILY_CNY)  # 4990 厘, 距上限 10 厘
+
+    async def attempt() -> bool:
+        try:
+            await guard.precheck("tenant-1", "user-1", tier="standard")
+            return True
+        except BudgetExceeded:
+            return False
+
+    outcomes = await asyncio.gather(*(attempt() for _ in range(20)))
+    assert sum(outcomes) == 1  # 第一个预扣后其余 19 个原子地看到 ≥100%
+
+
+# ---------- 日界与时钟 ----------
+
+
 async def test_settle_accumulates_in_micro_cny(redis):
     guard, _ = make_guard(redis)
     await guard.settle(event(1.2))
     await guard.settle(event(0.3))
     key = budget_key("user-1", NOON_UTC.astimezone(CN_TZ))
-    assert key == "budget:user-1:20260726"  # 沪时日界
+    assert key == f"budget:user-1:{DAY}"  # 沪时日界
     raw = await redis.get(key)
     assert raw is not None and float(raw) == pytest.approx(1500.0)
+    # P0-2b: settle 同时累加全局键 (同一 pipeline)
+    gkey = global_budget_key(NOON_UTC.astimezone(CN_TZ))
+    assert float(await redis.get(gkey)) == pytest.approx(1500.0)
     ttl = await redis.ttl(key)
     assert 0 < ttl <= KEY_TTL_SECONDS
 
@@ -107,7 +261,8 @@ async def test_stub_replay_cache_modes_not_counted(redis):
     for mode in ("stub", "replay", "cache"):
         await guard.settle(event(1.0, mode=mode))
     await guard.settle(event(0.0))  # live 但零成本也不写 key
-    assert await redis.get("budget:user-1:20260726") is None
+    assert await redis.get(f"budget:user-1:{DAY}") is None
+    assert await redis.get(f"budget:global:{DAY}") is None
     assert await guard.precheck("tenant-1", "user-1") is None
 
 
@@ -116,12 +271,14 @@ async def test_day_rollover_with_injected_clock(redis):
     await _spend(redis, "user-1", DAILY_CNY, day="20260726")
     with pytest.raises(BudgetExceeded):
         await guard.precheck("tenant-1", "user-1")
-    # 虚拟时钟推进 1 天: 新 key, 预算复位
+    # 注入时间推进 1 天: 新 key, 预算复位 (precheck 放行并预扣 standard 20 厘)
     clock["now"] = NOON_UTC + timedelta(days=1)
     assert await guard.precheck("tenant-1", "user-1") is None
-    # settle 写入新日期 key
+    # settle 写入新日期 key: 预扣 20 + 实付 500
     await guard.settle(event(0.5))
-    assert float(await redis.get("budget:user-1:20260727")) == pytest.approx(500.0)
+    assert float(await redis.get("budget:user-1:20260727")) == pytest.approx(
+        500.0 + EST_STANDARD
+    )
 
 
 async def test_shanghai_day_boundary_not_utc(redis):
@@ -132,24 +289,37 @@ async def test_shanghai_day_boundary_not_utc(redis):
     assert float(await redis.get("budget:user-1:20260727")) == pytest.approx(1000.0)
 
 
-async def test_missing_user_or_disabled_budget_passes(redis):
-    guard, _ = make_guard(redis)
-    assert await guard.precheck("tenant-1", "") is None
-    await guard.settle(event(1.0, user=""))  # 无用户主体不计
-    disabled = RedisBudgetGuard(
-        redis, Settings(_env_file=None, user_daily_budget_cny=0.0), now_fn=None
+async def test_budget_date_ignores_timectl_offset(redis):
+    """P1-12 后半: time-travel 演示按钮不得清零全站预算。
+
+    create_budget_guard 缺省时钟 = 真实系统时钟; 写入 clock:offset_seconds
+    (timectl 虚拟时钟偏移 30 天) 后, 预算键日期必须仍是真实当天。
+    """
+    settings = Settings(
+        _env_file=None,
+        user_daily_budget_cny=DAILY_CNY,
+        global_daily_budget_cny=GLOBAL_CNY,
     )
-    # 预算=0 视为未启用 (而非全员封禁)
-    assert await disabled.precheck("tenant-1", "user-1") is None
-
-
-async def test_factory_uses_virtual_clock(redis):
-    # create_budget_guard 缺省走 timectl.now(redis): 写入 clock:offset 偏移应改变日界
-    settings = Settings(_env_file=None, user_daily_budget_cny=DAILY_CNY)
     guard = create_budget_guard(redis, settings)
     await redis.set("clock:offset_seconds", 30 * 86400)  # time-travel 30 天
     await guard.settle(event(1.0))
     keys = [k async for k in redis.scan_iter(match="budget:user-1:*")]
     assert len(keys) == 1
-    real_today = datetime.now(UTC).strftime("%Y%m%d")
-    assert real_today not in keys[0]  # 日期跟随虚拟时钟, 不是系统当天
+    real_today = datetime.now(UTC).astimezone(CN_TZ).strftime("%Y%m%d")
+    assert keys[0] == f"budget:user-1:{real_today}"  # 不随虚拟时钟偏移
+
+
+async def test_missing_user_or_disabled_budget_passes(redis):
+    guard, _ = make_guard(redis)
+    # 无用户主体: 不做用户档校验 (仍受全局熔断约束, 预扣只打全局键)
+    assert await guard.precheck("tenant-1", "") is None
+    assert await redis.get(f"budget:user-1:{DAY}") is None
+    await guard.settle(event(1.0, user=""))  # 无用户主体只计全局
+    assert await redis.get(f"budget:user-1:{DAY}") is None
+    # 全局键 = precheck 预扣 20 (standard 缺省档) + settle 1000
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(
+        1000.0 + EST_STANDARD
+    )
+    disabled, _ = make_guard(redis, daily_cny=0.0)
+    # 用户预算=0 视为未启用 (而非全员封禁)
+    assert await disabled.precheck("tenant-1", "user-9") is None

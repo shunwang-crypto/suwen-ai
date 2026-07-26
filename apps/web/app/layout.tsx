@@ -5,6 +5,7 @@ import "./globals.css";
 
 import { AuthProvider } from "@/lib/auth-context";
 import { AppShell } from "@/components/app-shell";
+import { FeedbackWidget } from "@/components/feedback-widget";
 
 export const metadata: Metadata = {
   title: {
@@ -24,6 +25,7 @@ export default function RootLayout({
       <body className="h-full">
         <AuthProvider>
           <AppShell>{children}</AppShell>
+          <FeedbackWidget />
         </AuthProvider>
       </body>
     </html>

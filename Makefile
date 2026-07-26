@@ -63,3 +63,42 @@ demo-m1:       ## M1 DoD: compose 全绿 + SSE + 降级 + usage + 越权
 .PHONY: time-travel
 time-travel:   ## make time-travel DAYS=3 (演示: 虚拟时钟前进, §9)
 	$(PY) scripts/time_travel.py $(DAYS)
+
+# ===== 工程收尾追加 (备份/预热/demo-m2..m5); 只追加, 不改上方既有 target =====
+.PHONY: backup restore preheat demo-m2 demo-m3 demo-m4 demo-m5
+
+backup:        ## 备份三件套: pg_dump -Fc + objects tar + Qdrant 快照 (保留14份轮转)
+	bash scripts/backup.sh
+
+restore:       ## 恢复: make restore STAMP=20260727-033000 (交互二次确认)
+	bash scripts/restore.sh $(STAMP)
+
+preheat:       ## 会前预热: 三服务健康 + API/web 探活 + demo 登录 + chat 预热缓存 (§9.4)
+	bash scripts/preheat.sh
+
+demo-m2:       ## M2 演示: RAG e2e (上传→两阶段摄取→混合检索→引用→拒答→恶意文件拒收)
+	@INTEGRATION=1 $(PY) -m pytest tests/integration/test_rag_e2e.py -q \
+		&& echo "demo-m2: PASS (RAG e2e; M2-D2/D3/D4 链路)" \
+		|| { echo "demo-m2: FAIL"; exit 1; }
+	@echo "-- 检索评估 CLI (干跑说明, 数字存档见 docs/evidence/m2/): --"
+	@echo "   make seed                                    # 输出 TENANT/KB id"
+	@echo "   make eval-retrieval TENANT=<tenant> KB=<kb>  # 黄金集 hit_rate@5 / MRR / nDCG@10"
+	@echo "   消融开关: eval/run_retrieval_eval.py --no-sparse | --no-rerank (M2-D5)"
+
+demo-m3:       ## M3 演示: 出题 interrupt→resume + schema 校验 + VLSE 闭环 (quiz→BKT→FSRS→复习)
+	@INTEGRATION=1 $(PY) -m pytest tests/integration/test_quiz_flow.py tests/integration/test_vlse_loop.py -q \
+		&& echo "demo-m3: PASS (quiz interrupt/resume + VLSE 闭环; M3-D2/D3 链路)" \
+		|| { echo "demo-m3: FAIL"; exit 1; }
+
+demo-m4:       ## M4 演示: 错题→time-travel→到期复习 + 计划错误路径 (M4-D2/D4 链路)
+	@INTEGRATION=1 $(PY) -m pytest tests/integration/test_reviews_flow.py tests/integration/test_plan_errors.py -q \
+		&& echo "demo-m4: PASS (reviews flow + plan errors; M4-D2/D4 链路)" \
+		|| { echo "demo-m4: FAIL"; exit 1; }
+
+demo-m5:       ## M5 演示: 闭环实验快速版 (实验B, 3 seeds, 输出到临时目录, 不覆盖正式证据)
+	@OUT=$$(mktemp -d /tmp/eduagents-demo-m5.XXXXXX) && \
+	$(PY) eval/simulation/run_experiment.py --experiment b --seeds 3 --skip-sensitivity --output $$OUT \
+		&& echo "demo-m5: PASS (快速版; 正式版 10 seeds + 敏感性分析: docs/evidence/m5/report.md)" \
+		|| { echo "demo-m5: FAIL"; exit 1; }
+	@echo "-- 压测指引: loadtest/README.md (两档口径); 初测存档 docs/evidence/m5/loadtest_stub_initial.md --"
+	@echo "   (初测口径: stub 档 30 并发 / 90s, TTFE p95=87ms, 错误率 0%; 非正式 100 并发档)"

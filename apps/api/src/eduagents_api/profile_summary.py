@@ -5,6 +5,14 @@
   无数据时摘要为空串 (调用方据此判定"该用户尚无画像", 并据此保留答案缓存)。
 - 出题: weak_point_kcs -> 定向薄弱点 KC 名 (p<0.6, 近 7 天有错题者优先, p 升序 top5)。
 
+脱敏约定 (P2-7, 个保法口径): 摘要会随每次问答发往第三方 LLM, 且经 trace 事件
+进前端 —— 掌握度概率是"可推断学习能力"的敏感个人信息, 错题原文可能含隐私。
+因此对外出参只允许**抽象标签级**:
+- 薄弱点只给 KC 名 + 两档定性词 ("较弱"/"待巩固"), 不给精确掌握度小数;
+- 错因只给五分类类别名, 不给任何题干/作答原文;
+- 结构化 weak_points/mastered 只传 KC 名列表 (trace 同源, 无数值)。
+精确数值仅供站内页面走 /api/profile 等鉴权接口获取, 不随摘要出境。
+
 摘要走 Redis 60s 缓存 (key: profile_summary:{user_id}[:{kb 指纹}])。缓存故障一律
 回源, 绝不阻塞主链路。错题"近期"口径按真实时间 (created_at 是 server_default now(),
 与 §9 虚拟时钟无关; FSRS 的 due 才走 timectl)。
@@ -33,6 +41,7 @@ SUMMARY_MAX_CHARS = 300  # 摘要硬上限 (进 system prompt, 不能挤占资�
 # 问答摘要口径
 WEAK_THRESHOLD = 0.5
 MASTERED_THRESHOLD = 0.8
+_WEAK_SEVERE = 0.3  # P2-7 两档定性: p<0.3 "较弱", 0.3≤p<0.5 "待巩固" (不出精确小数)
 _WEAK_TOP = 5
 _MASTERED_TOP = 3
 _RECENT_ERROR_KCS = 3  # 摘要里点名的最近错题 KC 数
@@ -140,10 +149,19 @@ async def _load_snapshot(
     return scoped, error_names, causes
 
 
+def _weak_label(p: float) -> str:
+    """掌握度 -> 抽象两档定性词 (P2-7: 出境摘要禁精确小数)。"""
+    return "较弱" if p < _WEAK_SEVERE else "待巩固"
+
+
 def _compose_summary(
     mastery: list[tuple[str, str, float]], error_names: list[str], causes: Counter
 ) -> ProfileContext:
-    """确定性拼装中文摘要 (不经 LLM): 掌握点 / 薄弱点(带掌握度) / 近期错题 / 错因偏向。"""
+    """确定性拼装中文摘要 (不经 LLM): 掌握点 / 薄弱点(两档定性) / 近期错题KC / 错因类别。
+
+    P2-7 脱敏: 本摘要出境 (第三方 LLM) 且进前端 trace, 薄弱点只带"较弱/待巩固"
+    定性词; 错因只给类别; 全程无掌握度小数、无题干/作答原文 (见模块 docstring)。
+    """
     weak = [(name, p) for _kc, name, p in mastery if p < WEAK_THRESHOLD][:_WEAK_TOP]
     mastered = [name for _kc, name, p in reversed(mastery) if p > MASTERED_THRESHOLD][
         :_MASTERED_TOP
@@ -155,7 +173,7 @@ def _compose_summary(
         parts.append("该学生已掌握: " + "、".join(mastered))
     if weak:
         parts.append(
-            "薄弱点: " + "、".join(f"{name}(掌握度{p:.2f})" for name, p in weak)
+            "薄弱点: " + "、".join(f"{name}({_weak_label(p)})" for name, p in weak)
         )
     if error_names:
         parts.append("近期错题涉及: " + "、".join(error_names[:_RECENT_ERROR_KCS]))
@@ -217,7 +235,8 @@ async def build_profile_summary(
     kb_ids=(),
     redis=None,
 ) -> str:
-    """画像摘要文本 (≤300 字); 无数据返回空串。结构化字段见 build_profile_context。"""
+    """画像摘要文本 (≤300 字, 已脱敏为抽象标签级 — 理由见模块 docstring, P2-7);
+    无数据返回空串。结构化字段见 build_profile_context (weak_points 仅 KC 名列表)。"""
     return (await build_profile_context(tenant_id, user_id, kb_ids, redis=redis)).summary
 
 

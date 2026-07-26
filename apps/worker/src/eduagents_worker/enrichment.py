@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from eduagents_core.config import get_settings
+from eduagents_core.config import Settings, get_settings
 from eduagents_core.gateway import ChatMessage, ChatRequest, ModelGateway, Tier
 from eduagents_core.logging import get_logger
 from sqlalchemy import func, select, update
@@ -14,6 +14,32 @@ log = get_logger("enrichment")
 # apps/worker/src/eduagents_worker/enrichment.py -> 仓库根 = parents[4]
 _PROMPTS_DIR = Path(__file__).resolve().parents[4] / "prompts"
 _ENRICH_CONCURRENCY = 10  # §5.1: 并发度 ≥10, 单 chunk 失败降级不阻塞
+
+# 进程级共享网关 (P0-2a/P1-15): worker 三个 LLM 任务 (enrichment/reflection/
+# study_guide) 一律经此单例, 禁止裸构造 OpenAIGateway ——
+# - usage_sink=persist_usage: 后台支出进 usage_log, 成本看板不再系统性少报;
+# - budget_guard: 后台任务同样受 用户日预算+全局熔断 约束;
+# - 单例复用: 断路器/客户端连接池跨任务共享, 熔断真正生效 (P1-15)。
+_worker_gateway = None
+
+
+def get_worker_gateway(settings: Settings | None = None):
+    """worker 进程级 OpenAIGateway 单例工厂 (线程内 arq 单事件循环, 无锁足够)。"""
+    global _worker_gateway
+    if _worker_gateway is None:
+        from eduagents_api.budget import create_budget_guard
+        from eduagents_api.usage import persist_usage
+        from eduagents_core.gateway import OpenAIGateway
+        from redis.asyncio import Redis
+
+        settings = settings or get_settings()
+        redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        _worker_gateway = OpenAIGateway(
+            settings,
+            usage_sink=persist_usage,
+            budget_guard=create_budget_guard(redis, settings),
+        )
+    return _worker_gateway
 
 
 def _load_prompt(name: str) -> str:
@@ -66,7 +92,6 @@ async def enrich_document(
     from eduagents_api.models import Chunk, Document, KcEdge, KnowledgeComponent
     from eduagents_core.embedding.providers import create_embedder
     from eduagents_core.embedding.sparse import Bm25SparseEncoder
-    from eduagents_core.gateway import OpenAIGateway
     from eduagents_core.kc import (
         KcEntry,
         KcNormalizer,
@@ -85,7 +110,8 @@ async def enrich_document(
         if settings.gateway_mode == "stub":
             log.info("enrich_skipped_stub_mode", doc_id=doc_id)
             return "skipped"
-        gateway = OpenAIGateway(settings)
+        # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造
+        gateway = get_worker_gateway(settings)
 
     async with tenant_session(tenant_id) as session:
         doc = await session.get(Document, uuid.UUID(doc_id))
@@ -156,7 +182,10 @@ async def enrich_document(
             )
             summary = "章节结构:\n" + "\n".join(headings[:60]) + "\n\n内容节选:\n" + sample
             try:
-                vocab, new_edges = await build_vocabulary(gateway, summary)
+                # P0-2a: tenant/user 透传, 词表构建 (strong 档) 计量入 usage_log
+                vocab, new_edges = await build_vocabulary(
+                    gateway, summary, tenant_id=tenant_id, user_id=tenant_id
+                )
             except KcExtractionError as exc:
                 log.warning("kc_vocab_build_failed", doc_id=doc_id, error=str(exc))
                 vocab = KcVocabulary(entries=[])
@@ -173,7 +202,11 @@ async def enrich_document(
                 kc_ids: list[str] = []
                 try:
                     names = await extract_chunk_kcs(
-                        gateway, child["text"], vocab_names
+                        gateway,
+                        child["text"],
+                        vocab_names,
+                        tenant_id=tenant_id,
+                        user_id=tenant_id,
                     )
                     for name in names[:3]:
                         kc_id, _created = await normalizer.match_or_create(name)
