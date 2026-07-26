@@ -1,0 +1,21 @@
+[project]
+name = "eduagents-core"
+version = "0.1.0"
+description = "EduAgents core domain package: config, clock, logging, model gateway, protocols"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "structlog>=24.1",
+    "openai>=1.40",
+    "tenacity>=8.3",
+    "orjson>=3.10",
+    "xxhash>=3.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

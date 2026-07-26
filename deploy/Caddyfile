@@ -1,0 +1,15 @@
+:8080 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8000 {
+			# SSE: 关闭缓冲, 逐事件透传
+			flush_interval -1
+		}
+	}
+
+	# M4 接入 Next.js 前端后改为 reverse_proxy web:3000
+	handle {
+		respond "EduAgents API gateway. Frontend arrives in M4." 200
+	}
+}
