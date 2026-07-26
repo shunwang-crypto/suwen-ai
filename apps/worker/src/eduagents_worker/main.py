@@ -4,6 +4,8 @@ from arq.connections import RedisSettings
 from eduagents_core.config import get_settings
 from eduagents_core.logging import configure_logging, get_logger
 
+from .ingestion import cleanup_document, cleanup_kb, ingest_document
+
 log = get_logger("worker")
 
 
@@ -19,7 +21,7 @@ async def shutdown(ctx: dict) -> None:
 
 
 async def ping(ctx: dict) -> str:
-    """Liveness task; M2 ingestion pipeline tasks land beside it."""
+    """Liveness task."""
     return "pong"
 
 
@@ -28,7 +30,7 @@ def _redis_settings() -> RedisSettings:
 
 
 class WorkerSettings:
-    functions = [ping]
+    functions = [ping, ingest_document, cleanup_document, cleanup_kb]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()

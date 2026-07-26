@@ -14,7 +14,12 @@
 | M1-D3 [LIVE] | 拔主模型 key 走降级链, 日志可见熔断迁移 | 🟡 | 单测已覆盖降级到 stub (`test_live_without_keys_*`); live 档真实熔断演示待录制 | — |
 | M1-D4 [CI] | usage_log 三维归因 (user/feature/model) | ✅ | `make test-integration` | 2026-07-26 |
 | M1-D5 [CI] | 越权测试 (含 RLS 连接池复用路径) + auth 限流用例 | 🟡 | 越权 ✅ (test_tenant_isolation); auth 限流实现完成但缺专项用例 | 2026-07-26 |
-| M2-D1..D6 | RAG 摄取/检索/引用/评估 | ⬜ | — | — |
+| M2-D1 [LIVE] | 20页 PDF 60秒内 ready(basic) | 🟡 | md 全链路 ✅ (e2e); PDF 解析单测 ✅; 真实 PDF 端到端计时待验 | — |
+| M2-D2 [LIVE] | 回答带引用定位原文块+公式渲染 | 🟡 | API 层 citation 事件(文档/heading/页码/高亮) ✅ e2e; 前端渲染在 M4 | 2026-07-26 |
+| M2-D3 [LIVE] | 黄金集 recall@5 ≥ 0.8 | 🟡 | stub 嵌入口径 hit_rate@5=0.867 (13/15, 管线验证, 见 D12); live 口径待 SiliconFlow key | — |
+| M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
+| M2-D5 [LIVE] | 消融开关生效+真实差异报告 | 🟡 | 开关短路行为单测 ✅; CLI 支持 --no-sparse/--no-rerank; 对比报告待 live 嵌入 | — |
+| M2-D6 [CI] | KC-A1 归一化测试通过 | ⬜ | KC 体系 (词表构建/别名归并/先修DAG) 未实现 | — |
 | M3-D1..D6 | Agent 编排/Langfuse/interrupt/延迟口径 | ⬜ | — | — |
 | M4-D1..D4 | 闭环+前端/黄金路径/重启持久化 | ⬜ | — | — |
 | M5-D1..D5 | 压测/故障注入/闭环实验/15分钟复现 | ⬜ | — | — |
@@ -32,8 +37,8 @@
 
 | 模块 | 条款 | 状态 |
 |---|---|---|
-| F1 知识问答 | F1-A1..A6 | F1-A6 会话管理 API ✅ (增删改查+隔离); 其余 ⬜ (M2) |
-| F2 知识库 | F2-A1..A6 | ⬜ (M2) |
+| F1 知识问答 | F1-A1..A6 | F1-A6 ✅; F1-A2 拒答路径 ✅ (e2e, 无依据不调模型); 引用链路 API 层 ✅; A1/A3/A5 待 live+前端 |
+| F2 知识库 | F2-A1..A6 | A2 ✅ A3 ✅ A6(公式保留) ✅; A1 Stage1 ✅ / Stage2(enrich) ⬜; A4 双租户隔离 ✅ (≥3库用例待补); A5 待人工抽检 |
 | F3 规划 | F3-A1..A4 | ⬜ (M3) |
 | F4 苏格拉底辅导 | F4-A1..A3 | ⬜ (M3) |
 | F5 出题测评 | F5-A1..A3 | ⬜ (M3) |

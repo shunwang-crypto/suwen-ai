@@ -42,10 +42,23 @@
 {"event":"done","data":{"session_id":"…","usage":{"cost_cny":0.002,"mode":"live","latency_ms":1234}}}
 ```
 
+### 知识库（M2，用户级鉴权 + 限流）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /api/kb | {name, subject} 建库 |
+| GET | /api/kb | 库列表 |
+| DELETE | /api/kb/{id} | 删库 + 异步物理清理（向量/对象） |
+| POST | /api/kb/{id}/documents | multipart 上传；后缀白名单+魔数+配额三重校验；同哈希幂等；入 ARQ 摄取队列 |
+| GET | /api/kb/{id}/documents | 文档列表（含两阶段状态机 status/error_msg） |
+| DELETE | /api/kb/{id}/documents/{doc} | 删文档 + 异步清理向量与对象（F2-A3） |
+| POST | /api/kb/{id}/documents/{doc}/reindex | 重新摄取 |
+| GET | /api/kb/{id}/documents/{doc}/chunks | 分块预览器（text/页码/heading_path/向量化状态） |
+| POST | /api/kb/{id}/debug/retrieve | 检索调试面板：dense/sparse 命中、融合重排、置信度全透明 |
+
+`/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
+
 ## 规划中（占位，实现前须先在此登记冻结）
 
-- M2: `/api/kb` CRUD、`/api/kb/{id}/documents` 上传/列表/删除/重建索引、
-  `/api/kb/{id}/debug/retrieve` 检索调试、`/api/chat` 增加 kb_id 与 citation 事件
 - M3: `/api/threads/{thread_id}/resume`（interrupt 恢复协议）、`/api/quiz`、`/api/plans`
 - M4: `/api/profile`（AI 眼中的我）、`/api/errors`（错题本）、`/api/reports`、
   `/api/admin/usage`、`/api/admin/time-travel`

@@ -5,6 +5,7 @@ description = "EduAgents ARQ background worker (document ingestion, reflection, 
 requires-python = ">=3.12"
 dependencies = [
     "eduagents-core",
+    "eduagents-api",
     "arq>=0.26",
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncpg>=0.29",

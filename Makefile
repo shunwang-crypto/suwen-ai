@@ -1,6 +1,8 @@
 PY := /home/shunw/miniforge3/envs/eduagents/bin/python
 PIP := /home/shunw/miniforge3/envs/eduagents/bin/pip
 COMPOSE := docker compose -f deploy/docker-compose.yml
+# conda libstdc++ 优先 (pymupdf/qdrant ABI 冲突, 见 tests/conftest.py 注释)
+export LD_LIBRARY_PATH := /home/shunw/miniforge3/envs/eduagents/lib
 
 .PHONY: install up up-infra down migrate api worker test test-unit test-integration lint lock demo-m0 demo-m1
 
@@ -37,7 +39,17 @@ test-integration:  ## 需要 make up-infra 先起 PG/Redis
 	INTEGRATION=1 $(PY) -m pytest tests/integration -q
 
 lint:
-	$(PY) -m ruff check packages apps tests
+	$(PY) -m ruff check packages apps tests alembic eval scripts
+
+gen-corpus:
+	$(PY) scripts/gen_corpus.py
+
+seed:          ## 演示账号 + 高数知识库 + 摄取语料 (幂等)
+	$(PY) scripts/seed_demo.py
+
+eval-retrieval:  ## 检索评估 (需先 make seed; TENANT/KB 从 seed 输出取)
+	$(PY) eval/run_retrieval_eval.py --golden eval/golden_set/v1.jsonl \
+		--tenant-id $(TENANT) --kb-id $(KB) --output docs/evidence/m2/retrieval_eval.md
 
 lock:
 	$(PIP) freeze --exclude-editable > requirements.lock

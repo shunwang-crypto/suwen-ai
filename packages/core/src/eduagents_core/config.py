@@ -92,10 +92,37 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
 
     # --- embeddings / rerank (M2) ---
+    # stub: 确定性哈希向量 (开发/CI, 零网络); live: SiliconFlow BGE-M3
+    embedding_mode: Literal["live", "stub"] = "stub"
     embedding_api_key: str = ""
     embedding_base_url: str = "https://api.siliconflow.cn/v1"
     embedding_model: str = "BAAI/bge-m3"
+    embedding_dim: int = 1024
+    rerank_mode: Literal["live", "stub"] = "stub"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
+
+    # --- vector store (M2) ---
+    # qdrant_local_path 非空 -> qdrant-client 纯本地模式 (无服务依赖);
+    # 为空 -> 连 qdrant_url 服务端
+    qdrant_local_path: str = ""
+    qdrant_collection: str = "eduagents_chunks"
+
+    # --- object storage (M2) ---
+    storage_backend: Literal["local", "minio"] = "local"
+    local_storage_dir: str = ""  # 空 -> ~/.local/share/eduagents/objects
+
+    # --- retrieval (M2, 每个策略独立开关供消融) ---
+    retrieval_candidate_k: int = 20
+    retrieval_final_k: int = 5
+    rrf_k: int = 60
+    retrieval_enable_sparse: bool = True
+    retrieval_enable_rerank: bool = True
+    retrieval_confidence_threshold: float = 0.35
+
+    # --- chunking (M2) ---
+    chunk_child_chars: int = 700
+    chunk_parent_chars: int = 2400
+    chunk_overlap_chars: int = 80
 
     # --- upload constraints ---
     max_upload_mb: int = 50

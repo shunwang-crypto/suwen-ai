@@ -41,3 +41,27 @@ F10 运营面板需要管理员跨租户聚合。仅 usage_log 一张表的 SELE
 
 ## D8 · Qdrant/MinIO 推迟到 M2 接入（2026-07-26）
 M1 骨架不依赖二者；compose 中已定义服务与健康检查，M2 摄取流水线落地时启用。
+
+## D9 · 应用数据库角色与超级用户分离（2026-07-26）
+初版集成测试暴露：initdb/POSTGRES_USER 创建的 `edu` 是超级用户，**静默绕过 RLS**。
+迁移 0001 现在创建 `edu_app`（NOSUPERUSER NOBYPASSRLS，开发默认密码 edu，生产必须
+ALTER ROLE 改密）并授予 DML 权限；应用连接走 edu_app（DATABASE_URL），迁移走
+edu（MIGRATION_DATABASE_URL）。RLS 策略统一 `NULLIF(current_setting(...), '')::uuid`
+兜住事务级 set_config 结束后 GUC 残留空串的坑。
+
+## D10 · conda libstdc++ ABI 冲突处理（2026-07-26）
+pymupdf 触发加载系统 libstdc++ 后，qdrant-client 的 sqlite3/icu 需要 conda 新 ABI 而报
+`CXXABI_1.3.15 not found`。处置：tests/conftest.py 顶部用 ctypes 预加载
+`{sys.prefix}/lib/libstdc++.so.6`（RTLD_GLOBAL），Makefile 导出 LD_LIBRARY_PATH。
+容器镜像（pip + debian slim）无此问题。
+
+## D11 · 开发期 Qdrant 本地嵌入模式的单进程限制（2026-07-26）
+`QDRANT_LOCAL_PATH` 非空时 qdrant-client 走文件锁本地模式，同一路径仅允许一个进程。
+约束：`make seed`/评估 CLI 与 `make api` 不可同时运行；进程内(API+直调摄取函数)通过
+qdrant_store 的客户端单例缓存共享。Qdrant 容器可用后 .env 置空 QDRANT_LOCAL_PATH
+切服务端模式，该限制消失。
+
+## D12 · stub 嵌入口径的评估数字只做管线验证（2026-07-26）
+当前检索评估 (hit_rate@5=0.867) 是 stub 哈希嵌入 + 真实 BM25 稀疏的口径——证明评估
+管线端到端可跑，**不得**作为质量宣称（§14 禁伪造/§13 诚实呈现）。M2-D3 的正式数字
+必须在 live 嵌入（SiliconFlow BGE-M3，待用户提供 key）下重测并存档。
