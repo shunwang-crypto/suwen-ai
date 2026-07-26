@@ -16,6 +16,9 @@ import { useAuth } from "@/lib/auth-context";
 // "/" 为营销落地页（app/page.tsx）：未登录可见，已登录由下方 effect 跳 /chat
 const PUBLIC_PATHS = ["/", "/login", "/register"];
 
+// 需要登录但不套侧边导航外壳的全屏聚焦流程（P2-4 Onboarding）
+const BARE_AUTHED_PATHS = ["/onboarding"];
+
 interface NavItem {
   href: string;
   label: string;
@@ -92,6 +95,13 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         label: "我的画像",
         icon: icon("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"),
       },
+      {
+        href: "/settings",
+        label: "设置",
+        icon: icon(
+          "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
+        ),
+      },
     ],
   },
   {
@@ -135,6 +145,7 @@ const TITLE_MAP: Record<string, string> = {
   "/errors": "错题本",
   "/reports": "学情报告",
   "/profile": "我的画像",
+  "/settings": "设置",
   "/teacher": "组卷导出",
   "/admin": "运营",
   "/evals": "评估看板",
@@ -263,6 +274,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  // Onboarding（P2-4）：已登录的全屏聚焦流程，不套导航外壳（跳过/完成后自行跳转）
+  if (BARE_AUTHED_PATHS.includes(pathname)) {
+    return <>{children}</>;
   }
 
   const isAdmin = user?.role === "admin";

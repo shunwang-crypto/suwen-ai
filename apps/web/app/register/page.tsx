@@ -41,7 +41,8 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(email, password); // 注册成功后自动登录
-      router.replace("/chat");
+      // G12 冷启动：新注册用户先走 Onboarding 三步偏好表单（可跳过）；登录页不跳
+      router.replace("/onboarding");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "网络异常，请稍后重试");
       setSubmitting(false);

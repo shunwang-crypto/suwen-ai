@@ -6,6 +6,9 @@
 - 落库: 仅接受能在该用户可见 KC 受控词表里匹配到的 kc_name (词表外如实丢弃, 不新建 KC);
   confused -> BKT correct=False, understood -> correct=True, **权重一律 0.3**
   (对话证据弱于测评的 1.0 与主观题/辅导小结的 0.5), evidence_type="chat_reflection";
+- 长期记忆 (P2-1, G10): 入账洞察连同学生原话 (evidence) 写 learner_insights,
+  幂等复用 mastery_log 去重 (重复入队不重复落原话), 每用户 100 条上限在
+  services.persist_learner_insights 统一裁剪;
 - stub 网关下跳过 (D2 约定, 同 enrichment: stub 不产生可入库内容)。
 """
 
@@ -54,19 +57,19 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def match_insights(
+def match_insight_rows(
     insights: list[dict], vocab: list[tuple[str, str, list[str]]]
-) -> tuple[list[str], list[str], dict[str, str]]:
-    """洞察 -> (confused kc_ids, understood kc_ids, kc_id->name)。纯函数, 便于单测。
+) -> list[dict]:
+    """洞察 -> [{kc_id, kc_name, kind, text}] 待落库行。纯函数, 便于单测。
 
     匹配规则与 services.apply_tutor_summary 同源: KC canonical/alias 归一化后精确相等,
     或作为子串出现在 kc_name 文本中。同一 KC 只计一次 (先出现者胜)。
+    text = 学生原话 evidence (P2-1 长期记忆, 入库前由 persist_learner_insights
+    统一截断); kind 直接沿用 signal (confused|understood)。
     """
     from eduagents_core.kc.types import normalize_kc_name
 
-    confused: list[str] = []
-    understood: list[str] = []
-    names: dict[str, str] = {}
+    rows: list[dict] = []
     seen: set[str] = set()
     for item in insights[:_MAX_INSIGHTS]:
         if not isinstance(item, dict):
@@ -91,9 +94,29 @@ def match_insights(
             if kc_id in seen:
                 break
             seen.add(kc_id)
-            names[kc_id] = canonical
-            (confused if signal == "confused" else understood).append(kc_id)
+            rows.append(
+                {
+                    "kc_id": kc_id,
+                    "kc_name": canonical,
+                    "kind": signal,
+                    "text": evidence.strip(),
+                }
+            )
             break
+    return rows
+
+
+def match_insights(
+    insights: list[dict], vocab: list[tuple[str, str, list[str]]]
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """洞察 -> (confused kc_ids, understood kc_ids, kc_id->name)。纯函数, 便于单测。
+
+    match_insight_rows 的 BKT 视图 (匹配语义单一出处, 不重复实现)。
+    """
+    rows = match_insight_rows(insights, vocab)
+    confused = [r["kc_id"] for r in rows if r["kind"] == "confused"]
+    understood = [r["kc_id"] for r in rows if r["kind"] == "understood"]
+    names = {r["kc_id"]: r["kc_name"] for r in rows}
     return confused, understood, names
 
 
@@ -110,7 +133,7 @@ async def reflect_session(
     from eduagents_api.deps import AuthContext
     from eduagents_api.models import ChatMessage as ChatMessageRow
     from eduagents_api.models import ChatSession, KnowledgeComponent
-    from eduagents_api.services import _update_mastery
+    from eduagents_api.services import _update_mastery, persist_learner_insights
 
     from .enrichment import get_worker_gateway
 
@@ -177,7 +200,10 @@ async def reflect_session(
         log.warning("reflect_parse_failed", session_id=session_id)
         return "parse_failed"
 
-    confused, understood, names = match_insights(insights, vocab)
+    insight_rows = match_insight_rows(insights, vocab)
+    confused = [r["kc_id"] for r in insight_rows if r["kind"] == "confused"]
+    understood = [r["kc_id"] for r in insight_rows if r["kind"] == "understood"]
+    names = {r["kc_id"]: r["kc_name"] for r in insight_rows}
     if not confused and not understood:
         return "no_match"
 
@@ -202,6 +228,19 @@ async def reflect_session(
                     evidence_id=uuid.UUID(session_id),
                     evidence_type=EVIDENCE_TYPE,
                 )
+            )
+        # P2-1: 真正入账的洞察连同学生原话写入长期记忆 (G10)。以 changes 过滤 =
+        # 复用 _update_mastery 的 (evidence_type, evidence_id) 幂等口径 —
+        # worker 重试/重复入队时 changes 为空, 原话不会重复落库。
+        applied_kcs = {str(c["kc_id"]) for c in changes}
+        memory_rows = [r for r in insight_rows if r["kc_id"] in applied_kcs]
+        if memory_rows:
+            await persist_learner_insights(
+                session,
+                auth,
+                memory_rows,
+                source="chat_reflection",
+                session_id=session_id,
             )
     log.info(
         "reflect_done",

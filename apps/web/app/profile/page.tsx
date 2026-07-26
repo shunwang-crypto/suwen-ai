@@ -1,7 +1,9 @@
 "use client";
 
 // AI 眼中的我（F8）：掌握度雷达图（共享组件 components/radar.tsx）+ 掌握度列表（进度条+confidence）
-// + 错题分布条形（纯 div）+ 最近掌握度变化流水；每行「我已掌握」→ POST override 后即时刷新。
+// + 错题分布条形（纯 div）+ 最近掌握度变化流水；每行「验证一下」→ 跳 /quiz?kc=..&n=3 做题重估
+//（P2-6 可争辩画像），「我已掌握」→ POST override 直接标记；掌握度行附 FSRS 遗忘快照
+//（P2-7「再不复习，3 天后预计保持率 N%」）；「AI 记住的你」记忆条目可见可删（P2-1）。
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -11,6 +13,7 @@ import {
   EmptyState,
   ErrorBanner,
   PageHeader,
+  SkeletonList,
   SkeletonPage,
   Spinner,
   fmtDateTime,
@@ -46,6 +49,47 @@ const EVIDENCE_LABELS: Record<string, string> = {
 
 /** 掌握度低于此值视为薄弱点（与后端 profile_summary.QUIZ_WEAK_THRESHOLD 同口径）。 */
 const WEAK_THRESHOLD = 0.6;
+
+/** 遗忘快照只在 3 天后保持率低于此值时渲染（P2-7：高于 90% 属噪声不打扰）。 */
+const RETENTION_SHOW_BELOW = 0.9;
+
+/** 掌握度行 + 遗忘快照字段（P2-7，后端已附带；共享 types.ts 不改，页面局部扩展）。 */
+type MasteryWithRetention = MasteryItem & {
+  retention_now?: number | null;
+  retention_in_3d?: number | null;
+};
+
+/** 记忆条目（P2-1，对齐 GET /api/profile/insights；共享 types.ts 不改，局部定义）。 */
+interface InsightItem {
+  id: string;
+  kc_id: string | null;
+  kc_name: string;
+  source: string;
+  kind: string;
+  text: string;
+  session_id: string | null;
+  created_at: string;
+}
+
+interface InsightsResponse {
+  insights: InsightItem[];
+}
+
+/** kind 中文标签（models.py CHECK 白名单：confused/understood/misconception）。 */
+const KIND_LABELS: Record<string, { label: string; className: string }> = {
+  confused: { label: "困惑", className: "bg-amber-50 text-amber-700 ring-amber-200/70" },
+  understood: {
+    label: "已理解",
+    className: "bg-emerald-50 text-emerald-700 ring-emerald-200/70",
+  },
+  misconception: { label: "误解", className: "bg-rose-50 text-rose-700 ring-rose-200/70" },
+};
+const KIND_BADGE_FALLBACK = "bg-slate-100 text-slate-600 ring-slate-200/70";
+
+const SOURCE_LABELS: Record<string, string> = {
+  chat_reflection: "对话洞察",
+  tutor_summary: "辅导小结",
+};
 
 /** 计数条形行（纯 div 宽度百分比）。 */
 function CountBars({
@@ -91,6 +135,11 @@ export default function ProfilePage() {
   const [banner, setBanner] = useState<string | null>(null);
   const [overridingId, setOverridingId] = useState<string | null>(null);
 
+  // 记忆条目（P2-1）：null=加载中；主画像失败不牵连本区块，各自兜底
+  const [insights, setInsights] = useState<InsightItem[] | null>(null);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [deletingInsightId, setDeletingInsightId] = useState<string | null>(null);
+
   const [reloadKey, setReloadKey] = useState(0);
 
   // 画像加载：reloadKey 自增触发（effect 内联 IIFE，同 chat 页模式）
@@ -115,10 +164,50 @@ export default function ProfilePage() {
     };
   }, [reloadKey]);
 
+  // 记忆条目加载：与画像同随 reloadKey 刷新（「刷新画像」一并刷新记忆）
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await apiJson<InsightsResponse>("/api/profile/insights");
+        if (!alive) return;
+        setInsights(res.insights);
+        setInsightsError(null);
+      } catch (err) {
+        if (alive) {
+          setInsights([]);
+          setInsightsError(
+            err instanceof ApiError ? err.message : "记忆条目加载失败",
+          );
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reloadKey]);
+
   const reload = () => {
     setLoading(true);
     setError(null);
+    setInsights(null);
+    setInsightsError(null);
     setReloadKey((k) => k + 1);
+  };
+
+  // 删除记忆条目（用户纠正权）：204 后本地移除，不整页刷新
+  const deleteInsight = async (id: string) => {
+    if (deletingInsightId) return;
+    setDeletingInsightId(id);
+    setBanner(null);
+    try {
+      await apiJson<undefined>(`/api/profile/insights/${id}`, { method: "DELETE" });
+      setInsights((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));
+    } catch (err) {
+      setBanner(err instanceof ApiError ? err.message : "删除失败，请重试");
+    } finally {
+      setDeletingInsightId(null);
+    }
   };
 
   const override = async (item: MasteryItem) => {
@@ -201,7 +290,7 @@ export default function ProfilePage() {
                 </p>
               ) : (
                 <ul className="max-h-96 space-y-1 overflow-y-auto pr-1">
-                  {mastery.map((m) => (
+                  {(mastery as MasteryWithRetention[]).map((m) => (
                     <li
                       key={m.kc_id}
                       className="flex items-center gap-3 rounded-xl px-1.5 py-1.5 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-50/50 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
@@ -222,6 +311,21 @@ export default function ProfilePage() {
                         <span className="block text-xs text-slate-400">
                           置信 {fmtPct(m.confidence)}
                         </span>
+                        {/* 遗忘快照（P2-7）：FSRS 确定性预测，<90% 才显示避免噪声 */}
+                        {m.retention_in_3d != null &&
+                          m.retention_in_3d < RETENTION_SHOW_BELOW && (
+                            <span
+                              className="block text-xs text-amber-600"
+                              title={
+                                m.retention_now != null
+                                  ? `当前预计保持率 ${Math.floor(m.retention_now * 100)}%（FSRS 遗忘曲线确定性预测）`
+                                  : undefined
+                              }
+                            >
+                              再不复习，3 天后预计保持率{" "}
+                              {Math.floor(m.retention_in_3d * 100)}%
+                            </span>
+                          )}
                       </div>
                       {m.p_mastery < WEAK_THRESHOLD && (
                         <Link
@@ -232,15 +336,28 @@ export default function ProfilePage() {
                           针对此点练习
                         </Link>
                       )}
+                      {/* 可争辩画像（P2-6）：3 题快速验证 → 判分走既有 BKT 链路即重估 */}
+                      <Link
+                        href={`/quiz?kc=${encodeURIComponent(m.name)}&n=3`}
+                        title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
+                        className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100"
+                      >
+                        验证一下
+                      </Link>
                       <button
                         type="button"
                         disabled={overridingId !== null || m.p_mastery >= 0.9}
                         onClick={() => void override(m)}
-                        title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志"
+                        title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志；想经做题重估请用「验证一下」"
                         className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         {overridingId === m.kc_id && <Spinner className="h-3 w-3" />}
-                        我已掌握
+                        <span className="flex flex-col items-start leading-tight">
+                          <span>我已掌握</span>
+                          <span className="text-[10px] font-normal text-slate-400">
+                            直接标记，不验证
+                          </span>
+                        </span>
                       </button>
                     </li>
                   ))}
@@ -316,6 +433,89 @@ export default function ProfilePage() {
           </Card>
         </>
       )}
+
+      {/* AI 记住的你（P2-1 记忆条目）：与画像空态无关，独立渲染 —— 记忆可先于掌握度产生 */}
+      <Card
+        title="AI 记住的你"
+        extra={
+          <span className="text-xs text-slate-400">
+            来自对话与辅导的长期记忆 · 可逐条删除
+          </span>
+        }
+      >
+        {insights === null ? (
+          <SkeletonList rows={3} />
+        ) : insightsError ? (
+          <p className="py-3 text-center text-xs text-red-500">
+            {insightsError}，点右上角「刷新画像」重试
+          </p>
+        ) : insights.length === 0 ? (
+          <p className="py-4 text-center text-xs leading-relaxed text-slate-400">
+            还没有记忆条目 —— 去
+            <Link
+              href="/chat"
+              className="mx-0.5 font-medium text-indigo-600 hover:underline"
+            >
+              对话
+            </Link>
+            或
+            <Link
+              href="/tutor"
+              className="mx-0.5 font-medium text-indigo-600 hover:underline"
+            >
+              辅导
+            </Link>
+            中学习，AI 会记下你在什么语境下困惑、又在哪里豁然开朗
+          </p>
+        ) : (
+          <ul className="max-h-96 space-y-2 overflow-y-auto pr-1">
+            {insights.map((ins) => (
+              <li
+                key={ins.id}
+                className="flex items-start gap-2 rounded-xl border border-slate-100 px-3 py-2 transition-colors hover:border-indigo-100 hover:bg-indigo-50/40"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                        KIND_LABELS[ins.kind]?.className ?? KIND_BADGE_FALLBACK
+                      }`}
+                    >
+                      {KIND_LABELS[ins.kind]?.label ?? ins.kind}
+                    </span>
+                    {ins.kc_name && (
+                      <span
+                        className="max-w-48 truncate text-xs font-medium text-slate-600"
+                        title={ins.kc_name}
+                      >
+                        {ins.kc_name}
+                      </span>
+                    )}
+                    <span className="text-xs text-slate-400">
+                      {SOURCE_LABELS[ins.source] ?? ins.source} ·{" "}
+                      {fmtDateTime(ins.created_at)}
+                    </span>
+                  </p>
+                  {/* 学生原话 / 误解描述：AI 只作转述来源，掌握度数字不由它改写 */}
+                  <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                    {ins.text}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={deletingInsightId !== null}
+                  onClick={() => void deleteInsight(ins.id)}
+                  title="删除这条记忆（用户纠正权：删除后 AI 不再引用它）"
+                  className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {deletingInsightId === ins.id && <Spinner className="h-3 w-3" />}
+                  删除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   );
 }

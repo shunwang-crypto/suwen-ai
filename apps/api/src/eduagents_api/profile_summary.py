@@ -13,6 +13,13 @@
 - 结构化 weak_points/mastered 只传 KC 名列表 (trace 同源, 无数值)。
 精确数值仅供站内页面走 /api/profile 等鉴权接口获取, 不随摘要出境。
 
+偏好段 (P2-3, G8): 摘要末尾追加 user_preferences 的定性描述, 形如
+「讲解偏好: 类比优先、简洁; 兴趣: 篮球、动漫; 目标: 高数期末冲 90」。
+兴趣/目标是用户**自报**数据且只进其本人的 prompt (非平台推断、无掌握度数值),
+符合 P2-7 口径。偏好段优先级低于薄弱点段: 总长超 300 字时先砍兴趣,
+再不够则整段让位。只有偏好没有掌握度数据的新用户 (Onboarding 冷启动, G12)
+摘要同样非空 —— 个性化答案不得跨用户复用, 缓存互斥由 empty 判定自然生效。
+
 摘要走 Redis 60s 缓存 (key: profile_summary:{user_id}[:{kb 指纹}])。缓存故障一律
 回源, 绝不阻塞主链路。错题"近期"口径按真实时间 (created_at 是 server_default now(),
 与 §9 虚拟时钟无关; FSRS 的 due 才走 timectl)。
@@ -41,7 +48,7 @@ from eduagents_core.mastery.thresholds import (
 from sqlalchemy import select
 
 from .db import tenant_session
-from .models import ErrorItem, KnowledgeComponent, MasteryRecord
+from .models import ErrorItem, KnowledgeComponent, MasteryRecord, UserPreference
 
 log = get_logger("profile_summary")
 
@@ -66,6 +73,14 @@ CAUSE_LABELS = {
     "misread": "审题偏差",
     "knowledge_gap": "知识缺口",
 }
+
+# 偏好枚举 -> 中文定性词 (P2-3)。键序即枚举白名单唯一出处: routers/preferences.py
+# 校验与 0005 迁移 CHECK 约束同口径。风格枚举是**内容组织维度** (讲解怎么组织),
+# 不涉及任何感官类型分类 (该类说法已被证伪, 全仓禁用)。
+STYLE_LABELS = {"rigorous": "严谨", "colloquial": "口语", "analogy": "类比优先"}
+VERBOSITY_LABELS = {"concise": "简洁", "detailed": "详尽"}
+EXPLANATION_STYLES = tuple(STYLE_LABELS)
+VERBOSITY_LEVELS = tuple(VERBOSITY_LABELS)
 
 
 @dataclass(frozen=True)
@@ -94,13 +109,35 @@ def _norm_ids(kb_ids) -> list[str]:
     return [str(k) for k in (kb_ids or []) if str(k)]
 
 
+async def invalidate_profile_summary_cache(redis, user_id: uuid.UUID | str) -> int:
+    """删掉该用户 profile_summary 的全部缓存桶 (裸 key + 各 kb 指纹桶), 返回删除数。
+
+    PUT /api/preferences 保存后调用: 60s TTL 对"改完偏好立刻问答"的演示即时性
+    太慢, 必须立即失效。user_id 是定长 UUID, 前缀匹配不会误伤他人 key。
+    缓存故障只记日志 (最坏退化为 60s 后自然过期), 不阻塞偏好保存主链路。
+    """
+    if redis is None:
+        return 0
+    try:
+        keys = [
+            key async for key in redis.scan_iter(match=f"profile_summary:{user_id}*")
+        ]
+        if keys:
+            await redis.delete(*keys)
+        return len(keys)
+    except Exception:  # noqa: BLE001 — 缓存故障不阻塞主链路 (与读侧同口径)
+        log.warning("profile_summary_cache_invalidate_failed", user_id=str(user_id))
+        return 0
+
+
 async def _load_snapshot(
     tenant_id: uuid.UUID | str, user_id: uuid.UUID | str, kb_ids: list[str]
-) -> tuple[list[tuple[str, str, float]], list[str], Counter]:
-    """一次事务读齐: (掌握度行, 最近错题 KC 名, 近期错因计数)。
+) -> tuple[list[tuple[str, str, float]], list[str], Counter, dict | None]:
+    """一次事务读齐: (掌握度行, 最近错题 KC 名, 近期错因计数, 偏好 dict|None)。
 
     掌握度行形如 (kc_id, kc_name, p_mastery), 已按 p 升序。kb_ids 非空时按所属知识库
-    过滤; 过滤后为空则回退全量 (跨库学习者不该因绑库而丢画像)。
+    过滤; 过滤后为空则回退全量 (跨库学习者不该因绑库而丢画像)。偏好 (P2-3) 与
+    知识库无关, 不参与 kb 过滤。
     """
     uid = uuid.UUID(str(user_id))
     async with tenant_session(tenant_id) as session:
@@ -141,6 +178,18 @@ async def _load_snapshot(
                 )
             ).all():
                 name_by_id[str(kc.id)] = kc.canonical_name
+        pref_row = await session.get(UserPreference, uid)
+        prefs = (
+            None
+            if pref_row is None
+            else {
+                "explanation_style": pref_row.explanation_style,
+                "verbosity": pref_row.verbosity,
+                "interests": [str(x) for x in pref_row.interests or []],
+                "daily_minutes": pref_row.daily_minutes,
+                "goal": pref_row.goal,
+            }
+        )
 
     kb_set = set(kb_ids)
     scoped = [
@@ -152,22 +201,59 @@ async def _load_snapshot(
         scoped = [(str(kc_id), name, float(p)) for kc_id, p, name, _kb in rows]
     error_names = [name_by_id[k] for k in error_kc_ids if k in name_by_id]
     causes = Counter(item.cause for item in errors if item.cause)
-    return scoped, error_names, causes
+    return scoped, error_names, causes, prefs
+
+
+def _pref_parts(prefs: dict | None, include_interests: bool = True) -> list[str]:
+    """偏好 dict -> 定性描述片段 (P2-3)。全部字段可缺; 空 dict/None 返回空列表。
+
+    兴趣/目标为用户自报原话, 只进本人 prompt (P2-7 口径允许); 时长供计划链路
+    参考。include_interests=False 是超长降级档 (先砍兴趣, 见 _compose_summary)。
+    """
+    if not prefs:
+        return []
+    parts: list[str] = []
+    style_bits = [
+        label
+        for label in (
+            STYLE_LABELS.get(prefs.get("explanation_style") or ""),
+            VERBOSITY_LABELS.get(prefs.get("verbosity") or ""),
+        )
+        if label
+    ]
+    if style_bits:
+        parts.append("讲解偏好: " + "、".join(style_bits))
+    interests = [str(x).strip() for x in prefs.get("interests") or [] if str(x).strip()]
+    if include_interests and interests:
+        parts.append("兴趣: " + "、".join(interests))
+    goal = str(prefs.get("goal") or "").strip()
+    if goal:
+        parts.append("目标: " + goal)
+    minutes = prefs.get("daily_minutes")
+    if minutes:
+        parts.append(f"每日可学约{int(minutes)}分钟")
+    return parts
 
 
 def _compose_summary(
-    mastery: list[tuple[str, str, float]], error_names: list[str], causes: Counter
+    mastery: list[tuple[str, str, float]],
+    error_names: list[str],
+    causes: Counter,
+    prefs: dict | None = None,
 ) -> ProfileContext:
-    """确定性拼装中文摘要 (不经 LLM): 掌握点 / 薄弱点(两档定性) / 近期错题KC / 错因类别。
+    """确定性拼装中文摘要 (不经 LLM): 掌握点 / 薄弱点(两档定性) / 近期错题KC /
+    错因类别 / 偏好段 (P2-3)。
 
     P2-7 脱敏: 本摘要出境 (第三方 LLM) 且进前端 trace, 薄弱点只带"较弱/待巩固"
     定性词; 错因只给类别; 全程无掌握度小数、无题干/作答原文 (见模块 docstring)。
+    偏好段排最后且优先级最低: 超 300 字先砍兴趣, 再不够整段让位给薄弱点段。
     """
     weak = [(name, p) for _kc, name, p in mastery if p < WEAK_THRESHOLD][:_WEAK_TOP]
     mastered = [name for _kc, name, p in reversed(mastery) if p > MASTERED_THRESHOLD][
         :_MASTERED_TOP
     ]
-    if not weak and not mastered and not error_names and not causes:
+    pref_parts = _pref_parts(prefs)
+    if not weak and not mastered and not error_names and not causes and not pref_parts:
         return ProfileContext()
     parts: list[str] = []
     if mastered:
@@ -182,7 +268,13 @@ def _compose_summary(
     if causes:
         top_cause = causes.most_common(1)[0][0]
         parts.append("近期错因偏向: " + CAUSE_LABELS.get(top_cause, top_cause))
-    summary = "; ".join(parts) + "。"
+    summary = "; ".join(parts + pref_parts) + "。"
+    if len(summary) > SUMMARY_MAX_CHARS and pref_parts:
+        # 偏好段低优先: 先砍兴趣, 仍超长且薄弱点段非空时整段让位 (P2-3)
+        pref_parts = _pref_parts(prefs, include_interests=False)
+        summary = "; ".join(parts + pref_parts) + "。"
+        if len(summary) > SUMMARY_MAX_CHARS and parts:
+            summary = "; ".join(parts) + "。"
     if len(summary) > SUMMARY_MAX_CHARS:
         summary = summary[: SUMMARY_MAX_CHARS - 1] + "…"
     return ProfileContext(
@@ -211,8 +303,8 @@ async def build_profile_context(
                 )
         except Exception:  # noqa: BLE001 — 缓存故障一律回源, 不阻塞问答
             log.warning("profile_summary_cache_get_failed", user_id=str(user_id))
-    mastery, error_names, causes = await _load_snapshot(tenant_id, user_id, ids)
-    ctx = _compose_summary(mastery, error_names, causes)
+    mastery, error_names, causes, prefs = await _load_snapshot(tenant_id, user_id, ids)
+    ctx = _compose_summary(mastery, error_names, causes, prefs)
     if redis is not None:
         try:
             await redis.setex(

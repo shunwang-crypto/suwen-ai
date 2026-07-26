@@ -8,7 +8,7 @@ from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.bkt import BktParams, bkt_update
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .db import tenant_session
 from .deps import AuthContext
@@ -16,6 +16,7 @@ from .models import (
     Attempt,
     ErrorItem,
     KnowledgeComponent,
+    LearnerInsight,
     MasteryLog,
     MasteryRecord,
     Plan,
@@ -30,20 +31,107 @@ _SHORT_PASS_SCORE = 0.6
 _TUTOR_EVIDENCE_WEIGHT = 0.5  # 辅导小结证据权重 (与主观题同档: 间接证据减半)
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
 
+INSIGHT_TEXT_MAX = 600  # learner_insights.text 截断上限 (学生原话/误解描述)
+INSIGHTS_KEEP_PER_USER = 100  # 长期记忆每用户保留最近 100 条, 超出删最旧 (P2-1)
 
-async def _resolve_kc_ids(session, kb_id: str | None, kc_names: list[str]) -> list[str]:
-    """kc_name -> 归一化 kc_id (F5-A2: 禁止裸字符串)。无词表/未命中 -> 丢弃该名。"""
-    if not kb_id or not kc_names:
+
+async def persist_learner_insights(
+    session,
+    ctx: AuthContext,
+    rows: list[dict],
+    *,
+    source: str,
+    session_id: str | None = None,
+) -> int:
+    """洞察条目入长期记忆表 (P2-1 唯一写入口, G10: 补上"他在什么语境下困惑")。
+
+    rows: [{"kc_id": str|None, "kind": "confused"|"understood"|"misconception",
+    "text": 学生原话或误解描述}]; text 统一截断 ≤ INSIGHT_TEXT_MAX, 空文本如实丢弃。
+    写入后按 (created_at, id) 倒序裁剪, 每用户只保留最近 INSIGHTS_KEEP_PER_USER 条;
+    返回裁掉的旧行数 (供日志)。
+    幂等: reflection 侧由调用方复用 mastery_log 去重; 此外本函数自带内容级去重 ——
+    同批次与保留窗口内已有相同 (kind, kc_id, text) 的条目跳过不插。记忆条目直接
+    面向用户可见可删, summarize 轮被重试/重放时不得出现一字不差的重复行。
+    """
+    existing = {
+        (kind, str(kc) if kc else None, text)
+        for kind, kc, text in (
+            await session.execute(
+                select(LearnerInsight.kind, LearnerInsight.kc_id, LearnerInsight.text)
+                .where(
+                    LearnerInsight.user_id == ctx.user_id,
+                    LearnerInsight.source == source,
+                )
+                .order_by(LearnerInsight.created_at.desc(), LearnerInsight.id.desc())
+                .limit(INSIGHTS_KEEP_PER_USER)
+            )
+        ).all()
+    }
+    inserted = 0
+    for row in rows:
+        text_value = str(row.get("text") or "").strip()[:INSIGHT_TEXT_MAX]
+        if not text_value:
+            continue  # 无原话支撑的条目不入库 (与 match_insights 的丢弃口径一致)
+        kc_id = row.get("kc_id")
+        key = (row["kind"], str(kc_id) if kc_id else None, text_value)
+        if key in existing:
+            continue
+        existing.add(key)
+        session.add(
+            LearnerInsight(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                kc_id=uuid.UUID(str(kc_id)) if kc_id else None,
+                source=source,
+                kind=row["kind"],
+                text=text_value,
+                session_id=uuid.UUID(str(session_id)) if session_id else None,
+            )
+        )
+        inserted += 1
+    if not inserted:
+        return 0
+    await session.flush()
+    # 超额裁剪: 第 101 条起 (倒序 offset) 删除。同事务批次共享 now(), 以 id 兜底定序。
+    stale_ids = (
+        await session.scalars(
+            select(LearnerInsight.id)
+            .where(LearnerInsight.user_id == ctx.user_id)
+            .order_by(LearnerInsight.created_at.desc(), LearnerInsight.id.desc())
+            .offset(INSIGHTS_KEEP_PER_USER)
+        )
+    ).all()
+    if stale_ids:
+        await session.execute(
+            delete(LearnerInsight).where(LearnerInsight.id.in_(stale_ids))
+        )
+    return len(stale_ids)
+
+
+async def _resolve_kc_ids(
+    session, kb_id: str | None, kc_names: list[str], user_id: uuid.UUID | None = None
+) -> list[str]:
+    """kc_name -> 归一化 kc_id (F5-A2: 禁止裸字符串)。无词表/未命中 -> 丢弃该名。
+
+    词表口径: 绑库 = 该库全部 KC; 未绑库但有 user_id = 该用户有掌握度记录的 KC ——
+    画像页「验证一下」与薄弱点出题都可以不绑库发起, 名称本就来自其掌握度记录,
+    没有这条回退, 验证题会以 kc_ids=[] 落库, 判分永远写不动 BKT (重估空转)。
+    """
+    if not kc_names or (not kb_id and user_id is None):
         return []
     from eduagents_core.kc import KcEntry, KcVocabulary
 
-    rows = (
-        await session.scalars(
-            select(KnowledgeComponent).where(
-                KnowledgeComponent.kb_id == uuid.UUID(kb_id)
-            )
+    if kb_id:
+        query = select(KnowledgeComponent).where(
+            KnowledgeComponent.kb_id == uuid.UUID(kb_id)
         )
-    ).all()
+    else:
+        query = (
+            select(KnowledgeComponent)
+            .join(MasteryRecord, MasteryRecord.kc_id == KnowledgeComponent.id)
+            .where(MasteryRecord.user_id == user_id)
+        )
+    rows = (await session.scalars(query)).all()
     vocab = KcVocabulary(
         entries=[
             KcEntry(
@@ -85,7 +173,9 @@ async def finalize_quiz(
         await session.flush()
         out = []
         for q in questions:
-            kc_ids = await _resolve_kc_ids(session, kb_id, q.get("kc_names", []))
+            kc_ids = await _resolve_kc_ids(
+                session, kb_id, q.get("kc_names", []), user_id=ctx.user_id
+            )
             source_chunk = q.get("source_chunk_id")
             row = Question(
                 tenant_id=ctx.tenant_id,
@@ -201,22 +291,59 @@ async def _update_mastery(
     return changes
 
 
+def match_misconception_insights(
+    misconceptions: list[str], vocab: list[tuple[str, str, list[str]]]
+) -> tuple[list[str], dict[str, str], list[str | None]]:
+    """误解文本批量匹配 KC 词表 (纯函数, 便于单测)。
+
+    vocab: [(kc_id, canonical, aliases)] 按 created_at 序。返回三元组:
+    - matched: 命中的 kc_id (词表序去重) — BKT 口径与旧内联实现逐位相同
+      (KC canonical/alias 归一化后作为子串出现在任一误解文本中即命中);
+    - name_by_id: kc_id -> canonical 名;
+    - kc_by_text: 每条文本的首个命中 kc_id (词表序), 未命中为 None —
+      供 learner_insights 落库时"能归一匹配 KC 就带 kc_id" (P2-1)。
+    """
+    from eduagents_core.kc.types import normalize_kc_name
+
+    norm_texts = [normalize_kc_name(t) for t in misconceptions]
+    matched: list[str] = []
+    name_by_id: dict[str, str] = {}
+    kc_by_text: list[str | None] = [None] * len(misconceptions)
+    for kc_id, canonical, aliases in vocab:
+        keys = [normalize_kc_name(canonical)] + [
+            normalize_kc_name(a) for a in aliases if isinstance(a, str)
+        ]
+        keys = [k for k in keys if len(k) >= _MIN_KC_MATCH_LEN]
+        hit = False
+        for i, text_norm in enumerate(norm_texts):
+            if any(k in text_norm for k in keys):
+                hit = True
+                if kc_by_text[i] is None:
+                    kc_by_text[i] = kc_id
+        if hit and kc_id not in matched:
+            matched.append(kc_id)
+            name_by_id[kc_id] = canonical
+    return matched, name_by_id, kc_by_text
+
+
 async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
     """辅导小结落画像 (F4→F8 联动): misconceptions 命中已有 KC 词表 → BKT 负向证据。
 
     匹配规则: KC canonical/alias 归一化后作为子串出现在误解文本中即命中;
-    词表外的误解如实丢弃, 不新建 KC (画像外键只认归一化 kc_id, F5-A2)。
+    词表外的误解不进 BKT、不新建 KC (画像外键只认归一化 kc_id, F5-A2)。
     命中 KC 以 correct=False、0.5 权重、evidence_type="tutor_summary" 进 BKT,
     返回变化列表 (附 KC 名, 供前端复盘卡展示)。
-    """
-    from eduagents_core.kc.types import normalize_kc_name
 
-    texts = [
-        normalize_kc_name(m)
+    P2-1 追加: 误解文本本身写入 learner_insights (source=tutor_summary,
+    kind=misconception; 能归一匹配 KC 就带 kc_id, 匹配不上也如实保留原文) —
+    掌握度数字之外留住"他到底错在哪"的语境 (G10)。
+    """
+    raw_texts = [
+        m.strip()
         for m in (summary.get("misconceptions") or [])
         if isinstance(m, str) and m.strip()
     ]
-    if not texts:
+    if not raw_texts:
         return []
     async with tenant_session(ctx.tenant_id) as session:
         rows = (
@@ -224,18 +351,17 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
                 select(KnowledgeComponent).order_by(KnowledgeComponent.created_at)
             )
         ).all()
-        matched: list[str] = []
-        name_by_id: dict[str, str] = {}
-        for row in rows:
-            keys = [normalize_kc_name(row.canonical_name)] + [
-                normalize_kc_name(a) for a in (row.aliases or []) if isinstance(a, str)
-            ]
-            keys = [k for k in keys if len(k) >= _MIN_KC_MATCH_LEN]
-            if any(k in t for t in texts for k in keys):
-                kc_id = str(row.id)
-                if kc_id not in matched:
-                    matched.append(kc_id)
-                    name_by_id[kc_id] = row.canonical_name
+        vocab = [(str(r.id), r.canonical_name, list(r.aliases or [])) for r in rows]
+        matched, name_by_id, kc_by_text = match_misconception_insights(raw_texts, vocab)
+        await persist_learner_insights(
+            session,
+            ctx,
+            [
+                {"kc_id": kc_by_text[i], "kind": "misconception", "text": text}
+                for i, text in enumerate(raw_texts)
+            ],
+            source="tutor_summary",
+        )
         if not matched:
             return []
         changes = await _update_mastery(

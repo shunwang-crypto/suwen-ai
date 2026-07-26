@@ -2,6 +2,7 @@
 
 // 今日复习（F6）：到期错题队列卡片 → 作答 → 对错反馈 + next_due + 状态机变化
 //（mastered 庆祝样式）；变式重练按钮换同考点新题；空队列友好空态。
+// 卡片附 FSRS 遗忘快照（P2-7「再不复习，3 天后预计保持率 N%」，<90% 才显示）。
 
 import { useEffect, useState } from "react";
 
@@ -52,6 +53,15 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
   new: { label: "新错题", className: "bg-red-50 text-red-600" },
   reviewing: { label: "复习中", className: "bg-amber-50 text-amber-700" },
   mastered: { label: "已掌握", className: "bg-emerald-50 text-emerald-700" },
+};
+
+/** 遗忘快照只在 3 天后保持率低于此值时渲染（P2-7，与画像页同口径）。 */
+const RETENTION_SHOW_BELOW = 0.9;
+
+/** 队列项 + 遗忘快照字段（P2-7，后端已附带；共享 types.ts 不改，页面局部扩展）。 */
+type ReviewItemWithRetention = ReviewItem & {
+  retention_now?: number | null;
+  retention_in_3d?: number | null;
 };
 
 function StateBadge({ state }: { state: string }) {
@@ -227,7 +237,7 @@ export default function ReviewsPage() {
         />
       ) : (
         <ul className="space-y-4">
-          {data.items.map((item) => {
+          {(data.items as ReviewItemWithRetention[]).map((item) => {
             const st = states[item.error_item_id] ?? initialItemState;
             const mastered = st.result?.state === "mastered";
             const wrong = Boolean(st.result && !st.result.correct);
@@ -269,6 +279,22 @@ export default function ReviewsPage() {
                         到期 {fmtRelative(item.due)}
                       </span>
                     )}
+                    {/* 遗忘快照（P2-7）：作答后卡片已被 FSRS 重排，预测随之过期故隐藏 */}
+                    {!st.result &&
+                      item.retention_in_3d != null &&
+                      item.retention_in_3d < RETENTION_SHOW_BELOW && (
+                        <span
+                          className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+                          title={
+                            item.retention_now != null
+                              ? `当前预计保持率 ${Math.floor(item.retention_now * 100)}%（FSRS 遗忘曲线确定性预测）`
+                              : undefined
+                          }
+                        >
+                          再不复习，3 天后预计保持率{" "}
+                          {Math.floor(item.retention_in_3d * 100)}%
+                        </span>
+                      )}
                     {st.isVariant && (
                       <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600">
                         变式题

@@ -88,6 +88,14 @@ export default function QuizPage() {
   const prefillKb = urlParams.get("kb") ?? "";
   // /quiz?weak=1（画像页/学情报告页的「针对此点练习」）：高亮薄弱点定向出题卡片
   const fromWeakLink = urlParams.get("weak") === "1";
+  // /quiz?kc=<KC名>&n=3（画像页「验证一下」，P2-6 可争辩画像）：
+  // 该 KC 定向出 n 题，判分走既有 BKT 直写链路 = 掌握度重估，不走薄弱点通道
+  const verifyKc = urlParams.get("kc") ?? "";
+  const rawVerifyN = Number(urlParams.get("n") ?? "3");
+  const verifyCount =
+    Number.isInteger(rawVerifyN) && rawVerifyN >= 1 && rawVerifyN <= 20
+      ? rawVerifyN
+      : 3;
 
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [quizzes, setQuizzes] = useState<QuizListItem[] | null>(null);
@@ -260,6 +268,32 @@ export default function QuizPage() {
       num_questions: points.length,
     });
   }, [weak, consume]);
+
+  /** 掌握度验证出题（P2-6 可争辩画像）：主题=该 KC、kc_names=[该KC]、题数默认 3。
+   *  难度三档均摊（重估需跨难度采样）；蓝图节点保证题数恰为 verifyCount。 */
+  const startVerifyQuiz = useCallback(() => {
+    if (!verifyKc) return;
+    topicRef.current = `验证：${verifyKc}`;
+    setTimeline([]);
+    setInterruptData(null);
+    setFlowError(null);
+    setNotice(null);
+    setQuiz(null);
+    setAttempt(null);
+    setPhase("streaming");
+    const base = Math.floor(verifyCount / 3);
+    const rem = verifyCount % 3;
+    void consume("/api/quiz", {
+      topic: verifyKc,
+      kc_names: [verifyKc],
+      num_questions: verifyCount,
+      difficulty_mix: {
+        easy: base + (rem > 0 ? 1 : 0),
+        mid: base + (rem > 1 ? 1 : 0),
+        hard: base,
+      },
+    });
+  }, [verifyKc, verifyCount, consume]);
 
   const resume = useCallback(
     (approved: boolean, blueprint?: Blueprint) => {
@@ -515,6 +549,35 @@ export default function QuizPage() {
           />
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1 space-y-4">
+            {/* 掌握度验证（P2-6 可争辩画像）：画像页「验证一下」跳转入口 */}
+            {verifyKc && (
+              <section className="rounded-2xl border border-indigo-400 bg-white p-4 shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] ring-2 ring-indigo-100">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold text-slate-800">
+                      验证「{verifyKc}」的掌握度
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      不同意画像？做 {verifyCount} 道该知识点的题，判分结果将作为
+                      真实证据重估你的掌握度（与普通练习同一条链路）
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    autoFocus
+                    disabled={busy}
+                    onClick={startVerifyQuiz}
+                    className="flex shrink-0 items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy && (
+                      <Spinner className="h-4 w-4 border-white/40 border-t-white" />
+                    )}
+                    开始验证（{verifyCount} 题）
+                  </button>
+                </div>
+              </section>
+            )}
+
             {/* 画像联动出题（M4-D2）：主按钮 + 将要练的 KC 预览 */}
             <section
               className={`rounded-2xl border bg-white p-4 shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] ${

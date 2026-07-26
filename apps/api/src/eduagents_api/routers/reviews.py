@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import orjson
 from eduagents_core.gateway import ChatMessage as GwMessage
@@ -55,6 +55,8 @@ _MASTERY_STREAK = 2  # 连对 2 次 → mastered
 _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重
 _SHORT_PASS_SCORE = 0.6
 _KC_TOP_N = 10  # 统计里按 KC 计数的 top N
+# 遗忘快照 (P2-7) 第二时刻点: 现在 + 3 天, 与 profile.py 同口径
+_RETENTION_HORIZON = timedelta(days=3)
 
 
 class AnswerIn(BaseModel):
@@ -93,17 +95,23 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
         due_rows = [r for r in rows if scheduler.is_due(r.fsrs_card_json, now_dt)]
         due_rows.sort(key=lambda r: scheduler.due_at(r.fsrs_card_json) or r.created_at)
         items = []
+        at_3d = now_dt + _RETENTION_HORIZON
         for row in due_rows[:_TODAY_LIMIT]:
             question = await session.get(Question, row.question_id)
             if question is None:
                 continue
             due = scheduler.due_at(row.fsrs_card_json)
+            # 遗忘快照 (P2-7): 该卡两点保持率; 未复习过的卡为 None (无预测依据)
+            r_now = scheduler.predicted_retention(row.fsrs_card_json, now_dt)
+            r_3d = scheduler.predicted_retention(row.fsrs_card_json, at_3d)
             items.append(
                 {
                     "error_item_id": str(row.id),
                     "state": row.state,
                     "cause": row.cause,
                     "due": due.isoformat() if due else None,
+                    "retention_now": round(r_now, 4) if r_now is not None else None,
+                    "retention_in_3d": round(r_3d, 4) if r_3d is not None else None,
                     "question": _question_public(question),
                 }
             )

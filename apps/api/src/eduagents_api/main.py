@@ -28,9 +28,11 @@ from .routers import (
     feedback,
     health,
     kb,
+    next_actions,
     ops,
     orgs,
     plans,
+    preferences,
     profile,
     quiz,
     reports,
@@ -153,11 +155,13 @@ def create_app() -> FastAPI:
     app.include_router(plans.router)
     app.include_router(plans.tutor_router)
     app.include_router(profile.router)
+    app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)
     app.include_router(reports.router)
     app.include_router(ops.router)
     app.include_router(reviews.router)
     app.include_router(reviews.errors_router)  # 错题本 /api/errors (F6)
     app.include_router(reviews.appeals_router)  # P2-3 判分申诉
+    app.include_router(next_actions.router)  # P2-2/P2-5 可解释推荐 (F8-A2 开场卡数据源)
     app.include_router(admin.router)
     app.include_router(evals.router)  # F9 评估看板
     app.include_router(teacher.router)  # U-A4 教师组卷导出

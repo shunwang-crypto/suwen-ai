@@ -55,6 +55,24 @@ def review(card_json: dict | None, correct: bool, now: datetime) -> tuple[dict, 
     return out, new_card.due
 
 
+def predicted_retention(card_json: dict | None, at: datetime) -> float | None:
+    """FSRS 保持率预测 (P2-7 遗忘快照): 该卡在 at 时刻仍能正确回忆的概率。
+
+    口径 = fsrs 库 Scheduler.get_card_retrievability (天粒度确定性衰减),
+    at 由调用方经 Clock 换算传入 —— 本函数无时间源 (学 bkt.py 的纯函数纪律)。
+    返回 None 的情形 (前端据此不渲染, 不假装能预测):
+    - 无卡 / 缺 FSRS 字段 (历史行 fsrs_card_json={});
+    - 卡从未复习过 (last_review/stability 为空, 记忆模型尚未建立)。
+    at 早于 last_review 时库内按 elapsed=0 处理, 返回 1.0 (不外推未来记忆)。
+    """
+    if not card_json or any(field not in card_json for field in _FSRS_FIELDS):
+        return None
+    card = Card.from_dict(card_json)
+    if card.last_review is None or card.stability is None:
+        return None
+    return float(_scheduler.get_card_retrievability(card, _ensure_aware(at)))
+
+
 def due_at(card_json: dict | None) -> datetime | None:
     """卡片到期时间; 空卡返回 None (调用方视为即刻到期)。"""
     if not card_json or not card_json.get("due"):

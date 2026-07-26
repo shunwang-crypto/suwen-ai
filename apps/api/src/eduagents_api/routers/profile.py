@@ -1,31 +1,68 @@
 """F8 "AI 眼中的我": 画像全量读取 + 用户纠正 (最终解释权)。
 
-- GET /api/profile: 掌握度全量 (join KC 名) + 错题分布 + 最近 10 条掌握度变化流水 (F8-A3)。
+- GET /api/profile: 掌握度全量 (join KC 名, 附 FSRS 保持率快照) + 错题分布
+  + 最近 10 条掌握度变化流水 (F8-A3)。
 - GET /api/profile/weak-points: 定向出题将要覆盖的薄弱点预览 (与 POST /api/quiz
   的 from_weak_points 走同一函数, 预览即所得)。
 - POST /api/profile/kc/{kc_id}/override: 用户直改 p_mastery, 确定性直写
   mastery_record + mastery_log(evidence_type="user_override", weight=1.0)。
+- GET/DELETE /api/profile/insights (P2-1): 长期记忆条目 (学生原话/误解语境)
+  用户可见可删 — F8 规格"记忆条目"的最终解释权同样归用户。
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 
+from eduagents_core.mastery import scheduler
 from eduagents_core.mastery.bkt import BktParams
 from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import ErrorItem, KnowledgeComponent, MasteryLog, MasteryRecord
+from ..models import (
+    ErrorItem,
+    KnowledgeComponent,
+    LearnerInsight,
+    MasteryLog,
+    MasteryRecord,
+)
 from ..profile_summary import QUIZ_WEAK_TOP, weak_point_kcs
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 _RECENT_LOG_LIMIT = 10
+_INSIGHTS_LIMIT = 50  # 记忆条目读取上限 (库内本就每用户 ≤100, 见 services)
+# 遗忘快照 (P2-7) 的第二个时刻点: 现在 + 3 天 ("再不复习, 3 天后…" 的产品口径)
+_RETENTION_HORIZON = timedelta(days=3)
+
+
+def _kc_retention_snapshots(
+    err_rows: list, now_dt: datetime, at_3d: datetime
+) -> dict[str, tuple[float, float]]:
+    """按 KC 聚合 FSRS 保持率快照 (P2-7): kc_id -> (retention_now, retention_in_3d)。
+
+    err_rows 为 (kc_ids, fsrs_card_json) 元组; 同一 KC 挂多张卡时取
+    retention_now 最低的那张 (最危险的记忆), 两个时刻点取同一张卡保证自洽。
+    从未复习过的卡 predicted_retention 返回 None, 此处跳过 (无预测依据)。
+    """
+    result: dict[str, tuple[float, float]] = {}
+    for kc_ids, card_json in err_rows:
+        r_now = scheduler.predicted_retention(card_json, now_dt)
+        if r_now is None:
+            continue
+        r_3d = scheduler.predicted_retention(card_json, at_3d)
+        for kc_id in kc_ids or []:
+            key = str(kc_id)
+            prev = result.get(key)
+            if prev is None or r_now < prev[0]:
+                result[key] = (r_now, r_3d)
+    return result
 
 
 class OverrideIn(BaseModel):
@@ -33,8 +70,23 @@ class OverrideIn(BaseModel):
 
 
 @router.get("")
-async def get_profile(ctx: AuthContext = Depends(api_rate_limited)):
+async def get_profile(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    # 业务时间经虚拟时钟 (§9): 保持率快照随 time-travel 前进而衰减, 可现场演示
+    now_dt = await timectl.now(request.app.state.redis)
+    at_3d = now_dt + _RETENTION_HORIZON
     async with tenant_session(ctx.tenant_id) as session:
+        # 遗忘快照 (P2-7): 该用户全部未归档错题的 FSRS 卡, 按 KC 聚合两点保持率
+        # (archived 是用户显式退出复习, 不再对其渲染"再不复习"提示)
+        err_rows = (
+            await session.execute(
+                select(ErrorItem.kc_ids, ErrorItem.fsrs_card_json).where(
+                    ErrorItem.user_id == ctx.user_id,
+                    ErrorItem.state != "archived",
+                )
+            )
+        ).all()
+        retention_by_kc = _kc_retention_snapshots(err_rows, now_dt, at_3d)
+
         # 掌握度全量 (join KC 名)
         mastery_rows = (
             await session.execute(
@@ -44,16 +96,21 @@ async def get_profile(ctx: AuthContext = Depends(api_rate_limited)):
                 .order_by(MasteryRecord.p_mastery.asc())
             )
         ).all()
-        mastery = [
-            {
-                "kc_id": str(r.kc_id),
-                "name": name,
-                "p_mastery": round(r.p_mastery, 4),
-                "confidence": round(r.confidence, 4),
-                "last_seen": r.last_seen,
-            }
-            for r, name in mastery_rows
-        ]
+        mastery = []
+        for r, name in mastery_rows:
+            retention = retention_by_kc.get(str(r.kc_id))
+            mastery.append(
+                {
+                    "kc_id": str(r.kc_id),
+                    "name": name,
+                    "p_mastery": round(r.p_mastery, 4),
+                    "confidence": round(r.confidence, 4),
+                    "last_seen": r.last_seen,
+                    # 无 FSRS 卡 (没错过题 / 卡未复习过) 的条目为 null, 前端不渲染
+                    "retention_now": round(retention[0], 4) if retention else None,
+                    "retention_in_3d": round(retention[1], 4) if retention else None,
+                }
+            )
 
         # 错题分布: 按错因五分类 / 按状态机各计数
         by_cause = {
@@ -136,11 +193,68 @@ async def get_weak_points(
     }
 
 
+@router.get("/insights")
+async def list_insights(ctx: AuthContext = Depends(api_rate_limited)):
+    """长期记忆条目 (P2-1): 最近 50 条, join KC 名 (kc_id 可空故 outerjoin)。
+
+    text 是学生自己的原话/误解描述, 只回给本人 (RLS 限租户 + user_id 限本人),
+    是 F8-A2"上次你在 X 卡住"开场卡的数据源。
+    """
+    async with tenant_session(ctx.tenant_id) as session:
+        rows = (
+            await session.execute(
+                select(LearnerInsight, KnowledgeComponent.canonical_name)
+                .outerjoin(
+                    KnowledgeComponent, KnowledgeComponent.id == LearnerInsight.kc_id
+                )
+                .where(LearnerInsight.user_id == ctx.user_id)
+                .order_by(LearnerInsight.created_at.desc(), LearnerInsight.id.desc())
+                .limit(_INSIGHTS_LIMIT)
+            )
+        ).all()
+    return {
+        "insights": [
+            {
+                "id": str(r.id),
+                "kc_id": str(r.kc_id) if r.kc_id else None,
+                "kc_name": name or "",
+                "source": r.source,
+                "kind": r.kind,
+                "text": r.text,
+                "session_id": str(r.session_id) if r.session_id else None,
+                "created_at": r.created_at,
+            }
+            for r, name in rows
+        ]
+    }
+
+
+@router.delete("/insights/{insight_id}", status_code=204)
+async def delete_insight(
+    insight_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """删除一条记忆条目 (用户纠正权: 本人删本人)。
+
+    RLS 已限租户; 再显式核对 user_id (个人表 tenant_id 即 user_id, 双保险),
+    不存在或不属于本人一律 404, 不泄露他人条目存在性。
+    """
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.get(LearnerInsight, insight_id)
+        if row is None or row.user_id != ctx.user_id:
+            raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
+        await session.delete(row)
+
+
 @router.post("/kc/{kc_id}/override")
 async def override_mastery(
-    kc_id: uuid.UUID, body: OverrideIn, ctx: AuthContext = Depends(api_rate_limited)
+    kc_id: uuid.UUID,
+    body: OverrideIn,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
 ):
     """用户纠正画像 ("这个我已经会了"): 直写, 不经 LLM, 全程留审计日志。"""
+    # last_seen 走虚拟时钟 (§9): 与练习/复习写入口径一致, time-travel 演示不穿帮
+    now_dt = await timectl.now(request.app.state.redis)
     async with tenant_session(ctx.tenant_id) as session:
         kc = await session.get(KnowledgeComponent, kc_id)  # RLS 保证只见本租户 KC
         if kc is None:
@@ -158,14 +272,14 @@ async def override_mastery(
                 kc_id=kc_id,
                 p_mastery=body.p_mastery,
                 confidence=1.0,
-                last_seen=datetime.now(UTC),
+                last_seen=now_dt,
             )
             session.add(record)
         else:
             record.p_mastery = body.p_mastery
             # 用户亲自断言 = 最强证据, 置信度拉满 (用户对自己画像的最终解释权)
             record.confidence = 1.0
-            record.last_seen = datetime.now(UTC)
+            record.last_seen = now_dt
         log_row = MasteryLog(
             tenant_id=ctx.tenant_id,
             user_id=ctx.user_id,

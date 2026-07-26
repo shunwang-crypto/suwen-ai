@@ -92,6 +92,7 @@ async def test_account_deletion_wipes_all_tables(client):
         ErrorItem,
         KnowledgeBase,
         KnowledgeComponent,
+        LearnerInsight,
         MasteryLog,
         MasteryRecord,
         PendingCleanup,
@@ -101,6 +102,7 @@ async def test_account_deletion_wipes_all_tables(client):
         Quiz,
         RefreshToken,
         UsageLog,
+        UserPreference,
     )
     from eduagents_worker.cleanup_outbox import process_pending_cleanup
 
@@ -121,7 +123,7 @@ async def test_account_deletion_wipes_all_tables(client):
     r = await client.post("/api/orgs", json={"name": "注销测试机构"}, headers=headers)
     assert r.status_code == 201
 
-    # ORM 直插补齐其余学情表 (12 表全覆盖)
+    # ORM 直插补齐其余学情表 (含 0005 长期记忆/偏好, 16 表全覆盖)
     async with tenant_session(uid) as s:
         sess = ChatSession(tenant_id=uid, user_id=uid, title="t")
         s.add(sess)
@@ -149,6 +151,14 @@ async def test_account_deletion_wipes_all_tables(client):
                 old_p=0.3, new_p=0.5, evidence_type="quiz",
             )
         )
+        # 0005 长期记忆/偏好 (P2-1): 注销必须随 users 外键级联清空
+        s.add(
+            LearnerInsight(
+                tenant_id=uid, user_id=uid, kc_id=kc.id,
+                source="chat_reflection", kind="confused", text="为什么要先展开?",
+            )
+        )
+        s.add(UserPreference(user_id=uid, tenant_id=uid, interests=["天文"]))
         s.add(
             UsageLog(
                 tenant_id=uid, request_id="req-del", user_id=uid,
@@ -190,6 +200,7 @@ async def test_account_deletion_wipes_all_tables(client):
         Attempt, ChatSession, ChatMessage, ErrorItem, MasteryLog, MasteryRecord,
         Plan, PlanAdjustment, Quiz, Question,
         KnowledgeBase, Document, Chunk, KnowledgeComponent,
+        LearnerInsight, UserPreference,
     ]
     async with tenant_session(uid) as s:
         for model in models_zero:
@@ -542,7 +553,8 @@ async def test_export_user_data(client):
     names = set(zf.namelist())
     assert {"profile.json", "chunks.json", "uploads_manifest.json"} <= names
     tables = {n for n in names if n.startswith("tables/")}
-    assert len(tables) == 12  # 12 张业务表逐表 JSON
+    assert len(tables) == 14  # 14 张业务表逐表 JSON (0005 起含长期记忆/偏好两表)
+    assert {"tables/learner_insights.json", "tables/user_preferences.json"} <= tables
     kbs = json.loads(zf.read("tables/knowledge_bases.json"))
     assert any(row["id"] == kb_id for row in kbs)
     manifest = json.loads(zf.read("uploads_manifest.json"))

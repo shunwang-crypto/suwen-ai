@@ -4,14 +4,16 @@
 - 重输密码验证 -> 单事务: 删个人知识库行 (FK 级联 documents/chunks/KC/kc_edges)
   + 删 users 行 (0003 外键级联清 attempts/chat_sessions+messages/error_items/
   mastery_log/mastery_records/plans+adjustments/quizzes+questions/org_members/
-  refresh_tokens; usage_log 置 NULL 留审计) + 写 pending_cleanup(kind=tenant)。
+  refresh_tokens; 0005 外键级联清 learner_insights/user_preferences;
+  usage_log 置 NULL 留审计) + 写 pending_cleanup(kind=tenant)。
 - Qdrant 两 collection / 对象存储前缀 / Redis 前缀 / checkpoint 三表由 worker
   outbox 消费 (purge_tenant), 与删除事务同提交, 不存在"删了一半"的窗口。
 - 之后拉黑当前 jti + 写 deleted 状态标记: 其余在途 access token 被 deps 的
   账号状态检查立即拒绝; refresh 已随 users 行级联删除 (等价全部撤销)。
 
-导出 (个保法第 45 条可携带权): POST 入队 export_user_data -> 12 张表 JSON +
-chunk 文本 + 上传文件清单打 ZIP 落对象存储 exports/{uid}/{ts}.zip (worker/export.py);
+导出 (个保法第 45 条可携带权): POST 入队 export_user_data -> 14 张表 JSON
+(含 learner_insights/user_preferences) + chunk 文本 + 上传文件清单打 ZIP
+落对象存储 exports/{uid}/{ts}.zip (worker/export.py);
 GET 查状态; GET /download 经 API 流式转发 (LocalStorage 无预签名 URL 概念)。
 
 接线 (主线): main.py app.include_router(account.router);
@@ -78,8 +80,9 @@ async def delete_account(
         await session.execute(
             delete(KnowledgeBase).where(KnowledgeBase.owner_type == "user")
         )
-        # users 行: 0003 外键级联清 8 张学情表 + refresh_tokens (users 无 RLS,
-        # 显式限定 id); usage_log.user_id 置 NULL 留审计
+        # users 行: 0003 外键级联清 8 张学情表 + refresh_tokens, 0005 级联清
+        # learner_insights/user_preferences (users 无 RLS, 显式限定 id);
+        # usage_log.user_id 置 NULL 留审计
         await session.execute(delete(User).where(User.id == ctx.user_id))
         session.add(
             PendingCleanup(

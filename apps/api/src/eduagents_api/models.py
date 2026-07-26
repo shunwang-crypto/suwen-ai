@@ -48,6 +48,9 @@ def _created_at() -> Mapped[datetime]:
 
 # RLS 生效表清单 (owner_id 语义): 迁移脚本据此启用 ENABLE + FORCE ROW LEVEL SECURITY。
 # orgs/org_members 也启用 RLS, 但策略形状不同 (无 tenant_id 列), 由 0002 单独建。
+# 注意: 本清单被 0001 迭代建策略, 0001 之后新建的租户表 (feedback/learner_insights/
+# user_preferences) **不得**追加进来 —— 从零重放时 0001 执行会撞"表不存在";
+# 它们的 ENABLE+FORCE+策略由各自迁移 (0004/0005) 按同一 GUC 口径单独建。
 TENANT_TABLES = [
     "knowledge_bases",
     "documents",
@@ -398,6 +401,66 @@ class UsageLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="live")
     at: Mapped[datetime] = _created_at()
+
+
+class LearnerInsight(Base):
+    """学习者长期记忆条目 (P2-1, G10): 补上"他在什么语境下困惑"。
+
+    现状缺口: Reflection 与 tutor 小结只往 BKT 留数字, 学生原话/误解描述全被丢弃 —
+    本表把匹配上 KC 词表的洞察证据落库, 是 F8-A2"新会话主动关联历史卡点"的地基。
+    - source: chat_reflection (对话洞察, kind=confused|understood, text=学生原话)
+            | tutor_summary (辅导小结, kind=misconception, text=误解描述)
+    - text ≤600 字, 写入口统一截断 (services.persist_learner_insights);
+    - 每用户只保留最近 INSIGHTS_KEEP_PER_USER=100 条, 超出删最旧 (同一写入口);
+    - kc_id 可空: tutor 误解文本匹配不上词表也如实保留原文 (不新建 KC, F5-A2)。
+    - 用户可见可删 (GET/DELETE /api/profile/insights, 用户纠正权);
+    - PIPL: user_id FK CASCADE 随注销级联删; 导出纳入 worker/export.py。
+    新表可直接在 ORM 声明外键: 0001 的建表范围已冻结, 本表只由 0005 create_all
+    建出, 不存在 0003 注释里"重复建约束"的问题。
+    索引: 0005 建 (user_id, created_at DESC) 复合索引, 前缀即覆盖 user_id 查询。
+    """
+
+    __tablename__ = "learner_insights"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # KC 删除时置空保留学生原话 (记忆属于用户, 不随知识库结构陪葬)
+    kc_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_components.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class UserPreference(Base):
+    """用户学习偏好 (P2-1/P2-3, G8): 注入 QA/quiz/tutor 画像段的确定性来源。
+
+    - explanation_style: rigorous|colloquial|analogy (严谨/口语/类比优先) —
+      **内容组织维度**, 不是任何感官类型分类 (该类说法已被证伪, 全仓禁用);
+    - verbosity: concise|detailed; interests: list[str] ≤8 项/单项 ≤20 字 (应用层校验);
+    - 一人一行 (user_id 即主键), FK CASCADE 随注销级联删; 导出纳入 worker/export.py。
+    """
+
+    __tablename__ = "user_preferences"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    explanation_style: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    verbosity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    interests: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    daily_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    goal: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PendingCleanup(Base):

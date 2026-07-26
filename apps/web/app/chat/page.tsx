@@ -16,6 +16,7 @@ import {
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
+import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
 import { ProcessTimeline, type TimelineItem } from "@/components/chat/timeline";
 import { ApiError, apiJson } from "@/lib/api";
@@ -676,6 +677,8 @@ function ChatView() {
                     支持数学公式渲染；绑定知识库后回答自带引用溯源。
                   </p>
                 </div>
+                {/* F8-A2 主动开场卡：仅新会话（消息为空）首屏；有消息即随本分支隐藏 */}
+                <OpeningCard />
                 <div className="flex flex-wrap justify-center gap-2">
                   {SAMPLE_QUESTIONS.map((q, i) => (
                     <button
