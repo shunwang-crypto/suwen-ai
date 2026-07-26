@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 from .db import dispose_engine, get_engine
 from .middleware import RequestContextMiddleware, install_error_handlers
 from .ratelimit import RateLimiter
-from .routers import auth, chat, health, kb
+from .routers import auth, chat, health, kb, plans, quiz, threads
 from .usage import persist_usage
 
 log = get_logger("app")
@@ -49,8 +49,33 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 — 检索栈缺失时 API 其余功能照常, kb 问答 503
         app.state.retrieval = None
         log.exception("retrieval_stack_unavailable")
+    try:
+        from eduagents_core.graphs.state import GraphDeps
+        from eduagents_core.tools.web_search import TavilySearch
+
+        from .graph_runtime import GraphRuntime
+
+        tavily = TavilySearch(settings)
+
+        async def _web_search(query: str):
+            results, from_cache = await tavily.search(query)
+            return results if results else None
+
+        deps = GraphDeps(
+            settings=settings,
+            gateway=app.state.gateway,
+            retrieval=app.state.retrieval,
+            web_search=_web_search if tavily.available else None,
+        )
+        app.state.graphs = GraphRuntime(settings, deps)
+        await app.state.graphs.start()
+    except Exception:  # noqa: BLE001 — 图运行时缺失时基础问答仍可用
+        app.state.graphs = None
+        log.exception("graph_runtime_unavailable")
     log.info("app_started", env=settings.app_env, gateway_mode=settings.gateway_mode)
     yield
+    if getattr(app.state, "graphs", None) is not None:
+        await app.state.graphs.stop()
     await app.state.arq.aclose()
     await app.state.redis.aclose()
     await dispose_engine()
@@ -77,6 +102,10 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(kb.router)
+    app.include_router(threads.router)
+    app.include_router(quiz.router)
+    app.include_router(plans.router)
+    app.include_router(plans.tutor_router)
     return app
 
 

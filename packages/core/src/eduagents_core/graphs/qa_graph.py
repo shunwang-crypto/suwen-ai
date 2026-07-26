@@ -1,0 +1,548 @@
+"""qa 子图 — Agentic RAG 自省环 (§5.3)。
+
+router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → retrieve(多查询 RRF 融合)
+  → 置信度门控(confident 快路径跳过 grade) → grade(cheap 批量相关性)
+  → rewrite 重检环(retry_count 硬上限 2) → web_fallback → generate → verify_support(kb 二次校验)
+全路径 trace 事件可观测 (API 层转发为 SSE trace_event); 检索/网络文本经 sanitize
+过滤指令性内容 (§8 第二层防线)。deps 由构图闭包捕获, 不进 state (state 需可序列化)。
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from langgraph.graph import END, START, StateGraph
+
+from ..gateway.base import ChatMessage, ChatRequest, GatewayError, Tier
+from ..logging import get_logger
+from ..retrieval.base import rrf_fuse
+from ..retrieval.sanitize import sanitize_retrieved_text
+from .state import GraphDeps, QaState
+
+log = get_logger("qa_graph")
+
+# 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
+_PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
+_MAX_RETRY = 2  # 查询改写重检硬上限 (§5.3)
+_EVIDENCE_SNIPPET_CHARS = 600  # grade/verify 摘要单条截断长度
+_MAX_PLAN_QUERIES = 3  # 原查询 + 至多 2 个改写
+
+# 触发 web 补充倾向的时效性/搜索意图关键词 (规则路由, 命中即不调 LLM)
+_WEB_KEYWORDS = ("最新", "今年", "新闻", "搜索", "近期", "联网")
+
+# direct 路径普通助教 prompt。文案对齐 apps/api routers/chat.py 的 _SYSTEM_PROMPT;
+# core 不得反向依赖 apps, 故此处内联同款文案。
+DIRECT_SYSTEM_PROMPT = (
+    "你是 EduAgents 平台的 AI 助教，面向自学者与学生。"
+    "回答准确、结构清晰、循序渐进；数学符号一律使用 LaTeX（行内 $..$，块级 $$..$$）。"
+    "不确定的内容明确说明不确定，不要编造。"
+)
+
+# 拒答文案对齐 apps/api routers/chat.py 的 _NO_EVIDENCE_ANSWER (敢拒答是产品和玩具的分界)
+NO_EVIDENCE_ANSWER = (
+    "知识库中没有找到与该问题相关的依据。\n\n"
+    "建议：换一种问法、确认文档已完成解析（状态为 ready），"
+    "或在不绑定知识库的通用模式下提问。"
+)
+
+UNSUPPORTED_DISCLAIMER = "⚠️ 以下回答部分内容未能在知识库中找到直接依据"
+
+STRICT_REGEN_INSTRUCTION = (
+    "\n\n【强化指令】只使用资料中明确内容作答；资料未明确覆盖的论断一律删去，"
+    "宁可说明知识库资料不足，也不要推测或补充资料之外的内容。"
+)
+
+
+class _QaGraphState(QaState, total=False):
+    """构图私有扩展通道: 多查询计划与 verify 重生成控制, 不进 QaState 公共契约。"""
+
+    queries: list[str]  # query_plan 产出的检索查询列表 (rewrite 后重置为单条)
+    regen_count: int  # verify 不支持触发的重生成次数 (上限 1 次)
+    verify_action: str  # verify_support 的路由信号: regen | end
+
+
+def _load_prompt(filename: str) -> str:
+    return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    """尽力解析单个 JSON 对象: 先整体, 再截取首 { 到末 } (容忍代码块围栏)。
+
+    任何失败返回 None, 不向外抛裸异常; stub 网关的 {"stub": true} 缺业务字段,
+    由各调用方的字段校验兜底为解析失败。
+    """
+    candidates = [text.strip()]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start : end + 1])
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _format_sources(evidences: list[dict]) -> str:
+    """evidences -> <source> 包裹块 (与 chat.py 的防注入第一层约定一致)。"""
+    parts = []
+    for i, ev in enumerate(evidences, 1):
+        parts.append(
+            f'<source idx="{i}" doc="{ev.get("doc_id", "")}" '
+            f'loc="{ev.get("heading_path", "")}" page="{ev.get("page_start") or ""}">\n'
+            f"{ev.get('text', '')}\n</source>"
+        )
+    return "\n\n".join(parts)
+
+
+def _format_web_results(web_results: list[dict]) -> str:
+    """web 结果 -> <source> 包裹块; 内容同样过 sanitize (网页文本同属不可信输入)。"""
+    parts = []
+    for i, r in enumerate(web_results, 1):
+        content, hits = sanitize_retrieved_text(str(r.get("content", "")))
+        if hits:
+            log.warning("qa_web_text_sanitized", url=r.get("url", ""), patterns=hits)
+        parts.append(
+            f'<source idx="{i}" title="{r.get("title", "")}" url="{r.get("url", "")}">\n'
+            f"{content}\n</source>"
+        )
+    return "\n\n".join(parts)
+
+
+def _evidence_digest(evidences: list[dict]) -> str:
+    """grade/verify 用的编号摘要 (单条截断, 控 cheap 档上下文)。"""
+    lines = []
+    for i, ev in enumerate(evidences, 1):
+        text = str(ev.get("text", ""))[:_EVIDENCE_SNIPPET_CHARS]
+        lines.append(f"[{i}] ({ev.get('heading_path', '')}) {text}")
+    return "\n".join(lines)
+
+
+def _rule_route(query: str, has_kb: bool, web_ok: bool) -> tuple[str, str] | None:
+    """规则路由: 命中返回 (route, reason), 未命中返回 None 交 LLM 兜底。
+
+    唯一的模糊场景: 查询有联网意图但 web_search 不可用 (kb/direct 二选一交 LLM)。
+    """
+    if any(kw in query for kw in _WEB_KEYWORDS):
+        if web_ok:
+            return "web", "规则: 查询含时效性/搜索意图关键词"
+        return None
+    if has_kb:
+        return "kb", "规则: 已绑定知识库, 默认知识库问答"
+    return "direct", "规则: 未绑定知识库且无时效性需求"
+
+
+def build_qa_graph(deps: GraphDeps) -> StateGraph:
+    """构建 qa 子图 (未编译)。deps 经闭包捕获, 不进 state。"""
+
+    async def _chat_json(
+        state: _QaGraphState, *, feature: str, prompt: str, temperature: float = 0.2
+    ) -> dict[str, Any] | None:
+        """cheap 档 json_mode 辅助调用; 网关错误与解析失败统一返回 None (调用方降级)。"""
+        req = ChatRequest(
+            messages=(ChatMessage(role="user", content=prompt),),
+            tier=Tier.cheap,
+            temperature=temperature,
+            json_mode=True,
+            feature=feature,
+            tenant_id=state.get("tenant_id", ""),
+            user_id=state.get("user_id", ""),
+            request_id=state.get("request_id", ""),
+        )
+        try:
+            result = await deps.gateway.chat(req)
+        except GatewayError as exc:
+            log.warning("qa_llm_call_failed", feature=feature, error=str(exc))
+            return None
+        return _parse_json_object(result.text)
+
+    # ---- 节点 ----
+
+    async def router(state: _QaGraphState) -> dict:
+        query = state.get("query", "")
+        has_kb = bool(state.get("kb_id")) and deps.retrieval is not None
+        web_ok = deps.web_search is not None
+        ruled = _rule_route(query, has_kb, web_ok)
+        if ruled is not None:
+            route, reason = ruled
+            return {
+                "route": route,
+                "route_reason": reason,
+                "trace": [
+                    {"type": "router", "route": route, "reason": reason, "rule_hit": True}
+                ],
+            }
+        prompt = (
+            _load_prompt("qa_router.md")
+            .replace("{{QUERY}}", query)
+            .replace("{{HAS_KB}}", "是" if has_kb else "否")
+            .replace("{{WEB_AVAILABLE}}", "是" if web_ok else "否")
+        )
+        data = await _chat_json(state, feature="qa_router", prompt=prompt)
+        allowed = {"direct"} | ({"kb"} if has_kb else set()) | ({"web"} if web_ok else set())
+        if data is not None and data.get("route") in allowed:
+            route = str(data["route"])
+            reason = str(data.get("reason") or "LLM 路由")
+        else:
+            # 解析失败降级: 有知识库默认 kb, 否则 direct
+            route = "kb" if has_kb else "direct"
+            reason = "LLM 路由解析失败, 按默认路径降级"
+        return {
+            "route": route,
+            "route_reason": reason,
+            "trace": [{"type": "router", "route": route, "reason": reason, "rule_hit": False}],
+        }
+
+    async def query_plan(state: _QaGraphState) -> dict:
+        query = state.get("query", "")
+        prompt = _load_prompt("qa_query_plan.md").replace("{{QUERY}}", query)
+        data = await _chat_json(state, feature="qa_query_plan", prompt=prompt)
+        queries = [query]
+        degraded = True
+        if data is not None and isinstance(data.get("queries"), list):
+            degraded = False
+            for item in data["queries"]:
+                if isinstance(item, str) and item.strip() and item.strip() not in queries:
+                    queries.append(item.strip())
+            queries = queries[:_MAX_PLAN_QUERIES]
+        return {
+            "queries": queries,
+            "trace": [{"type": "query_plan", "queries": queries, "degraded": degraded}],
+        }
+
+    async def retrieve(state: _QaGraphState) -> dict:
+        tenant_id = state.get("tenant_id", "")
+        kb_id = state.get("kb_id", "")
+        queries = state.get("queries") or [state.get("query", "")]
+        results = []
+        errors = 0
+        for q in queries:
+            try:
+                results.append(await deps.retrieval.retrieve(tenant_id, kb_id, q))
+            except Exception:  # noqa: BLE001 — 单查询失败不拖垮整轮检索
+                log.exception("qa_retrieve_failed")
+                results.append(None)
+                errors += 1
+        valid = [r for r in results if r is not None]
+        # chunk_id 去重合并, 同 id 保留最高分实例
+        chunk_map: dict[str, Any] = {}
+        for r in valid:
+            for c in r.chunks:
+                prev = chunk_map.get(c.chunk_id)
+                if prev is None or c.score > prev.score:
+                    chunk_map[c.chunk_id] = c
+        if len(valid) > 1:
+            # 多查询结果用 RRF 融合排序 (retrieval.base.rrf_fuse, k=60)
+            fused = rrf_fuse([[c.chunk_id for c in r.chunks] for r in valid])
+            ordered_ids = sorted(chunk_map, key=lambda cid: -fused.get(cid, 0.0))
+        else:
+            ordered_ids = list(
+                dict.fromkeys(c.chunk_id for r in valid for c in r.chunks)
+            )
+        evidences = []
+        sanitized_count = 0
+        for cid in ordered_ids:
+            c = chunk_map[cid]
+            # 防注入第二层 (§8): 指令性内容在进入任何 LLM 上下文之前过滤
+            clean_text, hits = sanitize_retrieved_text(c.text)
+            if hits:
+                sanitized_count += 1
+                log.warning(
+                    "qa_retrieved_text_sanitized", chunk_id=c.chunk_id, patterns=hits
+                )
+            evidences.append(
+                {
+                    "chunk_id": c.chunk_id,
+                    "doc_id": c.doc_id,
+                    "text": clean_text,
+                    "heading_path": c.heading_path,
+                    "page_start": c.page_start,
+                    "score": c.score,
+                    "sanitized": bool(hits),
+                }
+            )
+        first = results[0] if results else None
+        confident = bool(first.confident) if first is not None else False
+        trace_event = {
+            "type": "retrieval",
+            "queries": len(queries),
+            "returned": len(evidences),
+            "dense_hits": first.dense_hits if first is not None else 0,
+            "sparse_hits": first.sparse_hits if first is not None else 0,
+            "used_sparse": first.used_sparse if first is not None else False,
+            "used_rerank": first.used_rerank if first is not None else False,
+            "confident": confident,
+            "fast_path": confident and bool(evidences),
+            "sanitized_chunks": sanitized_count,
+        }
+        if errors:
+            trace_event["errors"] = errors
+        return {"evidences": evidences, "confident": confident, "trace": [trace_event]}
+
+    async def grade(state: _QaGraphState) -> dict:
+        evidences = state.get("evidences") or []
+        if not evidences:
+            return {
+                "grade_passed": False,
+                "trace": [
+                    {
+                        "type": "grade",
+                        "relevant": 0,
+                        "total": 0,
+                        "passed": False,
+                        "skipped": "no_evidence",
+                    }
+                ],
+            }
+        prompt = (
+            _load_prompt("qa_grade.md")
+            .replace("{{QUERY}}", state.get("query", ""))
+            .replace("{{EVIDENCES}}", _evidence_digest(evidences))
+        )
+        data = await _chat_json(state, feature="qa_grade", prompt=prompt, temperature=0.0)
+        grades = data.get("grades") if data is not None else None
+        parse_failed = not isinstance(grades, list)
+        if parse_failed:
+            # 宽松降级 (§5.3): 解析失败视为全相关, 宁可多生成也不误拒
+            relevant = len(evidences)
+        else:
+            relevant_idx = {
+                item["idx"]
+                for item in grades
+                if isinstance(item, dict)
+                and item.get("relevant") is True
+                and isinstance(item.get("idx"), int)
+                and 1 <= item["idx"] <= len(evidences)
+            }
+            relevant = len(relevant_idx)
+        passed = relevant >= 2
+        trace_event = {
+            "type": "grade",
+            "relevant": relevant,
+            "total": len(evidences),
+            "passed": passed,
+        }
+        if parse_failed:
+            trace_event["parse_failed"] = True
+        return {"grade_passed": passed, "trace": [trace_event]}
+
+    async def rewrite(state: _QaGraphState) -> dict:
+        query = state.get("query", "")
+        retry = state.get("retry_count", 0) + 1
+        # 复用 query_plan 提示词: 取第一个与当前查询不同的候选作为改写
+        prompt = _load_prompt("qa_query_plan.md").replace("{{QUERY}}", query)
+        data = await _chat_json(state, feature="qa_rewrite", prompt=prompt, temperature=0.7)
+        new_query = query
+        if data is not None and isinstance(data.get("queries"), list):
+            for item in data["queries"]:
+                if isinstance(item, str) and item.strip() and item.strip() != query:
+                    new_query = item.strip()
+                    break
+        return {
+            "query": new_query,
+            "queries": [new_query],
+            "retry_count": retry,
+            "trace": [
+                {"type": "rewrite", "from": query, "to": new_query, "retry_count": retry}
+            ],
+        }
+
+    async def web_fallback(state: _QaGraphState) -> dict:
+        raw = await deps.web_search(state.get("query", ""))
+        from_cache = False
+        if isinstance(raw, tuple):  # TavilySearch.search 形状: (results, from_cache)
+            raw_results, from_cache = raw
+        else:  # GraphDeps 文档形状: list | None
+            raw_results = raw or []
+        results = [
+            {
+                "title": str(r.get("title", "")),
+                "url": str(r.get("url", "")),
+                "content": str(r.get("content", "")),
+            }
+            for r in raw_results
+            if isinstance(r, dict)
+        ]
+        return {
+            "web_results": results,
+            "trace": [
+                {"type": "web_search", "returned": len(results), "from_cache": from_cache}
+            ],
+        }
+
+    def _gen_path(state: _QaGraphState) -> str:
+        """生成路径判定: web_results 优先 (kb 路径 grade 失败后 web 兜底也走此分支)。"""
+        if state.get("web_results"):
+            return "web"
+        if state.get("route") == "kb" and state.get("evidences"):
+            return "kb"
+        return "direct"
+
+    async def generate(state: _QaGraphState) -> dict:
+        query = state.get("query", "")
+        path = _gen_path(state)
+        regen = state.get("regen_count", 0) > 0
+        if path == "kb":
+            system = _load_prompt("qa_generate_kb.md").replace(
+                "{{SOURCES}}", _format_sources(state.get("evidences") or [])
+            )
+            if regen:
+                system += STRICT_REGEN_INSTRUCTION
+        elif path == "web":
+            system = _load_prompt("qa_generate_web.md").replace(
+                "{{WEB_RESULTS}}", _format_web_results(state.get("web_results") or [])
+            )
+        else:
+            system = DIRECT_SYSTEM_PROMPT
+        history = [
+            ChatMessage(role=m["role"], content=str(m.get("content", "")))
+            for m in state.get("messages") or []
+            if m.get("role") in ("user", "assistant")
+        ]
+        if history and history[-1].role == "user" and history[-1].content == query:
+            history = history[:-1]  # 当前查询若已入 messages, 避免重复追加
+        # 图内节点用非流式 chat; API 层 M3 先整段切流, 真流式接线由主线负责
+        result = await deps.gateway.chat(
+            ChatRequest(
+                messages=(
+                    ChatMessage(role="system", content=system),
+                    *history,
+                    ChatMessage(role="user", content=query),
+                ),
+                tier=Tier.standard,
+                feature="qa_generate",
+                tenant_id=state.get("tenant_id", ""),
+                user_id=state.get("user_id", ""),
+                request_id=state.get("request_id", ""),
+            )
+        )
+        return {
+            "answer": result.text,
+            "trace": [
+                {"type": "generate", "path": path, "regen": regen, "degraded": result.degraded}
+            ],
+        }
+
+    async def verify_support(state: _QaGraphState) -> dict:
+        answer = state.get("answer", "")
+        prompt = (
+            _load_prompt("qa_verify.md")
+            .replace("{{SOURCES}}", _evidence_digest(state.get("evidences") or []))
+            .replace("{{ANSWER}}", answer)
+        )
+        data = await _chat_json(
+            state, feature="qa_verify_support", prompt=prompt, temperature=0.0
+        )
+        parse_failed = data is None or not isinstance(data.get("supported"), bool)
+        supported = True if parse_failed else bool(data["supported"])
+        claims: list[str] = []
+        if data is not None and isinstance(data.get("unsupported_claims"), list):
+            claims = [c for c in data["unsupported_claims"] if isinstance(c, str)][:5]
+        regen_count = state.get("regen_count", 0)
+        update: dict[str, Any] = {}
+        if supported:
+            action = "end"
+        elif regen_count < 1 and state.get("retry_count", 0) < _MAX_RETRY:
+            action = "regen"  # 重生成一次 (generate 侧追加强化指令)
+            update["regen_count"] = regen_count + 1
+        else:
+            action = "end"
+            disclaimer = UNSUPPORTED_DISCLAIMER
+            if claims:
+                disclaimer += "：" + "；".join(claims)
+            update["answer"] = f"{answer}\n\n{disclaimer}"
+        trace_event = {
+            "type": "verify",
+            "supported": supported,
+            "action": action,
+            "unsupported_claims": claims,
+        }
+        if parse_failed:
+            trace_event["parse_failed"] = True  # 宽松降级: 校验解析失败按支撑处理
+        update["verify_action"] = action
+        update["trace"] = [trace_event]
+        return update
+
+    async def refuse(state: _QaGraphState) -> dict:
+        return {
+            "answer": NO_EVIDENCE_ANSWER,
+            "refused": True,
+            "trace": [{"type": "refuse"}],
+        }
+
+    # ---- 条件边 ----
+
+    def after_router(state: _QaGraphState) -> str:
+        return state.get("route", "direct")
+
+    def after_retrieve(state: _QaGraphState) -> str:
+        # 置信度门控 (§5.3 答辩创新点): 高置信走快路径跳过 grade 压延迟
+        if state.get("confident") and state.get("evidences"):
+            return "generate"
+        return "grade"
+
+    def after_grade(state: _QaGraphState) -> str:
+        if state.get("grade_passed"):
+            return "generate"
+        if state.get("retry_count", 0) < _MAX_RETRY:
+            return "rewrite"
+        return "web_fallback" if deps.web_search is not None else "refuse"
+
+    def after_web_fallback(state: _QaGraphState) -> str:
+        return "generate" if state.get("web_results") else "refuse"
+
+    def after_generate(state: _QaGraphState) -> str:
+        return "verify" if _gen_path(state) == "kb" else "end"
+
+    def after_verify(state: _QaGraphState) -> str:
+        return "generate" if state.get("verify_action") == "regen" else "end"
+
+    # ---- 组图 ----
+
+    graph = StateGraph(_QaGraphState)
+    graph.add_node("router", router)
+    graph.add_node("query_plan", query_plan)
+    graph.add_node("retrieve", retrieve)
+    graph.add_node("grade", grade)
+    graph.add_node("rewrite", rewrite)
+    graph.add_node("web_fallback", web_fallback)
+    graph.add_node("generate", generate)
+    graph.add_node("verify_support", verify_support)
+    graph.add_node("refuse", refuse)
+
+    graph.add_edge(START, "router")
+    graph.add_conditional_edges(
+        "router",
+        after_router,
+        {"kb": "query_plan", "web": "web_fallback", "direct": "generate"},
+    )
+    graph.add_edge("query_plan", "retrieve")
+    graph.add_conditional_edges(
+        "retrieve", after_retrieve, {"generate": "generate", "grade": "grade"}
+    )
+    graph.add_conditional_edges(
+        "grade",
+        after_grade,
+        {
+            "generate": "generate",
+            "rewrite": "rewrite",
+            "web_fallback": "web_fallback",
+            "refuse": "refuse",
+        },
+    )
+    graph.add_edge("rewrite", "retrieve")
+    graph.add_conditional_edges(
+        "web_fallback", after_web_fallback, {"generate": "generate", "refuse": "refuse"}
+    )
+    graph.add_conditional_edges(
+        "generate", after_generate, {"verify": "verify_support", "end": END}
+    )
+    graph.add_conditional_edges(
+        "verify_support", after_verify, {"generate": "generate", "end": END}
+    )
+    graph.add_edge("refuse", END)
+    return graph

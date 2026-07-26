@@ -57,6 +57,17 @@
 
 `/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
 
+### 多智能体工作流（M3，用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /api/threads/{thread_id}/resume | {value} interrupt 恢复协议 (M3-D2)；thread_id=`kind:user:local`，跨用户 404 |
+| POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix} → SSE：Blueprint → interrupt(blueprint_confirm) |
+| GET | /api/quiz · /api/quiz/{id} | 卷列表 / 题目详情（kc_ids 已归一化） |
+| POST | /api/quiz/{id}/attempts | {answers} → 判分（客观本地/简答 LLM 附理由）+ 错题自动入本 + BKT 直写 + mastery_log 审计 |
+| POST | /api/plans | {goal, kb_id?, budget_hours_per_day, total_days} → SSE → interrupt(plan_confirm) |
+| GET | /api/plans | 计划列表 |
+| POST | /api/tutor | {problem, message, thread_local_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level |
+
 ## 规划中（占位，实现前须先在此登记冻结）
 
 - M3: `/api/threads/{thread_id}/resume`（interrupt 恢复协议）、`/api/quiz`、`/api/plans`

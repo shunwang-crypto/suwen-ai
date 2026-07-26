@@ -20,7 +20,12 @@
 | M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
 | M2-D5 [LIVE] | 消融开关生效+真实差异报告 | ✅ | 三配置 live 对比 + 如实解读 (rerank 在饱和小集上反降 MRR, 已解释并保留开关): docs/evidence/m2/ablation_summary.md | 2026-07-26 |
 | M2-D6 [CI] | KC-A1 归一化测试通过 | ✅ | 单测: 泰勒公式/Taylor公式/泰勒展开 收敛同一 kc_id (test_kc.py); 集成: enrich 后 chunk.kc_ids 100% 外键有效、成环边被拒 (test_enrichment.py) | 2026-07-26 |
-| M3-D1..D6 | Agent 编排/Langfuse/interrupt/延迟口径 | ⬜ | — | — |
+| M3-D1 [LIVE] | Langfuse 完整 trace 树 | ⛔ | Langfuse 自托管容器被 Docker 问题阻塞 (同 M1-D1); 图内 trace 事件流已全量落 state.trace 并经 SSE 透出 | — |
+| M3-D2 [LIVE] | interrupt→resume 全流程 + 续传 | ✅ | 集成测试: 出题 interrupt 挂起→跨 HTTP 请求 PG Checkpointer 恢复→生成落库; 越权 resume 404 (`test_quiz_flow.py`) | 2026-07-26 |
+| M3-D3 [LIVE] | 出题 100% 过 schema 校验 | ✅ | pydantic 全量校验+坏题带错误清单重试环(≤3轮), 校验不过不落库; 单测13+集成1 | 2026-07-26 |
+| M3-D4 [LIVE] | 辅导前3轮不给答案 | 🟡 | 结构性防线 ✅ (hint_level 状态机+代码注入禁答令, 单测逐轮断言实收 prompt); LIVE 效果脚本待录制阶段 | — |
+| M3-D5 [LIVE] | 拒答用例正确拒答 | ✅ | qa 图: 检索空+web 空→refused (单测); API 层无依据拒答 (rag e2e) | 2026-07-26 |
+| M3-D6 [LIVE] | 延迟三档口径达标 | ⬜ | 测量脚本待 M5 压测阶段 (stub 口径下无意义) | — |
 | M4-D1..D4 | 闭环+前端/黄金路径/重启持久化 | ⬜ | — | — |
 | M5-D1..D5 | 压测/故障注入/闭环实验/15分钟复现 | ⬜ | — | — |
 
