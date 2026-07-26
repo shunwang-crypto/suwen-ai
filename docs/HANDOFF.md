@@ -1,6 +1,6 @@
 # EduAgents 交接文档（新 session 从这里开始）
 
-> 写于 2026-07-27，HEAD = `85241de`（tag `ui-polish`）。本文档是唯一的跨 session 交接入口：
+> 写于 2026-07-27，个性化波次后更新，HEAD = tag `personalization-p2`。本文档是唯一的跨 session 交接入口：
 > 先读完本文，再按需查阅文末的文件索引。**注意 §7 的"文档滞后"警告，不要直接相信 STATUS.md 的基线段落。**
 
 ## 0. 一句话定位
@@ -86,27 +86,41 @@ scripts/ui_review.mjs、apps/web/ui_review2.mjs 仍可用。
 
 ## 5. 当前状态（以代码和 git 为准）
 
-- **HEAD `85241de` tag `ui-polish`**；全部 17 个提交、11 个 tag（m0→ui-polish）见 `git log`。
-- **测试基线（production-hardening 波次实测）：313 单测 + 60 集成全绿；web build 零错（19 页）+
-  eslint 全仓零警**。真模型黄金路径（record 口径）8 PASS 含真实拒答。
-- 已完成大事记：M0-M4 主体 + M5 实验/压测/答辩材料 + 功能补全波（VLSE 断点/错题本/评估看板/教师端/
-  学习指南/URL 导入/审核）+ 生产化审查修复波（**P0×6 全清 + P1×15 全清 + P2×7**，明细
-  `git show 1b01dd4`）+ 前端商业级美化三路（设计系统 tokens/BrandMark/营销落地页/全功能页微交互，
-  无外部图片字体 CDN，reduced-motion 全降级，17 屏 Playwright 实测）。
-- 前端合流备注：`fx-` 前缀动效与 tokens 共存；共享组件 API 定稿于 components/ui/
-  （BrandMark/Skeleton/EmptyState/ProgressRing/Celebrate）；components/common.tsx 里还有一套第三路的
-  局部 Skeleton/EmptyState 实现，**可择机平移到 components/ui/ 统一**（不冲突，只是重复）。
-  代码内遗留 TODO 仅 2 处：hero.tsx aurora token 合流、plan_graph.py 先修 DAG 拓扑序(M4)。
+- **HEAD = tag `personalization-p2`**（其前是 `personalization-p1`、`ui-polish`）；全部提交与 tag 见 `git log`。
+- **测试基线（个性化 Wave-P2 后实测）：402 单测 + 79 集成全绿；web build 零错（21 页，新增
+  /onboarding /settings）+ eslint 全仓零警**。真模型黄金路径（record 口径）8 PASS 含真实拒答。
+- 已完成大事记：M0-M4 主体 + M5 实验/压测/答辩材料 + 功能补全波 + 生产化审查修复波（P0×6/P1×15/P2×7，
+  `git show 1b01dd4`）+ 前端商业级美化三路 + **个性化两波**（设计出处 `docs/research/brief-5-个性化.md`，
+  定位「负责任的混合个性化」：BKT/FSRS 管状态、LLM 管表达、每个个性化决定可回答"为什么"）：
+  - **Wave-P1**（tag `personalization-p1`）：ZPD 难度自适应产品化（后端按 BKT 算配比+逐 KC 理由+
+    程序性强制，与仿真自适应臂同源、有跨包守护测试）；计划读真实 BKT+先修 DAG 拓扑序接线（F3-A2）；
+    tutor 画像注入（开场关联卡点）；非 KB 对话画像门禁移除。**P2-7 脱敏铁律：掌握度小数不出境
+    第三方 LLM（计划路径曾违反已修，出境只给定性档）**。
+  - **Wave-P2**（tag `personalization-p2`）：learner_insights 长期记忆表（迁移 0005，RLS FORCE，
+    PIPL 导出/注销覆盖，学生原话/误解落库，画像页「AI 记住的你」可见可删）；user_preferences
+    偏好（讲解风格/详略/兴趣/时长/目标 → 四链路 prompt 注入 + 兴趣情境化）；onboarding 三步表单；
+    F8-A2 开场卡（新会话"上次你在 X 卡住"）+ /api/next-actions 可解释推荐（零 LLM）；画像可争辩
+    「验证一下」3 题重估（真实写 BKT，审查曾抓到无 kb 时 kc_ids 空转已修）；FSRS 遗忘快照
+    （"3 天后预计保持率 N%"）。UI 证据：`docs/evidence/personalization/ui/`（17 屏 + 2 新页）。
+- **红线纪律（个性化波确立，答辩可讲）**：学习风格伪科学词汇（视觉型/听觉型等）全仓禁用；
+  掌握度只许 BKT+确定性规则写，LLM 不得改写；画像非空即禁答案缓存（个性化答案不跨用户复用）。
+- 前端合流备注：components/common.tsx 的局部 Skeleton/EmptyState 可择机平移到 components/ui/ 统一。
+  代码内遗留 TODO 仅 1 处：hero.tsx aurora token 合流（plan_graph.py 的 DAG TODO 已在 Wave-P1 清掉）。
 
 ## 6. 待办（按优先级）
 
 **A. 竞赛收尾（无需用户指令，可直接做）**
 1. 终版磁带重录：语料定稿后 record 口径重跑黄金路径（scripts/smoke_golden_path.py），替换旧磁带，
-   保证断网 replay 演示可靠。
+   保证断网 replay 演示可靠。**个性化两波改了 qa/quiz/plan/tutor 的 prompt（画像/偏好/兴趣段），
+   旧磁带 key 必然失配，重录前 replay 演示以旧路径为准**。
 2. STATUS.md / PRODUCTION_GAP_REVIEW.md 刷新（见 §7）。
-3. M4-D1 GUI"一镜到底"Playwright 串场脚本（demo 剧本 docs/defense/DEMO_SCRIPT.md 已有）。
-4. M4-D2 尾巴：quiz kc_names 从画像自动填充；F8-A2 新会话引用历史。
+3. M4-D1 GUI"一镜到底"Playwright 串场脚本（demo 剧本 docs/defense/DEMO_SCRIPT.md 已有，
+   个性化演示段见其 §6）。
+4. ~~M4-D2 尾巴：quiz kc_names 从画像自动填充；F8-A2 新会话引用历史~~ **均已完成**
+   （前者早于个性化波已在 `5d5947d` 完成、后者 = Wave-P2 开场卡 + next-actions）。
 5. CI 在真实 GitHub runner 上未验证过（.github/workflows/ci.yml 只在本地等价跑过）。
+6. 个性化候选下一波（brief-5 暂缓项）：个性化周报（学生/家长版）、练前预估-练后校准元认知环、
+   对话式学情看板。
 
 **B. 被用户侧动作阻塞**
 - Docker proxy（用户执行 systemd proxy.conf 六步）→ 解锁 M1-D1 compose 全绿验证 + M3-D1 Langfuse 自托管。
@@ -138,6 +152,8 @@ P2-14 套餐/免费额度分层（UI 层）。其余各项以代码为准逐条�
 | docs/decisions.md | D1-D16 架构决策（无 D13） |
 | docs/PRODUCTION_GAP_REVIEW.md | 外部审查发现（修复状态见 §7） |
 | docs/research/ACTION_PLAN.md + brief-1..4 | 调研结论与波次规划（已大部分执行） |
+| docs/research/brief-5-个性化.md | 个性化调研+设计（两波已实现，暂缓项见其 §4） |
+| docs/evidence/personalization/ | 个性化波 UI 证据（17 屏 + onboarding/settings） |
 | docs/defense/ | PPT 大纲/3 分钟 demo 剧本/QA Top10/竞品矩阵 |
 | docs/evidence/ | m0/m2/m4/m5/features 全部证据（截图/评估/压测/实验四图） |
 | deploy/ | docker-compose + Caddy + 部署与密钥轮换指南 |
