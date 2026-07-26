@@ -17,6 +17,7 @@ from eduagents_core.config import Settings
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import GatewayError, Tier
+from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import Date, cast, func, select
 
@@ -29,7 +30,8 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 _TREND_DAYS = 30
 _RADAR_TOP_N = 12
-_WEAK_THRESHOLD = 0.4
+# 报告薄弱红线与计划补强同源 (thresholds 唯一来源, G6): 两处判定不许漂移
+_WEAK_THRESHOLD = REINFORCE_THRESHOLD
 
 
 async def _build_aggregates(session, ctx: AuthContext) -> dict:
@@ -266,6 +268,8 @@ async def learning_report(
         "radar": agg["radar"],
         "trend": agg["trend"],
         "weak_points": agg["weak_points"],
+        # 薄弱判定红线随响应下发, 前端文案据此渲染 (不许两侧各写一份数字)
+        "weak_threshold": _WEAK_THRESHOLD,
         "actions": actions,
         "narrative": narrative,
         "narrative_note": note,

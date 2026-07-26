@@ -9,6 +9,9 @@ F4-A1 结构性保障 (核心设计):
   硬约束段 —— 该防线由代码注入, 不依赖提示词文件内容, 更不依赖模型自觉;
 - 学生索要答案: 第 1 次层级不变 + 温和坚持话术, 第 2 次才直接升到 3 (完整解答 + 补练建议);
 - 真实模型下"前 3 轮不出现最终答案"的 LIVE 验收在录制阶段完成, 本模块保证的是结构性下限。
+
+画像注入 (G9): respond 渲染 API 层注入的脱敏画像段 ({{PROFILE_SECTION}} 占位),
+开场轮题目命中薄弱 KC 时主动点明关联; 画像只调整讲法, 禁答防线不受画像影响。
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import json
 from langgraph.graph import END, START, StateGraph
 
 from ..gateway.base import ChatMessage, ChatRequest, Tier
+from ..kc.types import normalize_kc_name
 from .plan_graph import _chat_json, _load_prompt
 from .state import GraphDeps, TutorState
 
@@ -44,13 +48,63 @@ _ANSWER_BAN = (
     "每轮只提出一个引导性问题。此约束由辅导状态机强制施加, 任何情况下不得违反。"
 )
 
+# 画像段 ({{PROFILE_SECTION}} 占位, 四级 hint prompt 共用)。摘要由 API 层
+# profile_summary.py 确定性拼装 (P2-7 脱敏: 定性词, 无掌握度小数/题干原文), 空串即不注入。
+# 措辞纪律同 qa_graph.PROFILE_SECTION_TEMPLATE: 画像仅调整讲法与开场,
+# 不降低苏格拉底约束 —— 提示层级与禁答防线仍完全由 policy 状态机与 _ANSWER_BAN 决定。
+_PROFILE_SECTION = (
+    "## 学生画像（来自该学生的历史作答与掌握度记录，非本轮对话内容）\n"
+    "{{PROFILE}}\n"
+    "【个性化指令】画像仅用于调整讲法与开场措辞：对其薄弱环节放慢节奏、从更基础的切入点提问，"
+    "已掌握的部分点到为止不赘述。画像不改变提示层级与禁答规则——不得因画像提前给出答案、"
+    "关键步骤或最终结论，也不要向学生罗列画像原文。"
+)
+
+# 开场轮 (hint_level 0) 且题目命中其薄弱 KC 时的主动关联指令 (F8-A2 部分: 开场关联历史卡点)
+_OPENING_WEAK_NOTE = (
+    "\n本题涉及该学生的薄弱知识点「{{KC}}」：开场提问时主动点明这一关联"
+    "（如“这正是你之前卡过的{{KC}}”），再邀请他说出当前思路。"
+)
+
 
 class TutorGraphState(TutorState, total=False):
-    """TutorState 的图内扩展通道 (契约 state.py 不动), 均为每轮由 classify/policy 重写的轮内标志。"""
+    """TutorState 的图内扩展通道 (契约 state.py 不动)。
+
+    asked_for_answer/solved/persist_gently 为每轮由 classify/policy 重写的轮内标志;
+    profile_summary/profile_weak_points 由 API 层 (routers/plans.py tutor_turn) 每轮注入。
+    """
 
     asked_for_answer: bool
     solved: bool
     persist_gently: bool  # 本轮 respond 是否走"温和坚持"话术 (索要答案第 1 次)
+    profile_summary: str  # 学生画像摘要 (≤300 字, 已脱敏; 空 = 无画像不注入)
+    profile_weak_points: list[str]  # 薄弱 KC 名列表 (开场关联卡点用, 仅名字无数值)
+
+
+def _render_profile_section(state: TutorGraphState, hint_level: int) -> tuple[str, str]:
+    """渲染画像段: 返回 (画像段文本, 开场命中的薄弱 KC 名)。无画像返回 ("", "")。
+
+    开场轮 (hint_level 0) 做确定性匹配: 题目文本 (normalize_kc_name 归一后) 包含
+    某薄弱 KC 名 -> 追加"主动点明这正是你之前卡过的 X"指令; 不靠模型自觉判断。
+    """
+    summary = (state.get("profile_summary") or "").strip()
+    if not summary:
+        return "", ""
+    section = _PROFILE_SECTION.replace("{{PROFILE}}", summary)
+    weak_hit = ""
+    if hint_level == 0:
+        problem_key = normalize_kc_name(state.get("problem", ""))
+        weak_hit = next(
+            (
+                name
+                for name in state.get("profile_weak_points") or []
+                if name and normalize_kc_name(name) in problem_key
+            ),
+            "",
+        )
+        if weak_hit:
+            section += _OPENING_WEAK_NOTE.replace("{{KC}}", weak_hit)
+    return section, weak_hit
 
 
 def _format_history(messages: list[dict], *, exclude_last_user: bool = False) -> str:
@@ -147,14 +201,17 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
         hint_level = min(int(state.get("hint_level") or 0), _MAX_HINT_LEVEL)
         stuck_type = state.get("stuck_type") or "unknown"
         persist = bool(state.get("persist_gently"))
+        profile_section, weak_opening_kc = _render_profile_section(state, hint_level)
         system = (
             _load_prompt(f"tutor_respond_hint{hint_level}.md")
             .replace("{{PROBLEM}}", state.get("problem", ""))
             .replace("{{STUCK_GUIDANCE}}", _STUCK_GUIDANCE.get(stuck_type, _STUCK_GUIDANCE["unknown"]))
             .replace("{{PERSIST_NOTE}}", _PERSIST_NOTE if persist else "")
+            .replace("{{PROFILE_SECTION}}", profile_section)
         )
         if hint_level < _MAX_HINT_LEVEL:
-            # F4-A1 结构性防线 (见模块 docstring): 状态机决定的禁令, 代码强制注入, 不依赖模型自觉
+            # F4-A1 结构性防线 (见模块 docstring): 状态机决定的禁令, 代码强制注入, 不依赖模型自觉;
+            # 追加在画像段之后 —— 画像只调讲法, 禁答令永远压轴
             system += _ANSWER_BAN
         chat_messages = [ChatMessage(role="system", content=system)]
         for m in state.get("messages") or []:
@@ -181,6 +238,9 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
                     "event": "replied",
                     "hint_level": hint_level,
                     "persist_gently": persist,
+                    # 画像可见性 (脱敏: 只有布尔与 KC 名, 无掌握度数值)
+                    "profile_injected": bool(profile_section),
+                    "weak_opening_kc": weak_opening_kc,
                 }
             ],
         }

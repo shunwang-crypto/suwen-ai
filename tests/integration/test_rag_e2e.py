@@ -176,11 +176,16 @@ async def test_chunk_context_endpoint(client):
     chunks = r.json()
     children = [c for c in chunks if c["parent_id"]]
     assert children, "应存在子块"
-    # 选子块最多的 parent, 取其第 2 个子块以便断言 prev 相邻块存在
+    # 选子块最多的 parent, 取其文档序第 2 个子块以便断言 prev 相邻块存在。
+    # 列表接口按 created_at 排序而同事务入库时间戳相同, 平序不稳定; 与 context
+    # 端点同款规则 (子块文本在父块全文中的起始偏移) 复原文档序, 保证取块确定。
     by_parent: dict[str, list[dict]] = {}
     for c in children:
         by_parent.setdefault(c["parent_id"], []).append(c)
+    parent_texts = {c["id"]: c["text"] for c in chunks if not c["parent_id"]}
     group = max(by_parent.values(), key=len)
+    ptext = parent_texts[group[0]["parent_id"]]
+    group.sort(key=lambda c: (ptext.find(c["text"]), c["id"]))
     target = group[1] if len(group) >= 2 else group[0]
 
     r = await client.get(

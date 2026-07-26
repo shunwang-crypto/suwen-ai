@@ -6,7 +6,8 @@
    落在该用户薄弱点集合内, 且出题 prompt 里确实带着这些薄弱 KC 名;
 ③ Reflection: 直调 reflect_session, 对话洞察以 weight=0.3 / evidence_type=
    "chat_reflection" 落 mastery_log (confused 降、understood 升);
-④ 有画像时答案缓存禁用 (cacheable=False 路径), 无画像用户仍走缓存。
+④ 有画像时答案缓存禁用 (cacheable=False 路径), 无画像用户仍走缓存;
+⑤ 非 KB 会话 (P1-5): 直连路径同样注入画像段 + profile trace, 且答案缓存零触碰。
 
 全程零真实 LLM: FakeGateway 脚本化 + FakeRetrieval 预置结果; PG/Redis/Qdrant 为真。
 """
@@ -567,3 +568,84 @@ async def test_answer_cache_disabled_when_profile_present(client):
         app.state.embedder = old_embedder
         await runtime2.stop()
     assert spy2.gets == 1 and spy2.puts == 1
+
+
+# ---------- ⑤ 非 KB 会话画像注入 + 缓存互斥 (P1-5) ----------
+
+
+class StreamingFakeGateway(FakeGateway):
+    """直连网关路径 (无 kb) 用: 网关流式协议 = 若干 StreamDelta + 末尾恰好一个 ChatResult。"""
+
+    async def stream_chat(self, req):
+        from eduagents_core.gateway import StreamDelta
+
+        result = await self.chat(req)
+        for i in range(0, len(result.text), 6):
+            yield StreamDelta(result.text[i : i + 6])
+        yield result
+
+
+async def test_profile_injected_without_kb(client):
+    """非 KB 会话: 画像段进直连路径 system prompt, trace 可见, 答案缓存零触碰。"""
+    uid, headers = await _register(client, "vlse-nokb")
+    ids = await _seed_kb(uid)
+    await _seed_profile(uid, ids)
+
+    app = client._transport.app
+    gateway = StreamingFakeGateway({"chat": ["导数定义你之前不熟，我们从差商的极限讲起。"]})
+    spy = SpyCache()
+    old_gateway = app.state.gateway
+    old_cache, old_embedder = app.state.answer_cache, app.state.embedder
+    app.state.gateway = gateway
+    app.state.answer_cache = spy
+    app.state.embedder = object()  # 仅需非 None (缓存判据若误放行, spy 必有记录)
+    try:
+        events = await _sse(
+            client, "POST", "/api/chat", headers, {"message": "导数的定义是什么?"}
+        )
+    finally:
+        app.state.gateway = old_gateway
+        app.state.answer_cache = old_cache
+        app.state.embedder = old_embedder
+
+    # 直连路径 (feature="chat") 实收 prompt 带画像段与薄弱 KC 名
+    prompts = gateway.prompts("chat")
+    assert len(prompts) == 1
+    assert "学生画像" in prompts[0]
+    assert "导数定义" in prompts[0] and "薄弱点" in prompts[0]
+
+    # trace 可见 (与 kb 路径同款 profile 事件, 前端时间线"已加载学情画像")
+    profile_events = [t for t in events.get("trace_event", []) if t.get("type") == "profile"]
+    assert len(profile_events) == 1, events.get("trace_event")
+    assert "导数定义" in profile_events[0]["weak_points"]
+
+    # 缓存互斥覆盖 direct 路径: 有画像时答案缓存整条链路零触碰
+    assert (spy.gets, spy.puts) == (0, 0)
+    assert events["done"][0]["session_id"]
+
+
+async def test_no_kb_no_profile_keeps_bare_prompt(client):
+    """非 KB 且无画像: 裸助教 prompt, 无 profile trace; 直连路径本就不使用答案缓存。"""
+    _uid, headers = await _register(client, "vlse-nokb-n")
+
+    app = client._transport.app
+    gateway = StreamingFakeGateway({"chat": ["导数是函数的瞬时变化率。"]})
+    spy = SpyCache()
+    old_gateway = app.state.gateway
+    old_cache, old_embedder = app.state.answer_cache, app.state.embedder
+    app.state.gateway = gateway
+    app.state.answer_cache = spy
+    app.state.embedder = object()
+    try:
+        events = await _sse(
+            client, "POST", "/api/chat", headers, {"message": "导数的定义是什么?"}
+        )
+    finally:
+        app.state.gateway = old_gateway
+        app.state.answer_cache = old_cache
+        app.state.embedder = old_embedder
+
+    assert "学生画像" not in gateway.prompts("chat")[0]
+    assert [t for t in events.get("trace_event", []) if t.get("type") == "profile"] == []
+    assert (spy.gets, spy.puts) == (0, 0)
+    assert events["done"][0]["session_id"]

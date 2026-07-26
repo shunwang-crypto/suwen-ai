@@ -41,9 +41,10 @@ flowchart TB
     %% ---- 读取边 ----
     BKT -- "画像摘要注入 system prompt (确定性拼装)<br/>apps/api/src/eduagents_api/profile_summary.py" --> QA
     BKT -- "薄弱点定向出题 (p_mastery 升序)<br/>apps/api/src/eduagents_api/routers/quiz.py" --> QUIZ
-    BKT -- "辅导开场关联卡点" --> TUTOR
+    BKT -- "画像注入四级提示词 + 开场关联卡点<br/>apps/api/src/eduagents_api/routers/plans.py (tutor_turn)" --> TUTOR
+    BKT -- "计划摸底读真实掌握度 (diagnosis 注入,<br/>LLM 只兜底无记录主题)<br/>apps/api/src/eduagents_api/routers/plans.py" --> PLAN
     FSRS -- "今日复习队列 (is_due/due_at)<br/>apps/api/src/eduagents_api/routers/reviews.py" --> REVIEW
-    KCDAG -- "主题先后约束 kc_order<br/>(拓扑算法已就绪, plan 图接线进行中, 见下)" --> PLAN
+    KCDAG -- "先修拓扑序 kc_order (dag.topological_order)<br/>apps/api/src/eduagents_api/routers/plans.py 预查注入" --> PLAN
     KCDAG -- "kc_id 外键: 题目/错题/画像禁止裸字符串" --> QUIZ
 
     CLOCK -. "BKT 衰减 / FSRS due / 预算日界<br/>make time-travel DAYS=N" .-> VLSE
@@ -85,13 +86,16 @@ Reflection 节点异步抽取——掌握度若由 LLM 生成则不可复现, �
 
 ## 诚实边界 (与 STATUS.md 对齐, 不夸大)
 
-- **规划 ← DAG 拓扑排序的接线**: 拓扑算法与环检测已实现并有 17 个单测
-  (`packages/core/src/eduagents_core/kc/dag.py`, KC-A3 ✅), 但 plan 图当前的
-  `kc_order` 由调用方注入, 接真实 DAG 的接线标注为 TODO
-  (`packages/core/src/eduagents_core/graphs/plan_graph.py` 状态类注释), F3-A2 未勾选。
+- **规划 ← DAG 拓扑排序** 已接线 (F3-A2): API 层预查 `kc_edges` 先修边, 经
+  `kc.dag.topological_order` 计算拓扑序注入 plan 图 `kc_order`, 违序任务由
+  `_fix_kc_order` 顺延 (`apps/api/src/eduagents_api/routers/plans.py` +
+  `packages/core/src/eduagents_core/graphs/plan_graph.py`,
+  单测 `tests/unit/test_plan_personalization.py`); 但边的**生产供给仍稀疏**——
+  DAG 只覆盖主干概念, 无边的 KC 之间不施加顺序约束。
 - **新会话主动引用历史卡点** (F8-A2): 画像注入问答已验
-  (`tests/integration/test_vlse_loop.py::test_profile_injected_into_qa`), 开场主动关联待
-  Reflection/开场注入收尾 (STATUS M4-D3 🟡)。
+  (`tests/integration/test_vlse_loop.py::test_profile_injected_into_qa`); 辅导开场
+  关联卡点已接线 (题目命中薄弱 KC 时开场点明, `tutor_graph.py` 确定性匹配);
+  chat 新会话首屏主动开场卡片仍待后续波次 (STATUS M4-D3 🟡)。
 - 合成学生实验是**算法层验证** (估计器正确性 + 策略相对优劣), 不宣称等于真人教学效果
   (`docs/evidence/m5/report.md` 方法论说明)。
 

@@ -1,6 +1,6 @@
 M2-D1 PDF 摄取计时验收 (tests/integration/test_pdf_ingest_timing.py)
-时间: 2026-07-27T03:18:15
+时间: 2026-07-27T05:17:07
 文件: corpus/calculus.pdf (21 页, 103920 字节)
-摄取耗时: 2.69 s (阈值 <60s, perf_counter, 直调 ingest_document)
+摄取耗时: 2.78 s (阈值 <60s, perf_counter, 直调 ingest_document)
 结果: status=ready; 父块 77 个, 子块 77 个; chunk 页码覆盖 1-21
 口径: EMBEDDING_MODE=stub / GATEWAY_MODE=stub; 解析=pymupdf4llm; live 嵌入口径待 SiliconFlow key 后重测 (docs/decisions.md D12)

@@ -45,10 +45,26 @@ import type {
   QuizDetail,
   QuizListItem,
   QuizQuestion,
+  WeakPointItem,
   WeakPointsResponse,
 } from "@/lib/types";
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
+
+/** 后端下发的逐 KC 难度分档理由（P1-1 可解释出题：定性区间词，不含掌握度数值）。 */
+interface DifficultyReason {
+  kc_name: string;
+  zone: string;
+  difficulty: string;
+  reason: string;
+}
+
+/** 薄弱点预览项（/api/profile/weak-points 已附带 zone/reason 定性理由字段）。 */
+type WeakPointPreview = WeakPointItem & {
+  zone?: string;
+  difficulty?: string;
+  reason?: string;
+};
 
 // useSyncExternalStore 订阅占位：URL search 在页面生命周期内不变化（跳转即重挂载）
 const emptySubscribe = () => () => {};
@@ -226,12 +242,11 @@ export default function QuizPage() {
     [consume],
   );
 
-  /** 画像定向出题：kc_names 由后端按掌握度填充，前端只声明意图（M4-D2）。 */
+  /** 画像定向出题：kc_names 与难度分布都由后端按掌握度计算（M4-D2 / P1-1），
+   *  前端只声明意图 —— 客户端算的难度可篡改，且与仿真验证过的 ZPD 阈值不同源。 */
   const startWeakQuiz = useCallback(() => {
     const points = weak?.weak_points ?? [];
     if (points.length === 0) return;
-    // §5.6 掌握度驱动出题：P(L)<0.4 出基础题，0.4–0.6 出变式题
-    const easy = points.filter((p) => p.p_mastery < 0.4).length;
     topicRef.current = "薄弱点强化练习";
     setTimeline([]);
     setInterruptData(null);
@@ -243,7 +258,6 @@ export default function QuizPage() {
     void consume("/api/quiz", {
       from_weak_points: true,
       num_questions: points.length,
-      difficulty_mix: { easy, mid: points.length - easy, hard: 0 },
     });
   }, [weak, consume]);
 
@@ -307,6 +321,9 @@ export default function QuizPage() {
   }, [quiz, answers, submitting]);
 
   const busy = phase === "streaming" || phase === "resuming";
+  // 定向出题的逐 KC 分档理由（interrupt 负载平铺，普通出题为空数组）
+  const difficultyReasons =
+    (interruptData?.difficulty_reasons as DifficultyReason[] | undefined) ?? [];
   const resultByQid = new Map(
     (attempt?.results ?? []).map((r) => [r.question_id, r]),
   );
@@ -564,6 +581,24 @@ export default function QuizPage() {
                       </li>
                     ))}
                   </ul>
+                  {/* 为什么练这些（P1-1）：后端逐 KC 分档理由，与实际难度分布同源 */}
+                  {(weak.weak_points as WeakPointPreview[]).some((wp) => wp.reason) && (
+                    <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+                      {(weak.weak_points as WeakPointPreview[])
+                        .filter((wp) => wp.reason)
+                        .map((wp) => (
+                          <li key={wp.kc_id} className="text-xs leading-relaxed text-slate-600">
+                            <span className="font-medium text-slate-700">{wp.name}</span>
+                            {wp.zone && (
+                              <span className="mx-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                {wp.zone}
+                              </span>
+                            )}
+                            {wp.reason}
+                          </li>
+                        ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </section>
@@ -584,13 +619,42 @@ export default function QuizPage() {
             )}
 
             {phase === "await_confirm" && interruptData?.blueprint && (
-              <BlueprintCard
-                key={interruptData.thread_id}
-                blueprint={interruptData.blueprint}
-                busy={false}
-                onConfirm={(bp) => resume(true, bp)}
-                onCancel={() => resume(false)}
-              />
+              <div className="space-y-2">
+                {/* 为什么这套题（P1-1）：随 blueprint interrupt 下发的逐 KC 分档理由 */}
+                {difficultyReasons.length > 0 && (
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      为什么是这套题
+                    </h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      难度由学情画像按掌握区间自动分档（可在下方蓝图中调整）
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {difficultyReasons.map((r) => (
+                        <li
+                          key={r.kc_name}
+                          className="text-xs leading-relaxed text-slate-600"
+                        >
+                          <span className="font-medium text-slate-800">
+                            {r.kc_name}
+                          </span>
+                          <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+                            {r.zone}
+                          </span>
+                          {r.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <BlueprintCard
+                  key={interruptData.thread_id}
+                  blueprint={interruptData.blueprint}
+                  busy={false}
+                  onConfirm={(bp) => resume(true, bp)}
+                  onCancel={() => resume(false)}
+                />
+              </div>
             )}
             {phase === "resuming" && (
               <p className="flex items-center gap-2 text-sm text-slate-500">

@@ -485,6 +485,8 @@ export interface LearningReportResponse {
   radar: ReportRadarItem[];
   trend: ReportTrendPoint[];
   weak_points: ReportWeakPoint[];
+  /** 薄弱判定红线 (0-1), 由后端 thresholds 唯一来源下发, 前端文案据此渲染 */
+  weak_threshold?: number;
   actions: ReportAction[];
   narrative: string | null;
   narrative_note: string | null;

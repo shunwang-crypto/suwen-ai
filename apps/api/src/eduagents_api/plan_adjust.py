@@ -24,6 +24,7 @@ from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
 from eduagents_core.logging import get_logger
+from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD
 from sqlalchemy import select
 
 from .models import KnowledgeComponent, MasteryRecord, Plan, PlanAdjustment
@@ -32,8 +33,9 @@ log = get_logger("plan_adjust")
 
 TASK_KEY_RE = re.compile(r"^stage(\d+)\.day(\d+)\.task(\d+)$")
 
-LOW_MASTERY_THRESHOLD = 0.4  # p_mastery < 0.4 视为薄弱, 需补强
-LOW_SCORE_THRESHOLD = 0.6  # 单次测评正确率 < 0.6 视为低分, 触发自动调整
+# 薄弱判据 = REINFORCE_THRESHOLD (掌握度阈值唯一来源 eduagents_core.mastery.thresholds)
+_REINFORCE_PCT = round(REINFORCE_THRESHOLD * 100)  # 中文理由里的百分数表述
+LOW_SCORE_THRESHOLD = 0.6  # 单次测评正确率 < 0.6 视为低分, 触发自动调整 (非掌握度阈值)
 REINFORCE_MINUTES = 30  # 补强任务时长 (固定, 与 F3-A1 日预算校验解耦)
 MAX_INSERTS_PER_ADJUST = 5  # 单次调整最多插入的补强任务数 (防一次灌满计划)
 
@@ -162,7 +164,7 @@ async def _weak_kcs(session, user_id: uuid.UUID) -> list[tuple[str, str, float]]
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
             .where(
                 MasteryRecord.user_id == user_id,
-                MasteryRecord.p_mastery < LOW_MASTERY_THRESHOLD,
+                MasteryRecord.p_mastery < REINFORCE_THRESHOLD,
             )
             .order_by(MasteryRecord.p_mastery.asc())
         )
@@ -188,7 +190,7 @@ async def adjust_plan(
 ) -> dict:
     """依据当前学情调整计划: 薄弱 KC 无对应任务 → 在最近未完成日插入补强任务。
 
-    - 薄弱判据: mastery_records.p_mastery < 0.4 (由弱到强, 最多插 5 个);
+    - 薄弱判据: mastery_records.p_mastery < REINFORCE_THRESHOLD (由弱到强, 最多插 5 个);
     - 已覆盖判据: 计划中任一任务的 kc_names 归一化后命中该 KC 名 → 跳过 (不重复插);
     - 落点: 未完成日按时间先后轮转分配 (避免全部堆在同一天); 计划已全部完成则落最后一日;
     - 有插入才写 plan_adjustments (无插入不是一次调整, 不留噪声审计)。
@@ -204,9 +206,9 @@ async def adjust_plan(
 
     if not candidates:
         reason = (
-            "当前没有掌握度低于 40% 且计划未覆盖的知识点, 计划无需调整。"
+            f"当前没有掌握度低于 {_REINFORCE_PCT}% 且计划未覆盖的知识点, 计划无需调整。"
             if weak
-            else "当前没有掌握度低于 40% 的知识点, 计划无需调整。"
+            else f"当前没有掌握度低于 {_REINFORCE_PCT}% 的知识点, 计划无需调整。"
         )
         return {"inserted": [], "reason": reason_prefix + reason, "adjustment_id": None}
 
@@ -247,7 +249,7 @@ async def adjust_plan(
 
     detail = "、".join(f"{it['kc_names'][0]}({round(it['p_mastery'] * 100)}%)" for it in inserted)
     reason = (
-        f"{reason_prefix}检测到 {len(inserted)} 个掌握度低于 40% 的知识点: {detail}; "
+        f"{reason_prefix}检测到 {len(inserted)} 个掌握度低于 {_REINFORCE_PCT}% 的知识点: {detail}; "
         f"已在最近未完成的日程中插入 {len(inserted)} 个补强任务 (每个 {REINFORCE_MINUTES} 分钟)。"
     )
     plan.structure_json = new_structure
@@ -258,7 +260,7 @@ async def adjust_plan(
         reason=reason,
         diff_json={
             "trigger": trigger,
-            "threshold": LOW_MASTERY_THRESHOLD,
+            "threshold": REINFORCE_THRESHOLD,
             "inserted": inserted,
         },
     )

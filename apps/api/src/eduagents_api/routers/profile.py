@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 
 from eduagents_core.mastery.bkt import BktParams
+from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -20,7 +21,7 @@ from sqlalchemy import func, select
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ErrorItem, KnowledgeComponent, MasteryLog, MasteryRecord
-from ..profile_summary import QUIZ_WEAK_THRESHOLD, QUIZ_WEAK_TOP, weak_point_kcs
+from ..profile_summary import QUIZ_WEAK_TOP, weak_point_kcs
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 

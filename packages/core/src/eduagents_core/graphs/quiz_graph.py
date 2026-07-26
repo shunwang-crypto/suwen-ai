@@ -3,6 +3,8 @@
 - 蓝图 cheap 档、题目 standard 档, 全部 json_mode 经 ModelGateway;
 - 蓝图数量/难度分布与需求不符时程序性修正 (截断/补齐), 保证 items 数 == num_questions;
 - 确认经 langgraph interrupt(), resume 值 {"approved": bool, "blueprint": 可选修改后蓝图};
+  interrupt 负载附带 difficulty_reasons (定向出题的逐 KC 分档理由, P1-1 可解释);
+- generate 注入学生画像段 (P1-2): 干扰项贴合近期错因分布, 摘要为空即不注入;
 - 逐题 Pydantic 严格校验 (QUESTION_SCHEMA), 失败带错误清单回 generate 修复, 最多重试 2 轮;
 - 判分不进图: 客观题纯函数 grade_objective 由 API 层调用, 简答题走 LLM 评分 (§5.6)。
 """
@@ -18,6 +20,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ..gateway.base import ChatMessage, ChatRequest, Tier
+from ..kc.types import normalize_kc_name
 from .state import GraphDeps, QuizState
 
 # 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
@@ -27,6 +30,24 @@ MAX_RETRIES = 2  # 校验失败最多打回 generate 修复 2 轮
 _TYPES = ("single", "multi", "blank", "short")
 _DIFFICULTIES = ("easy", "mid", "hard")
 _LETTERS = ("A", "B", "C", "D")
+
+# 画像注入 (P1-2, 同 qa_graph 的注入法): 摘要由 API 层 profile_summary.py 确定性
+# 拼装并已按 P2-7 脱敏 (定性词, 无题干原文/PII), 空串即完全不改 prompt。
+PROFILE_SECTION_TEMPLATE = (
+    "## 学生画像（来自该学生的历史作答与掌握度记录，仅用于调整出题）\n\n"
+    "{{PROFILE}}\n\n"
+    "【个性化指令】干扰项优先贴合该学生近期的错因分布：错因偏向概念混淆时，"
+    "干扰项优先设计成其易混概念；偏向公式用错时优先易记错的公式变形；偏向计算失误时"
+    "优先典型计算陷阱。薄弱知识点的题目解析写得更细（从前置概念讲起）。"
+    "画像仅用于调整出题与解析，不得写进题干、选项或答案文本，不得罗列画像原文。"
+)
+
+
+class _QuizGraphState(QuizState, total=False):
+    """构图私有扩展通道 (同 qa 的 _QaGraphState): 不进 QuizState 公共契约。"""
+
+    profile_summary: str  # 学生画像摘要 (API 层 profile_summary.py 产出; 空=无画像)
+    difficulty_reasons: list[dict]  # 逐薄弱 KC 难度分档理由 (随 blueprint interrupt 下发)
 
 
 class QuestionModel(BaseModel):
@@ -142,16 +163,59 @@ def _mix_deficit(items: list[dict], num_questions: int, difficulty_mix: dict) ->
     return deficit
 
 
+def _enforce_difficulty_mix(
+    items: list[dict], difficulty_mix: dict, difficulty_by_kc: dict[str, str]
+) -> int:
+    """难度分布程序性强制 (ZPD 自适应不是对 LLM 的建议, 是约束)。
+
+    两步, 返回被改写的题数:
+    1. 逐 KC 钉住: 题目的 KC 命中定向分档表 (difficulty_by_kc, 归一化名) 时,
+       难度以掌握度匹配档为准 —— 前端"为什么这套题"展示的分档必须与实际出题一致;
+    2. 配比强制: mix 各档目标数之和恰等于题数时, 把盈余档的未钉住题稳定改标到缺口档。
+       钉住题不参与改标 (定向路径的 mix 本就由同一分档表轮转推得, 两者天然一致)。
+    """
+    changed = 0
+    for item in items:
+        pinned = difficulty_by_kc.get(normalize_kc_name(item["kc_name"]))
+        if pinned in _DIFFICULTIES and item["difficulty"] != pinned:
+            item["difficulty"] = pinned
+            item["_pinned"] = True
+            changed += 1
+        elif pinned in _DIFFICULTIES:
+            item["_pinned"] = True
+    targets = {d: difficulty_mix.get(d) for d in _DIFFICULTIES}
+    if all(isinstance(t, int) and t >= 0 for t in targets.values()) and sum(
+        targets.values()  # type: ignore[arg-type]
+    ) == len(items):
+        counts = {d: sum(1 for it in items if it["difficulty"] == d) for d in _DIFFICULTIES}
+        deficit = [d for d in _DIFFICULTIES for _ in range(targets[d] - counts[d]) if targets[d] > counts[d]]  # type: ignore[operator]
+        for item in items:
+            if not deficit:
+                break
+            if item.get("_pinned") or counts[item["difficulty"]] <= targets[item["difficulty"]]:  # type: ignore[operator]
+                continue
+            counts[item["difficulty"]] -= 1
+            item["difficulty"] = deficit.pop(0)
+            counts[item["difficulty"]] += 1
+            changed += 1
+    for item in items:
+        item.pop("_pinned", None)
+    return changed
+
+
 def _fix_blueprint(
     raw: dict,
     num_questions: int,
     difficulty_mix: dict,
     kc_names: list[str],
     topic: str,
-) -> tuple[dict, bool]:
+    difficulty_by_kc: dict[str, str] | None = None,
+    enforce_mix: bool = True,
+) -> tuple[dict, bool, int]:
     """清洗 LLM 蓝图并程序性修正数量: 超出截断、不足按 mix 缺口补齐。
 
-    返回 (blueprint, corrected)。保证 len(items) == num_questions。
+    返回 (blueprint, corrected, difficulty_enforced_count)。保证 len(items) == num_questions。
+    enforce_mix=False 用于用户改过的蓝图 (学习者控制权: 用户显式改的难度不被系统改回)。
     """
     fallback_kc = (kc_names[0] if kc_names else topic).strip() or "综合"
     items: list[dict] = []
@@ -183,11 +247,14 @@ def _fix_blueprint(
                 }
             )
             index += 1
+    enforced = 0
+    if enforce_mix:
+        enforced = _enforce_difficulty_mix(items, difficulty_mix, difficulty_by_kc or {})
     summary = raw.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         kcs = "、".join(dict.fromkeys(it["kc_name"] for it in items))
         summary = f"共 {num_questions} 题, 覆盖: {kcs}"
-    return {"items": items, "summary": summary}, corrected
+    return {"items": items, "summary": summary}, corrected, enforced
 
 
 def build_quiz_graph(deps: GraphDeps) -> StateGraph:
@@ -219,7 +286,15 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             )
         )
         raw = _parse_json_object(result.text) or {}
-        blueprint, corrected = _fix_blueprint(raw, num_questions, difficulty_mix, kc_names, topic)
+        # 定向出题的逐 KC 分档表: 蓝图 LLM 给错难度时程序性钉回 (mix 不是建议, 是约束)
+        difficulty_by_kc = {
+            normalize_kc_name(str(r.get("kc_name", ""))): r.get("difficulty")
+            for r in (state.get("difficulty_reasons") or [])
+            if isinstance(r, dict) and r.get("difficulty") in _DIFFICULTIES
+        }
+        blueprint, corrected, enforced = _fix_blueprint(
+            raw, num_questions, difficulty_mix, kc_names, topic, difficulty_by_kc
+        )
         return {
             "blueprint": blueprint,
             "num_questions": num_questions,
@@ -230,13 +305,20 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                     "items": len(blueprint["items"]),
                     "parsed": bool(raw),
                     "corrected": corrected,
+                    "difficulty_enforced": enforced,
                 }
             ],
         }
 
-    def confirm_blueprint(state: QuizState) -> dict:
+    def confirm_blueprint(state: _QuizGraphState) -> dict:
+        # difficulty_reasons: 定向出题时路由层产出的逐 KC 分档理由 (P1-1 可解释),
+        # 随 interrupt 平铺进 SSE, 前端蓝图确认卡渲染"为什么这套题"
         decision = interrupt(
-            {"kind": "blueprint_confirm", "blueprint": state.get("blueprint", {})}
+            {
+                "kind": "blueprint_confirm",
+                "blueprint": state.get("blueprint", {}),
+                "difficulty_reasons": state.get("difficulty_reasons") or [],
+            }
         )
         approved = isinstance(decision, dict) and bool(decision.get("approved"))
         if not approved:
@@ -252,13 +334,15 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             and bool(modified["items"])
         )
         if edited:
-            # 用户改过蓝图: 清洗后以其条数为准 (num_questions 跟随, 供整卷数量校验)
-            blueprint, _ = _fix_blueprint(
+            # 用户改过蓝图: 清洗后以其条数为准 (num_questions 跟随, 供整卷数量校验)。
+            # enforce_mix=False: 学习者控制权 —— 用户显式改的难度不被系统改回
+            blueprint, _, _ = _fix_blueprint(
                 modified,
                 len(modified["items"]),
                 state.get("difficulty_mix") or {},
                 state.get("kc_names") or [],
                 state.get("topic", ""),
+                enforce_mix=False,
             )
             update["blueprint"] = blueprint
             update["num_questions"] = len(blueprint["items"])
@@ -270,7 +354,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
     def route_after_confirm(state: QuizState) -> str:
         return "generate" if state.get("blueprint_confirmed") else END
 
-    async def generate(state: QuizState) -> dict:
+    async def generate(state: _QuizGraphState) -> dict:
         blueprint = state.get("blueprint") or {}
         kb_id = state.get("kb_id", "")
         chunk_ids: list[str] = []
@@ -296,11 +380,19 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 "## 上一轮输出未通过校验, 本轮必须修复\n\n"
                 f"重新输出全部题目, 并修复以下问题:\n{error_lines}"
             )
+        # 画像注入 (P1-2): 空摘要即整段置空, prompt 与无画像时完全一致
+        profile_summary = (state.get("profile_summary") or "").strip()
+        profile_block = (
+            PROFILE_SECTION_TEMPLATE.replace("{{PROFILE}}", profile_summary)
+            if profile_summary
+            else ""
+        )
         prompt = (
             _load_prompt("quiz_generate.md")
             .replace("{{TOPIC}}", state.get("topic", ""))
             .replace("{{BLUEPRINT_JSON}}", json.dumps(blueprint, ensure_ascii=False))
             .replace("{{MATERIALS}}", materials_block)
+            .replace("{{PROFILE_SECTION}}", profile_block)
             .replace("{{FIX_INSTRUCTIONS}}", fix_block)
         )
         result = await deps.gateway.chat(
@@ -339,6 +431,8 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                     "count": len(questions),
                     "materials": len(chunk_ids),
                     "round": int(state.get("retry_count") or 0),
+                    # 画像是否注入可观测 (前端时间线可核对, 同 qa 的 profile_injected)
+                    "profile_injected": bool(profile_summary),
                 }
             ],
         }
@@ -391,7 +485,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             return "generate"
         return END
 
-    graph = StateGraph(QuizState)
+    graph = StateGraph(_QuizGraphState)
     graph.add_node("make_blueprint", make_blueprint)
     graph.add_node("confirm_blueprint", confirm_blueprint)
     graph.add_node("generate", generate)

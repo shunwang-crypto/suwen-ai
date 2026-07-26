@@ -600,3 +600,60 @@ async def test_refuse_path_skips_followups():
     assert out["refused"] is True
     assert "followups" not in out
     assert gw.calls("qa_followups") == []
+
+
+# --- 画像注入 (F8-A2 / P1-5 全路径) ---
+
+
+def profile_state(query: str, kb_id: str = "") -> dict:
+    state = init_state(query, kb_id=kb_id)
+    state["profile_summary"] = "薄弱点: 导数定义(较弱)、极值判定(待巩固)。"
+    state["profile_weak_points"] = ["导数定义", "极值判定"]
+    return state
+
+
+async def test_direct_path_profile_injected_without_kb():
+    """无 kb 的 direct 路径: 画像段进 generate system prompt, trace 上报 profile 事件。"""
+    gw = FakeGateway(
+        {"qa_generate": ["从差商的极限讲起。"], "qa_followups": followups_script()}
+    )
+    out = await run(make_deps(gw), profile_state("导数是什么"))
+    assert out["route"] == "direct"
+    sys_prompt = gw.calls("qa_generate")[0].messages[0].content
+    assert "学生画像" in sys_prompt
+    assert "薄弱点: 导数定义(较弱)、极值判定(待巩固)。" in sys_prompt
+    assert "个性化指令" in sys_prompt
+    profile_evs = [e for e in out["trace"] if e["type"] == "profile"]
+    assert len(profile_evs) == 1
+    assert profile_evs[0]["weak_points"] == ["导数定义", "极值判定"]
+    gen_ev = [e for e in out["trace"] if e["type"] == "generate"][0]
+    assert gen_ev["path"] == "direct" and gen_ev["profile_injected"] is True
+
+
+async def test_web_path_profile_injected_without_kb():
+    """无 kb 的 web 路径 (时效关键词): 画像段同样注入 (三条生成路径通吃)。"""
+    web = make_web_search([{"title": "AI 周报", "url": "http://n", "content": "今日要闻"}])
+    gw = FakeGateway(
+        {"qa_generate": ["以下是最新进展 [1]"], "qa_followups": followups_script()}
+    )
+    out = await run(make_deps(gw, web_search=web), profile_state("最新的 AI 新闻"))
+    assert out["route"] == "web"
+    sys_prompt = gw.calls("qa_generate")[0].messages[0].content
+    assert "学生画像" in sys_prompt and "导数定义" in sys_prompt
+    assert [e for e in out["trace"] if e["type"] == "profile"]
+
+
+async def test_empty_profile_keeps_prompt_untouched():
+    """摘要为空串: prompt 无画像段, 不发 profile trace (与有画像路径互斥)。"""
+    gw = FakeGateway(
+        {"qa_generate": ["你好，我是 AI 助教。"], "qa_followups": followups_script()}
+    )
+    state = init_state("你好")
+    state["profile_summary"] = ""
+    state["profile_weak_points"] = []
+    out = await run(make_deps(gw), state)
+    sys_prompt = gw.calls("qa_generate")[0].messages[0].content
+    assert "学生画像" not in sys_prompt
+    assert [e for e in out["trace"] if e["type"] == "profile"] == []
+    gen_ev = [e for e in out["trace"] if e["type"] == "generate"][0]
+    assert gen_ev["profile_injected"] is False

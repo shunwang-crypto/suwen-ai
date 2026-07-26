@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,8 @@ from ..gateway.base import ChatMessage, ChatRequest, Tier
 
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与 KC 抽取共用同一套宽容策略
 from ..kc.extraction import _parse_json_object
+from ..kc.types import normalize_kc_name
+from ..mastery.thresholds import zone_label
 from .state import GraphDeps, PlanState
 
 # 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
@@ -34,15 +35,39 @@ _DAY_MAX_RATIO = 1.15  # 上限 = 1.15 * 预算
 _TOPIC_LIMIT = 5  # gather_resources 逐 topic 检索的 topic 上限
 _KB_TOP_K = 3  # 每 topic 取知识库 top3
 _WEB_TOP_K = 2  # 每 topic 取 web top2
+_DIAGNOSIS_LIMIT = 20  # 进 prompt 的掌握度条目上限 (目标相关优先, 防跨学科全量膨胀)
+
+
+def _topic_related(name: str, topics: list[str]) -> bool:
+    """KC 名与目标主题的宽松相关判定 (归一化后相等或互为包含)。"""
+    n = normalize_kc_name(name)
+    for topic in topics:
+        t = normalize_kc_name(topic)
+        if t and (n == t or n in t or t in n):
+            return True
+    return False
+
+
+def _render_diagnosis(diagnosis: dict, key_topics: list[str]) -> str:
+    """掌握度出境渲染 (P2-7 脱敏): 只给定性档, 精确概率仅供图内确定性逻辑使用。
+
+    目标相关条目优先、其余按掌握度升序, 截断到 _DIAGNOSIS_LIMIT 防 prompt 膨胀。
+    """
+    entries = sorted(
+        diagnosis.items(),
+        key=lambda kv: (not _topic_related(kv[0], key_topics), kv[1], kv[0]),
+    )[:_DIAGNOSIS_LIMIT]
+    return "\n".join(f"- {name}: {zone_label(p)}" for name, p in entries) or "(无摸底数据)"
 
 
 class PlanGraphState(PlanState, total=False):
     """PlanState 的图内扩展通道 (契约 state.py 不动)。
 
     parsed_goal: parse_goal 节点产物 {"subject", "key_topics", "level_hint"};
-    kc_order: 主题先后约束 (list[str]), M3 由调用方注入。
-        TODO(M4): 应来自 KC 先修 DAG 的 kc.dag.topological_order(kc_ids, prerequisite_edges);
-        GraphDeps 目前无 kc_edges 字段, 故 M3 简化为 state 直接注入, 拓扑约束 M4 接真实 DAG。
+    kc_order: 主题先后约束 (list[str], KC 名)。来自真实先修 DAG: API 层
+        (routers/plans.py) 预查 kc_edges 先修边, 经 kc.dag.topological_order
+        计算拓扑序后注入 —— GraphDeps 无 kc_edges 字段, 图内不查库,
+        故沿用 state 直接注入通道 (F3-A2)。
     """
 
     parsed_goal: dict
@@ -148,7 +173,14 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
     这不是冒充模型输出 — draft_plan 会在 trace 里记录 draft_fallback, 供上层提示降级。
     """
     diagnosis = state.get("diagnosis") or {}
-    topics = list(diagnosis) or [state.get("goal") or "自主学习"]
+    parsed = state.get("parsed_goal") or {}
+    key_topics = [t for t in (parsed.get("key_topics") or []) if isinstance(t, str) and t.strip()]
+    if key_topics:
+        # 目标主题优先, 掌握度记录只取与目标相关的 KC 补充 (防跨学科记录污染降级计划)
+        related = [k for k in diagnosis if _topic_related(k, key_topics)]
+        topics = list(dict.fromkeys([*key_topics, *related]))
+    else:
+        topics = [state.get("goal") or "自主学习"]
     days = []
     for day in range(1, total_days + 1):
         topic = topics[(day - 1) % len(topics)]
@@ -220,10 +252,18 @@ def _fix_kc_order(plan: dict, kc_order: list[str], fixes: list[dict]) -> None:
     """
     if not kc_order:
         return
-    rank_of = {name: i for i, name in enumerate(kc_order)}
+    # 匹配走 normalize_kc_name (与 diagnose 节点同一口径): 真实模型输出的全角/空格/大小写
+    # 变体不该让先修约束静默失效
+    rank_of: dict[str, int] = {}
+    for i, name in enumerate(kc_order):
+        rank_of.setdefault(normalize_kc_name(name), i)
 
     def rank(task: dict) -> int | None:
-        ranks = [rank_of[k] for k in task["kc_names"] if k in rank_of]
+        ranks = [
+            rank_of[normalize_kc_name(k)]
+            for k in task["kc_names"]
+            if normalize_kc_name(k) in rank_of
+        ]
         return min(ranks) if ranks else None
 
     slots: list[tuple[list, int]] = []  # (所在日的 tasks 列表, 下标), 按时间顺序
@@ -231,6 +271,10 @@ def _fix_kc_order(plan: dict, kc_order: list[str], fixes: list[dict]) -> None:
         for i in range(len(day["tasks"])):
             slots.append((day["tasks"], i))
     ranked_slots = [(lst, i) for lst, i in slots if rank(lst[i]) is not None]
+    if not ranked_slots:
+        # 有先修序但草稿任务一个都没挂上: 约束落空必须可见, 不许静默 (F3-A2 可审计)
+        fixes.append({"fix": "kc_order_unmatched", "kc_count": len(kc_order)})
+        return
     ranked_tasks = [lst[i] for lst, i in ranked_slots]
     ranks_now = [rank(t) for t in ranked_tasks]
     if ranks_now == sorted(ranks_now):  # type: ignore[type-var]
@@ -316,42 +360,58 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         }
 
     async def diagnose(state: PlanGraphState) -> dict:
-        existing = state.get("diagnosis")
-        if existing:
-            # 外部摸底结果 (如已做过测评) 直接采用; 真摸底考卷 M4 接 quiz 子图
-            return {
-                "trace": [
-                    {"node": "diagnose", "event": "external_diagnosis_used", "kc_count": len(existing)}
-                ]
-            }
+        # 外部注入的真实掌握度优先 (BKT, 由 routers/plans.py 预查 mastery_records 注入):
+        # LLM 摸底只对没有真实记录的主题兜底, 且不得覆盖真实值 (掌握度只许 BKT+确定性规则)。
+        existing: dict[str, float] = {}
+        for key, value in (state.get("diagnosis") or {}).items():
+            if isinstance(key, str) and key.strip() and isinstance(value, int | float):
+                existing[key.strip()] = min(max(float(value), 0.0), 1.0)
+        known_keys = {normalize_kc_name(name) for name in existing}
         parsed = state.get("parsed_goal") or {}
         topics = parsed.get("key_topics") or []
-        diagnosis: dict[str, float] = {}
-        if not topics:
+        missing = [t for t in topics if normalize_kc_name(t) not in known_keys]
+        if existing and not missing:
+            # 真实掌握度已覆盖全部主题, 完全不调 LLM
             return {
-                "diagnosis": diagnosis,
+                "diagnosis": existing,
+                "trace": [
+                    {"node": "diagnose", "event": "external_diagnosis_used", "kc_count": len(existing)}
+                ],
+            }
+        if not missing:
+            return {
+                "diagnosis": existing,
                 "trace": [{"node": "diagnose", "event": "no_topics"}],
             }
         prompt = (
             _load_prompt("plan_diagnose.md")
-            .replace("{{KEY_TOPICS}}", "\n".join(f"- {t}" for t in topics))
+            .replace("{{KEY_TOPICS}}", "\n".join(f"- {t}" for t in missing))
             .replace("{{LEVEL_HINT}}", parsed.get("level_hint") or "(未提供)")
         )
         data = await _chat_json(
             deps, state, feature="plan_diagnose", prompt=prompt, tier=Tier.cheap, temperature=0.0
         )
         raw = data.get("diagnosis") if isinstance(data, dict) else None
+        llm_est: dict[str, float] = {}
         if isinstance(raw, dict):
             for key, value in raw.items():
                 if isinstance(key, str) and isinstance(value, int | float):
-                    diagnosis[key.strip()] = min(max(float(value), 0.0), 1.0)
-        # 保守兜底: LLM 漏掉 (或解析失败) 的主题一律取 0.3
-        for topic in topics:
-            diagnosis.setdefault(topic, _DEFAULT_MASTERY)
+                    llm_est[normalize_kc_name(key)] = min(max(float(value), 0.0), 1.0)
+        diagnosis = dict(existing)
+        for topic in missing:
+            # 保守兜底: LLM 漏掉 (或解析失败) 的主题一律取 0.3
+            diagnosis[topic] = llm_est.get(normalize_kc_name(topic), _DEFAULT_MASTERY)
+        event = "external_plus_conservative" if existing else "conservative_initialized"
         return {
             "diagnosis": diagnosis,
             "trace": [
-                {"node": "diagnose", "event": "conservative_initialized", "kc_count": len(diagnosis)}
+                {
+                    "node": "diagnose",
+                    "event": event,
+                    "kc_count": len(diagnosis),
+                    "known_count": len(existing),
+                    "backfilled_count": len(missing),
+                }
             ],
         }
 
@@ -420,7 +480,9 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{BUDGET_MINUTES}}", str(int(round(budget_minutes))))
             .replace("{{GOAL}}", state.get("goal", ""))
             .replace("{{SUBJECT}}", parsed.get("subject") or "(未知)")
-            .replace("{{DIAGNOSIS}}", json.dumps(diagnosis, ensure_ascii=False))
+            # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
+            # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
+            .replace("{{DIAGNOSIS}}", _render_diagnosis(diagnosis, parsed.get("key_topics") or []))
             .replace("{{RESOURCES}}", resources_block)
             .replace("{{KC_ORDER}}", " -> ".join(kc_order) or "(无硬性先后约束)")
         )

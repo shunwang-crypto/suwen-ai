@@ -451,6 +451,7 @@ export default function ReportsPage() {
   }
 
   const { radar, trend, weak_points, actions, narrative, narrative_note } = report;
+  const weakPct = Math.round((report.weak_threshold ?? 0.4) * 100);
   const hasAnyData =
     radar.length > 0 || weak_points.length > 0 || trend.some((t) => t.attempts > 0);
 
@@ -503,7 +504,7 @@ export default function ReportsPage() {
         <Card
           title="薄弱知识点"
           extra={
-            <span className="text-xs text-slate-400">掌握度 &lt; 40% · 附归因下钻</span>
+            <span className="text-xs text-slate-400">掌握度 &lt; {weakPct}% · 附归因下钻</span>
           }
         >
           {weak_points.length === 0 ? (

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+from eduagents_core.logging import get_logger
+from eduagents_core.mastery.thresholds import DIFFICULTIES, difficulty_for_mastery
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
@@ -10,13 +12,27 @@ from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import Question, Quiz
-from ..profile_summary import weak_point_kcs
+from ..profile_summary import build_profile_context, weak_point_kcs
 from ..services import record_attempts
 from .threads import stream_graph_run
 
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
+log = get_logger("quiz")
 
 _WEAK_TOPIC = "薄弱点强化练习"
+
+
+def adaptive_difficulty_mix(weak: list[dict], num_questions: int) -> dict:
+    """按各薄弱 KC 的掌握度算整卷难度分布 (P1-1 ZPD 自适应产品化)。
+
+    档位与阈值同源仿真自适应臂 (thresholds.difficulty_for_mastery): 题目按薄弱点
+    轮转分配 (蓝图要求覆盖均衡), 第 i 题难度 = 对应 KC 的匹配档, 故各档之和恒等于
+    num_questions。由后端计算, 不信任前端传的 difficulty_mix (可篡改)。
+    """
+    counts = dict.fromkeys(DIFFICULTIES, 0)
+    for i in range(num_questions):
+        counts[difficulty_for_mastery(float(weak[i % len(weak)]["p_mastery"]))] += 1
+    return counts
 
 
 class QuizCreate(BaseModel):
@@ -47,13 +63,16 @@ async def create_quiz(
     """出题: Blueprint 预览 → interrupt 等确认 → resume 后生成+校验+落库 (F5)。
 
     from_weak_points=True 走画像定向通道 (M4-D2): 后端读掌握度取薄弱 KC 填 kc_names,
-    topic 缺省为"薄弱点强化练习"; 选中的薄弱点作为 trace 事件先行下发, 可核对。
+    topic 缺省为"薄弱点强化练习"; 难度分布同样由后端按掌握度算 (P1-1, 覆盖前端传值),
+    逐 KC 分档理由随蓝图 interrupt 下发。选中的薄弱点作为 trace 事件先行下发, 可核对。
     """
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     topic = body.topic.strip()
     kc_names = list(body.kc_names)
+    difficulty_mix = dict(body.difficulty_mix)
+    difficulty_reasons: list[dict] = []
     trace_prelude: list[dict] = []
     if body.from_weak_points:
         weak = await weak_point_kcs(
@@ -66,6 +85,17 @@ async def create_quiz(
             raise HTTPException(status_code=400, detail="NO_WEAK_POINTS")
         kc_names = [w["name"] for w in weak]
         topic = topic or _WEAK_TOPIC
+        # ZPD 难度自适应 (P1-1): 分布由后端按掌握度算; 理由只带定性词 (P2-7)
+        difficulty_mix = adaptive_difficulty_mix(weak, body.num_questions)
+        difficulty_reasons = [
+            {
+                "kc_name": w["name"],
+                "zone": w["zone"],
+                "difficulty": w["difficulty"],
+                "reason": w["reason"],
+            }
+            for w in weak
+        ]
         trace_prelude.append(
             {
                 "node": "weak_points",
@@ -74,8 +104,22 @@ async def create_quiz(
                 "kc_names": kc_names,
                 "p_mastery": [w["p_mastery"] for w in weak],
                 "recent_error": [w["name"] for w in weak if w["recent_error"]],
+                "difficulty_mix": difficulty_mix,
             }
         )
+    # 画像注入 (P1-2): 摘要已按 P2-7 脱敏 (定性词, 无题干原文), 供 generate 调整
+    # 干扰项设计; 读画像失败一律降级为"无画像"继续出题, 不拖垮主链路
+    profile_summary = ""
+    try:
+        profile = await build_profile_context(
+            ctx.tenant_id,
+            ctx.user_id,
+            [str(body.kb_id)] if body.kb_id else [],
+            redis=getattr(request.app.state, "redis", None),
+        )
+        profile_summary = profile.summary
+    except Exception:  # noqa: BLE001
+        log.exception("quiz_profile_summary_failed")
     local_id = str(uuid.uuid4())
     thread_id = runtime.thread_id("quiz", str(ctx.user_id), local_id)
     payload = {
@@ -85,8 +129,10 @@ async def create_quiz(
         "kb_id": str(body.kb_id) if body.kb_id else "",
         "topic": topic,
         "num_questions": body.num_questions,
-        "difficulty_mix": body.difficulty_mix,
+        "difficulty_mix": difficulty_mix,
         "kc_names": kc_names,
+        "profile_summary": profile_summary,
+        "difficulty_reasons": difficulty_reasons,
     }
     return await stream_graph_run(
         runtime, "quiz", thread_id, ctx, payload, trace_prelude=trace_prelude

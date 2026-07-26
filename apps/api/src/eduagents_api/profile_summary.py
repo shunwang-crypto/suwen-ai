@@ -28,6 +28,16 @@ from datetime import UTC, datetime, timedelta
 
 import orjson
 from eduagents_core.logging import get_logger
+
+# 阈值唯一来源 (个性化波次 G6): 此处仅 import 再导出 (routers/profile.py 等既有
+# 消费方沿用本模块入口), 禁止再落地本地硬编码副本。
+from eduagents_core.mastery.thresholds import (
+    MASTERED_THRESHOLD,
+    QUIZ_WEAK_THRESHOLD,
+    WEAK_THRESHOLD,
+    difficulty_for_mastery,
+    zone_label,
+)
 from sqlalchemy import select
 
 from .db import tenant_session
@@ -38,17 +48,13 @@ log = get_logger("profile_summary")
 CACHE_TTL_SECONDS = 60
 SUMMARY_MAX_CHARS = 300  # 摘要硬上限 (进 system prompt, 不能挤占资料位)
 
-# 问答摘要口径
-WEAK_THRESHOLD = 0.5
-MASTERED_THRESHOLD = 0.8
-_WEAK_SEVERE = 0.3  # P2-7 两档定性: p<0.3 "较弱", 0.3≤p<0.5 "待巩固" (不出精确小数)
+# 问答摘要口径 (定性两档边界见 thresholds.zone_label: p<0.3 "较弱", 其余薄弱段 "待巩固")
 _WEAK_TOP = 5
 _MASTERED_TOP = 3
 _RECENT_ERROR_KCS = 3  # 摘要里点名的最近错题 KC 数
 _ERROR_SCAN = 10  # 错因分布的近期错题扫描窗口
 
 # 定向出题口径 (M4-D2: "上午答错的概念下午自动出现在练习卷")
-QUIZ_WEAK_THRESHOLD = 0.6
 QUIZ_WEAK_TOP = 5
 _RECENT_ERROR_DAYS = 7
 
@@ -149,11 +155,6 @@ async def _load_snapshot(
     return scoped, error_names, causes
 
 
-def _weak_label(p: float) -> str:
-    """掌握度 -> 抽象两档定性词 (P2-7: 出境摘要禁精确小数)。"""
-    return "较弱" if p < _WEAK_SEVERE else "待巩固"
-
-
 def _compose_summary(
     mastery: list[tuple[str, str, float]], error_names: list[str], causes: Counter
 ) -> ProfileContext:
@@ -172,8 +173,9 @@ def _compose_summary(
     if mastered:
         parts.append("该学生已掌握: " + "、".join(mastered))
     if weak:
+        # p < WEAK_THRESHOLD 的薄弱段里 zone_label 只会给出 "较弱"/"待巩固" 两档定性词
         parts.append(
-            "薄弱点: " + "、".join(f"{name}({_weak_label(p)})" for name, p in weak)
+            "薄弱点: " + "、".join(f"{name}({zone_label(p)})" for name, p in weak)
         )
     if error_names:
         parts.append("近期错题涉及: " + "、".join(error_names[:_RECENT_ERROR_KCS]))
@@ -240,6 +242,33 @@ async def build_profile_summary(
     return (await build_profile_context(tenant_id, user_id, kb_ids, redis=redis)).summary
 
 
+# 难度档中文名 (与 apps/web 蓝图卡 DIFFICULTY_OPTIONS 同源)
+_DIFFICULTY_LABELS = {"easy": "简单", "mid": "中等", "hard": "困难"}
+
+# 定性区间 -> 派此难度档的解释话术 (P1-1 ZPD 自适应可解释化; 档位见
+# thresholds.difficulty_for_mastery, 语义锚定仿真自适应臂的脚手架原则)
+_ZONE_REASONS = {
+    "较弱": "掌握度较弱，低于最近发展区，先用{difficulty}题打稳地基",
+    "待巩固": "掌握度待巩固，处于最近发展区，用{difficulty}题练最见效",
+    "接近掌握": "接近掌握，用{difficulty}题冲刺达标线",
+    "已掌握": "已掌握，用{difficulty}题保持并挑战",
+}
+
+
+def difficulty_rationale(name: str, p_mastery: float, recent_error: bool) -> dict:
+    """单个 KC 的难度分档 + 可解释理由 (P1-1: "为什么这套题" 逐条理由)。
+
+    理由随蓝图确认卡与薄弱点预览出境展示, 沿用 P2-7 脱敏口径: 只带定性区间词
+    (zone_label), 不带掌握度小数、不带题干/作答原文。
+    """
+    zone = zone_label(p_mastery)
+    difficulty = difficulty_for_mastery(p_mastery)
+    reason = _ZONE_REASONS[zone].format(difficulty=_DIFFICULTY_LABELS[difficulty])
+    if recent_error:
+        reason += "；近 7 天答错过，优先安排"
+    return {"kc_name": name, "zone": zone, "difficulty": difficulty, "reason": reason}
+
+
 async def weak_point_kcs(
     tenant_id: uuid.UUID | str,
     user_id: uuid.UUID | str,
@@ -249,8 +278,9 @@ async def weak_point_kcs(
 ) -> list[dict]:
     """定向出题的薄弱 KC: p<threshold, 近 7 天有错题者优先, 其余按 p 升序, 取 top limit。
 
-    返回 [{kc_id, name, p_mastery, recent_error}]; 无薄弱点返回空列表 (调用方须显式提示,
-    不得静默降级成普通出题)。
+    返回 [{kc_id, name, p_mastery, recent_error, zone, difficulty, reason}]; zone/difficulty/
+    reason 是逐 KC 的难度分档与定性理由 (difficulty_rationale, P1-1 可解释出题)。
+    无薄弱点返回空列表 (调用方须显式提示, 不得静默降级成普通出题)。
     """
     uid = uuid.UUID(str(user_id))
     ids = _norm_ids(kb_ids)
@@ -279,15 +309,22 @@ async def weak_point_kcs(
     recent_kc_ids = {str(k) for item in recent for k in (item.kc_ids or [])}
     kb_set = set(ids)
     scoped = [r for r in rows if not kb_set or str(r[3]) in kb_set] or list(rows)
-    items = [
-        {
-            "kc_id": str(kc_id),
-            "name": name,
-            "p_mastery": round(float(p), 4),
-            "recent_error": str(kc_id) in recent_kc_ids,
-        }
-        for kc_id, p, name, _kb in scoped
-    ]
+    items = []
+    for kc_id, p, name, _kb in scoped:
+        recent = str(kc_id) in recent_kc_ids
+        rationale = difficulty_rationale(name, float(p), recent)
+        items.append(
+            {
+                "kc_id": str(kc_id),
+                "name": name,
+                # 精确数值仅供站内鉴权接口展示 (P2-7); 出境理由只用下面的定性字段
+                "p_mastery": round(float(p), 4),
+                "recent_error": recent,
+                "zone": rationale["zone"],
+                "difficulty": rationale["difficulty"],
+                "reason": rationale["reason"],
+            }
+        )
     # 近 7 天真的错过的排前面 ("上午答错的概念下午就出现在练习卷"), 其余按掌握度升序
     items.sort(key=lambda x: (not x["recent_error"], x["p_mastery"]))
     return items[:limit]

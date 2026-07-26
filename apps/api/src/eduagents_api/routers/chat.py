@@ -18,6 +18,7 @@ from eduagents_core.gateway import (
 from eduagents_core.gateway import (
     ChatRequest as GwRequest,
 )
+from eduagents_core.graphs.qa_graph import PROFILE_SECTION_TEMPLATE
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select, text
@@ -112,6 +113,30 @@ async def _load_minor_flag(user_id) -> bool:
 
 def _sse(data: dict) -> str:
     return orjson.dumps(data).decode()
+
+
+def _direct_system_prompt(profile: ProfileContext) -> str:
+    """通用路径 system prompt: 画像非空时追加画像段 (P1-5 全路径注入, 与 qa 子图同款)。"""
+    if not profile.summary:
+        return _SYSTEM_PROMPT
+    return _SYSTEM_PROMPT + PROFILE_SECTION_TEMPLATE.replace(
+        "{{PROFILE}}", profile.summary
+    )
+
+
+def _cache_admissible(
+    kb_ids: list, history: list, cache, embedder, profile: ProfileContext
+) -> bool:
+    """两级语义缓存准入 (包B §7): 仅单库+首轮 (缓存键不含会话历史) 且组件可用。
+
+    画像非空一票否决 (F8-A2/P1-5 互斥): 有画像 = 答案已按该学生的薄弱点个性化,
+    跨用户复用即错答案; 空画像 (新用户) 照常读写缓存, 命中率不受损。
+    """
+    return (
+        len(kb_ids) == 1 and not history
+        and cache is not None and embedder is not None
+        and not profile.summary
+    )
 
 
 async def _maybe_enqueue_reflection(request: Request, ctx: AuthContext, session_id) -> bool:
@@ -229,19 +254,19 @@ async def chat(
         if row.role in ("user", "assistant")
     ]
 
-    # 画像注入 (F8-A2): kb 路径按绑定库读画像摘要, 空摘要 = 该用户尚无画像。
+    # 画像注入 (F8-A2 / P1-5 全路径): 绑定 kb 时按库取材; 未绑定传空列表走全量画像
+    # (profile_summary 缓存 key 此时不带 kb 指纹)。空摘要 = 该用户尚无画像。
     # 读画像失败一律降级为"无画像"继续问答, 不让画像故障拖垮主链路。
     profile = ProfileContext()
-    if kb_ids:
-        try:
-            profile = await build_profile_context(
-                ctx.tenant_id,
-                ctx.user_id,
-                [str(k) for k in kb_ids],
-                redis=getattr(request.app.state, "redis", None),
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("profile_summary_failed")
+    try:
+        profile = await build_profile_context(
+            ctx.tenant_id,
+            ctx.user_id,
+            [str(k) for k in kb_ids],
+            redis=getattr(request.app.state, "redis", None),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("profile_summary_failed")
 
     # P0-5: 未成年判定 (birth_year, 未知按成年) — 决定审核 strict 档与 prompt 安全段
     minor = await _load_minor_flag(ctx.user_id)
@@ -283,11 +308,8 @@ async def chat(
                 # 多轮上下文相关答案禁止缓存) ----
                 cache = getattr(request.app.state, "answer_cache", None)
                 cache_embedder = getattr(request.app.state, "embedder", None)
-                cacheable = (
-                    len(kb_ids) == 1 and not history
-                    and cache is not None and cache_embedder is not None
-                    # 有画像 = 答案已按该学生的薄弱点个性化, 跨用户复用即错答案 (F8-A2)
-                    and not profile.summary
+                cacheable = _cache_admissible(
+                    kb_ids, history, cache, cache_embedder, profile
                 )
                 # P1-11: 缓存作用域 = 该 kb 的 owner (个人库 owner=本人语义不变;
                 # 机构库 owner=org id, 成员间即共享命中)。cacheable 已限单库,
@@ -580,9 +602,12 @@ async def chat(
                 await _maybe_enqueue_reflection(request, ctx, session_id)
                 return
 
-            # ---- 通用路径: 直连网关, 真 token 流 ----
-            messages = [GwMessage(role="system", content=_SYSTEM_PROMPT), *history,
-                        GwMessage(role="user", content=body.message)]
+            # ---- 通用路径: 直连网关, 真 token 流 (画像注入见 _direct_system_prompt) ----
+            messages = [
+                GwMessage(role="system", content=_direct_system_prompt(profile)),
+                *history,
+                GwMessage(role="user", content=body.message),
+            ]
             gw_req = GwRequest(
                 messages=tuple(messages),
                 tier=Tier.standard,
@@ -597,6 +622,16 @@ async def chat(
                     {"node": "generate", "status": "running", "detail": "生成回答中"}
                 ),
             }
+            if profile.summary:
+                # 与 qa 子图 generate 节点同款 trace: 前端时间线"已加载学情画像"可核对
+                yield {
+                    "event": "trace_event",
+                    "data": _sse({
+                        "type": "profile",
+                        "weak_points": profile.weak_points,
+                        "chars": len(profile.summary),
+                    }),
+                }
             mod_buf = _new_mod_buffer(strict=minor)
             blocked = False
             try:
