@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # --- budget ---
     user_daily_budget_cny: float = 5.0
+    # 软限 (80-100%) 降档到 cheap 后的 max_tokens 硬上限, 防降档后一条长回答仍穿透预算
+    budget_cheap_max_tokens: int = 1024
 
     # --- model gateway ---
     # live: real API calls; record: live + save cassette; replay: cassette only;

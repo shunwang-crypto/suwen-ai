@@ -1,8 +1,11 @@
 "use client";
 
-// 引用面板：citation 事件卡片；点击卡片与正文 [N] 双向联动高亮。
+// 引用面板：citation 事件卡片；点击卡片与正文 [N] 双向联动高亮，
+// 并打开「引用回原文」抽屉（onOpenContext，由 chat 页装配 ContextDrawer）。
 
 import { useEffect, useRef } from "react";
+
+import { MathText } from "@/lib/katex";
 
 import type { CitationData } from "@/lib/types";
 
@@ -10,10 +13,12 @@ export function CitationsPanel({
   citations,
   activeIdx,
   onSelect,
+  onOpenContext,
 }: {
   citations: CitationData[];
   activeIdx: number | null;
   onSelect: (idx: number) => void;
+  onOpenContext?: (citation: CitationData) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -59,7 +64,10 @@ export function CitationsPanel({
             key={`${c.chunk_id}-${c.idx}`}
             type="button"
             data-citation-idx={c.idx}
-            onClick={() => onSelect(c.idx)}
+            onClick={() => {
+              onSelect(c.idx);
+              onOpenContext?.(c);
+            }}
             className={`block w-full rounded-xl border p-3 text-left transition-colors ${
               active
                 ? "border-indigo-400 bg-indigo-50/60 ring-2 ring-indigo-100"
@@ -79,6 +87,14 @@ export function CitationsPanel({
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
                 {c.doc_name || "未知文档"}
               </span>
+              {c.kb_name && (
+                <span
+                  className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                  title={`来源知识库：${c.kb_name}`}
+                >
+                  {c.kb_name}
+                </span>
+              )}
               {c.sanitized && (
                 <span
                   className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-600"
@@ -97,7 +113,7 @@ export function CitationsPanel({
             )}
             {c.highlight && (
               <p className="line-clamp-4 border-l-2 border-indigo-200 pl-2 text-xs leading-relaxed text-slate-600">
-                {c.highlight}
+                <MathText text={c.highlight} />
               </p>
             )}
           </button>

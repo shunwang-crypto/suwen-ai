@@ -4,15 +4,17 @@ import uuid
 
 import orjson
 from eduagents_core.gateway import (
+    BudgetExceeded,
+    ChatResult,
+    StreamDelta,
+    Tier,
+    UsageEvent,
+)
+from eduagents_core.gateway import (
     ChatMessage as GwMessage,
 )
 from eduagents_core.gateway import (
     ChatRequest as GwRequest,
-)
-from eduagents_core.gateway import (
-    ChatResult,
-    StreamDelta,
-    Tier,
 )
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,8 +23,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import ChatMessage, ChatSession, Document
+from ..models import ChatMessage, ChatSession, Document, KnowledgeBase
 from ..schemas import ChatRequestIn, MessageOut, SessionOut, SessionRename
+from ..usage import persist_usage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 log = get_logger("chat")
@@ -50,8 +53,31 @@ async def chat(
     gateway = request.app.state.gateway
     runtime = getattr(request.app.state, "graphs", None)
     request_id = getattr(request.state, "request_id", "")
-    if body.kb_id is not None and runtime is None:
+    # Wave3 联合检索: kb_ids 为准; 旧单值 kb_id 向后兼容 (等价 kb_ids=[kb_id])
+    kb_ids: list[uuid.UUID] = list(
+        dict.fromkeys(body.kb_ids or ([body.kb_id] if body.kb_id is not None else []))
+    )
+    if kb_ids and runtime is None:
         raise HTTPException(status_code=503, detail="RETRIEVAL_UNAVAILABLE")
+
+    # PG 侧可见性预校验 (授权唯一来源; Qdrant filter 只是纵深兜底):
+    # 任何不可见 kb (不存在 / 非本人 / 非成员机构) 一律 403, 不泄漏存在性差异
+    owner_ids: list[str] = []
+    kb_names: dict[str, str] = {}
+    kb_versions: dict[str, int] = {}
+    if kb_ids:
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+            rows = (
+                await session.scalars(
+                    select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids))
+                )
+            ).all()
+            visible = {r.id for r in rows}
+            if any(k not in visible for k in kb_ids):
+                raise HTTPException(status_code=403, detail="KB_FORBIDDEN")
+            owner_ids = sorted({str(r.tenant_id) for r in rows})
+            kb_names = {str(r.id): r.name for r in rows}
+            kb_versions = {str(r.id): r.kb_version for r in rows}
 
     # 会话与历史在流外准备好, 流内不持有长事务
     async with tenant_session(ctx.tenant_id) as session:
@@ -117,7 +143,67 @@ async def chat(
         citations: list[dict] = []
 
         # ---- 知识库路径: qa 子图 (Agentic RAG 自省环 §5.3, M3 起唯一实现) ----
-        if body.kb_id is not None:
+        if kb_ids:
+            # ---- 两级语义缓存 (包B, §7): 仅单库+首轮 (缓存键不含会话历史,
+            # 多轮上下文相关答案禁止缓存) ----
+            cache = getattr(request.app.state, "answer_cache", None)
+            cache_embedder = getattr(request.app.state, "embedder", None)
+            cacheable = (
+                len(kb_ids) == 1 and not history
+                and cache is not None and cache_embedder is not None
+            )
+            if cacheable:
+                try:
+                    hit = await cache.get(
+                        str(ctx.tenant_id), str(kb_ids[0]),
+                        kb_versions[str(kb_ids[0])], body.message, cache_embedder,
+                    )
+                except Exception:  # noqa: BLE001 — 缓存故障不阻塞主链路
+                    log.exception("answer_cache_get_failed")
+                    hit = None
+                if hit is not None:
+                    yield {
+                        "event": "trace_event",
+                        "data": _sse({
+                            "type": "cache", "source": hit.source,
+                            "matched_query": hit.matched_query, "score": hit.score,
+                        }),
+                    }
+                    for i, c in enumerate(hit.citations, 1):
+                        yield {"event": "citation", "data": _sse({**c, "idx": i})}
+                    for i in range(0, len(hit.answer), 24):
+                        yield {
+                            "event": "token",
+                            "data": _sse({"text": hit.answer[i : i + 24], "attempt": 0}),
+                        }
+                    await _persist_assistant(
+                        hit.answer, None, hit.citations,
+                        extra_meta={"route": "kb", "cache": hit.source,
+                                    "followups": hit.followups},
+                    )
+                    # 命中计量 (F10 缓存节省口径, 见 ops.py): cached_tokens=原答案输出量
+                    await persist_usage(UsageEvent(
+                        request_id=request_id, tenant_id=str(ctx.tenant_id),
+                        user_id=str(ctx.user_id), feature="qa_cache",
+                        model=hit.model, tier=hit.tier, prompt_tokens=0,
+                        completion_tokens=0, cached_tokens=hit.completion_tokens,
+                        cost_cny=0.0, latency_ms=0, mode="cache",
+                    ))
+                    yield {
+                        "event": "followups",
+                        "data": _sse({"items": hit.followups}),
+                    }
+                    yield {
+                        "event": "done",
+                        "data": _sse({
+                            "session_id": str(session_id),
+                            "citations": len(hit.citations),
+                            "refused": False, "route": "kb",
+                            "usage": {"mode": "cache", "cost_cny": 0.0},
+                        }),
+                    }
+                    return
+
             thread = runtime.thread_id("qa", str(ctx.user_id), uuid.uuid4().hex)
             payload = {
                 "messages": [
@@ -127,12 +213,29 @@ async def chat(
                 "tenant_id": str(ctx.tenant_id),
                 "user_id": str(ctx.user_id),
                 "request_id": request_id,
-                "kb_id": str(body.kb_id),
+                # kb_id 保留为首库 (路由判定/旧路径兼容); 检索层用 kb_ids+owner_ids
+                "kb_id": str(kb_ids[0]),
+                "kb_ids": [str(k) for k in kb_ids],
+                "owner_ids": owner_ids,
             }
             state: dict = {}
+            answer_parts: list[str] = []  # 当前 attempt 已下发的 token 累积
+            attempt = 0
             try:
                 async for ev in runtime.astream_updates("qa", thread, payload):
-                    if ev["kind"] == "node":
+                    if ev["kind"] == "token":
+                        # 图内真流式 token (generate 节点 get_stream_writer 写出);
+                        # attempt 变化 = verify 触发重生成, 前端按此清空重排
+                        ev_attempt = int(ev.get("attempt", 0))
+                        if ev_attempt != attempt:
+                            attempt = ev_attempt
+                            answer_parts = []
+                        answer_parts.append(ev["text"])
+                        yield {
+                            "event": "token",
+                            "data": _sse({"text": ev["text"], "attempt": ev_attempt}),
+                        }
+                    elif ev["kind"] == "node":
                         delta = ev["delta"]
                         yield {
                             "event": "node_update",
@@ -145,7 +248,10 @@ async def chat(
                             doc_ids = {
                                 e["doc_id"] for e in evidences if e.get("doc_id")
                             }
-                            async with tenant_session(ctx.tenant_id) as session:
+                            # org_ids 注入: 机构库文档行在 org 只读策略下可见
+                            async with tenant_session(
+                                ctx.tenant_id, org_ids=ctx.org_ids
+                            ) as session:
                                 rows = (
                                     await session.scalars(
                                         select(Document).where(
@@ -165,6 +271,9 @@ async def chat(
                                     "doc_name": doc_names.get(
                                         e.get("doc_id", ""), "未知文档"
                                     ),
+                                    # 联合检索: 标注引用来自哪个库
+                                    "kb_id": e.get("kb_id", ""),
+                                    "kb_name": kb_names.get(e.get("kb_id", ""), ""),
                                     "heading_path": e.get("heading_path", ""),
                                     "page": e.get("page_start"),
                                     "highlight": (e.get("text") or "")[:160],
@@ -172,8 +281,18 @@ async def chat(
                                 }
                                 citations.append(citation)
                                 yield {"event": "citation", "data": _sse(citation)}
-                    else:  # end
+                    elif ev["kind"] == "end":
                         state = ev["state"]
+                    # 其余 kind (custom 等) 向前兼容: 忽略
+            except BudgetExceeded:
+                yield {
+                    "event": "error",
+                    "data": _sse({
+                        "code": "BUDGET_EXCEEDED",
+                        "message": "今日 AI 用量已达上限，明天再来或联系管理员",
+                    }),
+                }
+                return
             except Exception:
                 log.exception("qa_graph_failed")
                 yield {
@@ -184,9 +303,19 @@ async def chat(
                 }
                 return
             answer = state.get("answer", "")
-            # 图内生成为整段输出, 此处按块下发 token 事件 (真流式优化: decisions D13)
-            for i in range(0, len(answer), 24):
-                yield {"event": "token", "data": _sse({"text": answer[i : i + 24]})}
+            # 图内已真流式; 这里只补差量: 拒答路径不经 generate (streamed 为空),
+            # verify 二次仍不支持时免责声明追加在答案尾部
+            streamed = "".join(answer_parts)
+            if answer != streamed:
+                if not answer.startswith(streamed):
+                    attempt += 1  # 流内容与终态不一致 (罕见): 换 attempt 整段重发
+                    streamed = ""
+                tail = answer[len(streamed) :]
+                for i in range(0, len(tail), 24):
+                    yield {
+                        "event": "token",
+                        "data": _sse({"text": tail[i : i + 24], "attempt": attempt}),
+                    }
             await _persist_assistant(
                 answer,
                 None,
@@ -194,8 +323,30 @@ async def chat(
                 extra_meta={
                     "route": state.get("route", ""),
                     "refused": state.get("refused", False),
+                    "followups": state.get("followups") or [],
                 },
             )
+            # 缓存写入: 仅自省环通过的最终答案 (非拒答/无免责段/单库/首轮, 包B约定)
+            if (
+                cacheable and answer and not state.get("refused")
+                and "⚠️" not in answer and state.get("route") == "kb"
+            ):
+                try:
+                    await cache.put(
+                        str(ctx.tenant_id), str(kb_ids[0]),
+                        kb_versions[str(kb_ids[0])], body.message, cache_embedder,
+                        answer=answer, citations=citations,
+                        followups=state.get("followups") or [],
+                        model=state.get("model", ""), tier="standard",
+                        completion_tokens=len(answer),
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("answer_cache_put_failed")
+            # 追问 chips (包A): done 前固定下发; 生成失败降级为空列表, 不阻塞
+            yield {
+                "event": "followups",
+                "data": _sse({"items": state.get("followups") or []}),
+            }
             yield {
                 "event": "done",
                 "data": _sse(

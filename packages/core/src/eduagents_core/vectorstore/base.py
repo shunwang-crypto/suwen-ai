@@ -37,9 +37,17 @@ class VectorStore(Protocol):
     async def delete_by_kb(self, tenant_id: str, kb_id: str) -> None: ...
 
     async def search_dense(
-        self, tenant_id: str, kb_id: str, vector: list[float], limit: int
+        self,
+        tenant_id: str | list[str],
+        kb_id: str | list[str],
+        vector: list[float],
+        limit: int,
     ) -> list[SearchHit]: ...
 
     async def search_sparse(
-        self, tenant_id: str, kb_id: str, sparse: dict[int, float], limit: int
+        self,
+        tenant_id: str | list[str],
+        kb_id: str | list[str],
+        sparse: dict[int, float],
+        limit: int,
     ) -> list[SearchHit]: ...

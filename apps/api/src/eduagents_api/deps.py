@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 
 import jwt as pyjwt
+import orjson
 from eduagents_core.config import Settings, get_settings
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -12,6 +13,54 @@ from .security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
 
+# 机构成员关系缓存 (Wave3): org_members 极小但每请求都要, Redis 60s 兜住热路径。
+# 建 org / join 时由 routers/orgs.py 主动失效 (invalidate_org_cache)。
+_ORG_CACHE_TTL = 60
+
+
+def _org_cache_key(user_id: uuid.UUID | str) -> str:
+    return f"orgs:{user_id}"
+
+
+async def invalidate_org_cache(redis, user_id: uuid.UUID | str) -> None:
+    await redis.delete(_org_cache_key(user_id))
+
+
+async def _load_org_memberships(
+    redis, user_id: uuid.UUID
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """返回 (org_ids, admin_org_ids)。缓存值损坏时回源查库。"""
+    cached = await redis.get(_org_cache_key(user_id))
+    if cached is not None:
+        try:
+            pairs = orjson.loads(cached)
+            return (
+                tuple(str(o) for o, _ in pairs),
+                tuple(str(o) for o, r in pairs if r == "admin"),
+            )
+        except (orjson.JSONDecodeError, TypeError, ValueError):
+            pass
+    # 循环依赖规避: db/models 延迟导入 (deps 在 db 之前被大量模块引用)
+    from sqlalchemy import select
+
+    from .db import tenant_session
+    from .models import OrgMember
+
+    async with tenant_session(user_id) as session:
+        rows = (
+            await session.execute(
+                select(OrgMember.org_id, OrgMember.role).where(
+                    OrgMember.user_id == user_id
+                )
+            )
+        ).all()
+    pairs = [(str(org_id), role) for org_id, role in rows]
+    await redis.setex(_org_cache_key(user_id), _ORG_CACHE_TTL, orjson.dumps(pairs))
+    return (
+        tuple(o for o, _ in pairs),
+        tuple(o for o, r in pairs if r == "admin"),
+    )
+
 
 @dataclass(frozen=True)
 class AuthContext:
@@ -19,6 +68,9 @@ class AuthContext:
     tenant_id: uuid.UUID
     role: str
     jti: str
+    # Wave3 机构上下文: 所属机构 id 集合 (RLS org_ids GUC 注入源) 与其中的 admin 子集
+    org_ids: tuple[str, ...] = ()
+    admin_org_ids: tuple[str, ...] = ()
 
 
 def get_app_settings() -> Settings:
@@ -53,11 +105,15 @@ async def current_user(
     redis = request.app.state.redis
     if jti and await redis.exists(f"bl:{jti}"):
         raise HTTPException(status_code=401, detail="TOKEN_REVOKED")
+    user_id = uuid.UUID(payload["sub"])
+    org_ids, admin_org_ids = await _load_org_memberships(redis, user_id)
     ctx = AuthContext(
-        user_id=uuid.UUID(payload["sub"]),
+        user_id=user_id,
         tenant_id=uuid.UUID(payload["tid"]),
         role=payload.get("role", "student"),
         jti=jti,
+        org_ids=org_ids,
+        admin_org_ids=admin_org_ids,
     )
     request.state.auth = ctx
     return ctx

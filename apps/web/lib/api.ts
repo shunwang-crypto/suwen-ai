@@ -3,8 +3,9 @@
 
 import type { TokenResponse } from "./types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+// 默认同源 (dev 走 next.config.ts rewrites, 生产走 Caddy 反代);
+// 仅当前后端确实异源部署时才设置 NEXT_PUBLIC_API_BASE
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 let accessToken: string | null = null;
 

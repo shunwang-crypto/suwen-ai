@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from time import perf_counter
 
 from openai import (
@@ -21,6 +22,8 @@ from tenacity import (
 from ..config import Settings, TierConfig
 from ..logging import get_logger
 from .base import (
+    BudgetExceeded,
+    BudgetGuard,
     ChatRequest,
     ChatResult,
     GatewayError,
@@ -54,9 +57,15 @@ class OpenAIGateway:
     stub   — deterministic fake responses (dev/CI; banner-marked, never demoable)
     """
 
-    def __init__(self, settings: Settings, usage_sink: UsageSink | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        usage_sink: UsageSink | None = None,
+        budget_guard: BudgetGuard | None = None,
+    ):
         self._s = settings
         self._sink = usage_sink
+        self._guard = budget_guard
         self._cassette = Cassette(settings.gateway_cassette_dir)
         self._clients: dict[Tier, AsyncOpenAI] = {}
         self._breakers: dict[Tier, CircuitBreaker] = {
@@ -79,6 +88,7 @@ class OpenAIGateway:
         elif mode == "replay":
             result = self._replay_result(req, started)
         else:  # live / record
+            req = await self._budget_precheck(req)
             result = await self._live_chat(req, started)
             if mode == "record":
                 self._cassette.put(
@@ -115,6 +125,7 @@ class OpenAIGateway:
             yield result
             return
 
+        req = await self._budget_precheck(req)
         async for item in self._live_stream(req):
             yield item
 
@@ -122,6 +133,35 @@ class OpenAIGateway:
         return self._breakers[tier].state.value
 
     # ---------- internals ----------
+
+    async def _budget_precheck(self, req: ChatRequest) -> ChatRequest:
+        """live/record 入口预检 (预算强制唯一 choke point; stub/replay 零成本不预检)。
+
+        - None: 正常放行
+        - "cheap": 软限降档 — tier 压到 cheap 且 max_tokens 加硬上限 (防降档后长回答穿透预算)
+        - BudgetExceeded: 直接向上传播 (API 层转 429 + Retry-After)
+        - guard 自身故障 (如 Redis 抖动) fail-open, 预算功能不放大不可用性
+        """
+        if self._guard is None:
+            return req
+        try:
+            verdict = await self._guard.precheck(req.tenant_id, req.user_id)
+        except BudgetExceeded:
+            raise
+        except Exception:  # noqa: BLE001 — 预算预检故障不阻断业务, 只记日志
+            log.exception("budget_precheck_failed_open")
+            return req
+        if verdict == "cheap":
+            cap = self._s.budget_cheap_max_tokens
+            max_tokens = min(req.max_tokens, cap) if req.max_tokens else cap
+            if req.tier != Tier.cheap or req.max_tokens != max_tokens:
+                log.warning(
+                    "budget_soft_limit_downgrade",
+                    user_id=req.user_id,
+                    requested_tier=req.tier.value,
+                )
+                req = replace(req, tier=Tier.cheap, max_tokens=max_tokens)
+        return req
 
     def _cassette_key(self, req: ChatRequest) -> str:
         return Cassette.key(
@@ -338,21 +378,27 @@ class OpenAIGateway:
         yield fallback
 
     async def _emit_usage(self, req: ChatRequest, result: ChatResult) -> None:
+        event = UsageEvent(
+            request_id=req.request_id,
+            tenant_id=req.tenant_id,
+            user_id=req.user_id,
+            feature=req.feature,
+            model=result.model,
+            tier=result.tier,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            cached_tokens=0,
+            cost_cny=result.cost_cny,
+            latency_ms=result.latency_ms,
+            mode=result.mode,
+        )
+        # 预算结算: 只有真实产生成本的 live 结果计数 (stub/replay/降级兜底 cost=0 不计,
+        # 否则跑测试会把演示账号预算烧光)。结算失败只记日志, 不打断已完成的响应。
+        if self._guard is not None and result.mode == "live":
+            try:
+                await self._guard.settle(event)
+            except Exception:  # noqa: BLE001
+                log.exception("budget_settle_failed")
         if self._sink is None:
             return
-        await self._sink(
-            UsageEvent(
-                request_id=req.request_id,
-                tenant_id=req.tenant_id,
-                user_id=req.user_id,
-                feature=req.feature,
-                model=result.model,
-                tier=result.tier,
-                prompt_tokens=result.prompt_tokens,
-                completion_tokens=result.completion_tokens,
-                cached_tokens=0,
-                cost_cny=result.cost_cny,
-                latency_ms=result.latency_ms,
-                mode=result.mode,
-            )
-        )
+        await self._sink(event)

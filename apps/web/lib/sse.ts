@@ -15,12 +15,13 @@ export interface SseMessage {
   data: unknown;
 }
 
-/** 契约定义的七类事件名。 */
+/** 契约定义的七类事件名 + followups（追问 chips，done 前下发）。 */
 export const SSE_EVENT_NAMES = [
   "token",
   "node_update",
   "trace_event",
   "citation",
+  "followups",
   "interrupt",
   "done",
   "error",

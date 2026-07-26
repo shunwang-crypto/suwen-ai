@@ -3,6 +3,7 @@
 // 主对话界面：会话列表 / 流式消息（token 增量 + 过程时间线）/ 引用面板。
 // SSE 走 fetch+ReadableStream（lib/sse.ts），支持契约七类事件。
 
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -12,6 +13,7 @@ import {
 } from "react";
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
+import { ContextDrawer } from "@/components/chat/context-drawer";
 import { SessionList } from "@/components/chat/session-list";
 import { ProcessTimeline, type TimelineItem } from "@/components/chat/timeline";
 import { ApiError, apiJson } from "@/lib/api";
@@ -21,6 +23,7 @@ import type {
   CitationData,
   DoneData,
   ErrorEventData,
+  FollowupsEventData,
   InterruptData,
   KbOut,
   MessageOut,
@@ -40,6 +43,13 @@ interface ChatMsg {
   errorText?: string;
   interrupt?: InterruptData;
   streaming?: boolean;
+  /** 当前 token 流的重生成序号：变化时清空重排（防拼接双答案） */
+  attempt?: number;
+  /** 追问 chips（followups 事件；kb 路径 done 前下发） */
+  followups?: string[];
+  /** 发送时绑定的知识库（「考考我」chip 跳转 /quiz 用） */
+  kbId?: string;
+  kbName?: string;
 }
 
 const SAMPLE_QUESTIONS = [
@@ -55,12 +65,15 @@ function genId(): string {
 }
 
 export default function ChatPage() {
+  const router = useRouter();
   // 会话与知识库
   const [sessions, setSessions] = useState<SessionOut[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [kbs, setKbs] = useState<KbOut[]>([]);
-  const [kbId, setKbId] = useState("");
+  // Wave3 联合检索：多选（checkbox 列表，个人库与机构库分组），发送 kb_ids
+  const [kbIds, setKbIds] = useState<string[]>([]);
+  const [kbPickerOpen, setKbPickerOpen] = useState(false);
 
   // 消息与流式状态
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -71,6 +84,11 @@ export default function ChatPage() {
   // 引用联动
   const [activeCitation, setActiveCitation] = useState<number | null>(null);
   const [citationMsgId, setCitationMsgId] = useState<string | null>(null);
+  // 引用回原文抽屉（点击引用卡打开；kbId 取该消息发送时绑定的知识库）
+  const [contextTarget, setContextTarget] = useState<{
+    kbId: string;
+    citation: CitationData;
+  } | null>(null);
 
   // 移动端抽屉
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -209,6 +227,9 @@ export default function ChatPage() {
         timeline: [],
         citations: [],
         streaming: true,
+        attempt: 0,
+        kbId: kbIds[0] || undefined,
+        kbName: kbs.find((kb) => kb.id === kbIds[0])?.name,
       };
       setMessages((prev) => [...prev, userMsg, asstMsg]);
       setStreaming(true);
@@ -220,7 +241,7 @@ export default function ChatPage() {
         const body = {
           message: text,
           session_id: activeSessionId ?? undefined,
-          kb_id: kbId || undefined,
+          kb_ids: kbIds.length > 0 ? kbIds : undefined,
         };
         for await (const msg of streamSse("/api/chat", body, {
           signal: controller.signal,
@@ -228,7 +249,13 @@ export default function ChatPage() {
           switch (msg.event) {
             case "token": {
               const d = msg.data as TokenEventData;
-              patchMsg(asstId, (m) => ({ ...m, content: m.content + d.text }));
+              const attempt = d.attempt ?? 0;
+              patchMsg(asstId, (m) =>
+                attempt !== (m.attempt ?? 0)
+                  ? // verify 触发重生成：attempt 变化即清空重排，防拼接双答案
+                    { ...m, content: d.text, attempt }
+                  : { ...m, content: m.content + d.text },
+              );
               break;
             }
             case "node_update": {
@@ -254,6 +281,14 @@ export default function ChatPage() {
                 citations: [...m.citations, d],
               }));
               setCitationMsgId(asstId);
+              break;
+            }
+            case "followups": {
+              const d = msg.data as FollowupsEventData;
+              patchMsg(asstId, (m) => ({
+                ...m,
+                followups: Array.isArray(d.items) ? d.items : [],
+              }));
               break;
             }
             case "interrupt": {
@@ -301,7 +336,7 @@ export default function ChatPage() {
         abortRef.current = null;
       }
     },
-    [input, streaming, activeSessionId, kbId, patchMsg, loadSessions],
+    [input, streaming, activeSessionId, kbIds, kbs, patchMsg, loadSessions],
   );
 
   const stop = useCallback(() => {
@@ -329,6 +364,18 @@ export default function ChatPage() {
     );
   const panelCitations = citedMsg?.citations ?? [];
 
+  // 引用卡点击 → 打开原文抽屉。多库联合检索时优先用引用自带的来源库 kb_id，
+  // 回退到该消息发送时绑定的首库
+  const citedKbId = citedMsg?.kbId;
+  const openContext = useCallback(
+    (citation: CitationData) => {
+      const kbForCitation = citation.kb_id || citedKbId;
+      if (!kbForCitation) return;
+      setContextTarget({ kbId: kbForCitation, citation });
+    },
+    [citedKbId],
+  );
+
   const citationsPanel = (
     <CitationsPanel
       citations={panelCitations}
@@ -336,6 +383,7 @@ export default function ChatPage() {
       onSelect={(idx) =>
         setActiveCitation((prev) => (prev === idx ? null : idx))
       }
+      onOpenContext={openContext}
     />
   );
 
@@ -397,26 +445,98 @@ export default function ChatPage() {
             </svg>
           </button>
 
-          <label className="flex min-w-0 items-center gap-2">
+          <div className="relative flex min-w-0 items-center gap-2">
             <span className="hidden shrink-0 text-xs font-medium text-slate-500 sm:block">
               知识库
             </span>
-            <select
-              value={kbId}
-              onChange={(e) => setKbId(e.target.value)}
-              className="max-w-56 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            <button
+              type="button"
+              onClick={() => setKbPickerOpen((v) => !v)}
+              className="flex max-w-56 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 outline-none hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="">不绑定（通用模式）</option>
-              {kbs.map((kb) => (
-                <option key={kb.id} value={kb.id}>
-                  {kb.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {kbId && (
+              <span className="truncate">
+                {kbIds.length === 0
+                  ? "不绑定（通用模式）"
+                  : kbIds.length === 1
+                    ? (kbs.find((k) => k.id === kbIds[0])?.name ?? "1 个知识库")
+                    : `已选 ${kbIds.length} 个库（联合检索）`}
+              </span>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${kbPickerOpen ? "rotate-180" : ""}`}
+                aria-hidden
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+            {kbPickerOpen && (
+              <>
+                <button
+                  type="button"
+                  aria-label="关闭知识库选择"
+                  className="fixed inset-0 z-10 cursor-default"
+                  onClick={() => setKbPickerOpen(false)}
+                />
+                <div className="absolute left-0 top-full z-20 mt-1.5 max-h-80 w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => setKbIds([])}
+                    className={`w-full rounded-lg px-2.5 py-1.5 text-left text-sm ${
+                      kbIds.length === 0
+                        ? "bg-indigo-50 font-medium text-indigo-700"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    不绑定（通用模式）
+                  </button>
+                  {(["user", "org"] as const).map((ownerType) => {
+                    const group = kbs.filter((k) => k.owner_type === ownerType);
+                    if (group.length === 0) return null;
+                    return (
+                      <div key={ownerType} className="mt-1.5">
+                        <p className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                          {ownerType === "user" ? "个人库" : "机构库"}
+                        </p>
+                        {group.map((kb) => (
+                          <label
+                            key={kb.id}
+                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={kbIds.includes(kb.id)}
+                              onChange={(e) =>
+                                setKbIds((prev) =>
+                                  e.target.checked
+                                    ? [...prev, kb.id]
+                                    : prev.filter((id) => id !== kb.id),
+                                )
+                              }
+                              className="h-3.5 w-3.5 accent-indigo-600"
+                            />
+                            <span className="min-w-0 flex-1 truncate">{kb.name}</span>
+                            {kb.owner_type === "org" && (
+                              <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                                {kb.org_name ?? "机构"}
+                              </span>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+          {kbIds.length > 0 && (
             <span className="hidden rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 sm:block">
-              引用溯源问答
+              {kbIds.length > 1 ? "多库联合检索" : "引用溯源问答"}
             </span>
           )}
 
@@ -566,6 +686,51 @@ export default function ChatPage() {
                         </div>
                       )}
 
+                      {/* 追问 chips + 固定「考考我」chip（kb 路径回答完成后） */}
+                      {!m.streaming &&
+                        m.done &&
+                        !m.errorText &&
+                        ((m.followups?.length ?? 0) > 0 || m.kbId) && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(m.followups ?? []).map((q) => (
+                              <button
+                                key={q}
+                                type="button"
+                                disabled={streaming}
+                                onClick={() => void send(q)}
+                                className="rounded-full border border-indigo-200 bg-indigo-50/60 px-3 py-1.5 text-xs text-indigo-700 transition-colors hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {q}
+                              </button>
+                            ))}
+                            {m.kbId && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  router.push(
+                                    `/quiz?topic=${encodeURIComponent(m.kbName ?? "")}&kb=${encodeURIComponent(m.kbId ?? "")}`,
+                                  )
+                                }
+                                className="flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                              >
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-3 w-3"
+                                  aria-hidden
+                                >
+                                  <path d="M12 2 15 8.5 22 9.3 17 14l1.2 7L12 17.8 5.8 21 7 14 2 9.3 9 8.5Z" />
+                                </svg>
+                                考考我
+                              </button>
+                            )}
+                          </div>
+                        )}
+
                       {m.interrupt && (
                         <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
                           <p className="font-medium">
@@ -691,6 +856,15 @@ export default function ChatPage() {
             <div className="min-h-0 flex-1">{citationsPanel}</div>
           </div>
         </div>
+      )}
+
+      {/* 引用回原文抽屉（点击引用卡打开；面包屑+页码+相邻上下文+命中高亮） */}
+      {contextTarget && (
+        <ContextDrawer
+          kbId={contextTarget.kbId}
+          citation={contextTarget.citation}
+          onClose={() => setContextTarget(null)}
+        />
       )}
     </div>
   );

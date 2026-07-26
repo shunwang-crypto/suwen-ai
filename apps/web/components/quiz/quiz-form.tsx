@@ -44,13 +44,18 @@ export function QuizForm({
   kbs,
   busy,
   onSubmit,
+  initialTopic,
+  initialKbId,
 }: {
   kbs: KbOut[];
   busy: boolean;
   onSubmit: (value: QuizFormValue) => void;
+  /** URL 预填（/quiz?topic=..&kb=..，对话页「考考我」chip 跳转）；变化时由调用方换 key 重挂载 */
+  initialTopic?: string;
+  initialKbId?: string;
 }) {
-  const [topic, setTopic] = useState("");
-  const [kbId, setKbId] = useState("");
+  const [topic, setTopic] = useState(initialTopic ?? "");
+  const [kbId, setKbId] = useState(initialKbId ?? "");
   const [easy, setEasy] = useState(2);
   const [mid, setMid] = useState(2);
   const [hard, setHard] = useState(1);

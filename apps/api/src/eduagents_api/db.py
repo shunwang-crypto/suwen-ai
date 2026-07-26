@@ -42,8 +42,17 @@ async def dispose_engine() -> None:
 
 
 @asynccontextmanager
-async def tenant_session(tenant_id: uuid.UUID | str) -> AsyncIterator[AsyncSession]:
-    """Transaction-scoped session with the RLS tenant GUC set.
+async def tenant_session(
+    tenant_id: uuid.UUID | str,
+    org_ids: tuple[str, ...] | list[str] = (),
+    is_admin: bool = False,
+) -> AsyncIterator[AsyncSession]:
+    """Transaction-scoped session with the RLS GUCs set (唯一注入通道, D14)。
+
+    - app.tenant_id: 必设。个人请求 = user_id; org 库写路径/worker = 该库 owner_id(org_id)
+      (service 层先校验 org admin, 见 routers/kb.py / routers/orgs.py)。
+    - app.org_ids: 可选, 用户所属机构 id 逗号表 -> kb/documents/chunks 的 org 只读放行。
+    - app.is_admin: 可选, 运营聚合(usage_log)与 orgs 凭码查询的事务级放行 (D7 惯例)。
 
     必须用 set_config(..., is_local=true)（事务内 SET LOCAL 语义）：asyncpg 连接池
     复用连接，session 级 SET 会把上一个租户的身份泄漏给下一个请求（U-A1 显式测试）。
@@ -54,6 +63,15 @@ async def tenant_session(tenant_id: uuid.UUID | str) -> AsyncIterator[AsyncSessi
                 text("SELECT set_config('app.tenant_id', :tid, true)"),
                 {"tid": str(tenant_id)},
             )
+            if org_ids:
+                await session.execute(
+                    text("SELECT set_config('app.org_ids', :oids, true)"),
+                    {"oids": ",".join(str(o) for o in org_ids)},
+                )
+            if is_admin:
+                await session.execute(
+                    text("SELECT set_config('app.is_admin', 'true', true)")
+                )
             yield session
 
 

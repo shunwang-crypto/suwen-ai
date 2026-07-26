@@ -22,6 +22,7 @@ from .routers import (
     health,
     kb,
     ops,
+    orgs,
     plans,
     profile,
     quiz,
@@ -42,8 +43,26 @@ async def lifespan(app: FastAPI):
     get_engine()
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.rate_limiter = RateLimiter(app.state.redis)
-    app.state.gateway = OpenAIGateway(settings, usage_sink=persist_usage)
+    # 预算强制 (包B): 网关入口预检 — <80% 正常 / 80-100% 降 cheap / ≥100% 拒绝
+    from .budget import create_budget_guard
+
+    app.state.gateway = OpenAIGateway(
+        settings,
+        usage_sink=persist_usage,
+        budget_guard=create_budget_guard(app.state.redis, settings),
+    )
     app.state.storage = create_storage(settings)
+    # 两级语义缓存 (包B): L1 Redis 精确 + L2 Qdrant answer_cache
+    try:
+        from eduagents_core.cache import AnswerCache
+        from eduagents_core.embedding.providers import create_embedder
+
+        app.state.answer_cache = AnswerCache(settings, redis=app.state.redis)
+        app.state.embedder = create_embedder(settings)
+    except Exception:  # noqa: BLE001 — 缓存栈缺失时问答照常 (未命中语义)
+        app.state.answer_cache = None
+        app.state.embedder = None
+        log.exception("answer_cache_unavailable")
     app.state.arq = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         from eduagents_core.embedding.providers import create_embedder
@@ -115,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(kb.router)
+    app.include_router(orgs.router)
     app.include_router(threads.router)
     app.include_router(quiz.router)
     app.include_router(plans.router)

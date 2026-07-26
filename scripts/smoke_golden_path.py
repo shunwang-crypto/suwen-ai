@@ -114,7 +114,6 @@ def main() -> None:
     ok(f"kb 问答: {len(ev['citation'])} 条引用 + 过程事件")
 
     # 5) 出题 interrupt→resume→作答→错题 (stub 网关无法产出合法题, 如实跳过)
-    error_item_id = None
     if gateway_mode == "stub":
         skip("quiz 全链路", "stub 网关不产题, 需 record/live")
     else:
@@ -166,7 +165,7 @@ def main() -> None:
                     {"message": "水浒传作者是谁?", "kb_id": kb_id})
     if "done" not in ev:
         fail("qa_offtopic", "无 done")
-    ok("库外问题正常收敛 (refused=%s)" % ev["done"][0].get("refused"))
+    ok(f"库外问题正常收敛 (refused={ev['done'][0].get('refused')})")
 
     print(f"== 冒烟通过: {len(PASS)} PASS / {len(SKIP)} SKIP ==")
 

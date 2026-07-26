@@ -14,6 +14,7 @@ from psycopg_pool import AsyncConnectionPool
 log = get_logger("graph_runtime")
 
 _KINDS = ("qa", "quiz", "plan", "tutor")
+_MISSING = object()  # interrupt 载荷哨兵 (合法载荷可能为 None)
 
 
 def _pg_conninfo(url: str) -> str:
@@ -93,19 +94,52 @@ class GraphRuntime:
         self, kind: str, thread_id: str, payload: dict | None, resume: Any = None
     ) -> AsyncIterator[dict]:
         """逐节点产出规范化事件流:
+        {"kind":"token","text":...,"attempt":n} (图内 get_stream_writer 真流式) |
+        {"kind":"custom","payload":...} (其余自定义流事件) |
         {"kind":"node","node":name,"delta":partial_state} |
         {"kind":"interrupt","payload":...} | {"kind":"end","state":final}
         """
         graph = self.graph(kind)
         config = {"configurable": {"thread_id": thread_id}}
         inp: Any = Command(resume=resume) if resume is not None else payload
-        async for chunk in graph.astream(inp, config, stream_mode="updates"):
-            if "__interrupt__" in chunk:
-                intr = chunk["__interrupt__"]
-                value = intr[0].value if isinstance(intr, (list, tuple)) else intr.value
-                yield {"kind": "interrupt", "payload": value}
-                return
-            for node, delta in chunk.items():
+        # interrupt 不再提前 return: 多模式 astream 的 __interrupt__ 块可能先于
+        # checkpoint 落盘产出, 提前关闭生成器会取消持久化, 导致跨请求 resume
+        # 时从头重放 (make_blueprint 重跑 + 再次 interrupt)。缓存后消费到流自然
+        # 结束再上抛, 语义与原契约一致。
+        interrupt_payload: Any = _MISSING
+        async for chunk in graph.astream(
+            inp, config, stream_mode=["custom", "updates"]
+        ):
+            # 多模式下 astream 产 (mode, data) 二元组; 若传 subgraphs=True 则为
+            # (namespace, mode, data) 三元组 — 双形状兼容, 当前五子图均无嵌套子图
+            if isinstance(chunk, tuple) and len(chunk) == 3:
+                _ns, mode, data = chunk
+            elif isinstance(chunk, tuple) and len(chunk) == 2:
+                mode, data = chunk
+            else:  # 单模式回退形状 (防御)
+                mode, data = "updates", chunk
+            if mode == "custom":
+                if isinstance(data, dict) and data.get("type") == "token":
+                    yield {
+                        "kind": "token",
+                        "text": str(data.get("text", "")),
+                        "attempt": int(data.get("attempt") or 0),
+                    }
+                else:
+                    yield {"kind": "custom", "payload": data}
+                continue
+            if "__interrupt__" in data:
+                intr = data["__interrupt__"]
+                interrupt_payload = (
+                    intr[0].value if isinstance(intr, (list, tuple)) else intr.value
+                )
+                continue
+            for node, delta in data.items():
+                if node.startswith("__"):
+                    continue  # __metadata__ 等伪节点 (缓存重放元信息), 非业务事件
                 yield {"kind": "node", "node": node, "delta": delta or {}}
+        if interrupt_payload is not _MISSING:
+            yield {"kind": "interrupt", "payload": interrupt_payload}
+            return
         state = await graph.aget_state(config)
         yield {"kind": "end", "state": dict(state.values)}

@@ -14,7 +14,7 @@
 | M1-D3 [LIVE] | 拔主模型 key 走降级链, 日志可见熔断迁移 | 🟡 | 单测已覆盖降级到 stub (`test_live_without_keys_*`); live 档真实熔断演示待录制 | — |
 | M1-D4 [CI] | usage_log 三维归因 (user/feature/model) | ✅ | `make test-integration` | 2026-07-26 |
 | M1-D5 [CI] | 越权测试 (含 RLS 连接池复用路径) + auth 限流用例 | 🟡 | 越权 ✅ (test_tenant_isolation); auth 限流实现完成但缺专项用例 | 2026-07-26 |
-| M2-D1 [LIVE] | 20页 PDF 60秒内 ready(basic) | ✅ | 21页 PDF: stub口径 2.54s / live BGE-M3 口径 4.63s (docs/evidence/m2/pdf_ingest_timing.txt) | 2026-07-26 |
+| M2-D1 [LIVE] | 20页 PDF 60秒内 ready(basic) | ✅ | 21页 PDF: stub 口径 3.73s (pdf_ingest_timing.txt, 测试每跑覆写) / **live 口径 5.46s** (pdf_ingest_timing_live.md, 独立文件防覆写; 2026-07-27 重测——首测 4.63s 记录曾被覆写, 审计发现后重测固化) | 2026-07-27 |
 | M2-D2 [LIVE] | 回答带引用定位原文块+公式渲染 | 🟡 | API 层 citation 事件(文档/heading/页码/高亮) ✅ e2e; 前端渲染在 M4 | 2026-07-26 |
 | M2-D3 [LIVE] | 黄金集 recall@5 ≥ 0.8 | ✅ | live 口径 hit_rate@5=1.0 / MRR 0.92 (docs/evidence/m2/retrieval_eval_live_full.md; 小语料近饱和的诚实解读见 ablation_summary.md) | 2026-07-26 |
 | M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
@@ -64,8 +64,8 @@
 
 | 项 | 状态 | 验证 |
 |---|---|---|
-| 单元测试 | ✅ 22 passed | `make test-unit` |
-| 集成测试 | ✅ 3 passed (auth 全链路/租户隔离/健康) | `make dev-infra && make test-integration` |
+| 单元测试 | ✅ 232 passed (2026-07-27, Wave1 包A 合流后; 数字随开发增长, 以 `make test-unit` 实测为准) | `make test-unit` |
+| 集成测试 | ✅ 22 passed (同上) | `make dev-infra && make test-integration` |
 | Lint (ruff) | ✅ 全过 | `make lint` |
 | 结构化日志 (request_id 贯穿) | ✅ | 集成测试输出可见 JSON 日志 |
 | 统一错误信封 | ✅ | test_auth_flow 断言 code/request_id |

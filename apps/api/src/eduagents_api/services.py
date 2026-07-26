@@ -27,6 +27,8 @@ log = get_logger("services")
 
 _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重进 BKT (写死)
 _SHORT_PASS_SCORE = 0.6
+_TUTOR_EVIDENCE_WEIGHT = 0.5  # 辅导小结证据权重 (与主观题同档: 间接证据减半)
+_MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
 
 
 async def _resolve_kc_ids(session, kb_id: str | None, kc_names: list[str]) -> list[str]:
@@ -128,9 +130,18 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
 
 
 async def _update_mastery(
-    session, ctx: AuthContext, kc_ids: list[str], correct: bool, weight: float, evidence_id
+    session,
+    ctx: AuthContext,
+    kc_ids: list[str],
+    correct: bool,
+    weight: float,
+    evidence_id,
+    evidence_type: str = "quiz_attempt",
 ) -> list[dict]:
-    """BKT 直写 (确定性, 不经 LLM) + mastery_log 审计 (F8-A3)。"""
+    """BKT 直写 (确定性, 不经 LLM) + mastery_log 审计 (F8-A3)。
+
+    evidence_type 区分证据来源 (quiz_attempt | tutor_summary | ...), 默认值保持向后兼容。
+    """
     changes = []
     params = BktParams()
     for kc_id in kc_ids:
@@ -163,13 +174,62 @@ async def _update_mastery(
                 kc_id=uuid.UUID(kc_id),
                 old_p=old_p,
                 new_p=new_p,
-                evidence_type="quiz_attempt",
+                evidence_type=evidence_type,
                 evidence_id=evidence_id,
                 weight=weight,
             )
         )
         changes.append({"kc_id": kc_id, "old_p": round(old_p, 4), "new_p": round(new_p, 4)})
     return changes
+
+
+async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
+    """辅导小结落画像 (F4→F8 联动): misconceptions 命中已有 KC 词表 → BKT 负向证据。
+
+    匹配规则: KC canonical/alias 归一化后作为子串出现在误解文本中即命中;
+    词表外的误解如实丢弃, 不新建 KC (画像外键只认归一化 kc_id, F5-A2)。
+    命中 KC 以 correct=False、0.5 权重、evidence_type="tutor_summary" 进 BKT,
+    返回变化列表 (附 KC 名, 供前端复盘卡展示)。
+    """
+    from eduagents_core.kc.types import normalize_kc_name
+
+    texts = [
+        normalize_kc_name(m)
+        for m in (summary.get("misconceptions") or [])
+        if isinstance(m, str) and m.strip()
+    ]
+    if not texts:
+        return []
+    async with tenant_session(ctx.tenant_id) as session:
+        rows = (
+            await session.scalars(
+                select(KnowledgeComponent).order_by(KnowledgeComponent.created_at)
+            )
+        ).all()
+        matched: list[str] = []
+        name_by_id: dict[str, str] = {}
+        for row in rows:
+            keys = [normalize_kc_name(row.canonical_name)] + [
+                normalize_kc_name(a) for a in (row.aliases or []) if isinstance(a, str)
+            ]
+            keys = [k for k in keys if len(k) >= _MIN_KC_MATCH_LEN]
+            if any(k in t for t in texts for k in keys):
+                kc_id = str(row.id)
+                if kc_id not in matched:
+                    matched.append(kc_id)
+                    name_by_id[kc_id] = row.canonical_name
+        if not matched:
+            return []
+        changes = await _update_mastery(
+            session,
+            ctx,
+            matched,
+            correct=False,
+            weight=_TUTOR_EVIDENCE_WEIGHT,
+            evidence_id=None,
+            evidence_type="tutor_summary",
+        )
+    return [{**c, "name": name_by_id.get(c["kc_id"], "")} for c in changes]
 
 
 async def record_attempts(

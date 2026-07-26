@@ -30,7 +30,17 @@ async def stream_graph_run(
     async def gen():
         try:
             async for ev in runtime.astream_updates(kind, thread_id, payload, resume=resume):
-                if ev["kind"] == "node":
+                if ev["kind"] == "token":
+                    # 图内真流式 token (目前 qa generate 写出; 其余图无 writer 即无此事件)
+                    yield {
+                        "event": "token",
+                        "data": _sse(
+                            {"text": ev["text"], "attempt": ev.get("attempt", 0)}
+                        ),
+                    }
+                elif ev["kind"] == "custom":
+                    continue  # 未知自定义流事件: 向前兼容忽略
+                elif ev["kind"] == "node":
                     delta = ev["delta"]
                     yield {
                         "event": "node_update",

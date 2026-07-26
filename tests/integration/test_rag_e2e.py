@@ -116,6 +116,10 @@ async def test_rag_pipeline_end_to_end(client):
     cited = events["citation"][0]
     assert cited["doc_name"] == "calculus.md" and cited["heading_path"]
     assert "token" in events and "done" in events
+    # 图内真流式 (包A): token 事件带 attempt 序号 (重生成时递增, 前端清空重排)
+    assert all("attempt" in t for t in events["token"])
+    # 追问 chips (包A): done 前必发 followups 事件 (stub 网关下 items 降级为空)
+    assert "followups" in events and "items" in events["followups"][0]
     assert events["done"][0]["citations"] == len(events["citation"])
     assert any(e.get("type") == "retrieval" for e in events.get("trace_event", []))
 
@@ -148,6 +152,77 @@ async def test_rag_pipeline_end_to_end(client):
         )
     # qa 图按节点细分归因 (qa_generate/qa_grade/...), 成本可下钻到自省环每一步
     assert any(f.startswith("qa_") for f in features), features
+
+
+async def test_chunk_context_endpoint(client):
+    """引用回原文定位 (包A): chunk 上下文接口 — 命中块全文 + 同 parent 相邻子块
+    + 父块全文; 不存在/越权一律 404 不泄漏存在性。"""
+    user_id, headers = await _register_login(client)
+    r = await client.post(
+        "/api/kb", json={"name": "ctx-kb", "subject": "math"}, headers=headers
+    )
+    kb_id = r.json()["id"]
+    r = await client.post(
+        f"/api/kb/{kb_id}/documents",
+        files={"file": ("calculus.md", _CALCULUS_MD.encode(), "text/markdown")},
+        headers=headers,
+    )
+    doc_id = r.json()["id"]
+    from eduagents_worker.ingestion import ingest_document
+
+    assert await ingest_document({}, user_id, doc_id) == "ready"
+
+    r = await client.get(f"/api/kb/{kb_id}/documents/{doc_id}/chunks", headers=headers)
+    chunks = r.json()
+    children = [c for c in chunks if c["parent_id"]]
+    assert children, "应存在子块"
+    # 选子块最多的 parent, 取其第 2 个子块以便断言 prev 相邻块存在
+    by_parent: dict[str, list[dict]] = {}
+    for c in children:
+        by_parent.setdefault(c["parent_id"], []).append(c)
+    group = max(by_parent.values(), key=len)
+    target = group[1] if len(group) >= 2 else group[0]
+
+    r = await client.get(
+        f"/api/kb/{kb_id}/chunks/{target['id']}/context?window=1", headers=headers
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["chunk"]["id"] == target["id"]
+    assert data["chunk"]["text"] == target["text"]
+    assert data["chunk"]["heading_path"] == target["heading_path"]
+    assert data["doc_id"] == doc_id and data["doc_name"] == "calculus.md"
+    assert data["parent_text"] and data["parent_heading_path"] is not None
+    # 相邻子块: window=1 前后各至多 1 个, 与命中块互不重复
+    assert len(data["prev"]) <= 1 and len(data["next"]) <= 1
+    ids = [c["id"] for c in data["prev"]] + [target["id"]] + [c["id"] for c in data["next"]]
+    assert len(ids) == len(set(ids))
+    if len(group) >= 2:
+        assert data["prev"], "同父第 2 个子块应有前置相邻块"
+        assert data["prev"][0]["text"] != target["text"]
+
+    # 不存在的 chunk -> 404
+    r = await client.get(
+        f"/api/kb/{kb_id}/chunks/{uuid.uuid4()}/context", headers=headers
+    )
+    assert r.status_code == 404
+
+    # chunk 存在但 kb 不匹配 -> 404
+    r2 = await client.post(
+        "/api/kb", json={"name": "other-kb", "subject": "math"}, headers=headers
+    )
+    other_kb = r2.json()["id"]
+    r = await client.get(
+        f"/api/kb/{other_kb}/chunks/{target['id']}/context", headers=headers
+    )
+    assert r.status_code == 404
+
+    # 越权: 他人访问同一 chunk -> RLS 下不可见 404
+    _, headers_b = await _register_login(client)
+    r = await client.get(
+        f"/api/kb/{kb_id}/chunks/{target['id']}/context", headers=headers_b
+    )
+    assert r.status_code == 404
 
 
 async def test_upload_security_rejections(client):

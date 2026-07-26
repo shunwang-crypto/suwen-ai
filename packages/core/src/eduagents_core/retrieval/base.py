@@ -26,6 +26,9 @@ class RetrievalResult:
     used_sparse: bool = False
     used_rerank: bool = False
     confident: bool = False  # top 结果均分 >= 阈值 -> 可走快路径 (§5.3)
+    # debug 模式下的四阶段中间列表 (dense/sparse/fused/reranked + chunk_meta);
+    # 默认 None — 常规检索路径零额外开销 (命中测试页专用)
+    stages: dict | None = None
 
 
 def rrf_fuse(

@@ -36,7 +36,9 @@ class QaState(TypedDict, total=False):
     tenant_id: str
     user_id: str
     request_id: str
-    kb_id: str  # 空串 = 未绑定知识库
+    kb_id: str  # 空串 = 未绑定知识库 (联合检索时为 kb_ids[0], 路由判定用)
+    kb_ids: list[str]  # Wave3 联合检索: 多库列表 (个人+机构), 检索层 MatchAny
+    owner_ids: list[str]  # 上述库的 owner_id 集 (Qdrant tenant 纵深过滤)
     route: str  # kb | web | direct
     route_reason: str
     evidences: list[dict]  # RetrievedChunk 序列化: chunk_id/doc_id/text/heading_path/page_start/score
@@ -46,6 +48,7 @@ class QaState(TypedDict, total=False):
     grade_passed: bool
     answer: str
     refused: bool
+    followups: list[str]  # 末节点追问建议 (至多 3 条, 失败降级为空; API 层发 followups 事件)
     profile_summary: str
     trace: Annotated[list[dict], operator.add]
 

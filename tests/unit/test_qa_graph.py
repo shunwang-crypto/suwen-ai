@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from eduagents_core.config import Settings
-from eduagents_core.gateway.base import ChatRequest, ChatResult, Tier
+from eduagents_core.gateway.base import ChatRequest, ChatResult, StreamDelta, Tier
 from eduagents_core.graphs.qa_graph import (
     NO_EVIDENCE_ANSWER,
     UNSUPPORTED_DISCLAIMER,
@@ -47,6 +47,13 @@ class FakeGateway:
             latency_ms=0,
             mode="stub",
         )
+
+    async def stream_chat(self, req: ChatRequest):
+        """网关流式协议: 若干 StreamDelta + 末尾恰好一个 ChatResult (generate 走此路径)。"""
+        result = await self.chat(req)
+        for i in range(0, len(result.text), 6):
+            yield StreamDelta(result.text[i : i + 6])
+        yield result
 
 
 class FakeRetrieval:
@@ -135,20 +142,42 @@ def trace_types(out: dict) -> list[str]:
     return [e["type"] for e in out["trace"]]
 
 
+def followups_script() -> list[str]:
+    return [json.dumps({"followups": ["追问一", "追问二", "追问三"]})]
+
+
 def kb_happy_scripts() -> dict[str, list[str]]:
     return {
         "qa_query_plan": [json.dumps({"queries": ["什么是导数"]})],
         "qa_grade": [grades(True, True)],
         "qa_generate": ["导数是变化率 [1]。"],
         "qa_verify_support": [json.dumps({"supported": True, "unsupported_claims": []})],
+        "qa_followups": followups_script(),
     }
+
+
+async def stream_run(deps: GraphDeps, state: dict) -> tuple[list[dict], dict]:
+    """astream(stream_mode=["custom","updates"]) 消费: 返回 (token 事件列表, 终态)。"""
+    graph = build_qa_graph(deps).compile()
+    tokens: list[dict] = []
+    final: dict = {}
+    async for mode, data in graph.astream(state, stream_mode=["custom", "updates"]):
+        if mode == "custom" and isinstance(data, dict) and data.get("type") == "token":
+            tokens.append(data)
+        elif mode == "updates":
+            for delta in data.values():
+                if isinstance(delta, dict):
+                    final.update(delta)
+    return tokens, final
 
 
 # --- 规则路由 ---
 
 
 async def test_rule_route_direct_without_kb_skips_router_llm():
-    gw = FakeGateway({"qa_generate": ["你好，我是 AI 助教。"]})
+    gw = FakeGateway(
+        {"qa_generate": ["你好，我是 AI 助教。"], "qa_followups": followups_script()}
+    )
     out = await run(make_deps(gw), init_state("你好"))
     assert out["route"] == "direct"
     assert out["answer"] == "你好，我是 AI 助教。"
@@ -184,7 +213,12 @@ async def test_rule_route_kb_and_llm_call_metadata():
 
 async def test_rule_route_web_keyword_prefers_web():
     web = make_web_search([{"title": "AI 周报", "url": "http://n", "content": "今日要闻"}])
-    gw = FakeGateway({"qa_generate": ["以下依据网络搜索结果：… [1]"]})
+    gw = FakeGateway(
+        {
+            "qa_generate": ["以下依据网络搜索结果：… [1]"],
+            "qa_followups": followups_script(),
+        }
+    )
     out = await run(make_deps(gw, web_search=web), init_state("最新的 AI 新闻"))
     assert out["route"] == "web"
     assert gw.calls("qa_router") == []
@@ -203,6 +237,7 @@ async def test_router_llm_fallback_on_ambiguous_query():
         {
             "qa_router": [json.dumps({"route": "direct", "reason": "通用闲聊"})],
             "qa_generate": ["直接回答"],
+            "qa_followups": followups_script(),
         }
     )
     out = await run(make_deps(gw), init_state("帮我搜索一下人生的意义"))
@@ -231,6 +266,7 @@ async def test_fast_path_confident_skips_grade():
             "qa_query_plan": [json.dumps({"queries": ["什么是导数"]})],
             "qa_generate": ["快路径回答 [1]"],
             "qa_verify_support": [json.dumps({"supported": True, "unsupported_claims": []})],
+            "qa_followups": followups_script(),
         }
     )
     retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")], confident=True)])
@@ -258,7 +294,11 @@ def reflection_scripts() -> dict[str, list[str]]:
 
 async def test_reflection_loop_exhausts_retries_then_web_fallback():
     gw = FakeGateway(
-        {**reflection_scripts(), "qa_generate": ["以下依据网络搜索结果：…… [1]"]}
+        {
+            **reflection_scripts(),
+            "qa_generate": ["以下依据网络搜索结果：…… [1]"],
+            "qa_followups": followups_script(),
+        }
     )
     retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
     web = make_web_search(
@@ -315,6 +355,7 @@ async def test_verify_unsupported_regenerates_once_then_pass():
                 json.dumps({"supported": False, "unsupported_claims": ["编造论断"]}),
                 json.dumps({"supported": True, "unsupported_claims": []}),
             ],
+            "qa_followups": followups_script(),
         }
     )
     retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
@@ -339,6 +380,7 @@ async def test_verify_unsupported_twice_appends_disclaimer():
                 json.dumps({"supported": False, "unsupported_claims": ["编造论断"]}),
                 json.dumps({"supported": False, "unsupported_claims": ["编造论断"]}),
             ],
+            "qa_followups": followups_script(),
         }
     )
     retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
@@ -405,6 +447,7 @@ async def test_multi_query_rrf_dedup_and_order():
             "qa_grade": [grades(True, True, True)],
             "qa_generate": ["融合回答 [1]"],
             "qa_verify_support": [json.dumps({"supported": True, "unsupported_claims": []})],
+            "qa_followups": followups_script(),
         }
     )
     # RRF: A 出现在两路 rank0 > B (rank1+rank0) > C (单路 rank1)
@@ -438,4 +481,122 @@ async def test_trace_sequence_covers_full_kb_loop():
         "grade",
         "generate",
         "verify",
+        "followups",
     ]
+
+
+# --- 图内真流式 token 事件 (包A) ---
+
+
+async def test_generate_streams_tokens_via_custom_stream():
+    """generate 节点经 get_stream_writer 逐 token 写自定义流, attempt=0。"""
+    gw = FakeGateway(kb_happy_scripts())
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    tokens, final = await stream_run(
+        make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1")
+    )
+    assert tokens, "自定义流必须产出 token 事件"
+    assert all(t["attempt"] == 0 for t in tokens)
+    assert "".join(t["text"] for t in tokens) == "导数是变化率 [1]。"
+    assert final["answer"] == "导数是变化率 [1]。"  # 流内容与终态答案一致
+
+
+async def test_regen_tokens_carry_incremented_attempt():
+    """verify 触发重生成时第二轮 token 带 attempt=1, 且两轮互不拼接。"""
+    gw = FakeGateway(
+        {
+            "qa_query_plan": [json.dumps({"queries": ["什么是导数"]})],
+            "qa_grade": [grades(True, True)],
+            "qa_generate": ["第一版回答", "第二版回答 [1]"],
+            "qa_verify_support": [
+                json.dumps({"supported": False, "unsupported_claims": ["编造论断"]}),
+                json.dumps({"supported": True, "unsupported_claims": []}),
+            ],
+            "qa_followups": followups_script(),
+        }
+    )
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    tokens, final = await stream_run(
+        make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1")
+    )
+    attempts = [t["attempt"] for t in tokens]
+    assert set(attempts) == {0, 1}
+    # attempt 单调不减: 全部 0 在前, 全部 1 在后 (前端按 attempt 变化清空重排)
+    assert attempts == sorted(attempts)
+    assert "".join(t["text"] for t in tokens if t["attempt"] == 0) == "第一版回答"
+    assert "".join(t["text"] for t in tokens if t["attempt"] == 1) == "第二版回答 [1]"
+    assert final["answer"] == "第二版回答 [1]"
+
+
+async def test_chat_only_gateway_falls_back_to_chunked_tokens():
+    """仅实现 chat 的网关: generate 整段取回后仍分块写出 token (降级路径)。"""
+
+    class ChatOnlyGateway(FakeGateway):
+        stream_chat = None  # 模拟缺失流式协议的网关
+
+    gw = ChatOnlyGateway(kb_happy_scripts())
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    tokens, final = await stream_run(
+        make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1")
+    )
+    assert tokens and all(t["attempt"] == 0 for t in tokens)
+    assert "".join(t["text"] for t in tokens) == final["answer"]
+
+
+async def test_refuse_path_emits_no_tokens():
+    """拒答不经 generate: 无 token 事件, 前端由 API 层补发拒答文案。"""
+    gw = FakeGateway(reflection_scripts())
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    tokens, final = await stream_run(
+        make_deps(gw, retrieval=retrieval), init_state("原问题", kb_id="kb1")
+    )
+    assert tokens == []
+    assert final["refused"] is True
+
+
+# --- 追问 chips (包A) ---
+
+
+async def test_followups_generated_after_kb_answer():
+    gw = FakeGateway(kb_happy_scripts())
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    out = await run(make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1"))
+    assert out["followups"] == ["追问一", "追问二", "追问三"]
+    assert gw.calls("qa_followups")[0].tier == Tier.cheap
+    assert gw.calls("qa_followups")[0].json_mode is True
+    ev = [e for e in out["trace"] if e["type"] == "followups"][0]
+    assert ev["count"] == 3 and ev["degraded"] is False
+
+
+async def test_followups_parse_failure_degrades_to_empty():
+    """追问生成失败降级为空列表, 不阻塞主回答。"""
+    gw = FakeGateway({**kb_happy_scripts(), "qa_followups": ["这不是 JSON"]})
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    out = await run(make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1"))
+    assert out["followups"] == []
+    assert out["answer"] == "导数是变化率 [1]。"
+    ev = [e for e in out["trace"] if e["type"] == "followups"][0]
+    assert ev["degraded"] is True
+
+
+async def test_followups_dedup_and_cap_at_three():
+    gw = FakeGateway(
+        {
+            **kb_happy_scripts(),
+            "qa_followups": [
+                json.dumps({"followups": ["A", "A", " B ", "C", "D", 42]})
+            ],
+        }
+    )
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    out = await run(make_deps(gw, retrieval=retrieval), init_state("什么是导数", kb_id="kb1"))
+    assert out["followups"] == ["A", "B", "C"]  # 去重 + 去空白 + 截断 3 条 + 忽略非字符串
+
+
+async def test_refuse_path_skips_followups():
+    gw = FakeGateway(reflection_scripts())  # 无 qa_followups 脚本: 若被调用会立即断言失败
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")])])
+    out = await run(make_deps(gw, retrieval=retrieval), init_state("原问题", kb_id="kb1"))
+    assert out["refused"] is True
+    assert "followups" not in out
+    assert gw.calls("qa_followups") == []

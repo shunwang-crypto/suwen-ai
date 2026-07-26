@@ -51,12 +51,15 @@ export function DocumentTable({
   onPreview,
   onReindex,
   onDelete,
+  readOnly = false,
 }: {
   documents: DocumentOut[];
   busyDocId: string | null;
   onPreview: (doc: DocumentOut) => void;
   onReindex: (doc: DocumentOut) => void;
   onDelete: (doc: DocumentOut) => void;
+  /** 机构库 member 只读视图：隐藏重建索引/删除 */
+  readOnly?: boolean;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -103,22 +106,26 @@ export function DocumentTable({
                     >
                       分块预览
                     </button>
-                    <button
-                      type="button"
-                      disabled={busy || isDocActive(doc.status)}
-                      onClick={() => onReindex(doc)}
-                      className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      重建索引
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => onDelete(doc)}
-                      className="rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      删除
-                    </button>
+                    {!readOnly && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={busy || isDocActive(doc.status)}
+                          onClick={() => onReindex(doc)}
+                          className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          重建索引
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onDelete(doc)}
+                          className="rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          删除
+                        </button>
+                      </>
+                    )}
                   </span>
                 </td>
               </tr>

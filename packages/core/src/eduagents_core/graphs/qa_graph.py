@@ -3,8 +3,13 @@
 router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → retrieve(多查询 RRF 融合)
   → 置信度门控(confident 快路径跳过 grade) → grade(cheap 批量相关性)
   → rewrite 重检环(retry_count 硬上限 2) → web_fallback → generate → verify_support(kb 二次校验)
+  → followups(cheap 追问建议, 失败降级为空)
 全路径 trace 事件可观测 (API 层转发为 SSE trace_event); 检索/网络文本经 sanitize
 过滤指令性内容 (§8 第二层防线)。deps 由构图闭包捕获, 不进 state (state 需可序列化)。
+
+图内真流式 (包A): generate 经 langgraph get_stream_writer() 逐 token 写自定义流,
+事件形如 {"type":"token","text":...,"attempt":n} (attempt=重生成序号, verify 触发
+二次生成时前端按 attempt 清空重排, 防拼接双答案)。ainvoke 场景 writer 为 no-op。
 """
 
 from __future__ import annotations
@@ -13,9 +18,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
-from ..gateway.base import ChatMessage, ChatRequest, GatewayError, Tier
+from ..gateway.base import ChatMessage, ChatRequest, GatewayError, StreamDelta, Tier
 from ..logging import get_logger
 from ..retrieval.base import rrf_fuse
 from ..retrieval.sanitize import sanitize_retrieved_text
@@ -28,6 +34,9 @@ _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_RETRY = 2  # 查询改写重检硬上限 (§5.3)
 _EVIDENCE_SNIPPET_CHARS = 600  # grade/verify 摘要单条截断长度
 _MAX_PLAN_QUERIES = 3  # 原查询 + 至多 2 个改写
+_MAX_FOLLOWUPS = 3  # 追问 chips 数量上限
+_FOLLOWUP_ANSWER_CHARS = 1500  # 追问 prompt 中回答的截断长度 (控 cheap 档上下文)
+_TOKEN_FALLBACK_CHUNK = 24  # 仅实现 chat 的网关 (如测试 Fake) 整段取回后的分块写出粒度
 
 # 触发 web 补充倾向的时效性/搜索意图关键词 (规则路由, 命中即不调 LLM)
 _WEB_KEYWORDS = ("最新", "今年", "新闻", "搜索", "近期", "联网")
@@ -215,14 +224,16 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         }
 
     async def retrieve(state: _QaGraphState) -> dict:
-        tenant_id = state.get("tenant_id", "")
-        kb_id = state.get("kb_id", "")
+        # Wave3 联合检索: kb_ids/owner_ids 存在时多库单次查询 (Qdrant MatchAny);
+        # 旧单库路径 (仅 kb_id/tenant_id) 原样兼容
+        tenant_ref = state.get("owner_ids") or state.get("tenant_id", "")
+        kb_ref = state.get("kb_ids") or state.get("kb_id", "")
         queries = state.get("queries") or [state.get("query", "")]
         results = []
         errors = 0
         for q in queries:
             try:
-                results.append(await deps.retrieval.retrieve(tenant_id, kb_id, q))
+                results.append(await deps.retrieval.retrieve(tenant_ref, kb_ref, q))
             except Exception:  # noqa: BLE001 — 单查询失败不拖垮整轮检索
                 log.exception("qa_retrieve_failed")
                 results.append(None)
@@ -258,6 +269,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 {
                     "chunk_id": c.chunk_id,
                     "doc_id": c.doc_id,
+                    "kb_id": (c.payload or {}).get("kb_id", ""),  # 联合检索: 标注来源库
                     "text": clean_text,
                     "heading_path": c.heading_path,
                     "page_start": c.page_start,
@@ -385,7 +397,8 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
     async def generate(state: _QaGraphState) -> dict:
         query = state.get("query", "")
         path = _gen_path(state)
-        regen = state.get("regen_count", 0) > 0
+        attempt = state.get("regen_count", 0)  # 重生成序号: 首次 0, verify 重生成 1
+        regen = attempt > 0
         if path == "kb":
             system = _load_prompt("qa_generate_kb.md").replace(
                 "{{SOURCES}}", _format_sources(state.get("evidences") or [])
@@ -405,25 +418,53 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         ]
         if history and history[-1].role == "user" and history[-1].content == query:
             history = history[:-1]  # 当前查询若已入 messages, 避免重复追加
-        # 图内节点用非流式 chat; API 层 M3 先整段切流, 真流式接线由主线负责
-        result = await deps.gateway.chat(
-            ChatRequest(
-                messages=(
-                    ChatMessage(role="system", content=system),
-                    *history,
-                    ChatMessage(role="user", content=query),
-                ),
-                tier=Tier.standard,
-                feature="qa_generate",
-                tenant_id=state.get("tenant_id", ""),
-                user_id=state.get("user_id", ""),
-                request_id=state.get("request_id", ""),
-            )
+        req = ChatRequest(
+            messages=(
+                ChatMessage(role="system", content=system),
+                *history,
+                ChatMessage(role="user", content=query),
+            ),
+            tier=Tier.standard,
+            feature="qa_generate",
+            tenant_id=state.get("tenant_id", ""),
+            user_id=state.get("user_id", ""),
+            request_id=state.get("request_id", ""),
         )
+        # 图内真流式: 逐 token 写自定义流 (stub/replay 网关的 stream_chat 也按录制
+        # 文本分块产出 StreamDelta, 同样经此路径); astream 之外 writer 为 no-op。
+        writer = get_stream_writer()
+        stream = getattr(deps.gateway, "stream_chat", None)
+        result = None
+        if callable(stream):
+            parts: list[str] = []
+            async for item in stream(req):
+                if isinstance(item, StreamDelta):
+                    parts.append(item.text)
+                    writer({"type": "token", "text": item.text, "attempt": attempt})
+                else:  # 协议约定: 末尾恰好一个 ChatResult
+                    result = item
+            answer = result.text if result is not None else "".join(parts)
+        else:
+            # 仅实现 chat 的网关 (如单测 Fake 的降级形态): 整段取回后分块写出
+            result = await deps.gateway.chat(req)
+            answer = result.text
+            for i in range(0, len(answer), _TOKEN_FALLBACK_CHUNK):
+                writer(
+                    {
+                        "type": "token",
+                        "text": answer[i : i + _TOKEN_FALLBACK_CHUNK],
+                        "attempt": attempt,
+                    }
+                )
         return {
-            "answer": result.text,
+            "answer": answer,
             "trace": [
-                {"type": "generate", "path": path, "regen": regen, "degraded": result.degraded}
+                {
+                    "type": "generate",
+                    "path": path,
+                    "regen": regen,
+                    "degraded": bool(result.degraded) if result is not None else False,
+                }
             ],
         }
 
@@ -467,6 +508,32 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         update["trace"] = [trace_event]
         return update
 
+    async def followups(state: _QaGraphState) -> dict:
+        """轻量末节点: 同一次运行内用 cheap 档 json_mode 产 3 条递进追问建议。
+
+        任何失败 (网关错误/解析失败/字段缺失) 降级为空列表, 绝不阻塞主回答;
+        拒答路径 (refuse) 不经过本节点。
+        """
+        prompt = (
+            _load_prompt("qa_followups.md")
+            .replace("{{QUERY}}", state.get("query", ""))
+            .replace("{{ANSWER}}", (state.get("answer") or "")[:_FOLLOWUP_ANSWER_CHARS])
+        )
+        data = await _chat_json(
+            state, feature="qa_followups", prompt=prompt, temperature=0.5
+        )
+        degraded = data is None or not isinstance(data.get("followups"), list)
+        items: list[str] = []
+        if not degraded:
+            for it in data["followups"]:
+                if isinstance(it, str) and it.strip() and it.strip() not in items:
+                    items.append(it.strip())
+            items = items[:_MAX_FOLLOWUPS]
+        return {
+            "followups": items,
+            "trace": [{"type": "followups", "count": len(items), "degraded": degraded}],
+        }
+
     async def refuse(state: _QaGraphState) -> dict:
         return {
             "answer": NO_EVIDENCE_ANSWER,
@@ -496,10 +563,11 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         return "generate" if state.get("web_results") else "refuse"
 
     def after_generate(state: _QaGraphState) -> str:
-        return "verify" if _gen_path(state) == "kb" else "end"
+        # kb 路径先过支撑校验; 其余路径直接进追问建议末节点
+        return "verify" if _gen_path(state) == "kb" else "followups"
 
     def after_verify(state: _QaGraphState) -> str:
-        return "generate" if state.get("verify_action") == "regen" else "end"
+        return "generate" if state.get("verify_action") == "regen" else "followups"
 
     # ---- 组图 ----
 
@@ -512,6 +580,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
     graph.add_node("web_fallback", web_fallback)
     graph.add_node("generate", generate)
     graph.add_node("verify_support", verify_support)
+    graph.add_node("followups", followups)
     graph.add_node("refuse", refuse)
 
     graph.add_edge(START, "router")
@@ -539,10 +608,11 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         "web_fallback", after_web_fallback, {"generate": "generate", "refuse": "refuse"}
     )
     graph.add_conditional_edges(
-        "generate", after_generate, {"verify": "verify_support", "end": END}
+        "generate", after_generate, {"verify": "verify_support", "followups": "followups"}
     )
     graph.add_conditional_edges(
-        "verify_support", after_verify, {"generate": "generate", "end": END}
+        "verify_support", after_verify, {"generate": "generate", "followups": "followups"}
     )
+    graph.add_edge("followups", END)
     graph.add_edge("refuse", END)
     return graph

@@ -39,7 +39,7 @@ test-integration:  ## 需要 make up-infra 先起 PG/Redis
 	INTEGRATION=1 $(PY) -m pytest tests/integration -q
 
 lint:
-	$(PY) -m ruff check packages apps tests alembic eval scripts
+	$(PY) -m ruff check packages apps tests alembic eval scripts loadtest
 
 gen-corpus:
 	$(PY) scripts/gen_corpus.py

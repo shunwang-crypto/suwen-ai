@@ -37,6 +37,21 @@ M2 采用**结构定位** (标题路径子串匹配) 是因为 chunk 边界会�
 标题结构则与语料版本绑定、稳定可复现; M5 将升级为 **chunk_id 级**标注
 (黄金集直接冻结相关 chunk_id 列表), 消除同名标题/粗粒度匹配带来的误差。
 
+## v2 新增字段 (M5, 全部可选 — v1 文件无需修改即兼容)
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `category` | str | 难例类别 (公式编号引用/跨节比较/否定式提问/术语别名/表格数据查询/多跳推理/跨文档易混/长尾细节/需要计算/无答案拒答/v1基础保留), 报告按此分桶 |
+| `expect_refusal` | bool | 无答案题标记: 语料确实没有答案, 期望拒答; 不参与命中指标, 单独统计拒答正确率 |
+| `relevant_chunk_hints` | list[str] | chunk 级判定: `chunk.text` 含任一子串即相关, **优先于** heading 判定 (比 heading 级更严格, 同节错块不算命中) |
+
+拒答正确率判定 (检索层代理): 检索为空 或 top1 分数 (rerank_score 优先) <
+`retrieval_confidence_threshold`。端到端拒答由 qa 子图 grade→refuse 决定。
+
+v2 语料 = calculus.md + linear_algebra.md + probability.md (v2-2026-07-27,
+后两篇为 ~30% 术语重叠的干扰文档, 生成器 `scripts/gen_corpus_v2.py`;
+摄取入库用 `scripts/seed_eval_v2.py`)。
+
 ## 版本与冻结约定
 
 - 黄金集与语料版本绑定 (`version` 字段一致, 当前 `v1-2026-07-26`),

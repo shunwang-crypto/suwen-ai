@@ -47,9 +47,19 @@ const NAV_ITEMS: NavItem[] = [
     icon: icon("M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Zm0 0a2 2 0 0 0 2 2h13"),
   },
   {
+    href: "/orgs",
+    label: "机构",
+    icon: icon("M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"),
+  },
+  {
     href: "/quiz",
     label: "练习",
     icon: icon("M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9 2 2 4-4"),
+  },
+  {
+    href: "/tutor",
+    label: "辅导",
+    icon: icon("M12 4 2 9l10 5 10-5-10-5Zm-6 7.8V16c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.2M22 9v5"),
   },
   {
     href: "/plans",
@@ -60,6 +70,11 @@ const NAV_ITEMS: NavItem[] = [
     href: "/reviews",
     label: "复习",
     icon: icon("M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"),
+  },
+  {
+    href: "/reports",
+    label: "学情报告",
+    icon: icon("M3 3v18h18M8 17V9m4 8V5m4 12v-6"),
   },
   {
     href: "/profile",
@@ -77,9 +92,12 @@ const NAV_ITEMS: NavItem[] = [
 const TITLE_MAP: Record<string, string> = {
   "/chat": "对话",
   "/kb": "知识库",
+  "/orgs": "机构",
   "/quiz": "练习",
+  "/tutor": "辅导",
   "/plans": "学习计划",
   "/reviews": "复习",
+  "/reports": "学情报告",
   "/profile": "我的画像",
   "/admin": "运营",
 };

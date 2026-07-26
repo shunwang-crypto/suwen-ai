@@ -33,12 +33,43 @@ export interface KbOut {
   subject: string;
   kb_version: number;
   created_at: string;
+  /** Wave3 机构库：owner_type='org' 时带 org 标识；writable=当前用户可写 */
+  owner_type: "user" | "org";
+  org_id: string | null;
+  org_name: string | null;
+  writable: boolean;
 }
 
-// ---- SSE 事件数据（七类）----
+// ---- 机构（Wave3，对齐 routers/orgs.py）----
+
+export interface OrgOut {
+  id: string;
+  name: string;
+  /** 仅 admin 可见，member 视图为 null */
+  invite_code: string | null;
+  role: "admin" | "member";
+  member_count: number;
+  storage_quota_mb: number;
+  created_at: string;
+}
+
+export interface OrgMemberOut {
+  user_id: string;
+  email: string;
+  role: "admin" | "member";
+  joined_at: string;
+}
+
+// ---- SSE 事件数据（七类 + followups）----
 
 export interface TokenEventData {
   text: string;
+  /** 重生成序号：verify 触发二次生成时递增，前端按变化清空重排（防拼接双答案） */
+  attempt?: number;
+}
+
+export interface FollowupsEventData {
+  items: string[];
 }
 
 export interface NodeUpdateData {
@@ -64,6 +95,9 @@ export interface CitationData {
   doc_name?: string;
   heading_path?: string;
   sanitized?: boolean;
+  /** 联合检索：引用来源库（多库问答时标注归属） */
+  kb_id?: string;
+  kb_name?: string;
   [key: string]: unknown;
 }
 
@@ -115,6 +149,25 @@ export interface ChunkOut {
   embedding_status: string;
 }
 
+/** 引用回原文定位（GET /api/kb/{kb_id}/chunks/{chunk_id}/context）。 */
+export interface ChunkContextItem {
+  id: string;
+  text: string;
+  heading_path: string;
+  page_start: number | null;
+  page_end: number | null;
+}
+
+export interface ChunkContextOut {
+  chunk: ChunkContextItem;
+  doc_id: string;
+  doc_name: string;
+  prev: ChunkContextItem[];
+  next: ChunkContextItem[];
+  parent_text: string | null;
+  parent_heading_path: string | null;
+}
+
 export interface RetrieveDebugChunk {
   chunk_id: string;
   score: number;
@@ -125,6 +178,26 @@ export interface RetrieveDebugChunk {
   text: string;
 }
 
+/** 四阶段命中测试的单阶段条目（score 语义随阶段而变：cos/bm25/rrf/rerank）。 */
+export interface RetrieveStageEntry {
+  chunk_id: string;
+  score: number | null;
+}
+
+export interface RetrieveChunkMeta {
+  text: string;
+  heading_path: string;
+  page_start: number | null;
+}
+
+export interface RetrieveDebugStages {
+  dense: RetrieveStageEntry[];
+  sparse: RetrieveStageEntry[];
+  fused: RetrieveStageEntry[];
+  reranked: RetrieveStageEntry[];
+  chunk_meta: Record<string, RetrieveChunkMeta>;
+}
+
 export interface RetrieveDebugResult {
   query: string;
   dense_hits: number;
@@ -133,6 +206,7 @@ export interface RetrieveDebugResult {
   used_rerank: boolean;
   confident: boolean;
   chunks: RetrieveDebugChunk[];
+  stages?: RetrieveDebugStages;
 }
 
 // ---- 练习（F5，对齐 routers/quiz.py 与 quiz_graph.py）----
@@ -175,6 +249,8 @@ export interface MasteryChange {
   kc_id: string;
   old_p: number;
   new_p: number;
+  /** tutor 联动等场景由后端附带 KC 名（quiz 作答路径无此字段） */
+  name?: string;
 }
 
 export interface AttemptResultItem {
@@ -260,6 +336,69 @@ export interface PlanListItem {
   budget_hours: number;
   structure: PlanStructure | null;
   created_at: string;
+}
+
+// ---- 辅导（F4，对齐 routers/plans.py tutor_turn）----
+
+export interface TutorTurnResult {
+  thread_local_id: string;
+  reply: string;
+  hint_level: number;
+  stuck_type: string;
+  /** summarize 节点产出的 JSON 字符串（未结束时为空串） */
+  session_summary: string;
+  mastery_changes: MasteryChange[];
+}
+
+/** session_summary 的解析结构（tutor_summarize.md 契约） */
+export interface TutorSessionSummary {
+  misconceptions: string[];
+  review_suggestions: string[];
+}
+
+// ---- 学情报告（F7，对齐 routers/reports.py）----
+
+export interface ReportRadarItem {
+  kc_id: string;
+  name: string;
+  p_mastery: number;
+  activity: number;
+}
+
+export interface ReportTrendPoint {
+  date: string;
+  attempts: number;
+  correct: number;
+  accuracy: number | null;
+}
+
+export interface ReportRootCause {
+  kc_id: string;
+  name: string;
+  p_mastery: number;
+}
+
+export interface ReportWeakPoint {
+  kc_id: string;
+  name: string;
+  p_mastery: number;
+  error_count: number;
+  possible_root_cause: ReportRootCause[];
+}
+
+export interface ReportAction {
+  type: string;
+  label: string;
+  href: string;
+}
+
+export interface LearningReportResponse {
+  radar: ReportRadarItem[];
+  trend: ReportTrendPoint[];
+  weak_points: ReportWeakPoint[];
+  actions: ReportAction[];
+  narrative: string | null;
+  narrative_note: string | null;
 }
 
 // ---- 复习（F6，对齐 routers/reviews.py）----

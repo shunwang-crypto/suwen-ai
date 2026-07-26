@@ -58,6 +58,7 @@ def install_error_handlers(app: FastAPI) -> None:
             "TOKEN_REVOKED": "登录已注销，请重新登录",
             "FORBIDDEN": "没有权限执行此操作",
             "RATE_LIMITED": "请求过于频繁，请稍后再试",
+            "BUDGET_EXCEEDED": "今日 AI 用量已达上限，明天再来或联系管理员",
             "EMAIL_EXISTS": "该邮箱已注册",
             "BAD_CREDENTIALS": "邮箱或密码错误",
             "REFRESH_INVALID": "会话已失效，请重新登录",

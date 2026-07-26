@@ -28,14 +28,28 @@ class RetrievalService:
         self._store = store
         self._reranker = reranker
 
-    async def retrieve(self, tenant_id: str, kb_id: str, query: str) -> RetrievalResult:
+    async def retrieve(
+        self,
+        tenant_id: str | list[str],
+        kb_ids: str | list[str],
+        query: str,
+        *,
+        debug: bool = False,
+    ) -> RetrievalResult:
+        """debug=True 时额外回填 stages 四阶段中间列表 (命中测试页); 默认关, 不影响常规路径。
+
+        Wave3 联合检索: kb_ids/tenant_id 接受单值或列表 — 列表走 Qdrant MatchAny
+        单次查询 (所有库同 collection 同嵌入, 分数同尺度, 全局 top-K 严格优于逐库
+        RRF, 见 brief-2 §3)。tenant_id 列表 = 可见 owner 集 (个人 + 成员机构),
+        属纵深防御; 授权来源是 PG 侧可见性校验, 不是这里。
+        """
         s = self._settings
         candidate_k = s.retrieval_candidate_k
         final_k = s.retrieval_final_k
 
         # a) dense 通道
         dense_vec = (await self._embedder.embed([query]))[0]
-        dense_hits = await self._store.search_dense(tenant_id, kb_id, dense_vec, candidate_k)
+        dense_hits = await self._store.search_dense(tenant_id, kb_ids, dense_vec, candidate_k)
 
         # b) sparse 通道 (开关生效; 关闭时完全不触发 sparse 编码与检索)
         used_sparse = s.retrieval_enable_sparse
@@ -43,7 +57,7 @@ class RetrievalService:
         if used_sparse:
             sparse_query = self._sparse.encode_query(query)
             sparse_hits = await self._store.search_sparse(
-                tenant_id, kb_id, sparse_query, candidate_k
+                tenant_id, kb_ids, sparse_query, candidate_k
             )
 
         hit_by_id: dict[str, SearchHit] = {}
@@ -67,6 +81,24 @@ class RetrievalService:
         else:
             ordered = [(h.id, h.score) for h in dense_hits]
         ordered = ordered[:candidate_k]
+
+        # debug 模式: 记录 dense/sparse/fused 三阶段快照 (rerank 阶段在重排后补)
+        stages: dict | None = None
+        if debug:
+            stages = {
+                "dense": [{"chunk_id": h.id, "score": h.score} for h in dense_hits],
+                "sparse": [{"chunk_id": h.id, "score": h.score} for h in sparse_hits],
+                "fused": [{"chunk_id": cid, "score": score} for cid, score in ordered],
+                "reranked": [],
+                "chunk_meta": {
+                    cid: {
+                        "text": (h.payload or {}).get("text", ""),
+                        "heading_path": (h.payload or {}).get("heading_path", ""),
+                        "page_start": (h.payload or {}).get("page_start"),
+                    }
+                    for cid, h in hit_by_id.items()
+                },
+            }
 
         chunks: list[RetrievedChunk] = []
         for chunk_id, score in ordered:
@@ -101,6 +133,10 @@ class RetrievalService:
                 chunk.rerank_score = rerank_score
             chunks.sort(key=lambda c: c.rerank_score or 0.0, reverse=True)
             top = chunks[:final_k]
+            if stages is not None:
+                stages["reranked"] = [
+                    {"chunk_id": c.chunk_id, "score": c.rerank_score} for c in top
+                ]
             # e) confident 门控: top final_k 的 rerank_score 均 >= 阈值 (§5.3 快路径)
             confident = bool(top) and all(
                 c.rerank_score is not None
@@ -118,4 +154,5 @@ class RetrievalService:
             used_sparse=used_sparse,
             used_rerank=used_rerank,
             confident=confident,
+            stages=stages,
         )

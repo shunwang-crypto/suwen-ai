@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from eduagents_core.config import get_settings
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Date, cast, func, select, text
 
@@ -139,6 +140,36 @@ async def usage_overview(
             ).all()
         ]
 
+        # 缓存节省口径 (Wave1-包B, 唯一实现): 语义缓存命中时主线写入
+        # usage_log(mode='cache', cost_cny=0, cached_tokens=原答案 completion_tokens,
+        # tier=原答案 tier)。节省额 = Σ cached_tokens × 对应 tier 输出单价 / 1e6 (CNY)。
+        # 未计入原请求的 prompt_tokens 与嵌入费用 (命中行未存), 故为保守下界估算。
+        settings = get_settings()
+        savings_calls = savings_tokens = 0
+        saved_cny = 0.0
+        for tier_name, calls, cached_tokens in (
+            await session.execute(
+                select(
+                    UsageLog.tier,
+                    func.count(),
+                    func.coalesce(func.sum(UsageLog.cached_tokens), 0),
+                )
+                .where(in_window, UsageLog.mode == "cache")
+                .group_by(UsageLog.tier)
+            )
+        ).all():
+            savings_calls += int(calls)
+            savings_tokens += int(cached_tokens)
+            if tier_name in ("cheap", "standard", "strong"):
+                saved_cny += (
+                    int(cached_tokens) / 1e6 * settings.tier(tier_name).output_price_per_m
+                )
+        cache_savings = {
+            "calls": savings_calls,
+            "cached_tokens": savings_tokens,
+            "saved_cny": round(saved_cny, 6),
+        }
+
     return {
         "days": days,
         "totals": totals,
@@ -147,6 +178,7 @@ async def usage_overview(
         "by_mode": by_mode,
         "daily": daily,
         "top_users": top_users,
+        "cache_savings": cache_savings,
     }
 
 

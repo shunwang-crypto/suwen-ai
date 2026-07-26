@@ -2,7 +2,8 @@
 
 // 运营面板（F10，仅管理员）：成本/token 大数卡片、按 feature/model/mode 条形（纯 div）、
 // 日趋势折线（纯 SVG polyline）、top 用户表、latency p50/p95 表，
-// 以及 time-travel 虚拟时钟控制卡（演示遗忘曲线的操作台）。
+// time-travel 虚拟时钟控制卡（演示遗忘曲线的操作台），
+// 以及「检索命中测试」分区（四阶段召回/融合/重排全过程，评委演示 rerank 价值）。
 
 import { useEffect, useState } from "react";
 
@@ -14,11 +15,13 @@ import {
   Spinner,
   fmtDateTime,
 } from "@/components/common";
+import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {
   AdminLatencyResponse,
   AdminUsageResponse,
+  KbOut,
   TimeTravelInfo,
 } from "@/lib/types";
 
@@ -163,6 +166,92 @@ function DailyTrend({ daily }: { daily: AdminUsageResponse["daily"] }) {
   );
 }
 
+/** 检索命中测试（管理端）：选可见库或手输任意 kb_id + query → 四阶段命中对比。 */
+function RetrievalTestSection() {
+  const [kbs, setKbs] = useState<KbOut[] | null>(null);
+  const [kbError, setKbError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState("");
+  const [manualId, setManualId] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const list = await apiJson<KbOut[]>("/api/kb");
+        if (!alive) return;
+        setKbs(list);
+        setSelectedId((prev) => prev || (list[0]?.id ?? ""));
+        setKbError(null);
+      } catch (err) {
+        if (!alive) return;
+        setKbs([]);
+        setKbError(err instanceof ApiError ? err.message : "知识库列表加载失败");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 手输 kb_id 优先（admin 可测任意库），否则用下拉选中的可见库
+  const kbId = manualId.trim() || selectedId;
+
+  return (
+    <Card
+      title="检索命中测试"
+      extra={
+        <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+          dense / sparse / RRF / rerank 四阶段全透明
+        </span>
+      }
+    >
+      <div className="space-y-3">
+        {kbError && <ErrorBanner message={kbError} onClose={() => setKbError(null)} />}
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs text-slate-500">选择可见知识库</span>
+            <select
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            >
+              {(kbs ?? []).length === 0 && <option value="">（暂无可见知识库）</option>}
+              {(kbs ?? []).map((kb) => (
+                <option key={kb.id} value={kb.id}>
+                  {kb.name}（{kb.subject} · v{kb.kb_version}）
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs text-slate-500">
+              或直接输入 kb_id（优先生效）
+            </span>
+            <input
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              placeholder="粘贴任意知识库 UUID"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:font-sans placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            />
+          </label>
+        </div>
+
+        {kbs === null ? (
+          <LoadingState text="知识库列表加载中…" />
+        ) : !kbId ? (
+          <EmptyState
+            title="选择或输入一个知识库"
+            description="然后输入 query，观察四阶段召回与 rerank 如何改变排序"
+          />
+        ) : (
+          <RetrieveDebug key={kbId} kbId={kbId} />
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function NoAccess() {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -194,6 +283,7 @@ export default function AdminPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
+  const [tab, setTab] = useState<"ops" | "retrieval">("ops");
   const [days, setDays] = useState(7);
   const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
   const [latency, setLatency] = useState<AdminLatencyResponse | null>(null);
@@ -262,6 +352,33 @@ export default function AdminPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      {/* 分区切换：运营与成本 / 检索命中测试 */}
+      <div className="flex w-fit items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+        {(
+          [
+            ["ops", "运营与成本"],
+            ["retrieval", "检索命中测试"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={`rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors ${
+              tab === key
+                ? "bg-indigo-600 text-white"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "retrieval" && <RetrievalTestSection />}
+
+      {tab === "ops" && (
+        <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold text-slate-900">运营与成本</h2>
         <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
@@ -472,6 +589,8 @@ export default function AdminPage() {
               )}
             </Card>
           </div>
+        </>
+      )}
         </>
       )}
     </div>

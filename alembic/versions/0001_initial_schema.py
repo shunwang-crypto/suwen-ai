@@ -20,10 +20,42 @@ down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# create_all 会跟着 ORM 漂移: 后续迁移新增的表若也被 0001 建出来, 从零重放时
+# 0002 的 create_table 会撞 "already exists"。故把 0001 的建表范围冻结为
+# M0 契约当时的 21 张表 (历史事实, 只读不改), 之后一律增量迁移 (D3)。
+_TABLES_AT_0001: tuple[str, ...] = (
+    "organizations",
+    "users",
+    "refresh_tokens",
+    "knowledge_bases",
+    "documents",
+    "chunks",
+    "knowledge_components",
+    "kc_edges",
+    "mastery_records",
+    "mastery_log",
+    "quizzes",
+    "questions",
+    "attempts",
+    "error_items",
+    "plans",
+    "plan_adjustments",
+    "chat_sessions",
+    "chat_messages",
+    "usage_log",
+    "eval_runs",
+)
+
 
 def upgrade() -> None:
     bind = op.get_bind()
-    Base.metadata.create_all(bind=bind)
+    Base.metadata.create_all(
+        bind=bind, tables=[Base.metadata.tables[n] for n in _TABLES_AT_0001]
+    )
+    # 0001 之后新增的列在此显式回退为"当时不存在", 保证从零重放时 0002 的
+    # add_column 不会撞 "already exists" (create_all 用的是当前 ORM 定义)。
+    op.execute("ALTER TABLE knowledge_bases DROP COLUMN IF EXISTS owner_type")
+    op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS uploaded_by")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
     # 开发默认密码 'edu', 生产部署后必须 ALTER ROLE edu_app PASSWORD ...

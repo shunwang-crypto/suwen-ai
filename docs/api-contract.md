@@ -57,6 +57,20 @@
 
 `/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
 
+Wave3 机构库（D14）：
+- `GET /api/kb` 每项新增 `owner_type/org_id/org_name/writable`；机构库写端点
+  （上传/删文档/重建索引/删库/检索调试）member 一律 `403 ORG_READONLY`。
+- `/api/chat` 请求体新增 `kb_ids: UUID[]`（联合检索，`kb_id` 保留等价 `kb_ids=[kb_id]`）；
+  任一 kb 不可见 → `403 KB_FORBIDDEN`；citation 事件新增 `kb_id/kb_name` 来源库标注。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /api/orgs | {name} 建机构，创建者自动 admin，返回 8 位 invite_code |
+| POST | /api/orgs/join | {invite_code} 凭码加入为 member；无效码 404，重复加入 409 |
+| GET | /api/orgs | 我的机构列表（含 role/member_count；invite_code 仅 admin 可见） |
+| GET | /api/orgs/{id}/members | 成员列表（仅成员可见，非成员 404） |
+| POST | /api/orgs/{id}/kb | 建机构库（仅 org admin；owner_type='org', tenant_id=org_id） |
+
 ### 多智能体工作流（M3，用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
 | 方法 | 路径 | 说明 |
 |---|---|---|

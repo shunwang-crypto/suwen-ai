@@ -296,45 +296,71 @@ export default function KbPage() {
               还没有知识库，点击「新建」开始
             </p>
           ) : (
-            <ul className="space-y-1">
-              {kbs.map((kb) => (
-                <li key={kb.id} className="group flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(kb.id)}
-                    className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                      kb.id === selectedId
-                        ? "bg-indigo-50 font-medium text-indigo-700"
-                        : "text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    <span className="block truncate">{kb.name}</span>
-                    <span className="block truncate text-xs font-normal text-slate-400">
-                      {kb.subject} · v{kb.kb_version}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void deleteKb(kb)}
-                    className="shrink-0 rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                    aria-label={`删除知识库 ${kb.name}`}
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-4 w-4"
-                      aria-hidden
-                    >
-                      <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-3">
+              {(["user", "org"] as const).map((ownerType) => {
+                const group = kbs.filter((k) => k.owner_type === ownerType);
+                if (group.length === 0) return null;
+                return (
+                  <div key={ownerType}>
+                    <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      {ownerType === "user" ? "个人库" : "机构库"}
+                    </p>
+                    <ul className="space-y-1">
+                      {group.map((kb) => (
+                        <li key={kb.id} className="group flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(kb.id)}
+                            className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                              kb.id === selectedId
+                                ? "bg-indigo-50 font-medium text-indigo-700"
+                                : "text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <span className="min-w-0 truncate">{kb.name}</span>
+                              {kb.owner_type === "org" && (
+                                <span
+                                  className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                                  title={`机构：${kb.org_name ?? ""}${kb.writable ? "（可管理）" : "（只读）"}`}
+                                >
+                                  {kb.org_name ?? "机构"}
+                                </span>
+                              )}
+                            </span>
+                            <span className="block truncate text-xs font-normal text-slate-400">
+                              {kb.subject} · v{kb.kb_version}
+                              {kb.owner_type === "org" && !kb.writable && " · 只读"}
+                            </span>
+                          </button>
+                          {kb.writable && (
+                            <button
+                              type="button"
+                              onClick={() => void deleteKb(kb)}
+                              className="shrink-0 rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                              aria-label={`删除知识库 ${kb.name}`}
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className="h-4 w-4"
+                                aria-hidden
+                              >
+                                <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              </svg>
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Card>
       </aside>
@@ -350,9 +376,25 @@ export default function KbPage() {
           />
         ) : (
           <>
-            <Card title={`文档 · ${selected.name}`}>
+            <Card
+              title={`文档 · ${selected.name}`}
+              extra={
+                selected.owner_type === "org" ? (
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                    {selected.org_name ?? "机构"} ·{" "}
+                    {selected.writable ? "管理员" : "成员只读"}
+                  </span>
+                ) : undefined
+              }
+            >
               <div className="space-y-4">
-                <UploadZone uploading={uploading} onFiles={(f) => void uploadFiles(f)} />
+                {selected.writable ? (
+                  <UploadZone uploading={uploading} onFiles={(f) => void uploadFiles(f)} />
+                ) : (
+                  <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+                    机构库由管理员统一维护；你可以在对话页勾选该库进行联合检索问答。
+                  </p>
+                )}
                 {docsError && (
                   <ErrorBanner
                     message={docsError}
@@ -363,7 +405,9 @@ export default function KbPage() {
                   <LoadingState text="文档列表加载中…" />
                 ) : docs.length === 0 ? (
                   <p className="py-2 text-center text-xs text-slate-400">
-                    暂无文档，拖拽上传后自动进入 解析 → 切块 → 向量化 → 知识增强 流水线
+                    {selected.writable
+                      ? "暂无文档，拖拽上传后自动进入 解析 → 切块 → 向量化 → 知识增强 流水线"
+                      : "该机构库暂无文档"}
                   </p>
                 ) : (
                   <DocumentTable
@@ -372,21 +416,25 @@ export default function KbPage() {
                     onPreview={setPreviewDoc}
                     onReindex={(d) => void reindexDoc(d)}
                     onDelete={(d) => void deleteDoc(d)}
+                    readOnly={!selected.writable}
                   />
                 )}
               </div>
             </Card>
 
-            <Card
-              title="检索调试面板"
-              extra={
-                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
-                  过程全透明
-                </span>
-              }
-            >
-              <RetrieveDebug kbId={selected.id} />
-            </Card>
+            {/* 检索调试与写操作同权限：机构库仅 admin 可见（后端同样 403 兜底） */}
+            {selected.writable && (
+              <Card
+                title="检索调试面板"
+                extra={
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+                    过程全透明
+                  </span>
+                }
+              >
+                <RetrieveDebug kbId={selected.id} />
+              </Card>
+            )}
           </>
         )}
       </div>

@@ -262,6 +262,54 @@ async def test_confident_false_when_no_chunks():
     assert reranker.calls == 0
 
 
+async def test_debug_off_by_default_no_stages():
+    store = FakeStore(dense=[hit("A", 0.9)], sparse=[])
+    settings = make_settings(retrieval_enable_sparse=False, retrieval_enable_rerank=False)
+    service, _, _ = make_service(settings, store)
+
+    result = await service.retrieve("t1", "kb1", "问题")
+    assert result.stages is None  # 常规路径零额外开销
+
+
+async def test_debug_stages_capture_four_phases():
+    """debug=True: dense/sparse 原始召回序、RRF 融合序、rerank 终排序全部可核对。"""
+    store = FakeStore(
+        dense=[hit("A", 0.9), hit("B", 0.8), hit("C", 0.7)],
+        sparse=[hit("C", 5.0), hit("D", 4.0)],
+    )
+    reranker = FakeReranker({"text-A": 0.95, "text-C": 0.5, "text-B": 0.2, "text-D": 0.1})
+    settings = make_settings(retrieval_final_k=3)
+    service, _, _ = make_service(settings, store, reranker)
+
+    result = await service.retrieve("t1", "kb1", "问题", debug=True)
+
+    st = result.stages
+    assert st is not None
+    assert [e["chunk_id"] for e in st["dense"]] == ["A", "B", "C"]
+    assert [e["chunk_id"] for e in st["sparse"]] == ["C", "D"]
+    # RRF: C 双路命中排第一; B/D 同分时 dense 插入序稳定在前
+    assert [e["chunk_id"] for e in st["fused"]] == ["C", "A", "B", "D"]
+    # rerank 把 A 从融合第 2 提到终排第 1 (排名变化箭头的数据来源)
+    assert [e["chunk_id"] for e in st["reranked"]] == ["A", "C", "B"]
+    assert [e["score"] for e in st["reranked"]] == [0.95, 0.5, 0.2]
+    assert [c.chunk_id for c in result.chunks] == ["A", "C", "B"]  # 终排与 chunks 一致
+    assert st["chunk_meta"]["A"]["text"] == "text-A"
+    assert st["chunk_meta"]["D"]["heading_path"] == "讲义 > 第一章 > D"
+
+
+async def test_debug_stages_rerank_off_reranked_empty():
+    store = FakeStore(dense=[hit("A", 0.9), hit("B", 0.8)], sparse=[])
+    settings = make_settings(retrieval_enable_sparse=False, retrieval_enable_rerank=False)
+    service, _, _ = make_service(settings, store)
+
+    result = await service.retrieve("t1", "kb1", "问题", debug=True)
+    st = result.stages
+    assert st is not None
+    assert st["sparse"] == []
+    assert st["reranked"] == []
+    assert [e["chunk_id"] for e in st["fused"]] == ["A", "B"]
+
+
 async def test_payload_mapped_to_chunk_fields():
     store = FakeStore(dense=[hit("A", 0.9)], sparse=[])
     settings = make_settings(retrieval_enable_sparse=False, retrieval_enable_rerank=False)

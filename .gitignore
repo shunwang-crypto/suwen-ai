@@ -17,3 +17,7 @@ node_modules/
 # data / artifacts
 *.lock.tmp
 docs/evidence/**/*.log
+
+# 压测账号池 (含明文密码与预签 access token, 不入库; 通配覆盖 live 档的 accounts_live.json)
+loadtest/accounts.json
+loadtest/accounts*.json

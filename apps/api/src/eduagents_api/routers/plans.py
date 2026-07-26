@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import Plan
+from ..services import apply_tutor_summary
 from .threads import stream_graph_run
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])
@@ -92,10 +94,23 @@ async def tutor_turn(
     graph = runtime.graph("tutor")
     config = {"configurable": {"thread_id": thread_id}}
     state = await graph.ainvoke(payload, config)
+    # F4→F8 联动: 仅当本轮走了 summarize (trace 末项) 才把小结写入画像 —
+    # trace/session_summary 会随 checkpointer 跨轮保留, 不能只看非空, 否则同 thread 续聊会重复计分。
+    mastery_changes: list[dict] = []
+    summary_raw = state.get("session_summary", "")
+    trace = state.get("trace") or []
+    if summary_raw and trace and trace[-1].get("node") == "summarize":
+        try:
+            summary = json.loads(summary_raw)
+        except ValueError:
+            summary = None
+        if isinstance(summary, dict):
+            mastery_changes = await apply_tutor_summary(ctx, summary)
     return {
         "thread_local_id": local_id,
         "reply": state.get("reply", ""),
         "hint_level": state.get("hint_level", 0),
         "stuck_type": state.get("stuck_type", ""),
-        "session_summary": state.get("session_summary", ""),
+        "session_summary": summary_raw,
+        "mastery_changes": mastery_changes,
     }

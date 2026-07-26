@@ -3,7 +3,13 @@
 // 练习（F5）：发起表单 → SSE 流（过程时间线 + interrupt 蓝图确认）→ resume →
 // 题目作答（四种控件，MathText 渲染）→ 逐题结果 + 掌握度变化；历史卷可重开。
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import {
   Card,
@@ -40,6 +46,9 @@ import type {
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 
+// useSyncExternalStore 订阅占位：URL search 在页面生命周期内不变化（跳转即重挂载）
+const emptySubscribe = () => () => {};
+
 interface ActiveQuiz {
   id: string;
   title: string;
@@ -47,6 +56,17 @@ interface ActiveQuiz {
 }
 
 export default function QuizPage() {
+  // URL 预填（/quiz?topic=..&kb=..，来自对话页「考考我」chip）。
+  // SSR 快照为空串、客户端快照读真实 search：无水合不匹配，也无需 Suspense。
+  const search = useSyncExternalStore(
+    emptySubscribe,
+    () => window.location.search,
+    () => "",
+  );
+  const urlParams = new URLSearchParams(search);
+  const prefillTopic = urlParams.get("topic") ?? "";
+  const prefillKb = urlParams.get("kb") ?? "";
+
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [quizzes, setQuizzes] = useState<QuizListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -400,7 +420,14 @@ export default function QuizPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1 space-y-4">
             <Card title="发起练习">
-              <QuizForm kbs={kbs} busy={busy} onSubmit={startQuiz} />
+              <QuizForm
+                key={`${prefillTopic}|${prefillKb}`}
+                kbs={kbs}
+                busy={busy}
+                onSubmit={startQuiz}
+                initialTopic={prefillTopic}
+                initialKbId={prefillKb}
+              />
             </Card>
 
             {(timeline.length > 0 || busy) && (

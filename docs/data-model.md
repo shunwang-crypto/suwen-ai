@@ -3,9 +3,13 @@
 权威定义在 `apps/api/src/eduagents_api/models.py`（SQLAlchemy 2.0 ORM），
 本文档描述语义与约束。首个迁移 `alembic/versions/0001_initial_schema.py`。
 
-## 租户语义（全项目唯一定义）
-`tenant_id = user_id`（个人即租户）。`organizations` 表与 `users.org_id` 预留，
-本期无界面。所有租户表带 `tenant_id UUID NOT NULL` + 索引。
+## 租户语义（全项目唯一定义 · Wave3 起泛化, D14）
+`tenant_id = owner_id`。个人数据 owner_id = user_id（个人即租户）；机构库
+（`knowledge_bases.owner_type='org'`）owner_id = `orgs.id`，其下游 documents/chunks
+与 Qdrant payload 沿用同一 owner_id。物理列名保留 `tenant_id` 不改（存量零回填、
+向量零迁移，见 decisions.md D14）。`organizations` 表与 `users.org_id` 为 M0 遗留
+占位（无读写路径）；Wave3 实际机构模型是 `orgs` + `org_members`。
+所有租户表带 `tenant_id UUID NOT NULL` + 索引。
 
 ## RLS（行级安全）
 - 租户表清单：`models.TENANT_TABLES`（16 张）。
@@ -14,6 +18,14 @@
   GUC 未设置时 current_setting 返回 NULL → 默认拒绝一切行。
 - 注入方式：应用层每个事务内 `SELECT set_config('app.tenant_id', :tid, true)`
   （见 `db.tenant_session`）；**必须事务级**，防 asyncpg 连接池复用泄漏（U-A1）。
+- Wave3 三 GUC（0002，D14）：`app.tenant_id` + `app.org_ids`（成员机构逗号表）+
+  `app.is_admin`。`knowledge_bases/documents/chunks` 策略拆分为
+  `tenant_read`（owner 匹配 **OR** owner ∈ org_ids，成员只读挂载）与
+  `tenant_write`（仅 owner 匹配）；org 库写事务由 service 校验 org admin 后以
+  `tenant_session(org_id)` 开启（worker 摄取同构）。
+- `orgs`/`org_members` 自身 RLS：成员可读本机构行与同组名单；INSERT 仅限
+  `created_by/user_id = app.tenant_id`；凭邀请码 join 的跨行查询走事务级
+  `app.is_admin`（D7 惯例）；无 UPDATE/DELETE 策略（默认拒绝）。
 - 例外：`usage_log` 的读策略放行 `app.is_admin='true'`（运营面板，D7）。
 - 非 RLS 表：users、refresh_tokens、organizations、eval_runs（认证层/全局层）。
 
@@ -24,13 +36,19 @@
 |---|---|---|
 | users | email(uniq), password_hash(bcrypt≥12), role(student/teacher/admin), org_id(预留) | |
 | refresh_tokens | token_hash(uniq,sha256), expires_at, revoked, rotated_from | 轮换单次有效；重放→撤销全家 |
-| organizations | name | 预留 |
+| organizations | name | M0 遗留占位（勿用） |
+
+### 机构（Wave3 企业后台共享知识库，0002）
+| 表 | 关键字段 | 说明 |
+|---|---|---|
+| orgs | name, invite_code(uniq, 8位免混淆码), created_by, storage_quota_mb(默认512) | id 即机构库 owner_id |
+| org_members | (org_id, user_id) PK, role(admin/member), joined_at | 入会即挂载机构库（无 mount 表）；成员只读，仅 admin 可写 |
 
 ### 知识库（F2，M2 启用）
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| knowledge_bases | name, subject, kb_version, config_json | kb_version 进语义缓存键 |
-| documents | kb_id, filename, content_hash, size_bytes, status, parse_backend, error_msg, version | 状态机: pending→parsing→chunking→embedding→ready→enriching→enriched / failed |
+| knowledge_bases | owner_type(user/org), name, subject, kb_version, config_json | kb_version 进语义缓存键; owner_type='org' 时 tenant_id=orgs.id |
+| documents | kb_id, filename, content_hash, size_bytes, status, parse_backend, error_msg, version, uploaded_by | 状态机: pending→parsing→chunking→embedding→ready→enriching→enriched / failed; uploaded_by=最小审计 |
 | chunks | doc_id, parent_id(父子分块), text, context_prefix, page_start/end, heading_path, kc_ids[], content_hash, embedding_status | 子块命中、父块喂 LLM |
 
 ### 知识点体系（§5.8，M2）

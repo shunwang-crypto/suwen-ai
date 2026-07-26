@@ -10,7 +10,7 @@
 L1 前端      Next.js + shadcn/ui + KaTeX                    (M4)
 L2 接入      Caddy 2                                        (compose 已配)
 L3 应用      **FastAPI 全 async + JWT 轮换认证 + 租户中间件 + Redis 令牌桶限流 + SSE**
-L4 编排      LangGraph 五子图                               (M3)
+L4 编排      LangGraph 四子图 (qa/quiz/plan/tutor; 路由在 API 层, 学情诊断在服务层)
 L5 模型网关  **自研 ModelGateway: 三档路由/重试/熔断/降级链/用量计量/录制回放/stub**
 L6 异步      **ARQ Worker 骨架** → 摄取流水线               (M2)
 L7 数据      **PostgreSQL(RLS 多租户) + Redis**; Qdrant/MinIO (M2)

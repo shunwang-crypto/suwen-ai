@@ -1,102 +1,67 @@
-# 四项技术决策
+# 知识库+学习类 AI 交互设计调研简报 (2025-2026)
 
-## 1. LangGraph 图内 token 级流式
+## 一、Google NotebookLM
 
-**决策**:generate 节点内用 `get_stream_writer()`(langgraph.config,2026 当前版即 1.x 仍是此 API)把自研网关的 async token 流逐个 `writer()` 出去,API 层用 `graph.astream(stream_mode=["custom","updates"])` 消费——不要用 `astream_events`,也不要用 messages 模式(那只认 langchain LLM 的 callback)。
+1. **引用三段式交互 (行业标杆)**: 引用以**灰色圆角数字角标**内嵌在回答句中; **悬停**弹出浮层显示被引原文片段(不离开聊天区即可核对); **点击**则左侧来源查看器自动打开对应文档、**滚动到被引段落并高亮**。角标在"保存的笔记"里同样可点。
+2. **来源面板 = 范围控制器**: 每个来源前有**复选框**, 勾选/取消即时限定本轮问答检索范围; 点开单个来源自动生成 **Source guide**(摘要 + "关键主题"按钮组, 点主题按钮即发起对应提问)。上限 50 来源/笔记本、单来源 50 万词, 支持 PDF/TXT/Markdown/Google Docs/Slides/URL/YouTube。
+3. **Studio 一键生成物矩阵**: Audio Overview(双主播播客, 可"Join"插话提问)、Video Overview(讲解视频)、Mind Map(节点可点击继续提问)、Reports(学习指南/简报 Briefing/FAQ/时间线)、Flashcards、Quiz——全部是"点一个按钮、后台异步生成、生成后驻留在 Studio 栏"的模式, 2025 年扩展到 80+ 语言。
+4. **建议问题 chips**: 输入框上方常驻针对当前来源自动生成的建议问题, 点击即发送; 回答尾部固定 **Save to note** 按钮, 存为蓝色"Saved Response"笔记(可改标题不可改内容)。
+5. **Discover sources**: 输入主题自动全网发现候选来源, 用户勾选后批量导入——把"冷启动没资料"变成引导流程。
 
-```python
-# 节点内(Python>=3.11 async 节点可直接用;<3.11 必须改为签名注入 writer: StreamWriter)
-from langgraph.config import get_stream_writer
+## 二、腾讯 ima / 元宝、字节豆包
 
-async def generate(state: QAState) -> dict:
-    writer = get_stream_writer()
-    buf = []
-    async for tok in gateway.stream_chat(model, msgs):     # 自研网关 async 生成器
-        buf.append(tok)
-        writer({"ev": "token", "t": tok, "attempt": state.get("attempt", 0)})
-    return {"draft": "".join(buf)}
+1. **ima 采集入口矩阵**: 微信公众号文章长按分享→"用 ima 打开"一键入库; 网页 **URL 粘贴到"导入链接"输入框自动解析正文**; 浏览器插件剪藏; 本地拖拽(19 种格式含 PDF/Office/图片/音频); 微信聊天文件经小程序导入。核心是"在内容消费现场一步入库"。
+2. **ima 问答范围语法**: 输入框键入 **@ 选择指定知识库**, 回答 = 全网内容 + 私域知识库混合, 且所有回答标注出处、一键跳转溯源; 支持**直接修改上一条提问重新生成**(不必重开会话)。
+3. **ima 划词唤醒**: 阅读/笔记界面选中任意文字浮出 AI 菜单(解读/翻译/续写/润色); 笔记面板的 AI 写作可**引用知识库文献作参考**并多轮追问。
+4. **ima 共享知识库+广场**: 个人库/共享库两级, 微信邀请成员并设编辑/查看权限, 可发布到"知识库广场"公开订阅(百万成员规模, 不占个人空间)——个人→机构共享的现成范式。
+5. **元宝/豆包**: 元宝联网回答带**信源角标(公众号名+发布日期)可点击溯源**, 信源即生态内容(2B+ 公众号文章); 豆包电脑版主打**全局划词 AI**(任意应用内选中文字→搜索/翻译/解释/总结)和 **"AI 看网站"**(对当前网页一键生成总结/播客/脑图), 对话内原生输出思维导图/流程图。
 
-# API 层 SSE
-async for item in graph.astream(inp, cfg, stream_mode=["custom", "updates"], subgraphs=True):
-    ns, mode, chunk = item                                  # subgraphs=True 时是三元组
-    if mode == "custom" and chunk.get("ev") == "token":
-        yield f"event: token\ndata: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-    elif mode == "updates":
-        yield f"event: node\ndata: {json.dumps(list(chunk)[0])}\n\n"  # 节点进度
-```
+## 三、Coze(扣子) / Dify
 
-**坑**:① 多模式列表时 astream 产出 `(mode, chunk)` 元组、加 `subgraphs=True` 变 `(namespace, mode, chunk)` 三元组——你们 generate 在五子图内,updates 想看到子图节点必须开 subgraphs,解析要兼容两种形状;② Python<3.11 的 async 节点 `get_stream_writer()` 静默拿不到 writer(contextvar 不传播),确认部署镜像是 3.11+;③ 自省环会二次生成:token 事件必须带 `attempt` 序号,前端收到更高 attempt 就清空重排,否则用户看到两份拼接答案;④ 网关 replay 模式要按录制分片回放 token,否则流式路径永远没被测试覆盖;⑤ writer 每 token 调一次没问题,但 SSE 侧建议 20~40ms 微批合并降低帧开销。
+1. **Dify 召回测试页**: 知识库详情左侧栏独立"召回测试"入口: 输入模拟 query → 返回命中分段卡片列表(**每段显示相似度分数、分段全文、来源文档名**); 页内可临时切换检索模式/top-k/score 阈值, **仅对当前测试会话生效**不影响线上; "记录"区留存所有检索事件(含线上应用真实请求)可逐条回放。
+2. **Dify 引用与归因开关**: 应用编排里打开"引用和归因"后, 用户端回答下方折叠展示命中分段+所属文档, 点击展开原文——引用是应用级可配置项而非写死。
+3. **分段预览可编辑**: Coze/Dify 上传文档时实时预览切片结果, 支持自定义分段(分隔符/最大长度/重叠), **单个分段可手动编辑、禁用/启用**——把"清洗数据"做成了 UI 操作。
+4. **知识库分级权限**: Dify 每个知识库有可见性设置(仅自己/全部团队成员/指定成员); Coze 按个人空间/团队空间隔离资源——"个人库 vs 团队库"是空间+单库权限两层, 不是两套系统。
 
-## 2. 引用点击回原文定位
+## 四、Khanmigo / 多邻国 Max
 
-**决策**:本期唯一方案是「后端 chunk 上下文接口 + 前端 Sheet 抽屉文本预览(heading_path 面包屑 + 页码 + `<mark>` 高亮)」,**不引入 pdfjs-dist/react-pdf**——bundle 1MB+、worker 配置、textLayer 与 customTextRenderer 的节点错位是已知 issue、扫描版 PDF 无文本层直接失败,演示风险远大于收益;且文本抽屉对你们未来的 URL/markdown 导入天然通用。PDF 内嵌高亮若答辩前有余力,P2 用 `react-pdf-highlighter-extended` 单独加,不动本期协议。
+1. **Khanmigo 分层提示、绝不直出答案**: 典型链路: "先看题目要我们求什么?"→学生作答→"我们已知哪些信息? 试试某公式"→学生卡住可主动点**要提示**→给一个小 hint 或**一道相似的已解例题**(worked example), 始终不给本题答案; 写作类同理(学生要太阳的比喻, 它只给肯定性反馈+引导问题)。
+2. **嵌入练习现场**: 辅导不在独立聊天页, 而是内嵌在题目页侧栏, AI 天然拿到题目上下文——"在做题处辅导"而非"去聊天处问"。
+3. **教师/家长可见性**: 全部对话记录可回看; 仪表盘自动汇总"谁掌握了/谁需要帮助"并推荐练习; 越界内容触发通知家长与教师的警报——安全感是采纳前提。
+4. **Duolingo "Explain My Answer"**: 答题后出现入口按钮, 点击进入与 Duo 的聊天卡片, 解释这道题为何对/错, 可继续要更多例子——**解释入口长在错题上**, 不是让用户自己去描述问题。
+5. **Duolingo Video Call with Lily 的"事后复盘"设计**: 对话进行中**刻意不纠错不打断**(降低开口焦虑), 结束后给复盘页: 完整转写稿 + 做得好/待改进清单 + 可查看对方台词翻译; Lily 按学习者水平自适应并记住历史对话。
 
-```python
-# GET /api/chunks/{chunk_id}/context?window=1   (走 RLS,tenant 过滤)
-async def chunk_context(chunk_id: UUID, window: int = 1):
-    hit = await repo.get_chunk(chunk_id)
-    sibs = await repo.by_doc_index(hit.doc_id, hit.kb_version,
-                                   hit.chunk_index - window, hit.chunk_index + window)
-    return {"doc_name": hit.doc_name, "page_start": hit.page_start,
-            "heading_path": hit.heading_path,          # ["第3章", "3.2 牛顿定律"]
-            "prev": sibs.before, "hit": hit.text, "next": sibs.after}
-```
+## 五、对本项目的 8 条落地建议
 
-```tsx
-// 前端: shadcn Sheet;quote 子串定位失败就整块高亮,绝不报错
-const i = hit.indexOf(citation.quote);
-{i >= 0 ? <>{hit.slice(0,i)}<mark>{citation.quote}</mark>{hit.slice(i+q.length)}</> : <mark>{hit}</mark>}
-```
+| # | 建议 | 成本 | 感知价值 |
+|---|------|------|----------|
+| 1 | **引用交互照抄 NotebookLM 三段式** (P0): 数字角标内嵌句中 + 悬停浮层显示 chunk 原文 + 点击右侧抽屉打开源文档按 chunk 偏移量/页码滚动并高亮。摄取时已有 chunk 元数据, 关键是给 chunk 存 char offset/页码。演示时评委必点 | 中 | **高(演示杀手锏)** |
+| 2 | **追问 chips** (P0): 问答子图最后一节点顺带结构化输出 3 个追问(同次调用, 零额外成本), 渲染为输入框上方 chips 点击即发; 加一个学情驱动的固定 chip "考考我这个知识点"(直连出题子图), 体现五子图联动 | 低 | 高 |
+| 3 | **摄取完成自动生成"来源指南"** (P1 提前): 对齐 NotebookLM Source guide——摄取完成回调触发 ARQ 任务生成摘要 + KC 知识点 chips(词表已有, 点击即提问); Studio 式按钮"学习指南/简报/测验"复用出题子图, 一键异步生成 | 中 | 高 |
+| 4 | **来源级 checkbox + @知识库范围控制**: 前端来源列表加复选框, 问答请求带 source_ids 走 Qdrant payload 过滤(现有 tenant 过滤同机制, 改动极小) | 低 | 中 |
+| 5 | **检索命中测试页** (照 Dify): 管理端输入 query → 展示 BM25/向量/RRF/rerank 各阶段分数与排名变化的命中分段列表。你的混合检索链路比 Dify 复杂, 这一页就是向清北评委展示技术深度的窗口, 与成本面板并列 | 低-中 | **高(评委向)** |
+| 6 | **辅导前端做 Khanmigo 式提示阶梯** (P0): 辅导子图内置提示层级状态机(引导问题→小提示→大提示→相似例题), 前端常驻"要个提示"按钮, 每次点击升一级, 永不直出答案; 答对时给肯定语 + BKT 掌握度上涨的可视化动画(数值跳动/进度条), 把已有 BKT 变成即时奖励 | 中 | 高 |
+| 7 | **辅导会话结束复盘卡** (照 Lily): 会话中不打断纠错, 结束时生成复盘: 本次覆盖 KC、暴露的错因、掌握度变化曲线、FSRS 计算的下次复习时间——把 BKT+FSRS+辅导三条线在一张卡上闭环, 直接作为答辩叙事 | 中 | 中-高 |
+| 8 | **URL 导入先行、剪藏插件后置** (P1): 粘贴 URL→readability 抽正文→走现有两阶段摄取, 导入时展示解析预览与分段预览(可编辑/禁用单分段, 照 Coze); 浏览器插件工作量大且演示增益小, 竞赛周期内不做 | 低(URL)/高(插件) | 中 |
 
-**坑**:① 引用必须在生成阶段就锚定 `chunk_id`,不要靠事后文本匹配找 chunk;② 相邻 chunk 要限定同 doc 同 kb_version 按 chunk_index±1,跨版本会拼出错文;③ quote 高亮用 `indexOf` 精确子串即可,LLM 改写过的 quote 找不到时降级整块高亮;④ 抽屉头部展示 heading_path + "第 X 页" 本身就是溯源可信度的演示点,答辩时口径为"定位到章节与页码"而非"PDF 像素级高亮"。
+优先级排序建议: #1、#2、#5 是"低成本高演示回报"组合, 应最先做; #6、#7 构成辅导页的差异化叙事; #3、#4、#8 视 M5 前剩余时间取舍。
 
-## 3. 语义缓存
-
-**决策**:两级缓存——L1 精确用 Redis(归一化文本 SHA256),L2 语义用 **Qdrant 独立 `answer_cache` collection**(复用已有 BGE-M3 与 Qdrant 连接,零新依赖);不用 GPTCache(重依赖、多租户/自研网关适配差、社区维护弱),不用 Redis 裸线扫(O(n) 且引入 Redis Stack 是新组件)。
-
-```python
-async def cache_lookup(uid, kb_id, kb_ver, query):
-    k = f"qc:{uid}:{kb_id}:{kb_ver}:{sha256(normalize(query))}"
-    if exact := await redis.get(k): return json.loads(exact), "exact"
-    vec = await embed(query)
-    hits = await qdrant.search("answer_cache", vec, limit=1, score_threshold=0.95,
-        query_filter=must_eq(tenant_id=uid, kb_id=kb_id, kb_version=kb_ver))
-    return (hits[0].payload, "semantic") if hits else (None, None)
-
-async def sse_replay(answer):                    # 命中后伪流式,前端协议完全不变
-    for i in range(0, len(answer["text"]), 24):
-        yield sse("token", {"t": answer["text"][i:i+24]}); await asyncio.sleep(0.012)
-    yield sse("citations", answer["citations"])
-    yield sse("meta", {"cache": "hit", "cost_saved": answer["cost"]})
-```
-
-**失效策略**:`kb_version` 直接进 filter,重新摄取后旧缓存天然失效、无需主动删;文档删除时 `delete(filter=kb_id)`;Qdrant 无原生 TTL,用 ARQ 定时任务按 `created_at` 清 7 天前的点;L1 Redis TTL 24h。
-
-**坑**:① BGE-M3 对中文短 query 的 0.95 阈值偏松——"牛顿第一定律"vs"牛顿第三定律"可能超阈值,命中后加一道数字/否定词正则比对,不一致则视为 miss(或阈值提 0.97 后实测);② 只缓存自省环**通过后的最终答案**,且绝不缓存混入学情个性化上下文的回答;③ 命中也要写 usage_log(cost=0)——成本面板展示"缓存节省 X 元"是竞赛加分演示;④ 回放必须走与真流式相同的 SSE 事件类型,否则前端两套渲染路径必出 bug。
-
-## 4. 用户日预算强制
-
-**决策**:在**网关 sink 前置检查**(自研网关 completion 入口处),不用 FastAPI 中间件——LLM 调用发生在 LangGraph 节点和 ARQ 后台任务里,一次 HTTP 请求因自省环会触发多次 LLM 调用,中间件既拦不全也拦不准,网关是唯一 choke point;Redis 天粒度整数计数器(微元为单位,INCRBY 避免浮点),usage_log 的 PG SUM 只做对账不做实时判断。
-
-```python
-SOFT, HARD = int(0.8 * DAILY_MICRO), DAILY_MICRO
-def _key(uid): return f"budget:{uid}:{now_cn():%Y%m%d}"     # 固定 Asia/Shanghai
-
-async def precheck(uid, est_micro) -> str:                  # 网关调用前
-    spent = int(await redis.get(_key(uid)) or 0)
-    if spent + est_micro >= HARD:
-        raise BudgetExceeded(retry_after=seconds_to_cn_midnight())   # API 层转 429
-    return "cheap" if spent >= SOFT else "normal"           # cheap: 降档模型+压 max_tokens
-
-async def settle(uid, actual_micro):                        # 网关拿到真实 usage 后
-    pipe = redis.pipeline()
-    pipe.incrby(_key(uid), actual_micro)
-    pipe.expire(_key(uid), 172800, nx=True)                 # 48h 防跨天边界
-    await pipe.execute()
-```
-
-**降级链**:<80% 正常档 → 80%~100% 强制 cheap 档(切最便宜模型、压 max_tokens、跳过自省环二次调用)→ ≥100% 抛 `BudgetExceeded`,API 层转 429 + `Retry-After`,SSE 场景发 `event: error` 而非静默断流。预检用「已花 + max_tokens×单价的预估」防最后一笔穿透,结算记实际值。
-
-**坑**:① 并发请求同时读到 spent<HARD 会少量超支——竞赛级可接受,严格版用 Lua 原子「预扣+结算返还」,答辩被问到时能说出来即可;② 日期 key 必须固定时区,跟 UTC 混用会出现"半夜预算复活"的诡异现象;③ 网关 replay/stub 模式 cost 必须为 0 且不写计数器,否则跑测试把演示账号预算烧光;④ TTL 用 48h 而非 24h,否则 23:59 创建的 key 次日争用窗口内读到空值;⑤ cheap 档本身也要有 max_tokens 硬上限,防止降档后一条长回答仍然穿透预算。
-
-Sources: [LangGraph Streaming 官方文档](https://docs.langchain.com/oss/python/langgraph/streaming), [get_stream_writer API 参考](https://reference.langchain.com/python/langgraph/config/get_stream_writer), [langgraph#4610 async 节点 writer 问题](https://github.com/langchain-ai/langgraph/issues/4610), [react-pdf#1042 customTextRenderer 错位](https://github.com/wojtekmaj/react-pdf/issues/1042), [react-pdf-highlighter-extended](https://github.com/DanielArnould/react-pdf-highlighter), [2026 语义缓存方案对比](https://www.getmaxim.ai/articles/top-semantic-caching-solutions-for-ai-applications-in-2026/)
+Sources:
+- [FSU: How do NotebookLM's inline citations work](https://servicecenter.fsu.edu/s/article/How-do-NotebookLM-s-inline-citations-work-and-why-are-they-important)
+- [DataCamp NotebookLM Tutorial](https://www.datacamp.com/tutorial/notebooklm)
+- [Learn Prompting: NotebookLM Guide](https://learnprompting.org/blog/notebooklm-guide)
+- [Nanobits: NotebookLM Ultimate User Guide](https://nanobits.beehiiv.com/p/notebook-lm-the-ultimate-user-guide-with-real-life-examples)
+- [Yahoo Tech: NotebookLM Discover Sources](https://tech.yahoo.com/articles/notebooklm-now-help-discover-sources-191535900.html)
+- [53AI: 腾讯 IMA Copilot 深度解析](https://www.53ai.com/news/zhishiguanli/2025071526940.html)
+- [AIGC工具导航: ima 知识库全方位解析](https://www.aigc.cn/ima-knowledge-base)
+- [知乎: 2025 腾讯IMA实测评测](https://zhuanlan.zhihu.com/p/1977413402281398572)
+- [53AI: 腾讯产品接入 DeepSeek 实测](https://www.53ai.com/news/LargeLanguageModel/2025021824719.html)
+- [量子位: 豆包电脑版](https://www.qbitai.com/2024/12/237208.html)
+- [Dify Docs: Knowledge Base](https://docs.dify.ai/en/guides/knowledge-base/readme)
+- [知乎: 扣子 Coze 知识库全能指南](https://zhuanlan.zhihu.com/p/1934004233906128565)
+- [Medium: Dify vs Coze Studio 对比](https://medium.com/@cyan747/comparison-of-ai-development-tools-key-difference-facts-between-dify-and-coze-studio-open-source-3a3657b0a60c)
+- [AVID Open Access: Khanmigo as AI Personal Tutor](https://avidopenaccess.org/resource/khanmigo-as-an-ai-personal-tutor-and-assistant/)
+- [NeuralClass: Khanmigo in the Classroom](https://neuralclass.uk/articles/khanmigo-in-the-classroom-what-teachers-actually-get)
+- [Class Central: ChatGPT on Duolingo & Khan Academy](https://www.classcentral.com/report/chatgpt-on-duolingo-khan-academy/)
+- [duoplanet: Duolingo Video Call](https://duoplanet.com/duolingo-video-call/)
+- [Talkpal: Duolingo Video Call with Lily](https://talkpal.ai/how-to-ace-your-duolingo-video-call-with-lily-top-tips-and-tricks/)

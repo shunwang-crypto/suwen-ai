@@ -130,7 +130,11 @@ class QdrantStore:
     # --- read path ---
 
     async def search_dense(
-        self, tenant_id: str, kb_id: str, vector: list[float], limit: int
+        self,
+        tenant_id: str | list[str],
+        kb_id: str | list[str],
+        vector: list[float],
+        limit: int,
     ) -> list[SearchHit]:
         return await self._query(
             query=vector,
@@ -140,7 +144,11 @@ class QdrantStore:
         )
 
     async def search_sparse(
-        self, tenant_id: str, kb_id: str, sparse: dict[int, float], limit: int
+        self,
+        tenant_id: str | list[str],
+        kb_id: str | list[str],
+        sparse: dict[int, float],
+        limit: int,
     ) -> list[SearchHit]:
         return await self._query(
             query=models.SparseVector(
@@ -173,10 +181,18 @@ class QdrantStore:
         ]
 
     @staticmethod
-    def _filter(**conditions: str) -> models.Filter:
-        return models.Filter(
-            must=[
-                models.FieldCondition(key=key, match=models.MatchValue(value=value))
-                for key, value in conditions.items()
-            ]
-        )
+    def _filter(**conditions: str | list[str]) -> models.Filter:
+        """单值 -> MatchValue; 列表 -> MatchAny (Wave3 联合检索: 多 kb_id/多 owner 单次查询)。"""
+        must: list[models.FieldCondition] = []
+        for key, value in conditions.items():
+            if isinstance(value, list | tuple):
+                must.append(
+                    models.FieldCondition(
+                        key=key, match=models.MatchAny(any=[str(v) for v in value])
+                    )
+                )
+            else:
+                must.append(
+                    models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                )
+        return models.Filter(must=must)

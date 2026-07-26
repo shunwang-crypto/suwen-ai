@@ -28,7 +28,9 @@ def _uuid_pk() -> Mapped[uuid.UUID]:
 
 
 def _tenant_col() -> Mapped[uuid.UUID]:
-    # 本期租户语义: tenant_id = user_id (个人即租户), 见 docs/data-model.md
+    # 租户语义 (Wave3 泛化, decisions.md D14): tenant_id = owner_id —
+    # knowledge_bases.owner_type='user' 时为 user_id, ='org' 时为 org_id;
+    # 下游 documents/chunks 沿用其所属 kb 的 owner_id。列名保持 tenant_id 不改。
     return mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
 
@@ -38,7 +40,8 @@ def _created_at() -> Mapped[datetime]:
     )
 
 
-# RLS 生效表清单: 迁移脚本据此启用 ENABLE + FORCE ROW LEVEL SECURITY
+# RLS 生效表清单 (owner_id 语义): 迁移脚本据此启用 ENABLE + FORCE ROW LEVEL SECURITY。
+# orgs/org_members 也启用 RLS, 但策略形状不同 (无 tenant_id 列), 由 0002 单独建。
 TENANT_TABLES = [
     "knowledge_bases",
     "documents",
@@ -60,12 +63,46 @@ TENANT_TABLES = [
 
 
 class Organization(Base):
-    """预留: 班级/机构租户模型, 本期无任何界面, 演进路径见 docs/scaling.md"""
+    """M0 遗留占位表 (users.org_id 的 FK 目标), 已被 Wave3 的 Org/OrgMember 取代。
+    保留仅为不动 users 表结构; 无任何读写路径, 见 decisions.md D14。"""
 
     __tablename__ = "organizations"
     id: Mapped[uuid.UUID] = _uuid_pk()
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = _created_at()
+
+
+class Org(Base):
+    """机构 (企业后台共享知识库的所有者主体, Wave3)。
+
+    id 直接作为机构库的 owner_id 落在 knowledge_bases.tenant_id 上 (owner_type='org'),
+    因此 documents/chunks/Qdrant payload 的 tenant_id 传播链一行不改。
+    """
+
+    __tablename__ = "orgs"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 8 位免混淆大写字母+数字; 邀请即凭码 join (无邮件邀请, P1)
+    invite_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    storage_quota_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=512)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class OrgMember(Base):
+    """机构成员。入会即挂载机构库 (无 mount 表): 成员可读, 仅 admin 可写。"""
+
+    __tablename__ = "org_members"
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orgs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")
+    joined_at: Mapped[datetime] = _created_at()
 
 
 class User(Base):
@@ -96,7 +133,11 @@ class RefreshToken(Base):
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
     id: Mapped[uuid.UUID] = _uuid_pk()
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()  # owner_id
+    # 判别列: 'user' -> tenant_id 是 user_id; 'org' -> tenant_id 是 orgs.id
+    owner_type: Mapped[str] = mapped_column(
+        String(8), nullable=False, server_default="user", default="user"
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
     kb_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -118,6 +159,8 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     parse_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 最小审计 (机构库演示"谁传的"); 存量行为 NULL, 不回填
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(

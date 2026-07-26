@@ -65,3 +65,27 @@ qdrant_store 的客户端单例缓存共享。Qdrant 容器可用后 .env 置空
 当前检索评估 (hit_rate@5=0.867) 是 stub 哈希嵌入 + 真实 BM25 稀疏的口径——证明评估
 管线端到端可跑，**不得**作为质量宣称（§14 禁伪造/§13 诚实呈现）。M2-D3 的正式数字
 必须在 live 嵌入（SiliconFlow BGE-M3，待用户提供 key）下重测并存档。
+
+## D15 · 编排形态: 四子图 + API 层路由, 无独立 Supervisor/analyst 图（2026-07-27）
+偏离提示词 §5.4"顶层轻 Supervisor + 五子图"。实际形态: qa/quiz/plan/tutor **四个**
+LangGraph 子图; "Supervisor 意图分类"由前端明确入口 + API 端点路由承担（用户点"练习"
+就是出题意图, 无需模型再猜——省一次 LLM 调用且零误判）; "analyst 学情诊断"是纯聚合
++单次 LLM 叙述, 无多步决策, 做成 reports 服务层而非图。答辩口径: 这是"编排复杂度
+应与任务复杂度匹配"的工程判断, 不是能力缺失; 自由输入的意图路由在 qa 图 router
+节点内仍是真实存在的（kb/web/direct 三路）。历史 commit 信息中"五子图"措辞不准确,
+以本条与 README 为准。此偏差由答辩材料诚信审计 (2026-07-27) 发现并修正。
+
+## D14 · 机构库: owner_type 判别列 + tenant_id 语义泛化为 owner_id（2026-07-27）
+（D13 由流式/缓存主线占用。）Wave3 机构共享知识库不加 `kb.org_id` 可空列，也不重命名
+`tenant_id`：物理列名保留 `tenant_id`，语义泛化为 **owner_id** —— `owner_type='user'`
+时为 user_id，`='org'` 时为 orgs.id。理由：①存量行 `owner_type='user'` 默认值即正确，
+迁移零回填；②documents/chunks/Qdrant payload 的 tenant_id 传播链一行不改，向量零迁移；
+③重命名列需改 16 张表引用与全部查询，回归面不可控，而可空 org_id 列会让所有查询/RLS/
+payload 双分支 COALESCE。RLS 三 GUC：`app.tenant_id`（个人/owner 身份）+ `app.org_ids`
+（成员机构逗号表，只授 kb/documents/chunks 的**读**）+ `app.is_admin`（沿用 D7，另用于
+orgs 凭邀请码查询）。org 库**写**路径不走 org_ids：service 层校验 org admin 后以
+`tenant_session(org_id)` 开事务（与 ARQ worker 摄取同构），成员会话对 org 行的写被 RLS
+写策略（owner 匹配）拦截 —— service 与 RLS 双拦截。联合检索 chat 入参为显式
+`kb_ids: list[UUID]`（不做 scope=all，保回放确定性），PG 先逐库校验可见性（不可见 403），
+Qdrant 单次查询 kb_id/tenant_id 双 MatchAny 只作纵深兜底。机构配额用 `orgs.storage_quota_mb`
++ 上传事务内 SUM 预检（与个人路径同构，不引入计数列，避免计数漂移；库量级演示场景 SUM 足够）。
