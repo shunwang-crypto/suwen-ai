@@ -49,6 +49,20 @@ _INSIGHTS_LIMIT = 50  # 记忆条目读取上限 (库内本就每用户 ≤100, 
 _RETENTION_HORIZON = timedelta(days=3)
 
 
+def evidence_strength(score: float) -> str:
+    """把内部证据累计分映射为定性档位。
+
+    ``mastery_records.confidence`` 是历史实现中的证据累计分，不是经过校准的统计
+    置信概率。API 保留原字段兼容旧消费方，同时下发定性语义，避免产品把 1.0
+    错读成“模型判断 100% 正确”。
+    """
+    if score < 0.4:
+        return "limited"
+    if score < 0.8:
+        return "moderate"
+    return "strong"
+
+
 def filter_noop_changes(logs: list, *, include_noop: bool, limit: int = _RECENT_LOG_LIMIT) -> list:
     """C1: 掌握度流水去噪 (纯函数, 单测入口)。
 
@@ -129,6 +143,7 @@ async def get_profile(
                     "name": name,
                     "p_mastery": round(r.p_mastery, 4),
                     "confidence": round(r.confidence, 4),
+                    "evidence_strength": evidence_strength(r.confidence),
                     "last_seen": r.last_seen,
                     # 无 FSRS 卡 (没错过题 / 卡未复习过) 的条目为 null, 前端不渲染
                     "retention_now": round(retention[0], 4) if retention else None,

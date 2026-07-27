@@ -1,6 +1,7 @@
 """F7 学情分析报告数据面。
 
-- radar: 按活动量 top12 KC 的掌握度 (F7-A1: 与作答记录同源可核对)。
+- radar: 全局按知识库聚合；传 kb_id 时按章节聚合，并附 KC 下钻明细。
+- radar_kcs: 按活动量 top12 KC 的兼容字段 (F7-A1: 与作答记录同源可核对)。
 - trend: 近 30 天每日答题数与正确率 (attempts 聚合, 无数据日补零)。
 - weak_points: p<0.4 的 KC + 相关错题数 + 归因下钻 (沿 kc_edges 找未掌握前置)。
 - actions: 规则生成的可执行建议, 必须引用具体 KC 名/数量 (F7-A2/A3, 禁止空话)。
@@ -51,7 +52,7 @@ async def _build_aggregates(
     p_by_kc = {str(r.kc_id): r.p_mastery for r, _ in mastery_rows}
     name_by_kc = {str(r.kc_id): name for r, name in mastery_rows}
 
-    # radar: 按活动量 (mastery_log 条数 = 证据事件数) top 12
+    # 兼容轴: 按活动量 (mastery_log 条数 = 证据事件数) top 12
     activity = {
         str(kc_id): int(n)
         for kc_id, n in (

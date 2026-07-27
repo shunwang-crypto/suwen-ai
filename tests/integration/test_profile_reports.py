@@ -51,6 +51,8 @@ async def _seed_learning_data(uid: str) -> dict:
     from eduagents_api.db import tenant_session
     from eduagents_api.models import (
         Attempt,
+        Chunk,
+        Document,
         ErrorItem,
         KcEdge,
         KnowledgeBase,
@@ -72,6 +74,46 @@ async def _seed_learning_data(uid: str) -> dict:
         kc_c = KnowledgeComponent(tenant_id=tid, kb_id=kb.id, canonical_name="泰勒公式")
         s.add_all([kc_a, kc_b, kc_c])
         await s.flush()
+        doc = Document(
+            tenant_id=tid,
+            kb_id=kb.id,
+            filename="calculus.md",
+            content_hash=uuid.uuid4().hex,
+            status="ready",
+        )
+        s.add(doc)
+        await s.flush()
+        s.add_all(
+            [
+                Chunk(
+                    tenant_id=tid,
+                    doc_id=doc.id,
+                    text="极限",
+                    heading_path="高等数学 > 第一章 极限 > 1.1 极限定义",
+                    kc_ids=[str(kc_a.id)],
+                    content_hash=uuid.uuid4().hex,
+                    embedding_status="ready",
+                ),
+                Chunk(
+                    tenant_id=tid,
+                    doc_id=doc.id,
+                    text="导数定义",
+                    heading_path="高等数学 > 第二章 导数 > 2.1 导数定义",
+                    kc_ids=[str(kc_b.id)],
+                    content_hash=uuid.uuid4().hex,
+                    embedding_status="ready",
+                ),
+                Chunk(
+                    tenant_id=tid,
+                    doc_id=doc.id,
+                    text="泰勒公式",
+                    heading_path="高等数学 > 第十二章 泰勒公式 > 12.1 泰勒展开",
+                    kc_ids=[str(kc_c.id)],
+                    content_hash=uuid.uuid4().hex,
+                    embedding_status="ready",
+                ),
+            ]
+        )
         # 先修边: 必须先掌握 A(极限) 才能学 B(导数定义)
         s.add(KcEdge(tenant_id=tid, from_kc=kc_a.id, to_kc=kc_b.id, type="prerequisite"))
         s.add_all(
@@ -145,7 +187,12 @@ async def _seed_learning_data(uid: str) -> dict:
                 ),
             ]
         )
-    return {"kc_a": str(kc_a.id), "kc_b": str(kc_b.id), "kc_c": str(kc_c.id)}
+    return {
+        "kb_id": str(kb.id),
+        "kc_a": str(kc_a.id),
+        "kc_b": str(kc_b.id),
+        "kc_c": str(kc_c.id),
+    }
 
 
 async def test_profile_structure_and_override(api):
@@ -160,6 +207,8 @@ async def test_profile_structure_and_override(api):
     assert set(by_kc) == {ids["kc_a"], ids["kc_b"], ids["kc_c"]}
     assert by_kc[ids["kc_b"]]["name"] == "导数定义"
     assert by_kc[ids["kc_b"]]["p_mastery"] == pytest.approx(0.35)
+    assert by_kc[ids["kc_b"]]["evidence_strength"] == "moderate"
+    assert by_kc[ids["kc_c"]]["evidence_strength"] == "strong"
     assert by_kc[ids["kc_b"]]["last_seen"] is not None
     assert body["error_distribution"]["by_cause"] == {"concept_confusion": 1, "knowledge_gap": 1}
     assert body["error_distribution"]["by_state"] == {"new": 2}
@@ -181,6 +230,7 @@ async def test_profile_structure_and_override(api):
     body = r.json()
     by_kc = {m["kc_id"]: m for m in body["mastery"]}
     assert by_kc[ids["kc_b"]]["p_mastery"] == pytest.approx(0.95)
+    assert by_kc[ids["kc_b"]]["evidence_strength"] == "strong"
     latest = body["recent_changes"][0]
     assert latest["evidence_type"] == "user_override" and latest["weight"] == 1.0
 
@@ -214,10 +264,35 @@ async def test_reports_learning(api):
     assert r.status_code == 200, r.text
     body = r.json()
 
-    # radar: 3 KC 全在 (≤12), 活动量最高的 B 排第一
-    assert len(body["radar"]) == 3
-    assert body["radar"][0]["kc_id"] == ids["kc_b"]
-    assert body["radar"][0]["p_mastery"] == pytest.approx(0.35)
+    # 全局 radar: 轴按知识库聚合；证据数加权平均可由 3 个 KC 核对。
+    assert body["axes_kind"] == "kb"
+    assert len(body["radar"]) == 1
+    axis = body["radar"][0]
+    assert axis["name"] == "高等数学" and axis["kb_id"] == ids["kb_id"]
+    assert axis["kc_count"] == 3 and axis["weak_count"] == 2
+    assert axis["p_mastery"] == pytest.approx(0.3857)
+    assert [x["kc_id"] for x in axis["kcs"]] == [ids["kc_a"], ids["kc_b"], ids["kc_c"]]
+
+    # 兼容字段仍保留活动量 top KC，旧消费方不会被静默破坏。
+    assert len(body["radar_kcs"]) == 3
+    assert body["radar_kcs"][0]["kc_id"] == ids["kc_b"]
+    assert body["radar_kcs"][0]["p_mastery"] == pytest.approx(0.35)
+
+    # 单库 radar: 轴切为章节，中文章号按数值排序（第十二章不能排到第二章前）。
+    r = await api.get(f"/api/reports/learning?kb_id={ids['kb_id']}", headers=headers)
+    assert r.status_code == 200, r.text
+    chapter_body = r.json()
+    assert chapter_body["axes_kind"] == "chapter"
+    assert [x["name"] for x in chapter_body["radar"]] == [
+        "第一章 极限",
+        "第二章 导数",
+        "第十二章 泰勒公式",
+    ]
+    assert [x["kcs"][0]["kc_id"] for x in chapter_body["radar"]] == [
+        ids["kc_a"],
+        ids["kc_b"],
+        ids["kc_c"],
+    ]
 
     # trend: 恰好 30 天, 与作答记录可核对 (F7-A1); P2-11 后日切按 Asia/Shanghai
     trend = body["trend"]

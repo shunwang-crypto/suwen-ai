@@ -578,7 +578,10 @@ export interface MasteryItem {
   kc_id: string;
   name: string;
   p_mastery: number;
+  /** 兼容字段：内部证据累计分，不是统计置信概率。 */
   confidence: number;
+  /** 面向用户的定性证据强度，避免把内部 1.0 误读成“100% 正确”。 */
+  evidence_strength?: "limited" | "moderate" | "strong";
   last_seen: string | null;
 }
 
