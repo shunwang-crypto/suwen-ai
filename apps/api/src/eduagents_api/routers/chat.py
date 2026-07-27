@@ -20,6 +20,7 @@ from eduagents_core.gateway import (
 )
 from eduagents_core.graphs.qa_graph import PROFILE_SECTION_TEMPLATE
 from eduagents_core.logging import get_logger
+from eduagents_core.observability import observe_stages
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select, text
 from sse_starlette.sse import EventSourceResponse
@@ -565,6 +566,18 @@ async def chat(
                     },
                 )
                 persisted = True
+                # M3-D1 Langfuse: qa 图阶段数据挂为 span (request_id 种子 trace,
+                # 与本请求内网关 generation 同 trace); 未配置时内部短路
+                try:
+                    observe_stages(
+                        request.app.state.settings,
+                        request_id=request_id,
+                        stages=state.get("trace") or [],
+                        user_id=str(ctx.user_id),
+                        name="chat.qa",
+                    )
+                except Exception:  # noqa: BLE001 — 上报失败不影响已完成的回答
+                    log.debug("langfuse_stages_report_failed", exc_info=True)
                 # 缓存写入: 仅自省环通过的最终答案 (非拒答/无免责段/单库/首轮, 包B约定)
                 if (
                     cacheable and answer and not state.get("refused")

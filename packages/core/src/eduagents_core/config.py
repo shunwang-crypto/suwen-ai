@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     strong_input_price_per_m: float = 4.0
     strong_output_price_per_m: float = 16.0
 
+    # --- observability: Langfuse (M3-D1) ---
+    # 三项齐全才启用; 未启用时不 import langfuse, 热路径零额外开销
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = ""
+    # P2-7: 默认不上报 prompt/completion 原文 (只上长度+摘要哈希);
+    # =1 显式打开原文上报, 仅限本地调试, 生产必须保持关闭
+    langfuse_log_content: bool = False
+
     # --- search ---
     tavily_api_key: str = ""
 

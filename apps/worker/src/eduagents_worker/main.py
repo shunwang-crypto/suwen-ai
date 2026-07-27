@@ -5,6 +5,7 @@ from arq.connections import RedisSettings
 from eduagents_core.cache.answer_cache import cleanup_answer_cache
 from eduagents_core.config import get_settings
 from eduagents_core.logging import configure_logging, get_logger
+from eduagents_core.observability import flush_langfuse
 
 from .cleanup_outbox import process_pending_cleanup
 from .enrichment import enrich_document
@@ -32,6 +33,8 @@ async def startup(ctx: dict) -> None:
 
 
 async def shutdown(ctx: dict) -> None:
+    # M3-D1: Langfuse OTel 后台队列冲干净 (未启用时零操作, 内部 try/except)
+    flush_langfuse()
     log.info("worker_stopped")
 
 

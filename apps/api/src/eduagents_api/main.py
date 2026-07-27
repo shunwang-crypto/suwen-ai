@@ -7,6 +7,7 @@ from arq.connections import RedisSettings
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import OpenAIGateway
 from eduagents_core.logging import configure_logging, get_logger
+from eduagents_core.observability import flush_langfuse
 from eduagents_core.storage import create_storage
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -124,6 +125,8 @@ async def lifespan(app: FastAPI):
     await app.state.arq.aclose()
     await app.state.redis.aclose()
     await dispose_engine()
+    # M3-D1: Langfuse OTel 后台队列冲干净 (未启用时零操作, 内部 try/except)
+    flush_langfuse()
 
 
 def create_app() -> FastAPI:

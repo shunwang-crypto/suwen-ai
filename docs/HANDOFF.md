@@ -25,7 +25,8 @@
 
 | 坑 | 处置 |
 |---|---|
-| **机器只有代理出口** | shell 已有 `http(s)_proxy=127.0.0.1:7890`，直连是死的。**dockerd 不读代理 → docker pull 全挂**，修法是 systemd `proxy.conf`（六步指南已给用户，用户尚未执行）→ 这阻塞 M1-D1（compose 验证）和 M3-D1（Langfuse） |
+| **机器只有代理出口** | shell 已有 `http(s)_proxy=127.0.0.1:7890`，直连是死的。**Docker 已修复（2026-07-27）**：daemon.json 配 `proxies` 键，pull 正常。M1-D1/M3-D1 均已解锁翻绿 |
+| **内存只有 7.6GB，别同时开多套 Docker 栈** | 曾同时跑验证栈(7 容器)+Langfuse(6 容器, ClickHouse 是写盘大户)+开发栈+集成测试 → OOM+swap 颠簸(998MB/s 写盘)整机卡死。验证/演示完立即 `docker compose down`；Langfuse 仅演示时拉起 |
 | IPv6 已被用户禁用 | 一律用 `127.0.0.1`，不要用 `localhost`（会解析到 ::1 黑洞） |
 | conda libstdc++ ABI 冲突（D10） | 跑任何 Python 前 `export LD_LIBRARY_PATH=/home/shunw/miniforge3/envs/eduagents/lib`；pytest 由 conftest ctypes 预加载兜底 |
 | `pkill -f` 会匹配到自己的复合命令（exit 144） | 杀进程用 `ss -tlnp` 找 pid 或 `lsof -ti:端口`；**注意 lsof 有时漏报 next-server 残留进程，`ss -tlnp \| grep 3000` 才可靠**（刚踩过：旧 next-server 占着 3000，新服务 EADDRINUSE，三轮截图都打在旧 build 上） |
@@ -123,7 +124,9 @@ scripts/ui_review.mjs、apps/web/ui_review2.mjs 仍可用。
    对话式学情看板。
 
 **B. 被用户侧动作阻塞**
-- Docker proxy（用户执行 systemd proxy.conf 六步）→ 解锁 M1-D1 compose 全绿验证 + M3-D1 Langfuse 自托管。
+- ~~Docker proxy~~ **已解决（2026-07-27）**：M1-D1 compose 全绿（docs/evidence/m1/）+ M3-D1 Langfuse
+  自托管+网关 SDK 接线（docs/evidence/m3/，PII 指纹化）均完成。Langfuse 平时停用省内存，
+  演示时 `cd deploy/langfuse && docker compose --env-file .env up -d` + 取消 .env 三行注释。
 - 上线前密钥轮换（用户去 DeepSeek/SiliconFlow/Tavily 控制台）。
 
 **C. 商用四缺（明确等用户点头再做，上次已如实告知"当前不可收费"）**

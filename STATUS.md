@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | M0-D1 [CI] | 迁移从零建库成功 (21 表 + RLS + edu_app 角色) | ✅ | `make demo-m0` | 2026-07-26 |
 | M0-D2 [HUMAN] | 契约冻结 (data-model.md / api-contract.md 经用户确认) | 🟡 | 用户 review | — |
-| M1-D1 [LIVE] | docker-compose up 全绿 | ⛔ | `make up` | Docker daemon DNS 污染, 待用户执行 README「Docker 修复」; 本地开发用 `make dev-infra` 替代 |
+| M1-D1 [LIVE] | docker-compose up 全绿 | ✅ | 7/7 容器 healthy + 经 Caddy 注册/登录/SSE 冒烟; 顺手修镜像缺 langgraph(改 lock 安装); 证据 docs/evidence/m1/compose_validation.md | 2026-07-27 |
 | M1-D2 [LIVE] | SSE 逐 token 输出 | ✅ | `make test-integration` (test_tenant_isolation SSE 段) | 2026-07-26 |
 | M1-D3 [LIVE] | 拔主模型 key 走降级链, 日志可见熔断迁移 | 🟡 | 单测已覆盖降级到 stub (`test_live_without_keys_*`); live 档真实熔断演示待录制 | — |
 | M1-D4 [CI] | usage_log 三维归因 (user/feature/model) | ✅ | `make test-integration` | 2026-07-26 |
@@ -20,7 +20,7 @@
 | M2-D4 [CI] | 损坏/恶意文件正确处理 | ✅ | `make test-integration` (test_upload_security_rejections) | 2026-07-26 |
 | M2-D5 [LIVE] | 消融开关生效+真实差异报告 | ✅ | 三配置 live 对比 + 如实解读 (rerank 在饱和小集上反降 MRR, 已解释并保留开关): docs/evidence/m2/ablation_summary.md | 2026-07-26 |
 | M2-D6 [CI] | KC-A1 归一化测试通过 | ✅ | 单测: 泰勒公式/Taylor公式/泰勒展开 收敛同一 kc_id (test_kc.py); 集成: enrich 后 chunk.kc_ids 100% 外键有效、成环边被拒 (test_enrichment.py) | 2026-07-26 |
-| M3-D1 [LIVE] | Langfuse 完整 trace 树 | ⛔ | Langfuse 自托管容器被 Docker 问题阻塞 (同 M1-D1); 图内 trace 事件流已全量落 state.trace 并经 SSE 透出 | — |
+| M3-D1 [LIVE] | Langfuse 完整 trace 树 | ✅ | 自托管六容器全绿 + 网关/qa 图 SDK 接线(PII 指纹化) + 真实流量 span 树截图; 证据 docs/evidence/m3/langfuse_tracing.md | 2026-07-27 |
 | M3-D2 [LIVE] | interrupt→resume 全流程 + 续传 | ✅ | 集成测试: 出题 interrupt 挂起→跨 HTTP 请求 PG Checkpointer 恢复→生成落库; 越权 resume 404 (`test_quiz_flow.py`) | 2026-07-26 |
 | M3-D3 [LIVE] | 出题 100% 过 schema 校验 | ✅ | pydantic 全量校验+坏题带错误清单重试环(≤3轮), 校验不过不落库; 单测13+集成1 | 2026-07-26 |
 | M3-D4 [LIVE] | 辅导前3轮不给答案 | 🟡 | 结构性防线 ✅ (hint_level 状态机+代码注入禁答令, 单测逐轮断言实收 prompt); LIVE 效果脚本待录制阶段 | — |
@@ -37,7 +37,7 @@
 | 条款 | 内容 | 状态 | 验证 |
 |---|---|---|---|
 | U-A1 [CI] | 双账号全面越权测试 (API+向量+存储+SSE, 含 asyncpg 池复用) | 🟡 | API/RLS/池复用 ✅; 向量/MinIO 越权待 M2 | 
-| U-A2 [LIVE] | 重启容器后数据完整 | 🟡 | PG 持久化已验证 (本地实例); 容器版待 M1-D1 解锁 |
+| U-A2 [LIVE] | 重启容器后数据完整 | ✅ | 本地实例 + 容器版均验证: compose restart postgres/api 后注册用户登录成功(命名卷持久化), 见 docs/evidence/m3/langfuse_tracing.md §4 |
 | U-A3 [CI] | auth 独立限流 + refresh 重放拒绝 | 🟡 | 重放拒绝+撤销全家 ✅; 限流专项用例待补 |
 | U-A4 [LIVE] | 教师组卷导出 / 学生 403 | ⬜ | 角色中间件已就位 (require_teacher), 页面待 M4 |
 

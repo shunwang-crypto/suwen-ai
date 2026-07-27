@@ -21,6 +21,7 @@ from tenacity import (
 
 from ..config import Settings, TierConfig
 from ..logging import get_logger
+from ..observability import observe_generation
 from .base import (
     BudgetExceeded,
     BudgetGuard,
@@ -559,6 +560,11 @@ class OpenAIGateway:
                 await self._guard.settle(event, reserved_tier=reserved_tier)
             except Exception:  # noqa: BLE001
                 log.exception("budget_settle_failed")
+        # M3-D1 Langfuse: 每次网关调用一条 generation (未配置时内部短路;
+        # 全 try/except + OTel 后台批量导出, 不阻塞也不影响业务返回)。
+        # _emit_usage 是所有完成调用 (chat/stream/部分结算/stub/replay) 的
+        # 唯一汇点, 上报字段与 usage 计量同源。
+        observe_generation(self._s, req, result)
         if self._sink is None:
             return
         await self._sink(event)
