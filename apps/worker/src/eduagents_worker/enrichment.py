@@ -18,7 +18,7 @@ _ENRICH_CONCURRENCY = 10  # §5.1: 并发度 ≥10, 单 chunk 失败降级不阻
 # 进程级共享网关 (P0-2a/P1-15): worker 三个 LLM 任务 (enrichment/reflection/
 # study_guide) 一律经此单例, 禁止裸构造 OpenAIGateway ——
 # - usage_sink=persist_usage: 后台支出进 usage_log, 成本看板不再系统性少报;
-# - budget_guard: 后台任务同样受 用户日预算+全局熔断 约束;
+# - budget_guard: 后台任务同样受 钱包余额(0006)+用户日预算+全局熔断 约束;
 # - 单例复用: 断路器/客户端连接池跨任务共享, 熔断真正生效 (P1-15)。
 _worker_gateway = None
 
@@ -27,8 +27,8 @@ def get_worker_gateway(settings: Settings | None = None):
     """worker 进程级 OpenAIGateway 单例工厂 (线程内 arq 单事件循环, 无锁足够)。"""
     global _worker_gateway
     if _worker_gateway is None:
-        from eduagents_api.budget import create_budget_guard
         from eduagents_api.usage import persist_usage
+        from eduagents_api.wallet import create_billing_guard
         from eduagents_core.gateway import OpenAIGateway
         from redis.asyncio import Redis
 
@@ -37,7 +37,7 @@ def get_worker_gateway(settings: Settings | None = None):
         _worker_gateway = OpenAIGateway(
             settings,
             usage_sink=persist_usage,
-            budget_guard=create_budget_guard(redis, settings),
+            budget_guard=create_billing_guard(redis, settings),
         )
     return _worker_gateway
 

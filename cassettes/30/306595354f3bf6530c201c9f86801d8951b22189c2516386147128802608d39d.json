@@ -1,6 +1,6 @@
 {
-  "text": "该片段位于文档的同一位置，用于版本对照。",
+  "text": "该片段位于文档中稍后的位置，用于版本标识。",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 134,
-  "completion_tokens": 12
+  "completion_tokens": 13
 }

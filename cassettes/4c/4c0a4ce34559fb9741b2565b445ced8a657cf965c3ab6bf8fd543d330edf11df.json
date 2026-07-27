@@ -1,0 +1,6 @@
+{
+  "text": "{\"ks\": [\"数列极限\", \"函数列极限\" ,\"函数的连续\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 533,
+  "completion_tokens": 19
+}

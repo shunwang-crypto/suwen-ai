@@ -1,6 +1,6 @@
 {
-  "text": "在1.2节中，该片段给出了函数极限的ε-δ定义，并引出两个重要极限，是理解极限概念的核心内容。",
-  "model": "deepseek-v4-flash",
-  "prompt_tokens": 967,
-  "completion_tokens": 31
+  "text": "该片段位于第一章“极限与连续”的的“函数的极限与两个重要极限”节，，详细说明了ε-δ定义并及其证明方法，并并并介绍了两个重要极限 e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 1062,
+  "completion_tokens": 100
 }

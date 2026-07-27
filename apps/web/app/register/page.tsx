@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { AuthHero, BrandMark } from "@/components/ui/brand";
+import {
+  CaptchaField,
+  EMPTY_CAPTCHA,
+  type CaptchaState,
+} from "@/components/ui/captcha";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -18,6 +23,10 @@ export default function RegisterPage() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 图形验证码（契约：register 带 captcha_id/captcha_answer）。
+  // 服务未就绪（captchaId 为 null）时不带字段提交，由后端裁决。
+  const [captcha, setCaptcha] = useState<CaptchaState>(EMPTY_CAPTCHA);
+  const [captchaEpoch, setCaptchaEpoch] = useState(0);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -38,13 +47,34 @@ export default function RegisterPage() {
       setError("两次输入的密码不一致");
       return;
     }
+    if (captcha.captchaId && !captcha.answer.trim()) {
+      setError("请输入图中的验证码");
+      return;
+    }
     setSubmitting(true);
     try {
-      await register(email, password); // 注册成功后自动登录
+      // 注册成功后自动登录
+      await register(
+        email,
+        password,
+        captcha.captchaId
+          ? {
+              captcha_id: captcha.captchaId,
+              captcha_answer: captcha.answer.trim(),
+            }
+          : undefined,
+      );
       // G12 冷启动：新注册用户先走 Onboarding 三步偏好表单（可跳过）；登录页不跳
       router.replace("/onboarding");
     } catch (err) {
+      if (err instanceof ApiError && err.code === "CAPTCHA_REQUIRED") {
+        // 注册已成功但自动登录被要求验证码：去登录页完成
+        router.replace("/login");
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "网络异常，请稍后重试");
+      // 验证码一次性使用：失败后强制换一张
+      setCaptchaEpoch((n) => n + 1);
       setSubmitting(false);
     }
   };
@@ -114,7 +144,7 @@ export default function RegisterPage() {
               />
             </label>
 
-            <label className="mb-6 block">
+            <label className="mb-4 block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">
                 确认密码
               </span>
@@ -128,6 +158,15 @@ export default function RegisterPage() {
                 required
               />
             </label>
+
+            <CaptchaField
+              key={captchaEpoch}
+              value={captcha}
+              onChange={setCaptcha}
+              disabled={submitting}
+              inputClassName={inputCls}
+              className="mb-6"
+            />
 
             <button
               type="submit"

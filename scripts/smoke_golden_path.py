@@ -58,6 +58,12 @@ def sse_events(client: httpx.Client, method: str, url: str, token: str, body: di
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8000")
+    parser.add_argument(
+        "--wait-enriched",
+        action="store_true",
+        help="等增强完成再问答 (磁带口径: 录制与回放两轮必须看到相同的检索状态, "
+        "否则 enrich 完成时机的竞态会改变检索结果 -> prompt key 失配)",
+    )
     args = parser.parse_args()
     c = httpx.Client(base_url=args.base, timeout=60)
 
@@ -91,17 +97,27 @@ def main() -> None:
     if r.status_code != 201:
         fail("upload", r.text)
     doc_id = r.json()["id"]
-    deadline = time.time() + 120
+    deadline = time.time() + (900 if args.wait_enriched else 120)
     status = "pending"
+    terminal = ("enriched", "failed") if args.wait_enriched else (
+        "ready", "enriching", "enriched", "failed"
+    )
     while time.time() < deadline:
         docs = c.get(f"/api/kb/{kb_id}/documents", headers=auth).json()
         status = next(d["status"] for d in docs if d["id"] == doc_id)
-        # 两阶段语义 (F2): ready(basic) 即可问答, enriching 是后台增强不阻塞
-        if status in ("ready", "enriching", "enriched", "failed"):
+        # 两阶段语义 (F2): ready(basic) 即可问答, enriching 是后台增强不阻塞;
+        # --wait-enriched 时等到增强终态 (磁带确定性口径)
+        if status in terminal:
             break
         time.sleep(2)
-    if status == "failed" or status == "pending":
+    if status in ("failed", "pending") or (args.wait_enriched and status != "enriched"):
         fail("ingest", f"status={status} (worker 未跑? make worker)")
+    if args.wait_enriched:
+        # 真模型 enrich 可达 10+ 分钟, 超过 access token 时效 -> 后续步骤 401。
+        # 重新登录拿新 token (冒烟口径, 不影响磁带 key: token 不进 prompt)
+        r = c.post("/api/auth/login", json={"email": email, "password": "smoke-pass-1"})
+        token = r.json()["access_token"]
+        auth = {"Authorization": f"Bearer {token}"}
     ok(f"upload+ingest via ARQ worker (status={status})")
 
     # 4) 带引用问答 (qa 自省环)

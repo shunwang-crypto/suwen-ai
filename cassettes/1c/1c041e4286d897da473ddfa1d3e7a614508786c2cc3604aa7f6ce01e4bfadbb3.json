@@ -1,0 +1,6 @@
+{
+  "text": "{\"ks\": [\"不定积分\", \"原函数\", \"求导公式\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 559,
+  "completion_tokens": 17
+}

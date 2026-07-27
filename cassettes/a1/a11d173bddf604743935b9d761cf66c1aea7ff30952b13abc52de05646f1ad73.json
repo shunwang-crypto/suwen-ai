@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"无穷等量比较比较与\", \"等等价无穷小\", \"高阶无穷小\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 714,
+  "completion_tokens": 25
+}

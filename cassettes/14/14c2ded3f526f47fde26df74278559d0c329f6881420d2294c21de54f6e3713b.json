@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"拉格朗日中值定理\", \"高高阶导数\" , \"拉格朗日余项\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 891,
+  "completion_tokens": 29
+}

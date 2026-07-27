@@ -362,10 +362,11 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
         chunk_ids: list[str] = []
         materials_block = "(无素材)"
         if kb_id and deps.retrieval is not None:
+            # RetrievalService.retrieve(tenant_id, kb_ids, query) — 位置参数口径同 plan_graph;
+            # 曾因误用 kb_id= 关键字在真检索路径 TypeError (单测的 None/fake 检索盖不住,
+            # 由 record 冒烟抓出), 回归测试用真实签名的 fake 锁死
             retrieval = await deps.retrieval.retrieve(
-                tenant_id=state.get("tenant_id", ""),
-                kb_id=kb_id,
-                query=state.get("topic", ""),
+                state.get("tenant_id", ""), kb_id, state.get("topic", "")
             )
             chunks = list(retrieval.chunks)[:5]
             if chunks:

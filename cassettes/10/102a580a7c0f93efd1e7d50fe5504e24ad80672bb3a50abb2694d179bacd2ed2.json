@@ -1,6 +1,6 @@
 {
-  "text": "该片段列出了当$xx \\to 0$时$时中的常用的等价无穷无穷小，位于章节中例证之前的表格总结部分\n",
+  "text": "该片段位于表中，用于列出$x(x \\to 0)$$时下的等价无穷小量示例。",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 722,
-  "completion_tokens": 33
+  "completion_tokens": 26
 }

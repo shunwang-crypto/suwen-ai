@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"洛必达法则\", \"数列极限\", \"函数积分\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 902,
+  "completion_tokens": 18
+}

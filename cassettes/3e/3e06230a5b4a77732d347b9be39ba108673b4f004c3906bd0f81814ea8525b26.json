@@ -1,0 +1,6 @@
+{
+  "text": "{\"ks\": [\"罗尔拉格朗日中值定理\", \"闭区间上上连续函数的性质\" , \"费马引理\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 824,
+  "completion_tokens": 33
+}

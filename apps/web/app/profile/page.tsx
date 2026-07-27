@@ -1,9 +1,15 @@
 "use client";
 
-// AI 眼中的我（F8）：掌握度雷达图（共享组件 components/radar.tsx）+ 掌握度列表（进度条+confidence）
-// + 错题分布条形（纯 div）+ 最近掌握度变化流水；每行「验证一下」→ 跳 /quiz?kc=..&n=3 做题重估
-//（P2-6 可争辩画像），「我已掌握」→ POST override 直接标记；掌握度行附 FSRS 遗忘快照
-//（P2-7「再不复习，3 天后预计保持率 N%」）；「AI 记住的你」记忆条目可见可删（P2-1）。
+// AI 眼中的我（F8）：真实规模（3 库 × 152 KC）适配版。
+// - 掌握度雷达：components/mastery-radar.tsx —— 库 tab 切换 + 章节聚合轴 + 少轴条形降级 + 轴下钻
+//  （后端契约 kb_id/kb_name/subject/chapter 未上线时降级回 top12 旧行为）。
+// - 掌握度明细：「科目 → 章节」两级折叠树（组头=章均掌握度+薄弱计数，默认只展开含薄弱的章），
+//   名称/别名搜索 + 「只看薄弱」「只看到期」过滤 chip，行高压缩，动作收进桌面 hover /「…」菜单，
+//   窄屏两行卡片布局，遗忘快照缩成「3 天后 N%」徽章（P2-7 全文进 tooltip）。
+// - 最近掌握度变化：默认 10 条 +「展开更多」；×0.5/×0.3 权重徽章收进 hover tooltip（主观证据降权）；
+//   零变化行后端已滤，前端再兜底一次。
+// - 保留：「验证一下」→ /quiz?kc=..&n=3 重估（P2-6 可争辩画像）、「我已掌握」→ POST override、
+//  「AI 记住的你」记忆条目可见可删（P2-1）。
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -19,8 +25,8 @@ import {
   fmtDateTime,
   fmtPct,
 } from "@/components/common";
-import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
-import { ProgressRing } from "@/components/ui/progress-ring";
+import { MasteryRadarPanel } from "@/components/mastery-radar";
+import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
 
@@ -53,10 +59,22 @@ const WEAK_THRESHOLD = 0.6;
 /** 遗忘快照只在 3 天后保持率低于此值时渲染（P2-7：高于 90% 属噪声不打扰）。 */
 const RETENTION_SHOW_BELOW = 0.9;
 
-/** 掌握度行 + 遗忘快照字段（P2-7，后端已附带；共享 types.ts 不改，页面局部扩展）。 */
-type MasteryWithRetention = MasteryItem & {
+/** 最近掌握度变化默认显示条数（C1：超出收进「展开更多」）。 */
+const CHANGES_PAGE_SIZE = 10;
+
+/**
+ * 掌握度行 + 后端附带/并行契约字段（共享 types.ts 不改，页面局部扩展）：
+ * retention_*（P2-7 遗忘快照，已上线）；kb_id/kb_name/subject/chapter/aliases
+ *（真实规模契约，后端并行开发中，缺失时本页各区块自动降级）。
+ */
+type MasteryWithMeta = MasteryItem & {
   retention_now?: number | null;
   retention_in_3d?: number | null;
+  kb_id?: string | null;
+  kb_name?: string | null;
+  subject?: string | null;
+  chapter?: string | null;
+  aliases?: string[] | null;
 };
 
 /** 记忆条目（P2-1，对齐 GET /api/profile/insights；共享 types.ts 不改，局部定义）。 */
@@ -128,6 +146,270 @@ function CountBars({
   );
 }
 
+/** 折叠组头的展开箭头。 */
+function Chevron({ open, className }: { open: boolean; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={`${className ?? "h-3.5 w-3.5"} shrink-0 text-slate-400 transition-transform motion-reduce:transition-none ${
+        open ? "rotate-90" : ""
+      }`}
+    >
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+/** 老值→新值展示：默认 2 位小数，变化小于展示精度时自动升位（避免「0.76 → 0.76」）。 */
+function fmtPair(oldP: number, newP: number): [string, string] {
+  for (const digits of [2, 3, 4]) {
+    const a = oldP.toFixed(digits);
+    const b = newP.toFixed(digits);
+    if (a !== b) return [a, b];
+  }
+  return [oldP.toFixed(2), newP.toFixed(2)];
+}
+
+// ---- 明细折叠树（B1）：科目 → 章节 → KC ----
+
+interface ChapterGroup {
+  key: string;
+  name: string;
+  mean: number;
+  weakCount: number;
+  items: MasteryWithMeta[];
+}
+
+interface SubjectGroup {
+  key: string;
+  name: string;
+  total: number;
+  weakCount: number;
+  chapters: ChapterGroup[];
+}
+
+const isWeak = (m: MasteryWithMeta) => m.p_mastery < WEAK_THRESHOLD;
+/** 「到期」口径：FSRS 3 天后保持率有值且低于 90%（与遗忘快照展示阈值一致）。 */
+const isDue = (m: MasteryWithMeta) =>
+  m.retention_in_3d != null && m.retention_in_3d < RETENTION_SHOW_BELOW;
+
+/** 名称/别名本地搜索（q 已 trim + 小写）。 */
+function matchesQuery(m: MasteryWithMeta, q: string): boolean {
+  if (m.name.toLowerCase().includes(q)) return true;
+  return (m.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+}
+
+/** 按 subject → chapter 聚合，保持首次出现顺序（章节序即后端下发序）。 */
+function buildTree(items: MasteryWithMeta[]): SubjectGroup[] {
+  const groups: SubjectGroup[] = [];
+  const byKey = new Map<string, SubjectGroup>();
+  for (const m of items) {
+    const sName = m.subject ?? m.kb_name ?? "未分组";
+    let g = byKey.get(sName);
+    if (!g) {
+      g = { key: sName, name: sName, total: 0, weakCount: 0, chapters: [] };
+      byKey.set(sName, g);
+      groups.push(g);
+    }
+    const cName = m.chapter ?? "未分章";
+    let c = g.chapters.find((x) => x.name === cName);
+    if (!c) {
+      c = { key: `${sName}⟂${cName}`, name: cName, mean: 0, weakCount: 0, items: [] };
+      g.chapters.push(c);
+    }
+    c.items.push(m);
+    g.total += 1;
+    if (isWeak(m)) {
+      c.weakCount += 1;
+      g.weakCount += 1;
+    }
+  }
+  for (const g of groups) {
+    for (const c of g.chapters) {
+      c.mean = c.items.reduce((s, x) => s + x.p_mastery, 0) / c.items.length;
+    }
+  }
+  return groups;
+}
+
+/**
+ * 掌握度明细行：压缩行高；桌面 hover/键盘聚焦浮出快捷动作，
+ * 「…」菜单在所有尺寸可用（触屏兜底）；窄屏为两行卡片（名称行 + 元信息行）。
+ */
+function MasteryRow({
+  item,
+  menuOpen,
+  overriding,
+  overrideDisabled,
+  onToggleMenu,
+  onCloseMenu,
+  onOverride,
+}: {
+  item: MasteryWithMeta;
+  menuOpen: boolean;
+  overriding: boolean;
+  overrideDisabled: boolean;
+  onToggleMenu: () => void;
+  onCloseMenu: () => void;
+  onOverride: () => void;
+}) {
+  const weak = isWeak(item);
+  const ret3d = item.retention_in_3d;
+  const verifyHref = `/quiz?kc=${encodeURIComponent(item.name)}&n=3`;
+  const retentionTitle =
+    ret3d != null
+      ? `再不复习，3 天后预计保持率 ${Math.floor(ret3d * 100)}%${
+          item.retention_now != null
+            ? `（当前 ${Math.floor(item.retention_now * 100)}%，FSRS 遗忘曲线确定性预测）`
+            : "（FSRS 遗忘曲线确定性预测）"
+        }`
+      : undefined;
+
+  const menuItemCls =
+    "flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors";
+
+  return (
+    <li className="group relative rounded-lg transition-colors hover:bg-indigo-50/50">
+      <div className="flex items-center gap-2.5 px-1.5 py-1">
+        <ProgressRing
+          value={item.p_mastery}
+          size={32}
+          strokeWidth={3.5}
+          title={`${item.name}：掌握度 ${fmtPct(item.p_mastery)}`}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-slate-700" title={item.name}>
+              {item.name}
+            </span>
+            {weak && (
+              <span
+                className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
+                title={`薄弱点：掌握度 ${fmtPct(item.p_mastery)} < ${fmtPct(WEAK_THRESHOLD)}`}
+              >
+                薄弱
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+            <span>置信 {fmtPct(item.confidence)}</span>
+            {/* 遗忘快照（P2-7）缩成徽章，整句进 tooltip；<90% 才显示避免噪声 */}
+            {ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
+              <span
+                className="inline-flex cursor-help items-center rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
+                title={retentionTitle}
+              >
+                3 天后 {Math.floor(ret3d * 100)}%
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* 「…」菜单触发（触屏与所有尺寸的动作入口） */}
+        <button
+          type="button"
+          aria-label={`${item.name} 的操作菜单`}
+          aria-expanded={menuOpen}
+          onClick={onToggleMenu}
+          className="shrink-0 rounded-lg border border-transparent px-1.5 py-1 text-slate-400 transition-colors hover:border-slate-200 hover:text-slate-600"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4" aria-hidden>
+            <circle cx="5" cy="12" r="1.8" />
+            <circle cx="12" cy="12" r="1.8" />
+            <circle cx="19" cy="12" r="1.8" />
+          </svg>
+        </button>
+      </div>
+
+      {/* 桌面 hover / 键盘聚焦浮出的快捷动作（绝对定位盖行右侧，不挤压行宽） */}
+      <div className="pointer-events-none absolute inset-y-0.5 right-1 z-[5] hidden items-center gap-1 rounded-lg bg-white/95 pl-1.5 pr-1 opacity-0 shadow-sm ring-1 ring-slate-100 backdrop-blur-[2px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex sm:focus-within:pointer-events-auto sm:focus-within:opacity-100">
+        {weak && (
+          <Link
+            href="/quiz?weak=1"
+            title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
+            className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
+          >
+            练习
+          </Link>
+        )}
+        {/* 可争辩画像（P2-6）：3 题快速验证 → 判分走既有 BKT 链路即重估 */}
+        <Link
+          href={verifyHref}
+          title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
+          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100"
+        >
+          验证
+        </Link>
+        <button
+          type="button"
+          disabled={overrideDisabled}
+          onClick={onOverride}
+          title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志；想经做题重估请用「验证」"
+          className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {overriding && <Spinner className="h-3 w-3" />}
+          已掌握
+        </button>
+      </div>
+
+      {/* 「…」弹出菜单：动作全集 + 副说明（B1/B2 动作收纳） */}
+      {menuOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={onCloseMenu} aria-hidden />
+          <div className="absolute right-1 top-9 z-20 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+            {weak && (
+              <Link
+                href="/quiz?weak=1"
+                onClick={onCloseMenu}
+                title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
+                className={`${menuItemCls} text-amber-700 hover:bg-amber-50`}
+              >
+                针对此点练习
+                <span className="text-[10px] font-normal text-slate-400">
+                  薄弱点自动进卷
+                </span>
+              </Link>
+            )}
+            <Link
+              href={verifyHref}
+              onClick={onCloseMenu}
+              title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
+              className={`${menuItemCls} text-indigo-700 hover:bg-indigo-50`}
+            >
+              验证一下
+              <span className="text-[10px] font-normal text-slate-400">做 3 题重估掌握度</span>
+            </Link>
+            <button
+              type="button"
+              disabled={overrideDisabled}
+              onClick={() => {
+                onCloseMenu();
+                onOverride();
+              }}
+              title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志"
+              className={`${menuItemCls} text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40`}
+            >
+              <span className="flex items-center gap-1">
+                {overriding && <Spinner className="h-3 w-3" />}
+                我已掌握
+              </span>
+              <span className="text-[10px] font-normal text-slate-400">
+                直接标记，不验证
+              </span>
+            </button>
+          </div>
+        </>
+      )}
+    </li>
+  );
+}
+
 export default function ProfilePage() {
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,377 +424,390 @@ export default function ProfilePage() {
 
   const [reloadKey, setReloadKey] = useState(0);
 
-  // 画像加载：reloadKey 自增触发（effect 内联 IIFE，同 chat 页模式）
+  // 明细树交互态（B1/B2）
+  const [query, setQuery] = useState("");
+  const [weakOnly, setWeakOnly] = useState(false);
+  const [dueOnly, setDueOnly] = useState(false);
+  // 折叠覆写：未覆写时科目默认展开、章节默认「含薄弱才展开」
+  const [subjectOverrides, setSubjectOverrides] = useState<Record<string, boolean>>({});
+  const [chapterOverrides, setChapterOverrides] = useState<Record<string, boolean>>({});
+  const [actionMenuId, setActionMenuId] = useState<string | null>(null);
+
+  // 最近变化展开态（C1）
+  const [changesExpanded, setChangesExpanded] = useState(false);
+
   useEffect(() => {
-    let alive = true;
+    let cancelled = false;
     (async () => {
+      setLoading(true);
+      setError(null);
       try {
         const res = await apiJson<ProfileResponse>("/api/profile");
-        if (!alive) return;
-        setProfile(res);
-        setError(null);
-      } catch (err) {
-        if (alive) {
-          setError(err instanceof ApiError ? err.message : "画像加载失败");
-        }
+        if (!cancelled) setProfile(res);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : "画像加载失败");
       } finally {
-        if (alive) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
-      alive = false;
+      cancelled = true;
     };
   }, [reloadKey]);
 
-  // 记忆条目加载：与画像同随 reloadKey 刷新（「刷新画像」一并刷新记忆）
   useEffect(() => {
-    let alive = true;
+    let cancelled = false;
     (async () => {
       try {
         const res = await apiJson<InsightsResponse>("/api/profile/insights");
-        if (!alive) return;
-        setInsights(res.insights);
-        setInsightsError(null);
-      } catch (err) {
-        if (alive) {
+        if (!cancelled) setInsights(res.insights);
+      } catch (e) {
+        if (!cancelled) {
           setInsights([]);
-          setInsightsError(
-            err instanceof ApiError ? err.message : "记忆条目加载失败",
-          );
+          setInsightsError(e instanceof ApiError ? e.message : "记忆条目加载失败");
         }
       }
     })();
     return () => {
-      alive = false;
+      cancelled = true;
     };
   }, [reloadKey]);
 
-  const reload = () => {
-    setLoading(true);
-    setError(null);
-    setInsights(null);
-    setInsightsError(null);
-    setReloadKey((k) => k + 1);
-  };
-
-  // 删除记忆条目（用户纠正权）：204 后本地移除，不整页刷新
-  const deleteInsight = async (id: string) => {
-    if (deletingInsightId) return;
-    setDeletingInsightId(id);
-    setBanner(null);
-    try {
-      await apiJson<undefined>(`/api/profile/insights/${id}`, { method: "DELETE" });
-      setInsights((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));
-    } catch (err) {
-      setBanner(err instanceof ApiError ? err.message : "删除失败，请重试");
-    } finally {
-      setDeletingInsightId(null);
-    }
-  };
-
-  const override = async (item: MasteryItem) => {
-    if (overridingId) return;
+  const override = async (item: MasteryWithMeta) => {
     setOverridingId(item.kc_id);
     setBanner(null);
     try {
       await apiJson<OverrideResult>(`/api/profile/kc/${item.kc_id}/override`, {
-        body: { p_mastery: 0.9 },
+        method: "POST",
       });
       // 静默即时刷新（含变化流水里新增的 user_override 记录）
       setProfile(await apiJson<ProfileResponse>("/api/profile"));
-    } catch (err) {
-      setBanner(err instanceof ApiError ? err.message : "纠正失败，请重试");
+    } catch (e) {
+      setBanner(e instanceof ApiError ? e.message : "标记失败，请重试");
     } finally {
       setOverridingId(null);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="mx-auto w-full max-w-5xl p-4">
-        <SkeletonPage />
-      </div>
-    );
-  }
+  const deleteInsight = async (id: string) => {
+    setDeletingInsightId(id);
+    try {
+      await apiJson<undefined>(`/api/profile/insights/${id}`, { method: "DELETE" });
+      setInsights((prev) => (prev ?? []).filter((x) => x.id !== id));
+    } catch (e) {
+      setBanner(e instanceof ApiError ? e.message : "删除失败，请重试");
+    } finally {
+      setDeletingInsightId(null);
+    }
+  };
 
+  if (loading) return <SkeletonPage />;
   if (error || !profile) {
     return (
-      <div className="mx-auto w-full max-w-5xl p-4">
-        <ErrorBanner message={error ?? "画像加载失败"} onRetry={reload} />
+      <div className="space-y-4">
+        <PageHeader title="我的画像" subtitle="AI 眼中的我" />
+        <ErrorBanner message={error ?? "画像为空"} />
+        <button
+          type="button"
+          onClick={() => setReloadKey((k) => k + 1)}
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+        >
+          重试
+        </button>
       </div>
     );
   }
 
-  const { mastery, error_distribution, recent_changes } = profile;
+  const mastery = profile.mastery as MasteryWithMeta[];
+  const q = query.trim().toLowerCase();
+  const filtered = mastery.filter(
+    (m) =>
+      (!q || matchesQuery(m, q)) && (!weakOnly || isWeak(m)) && (!dueOnly || isDue(m)),
+  );
+  const tree = buildTree(filtered);
+  const filterActive = Boolean(q) || weakOnly || dueOnly;
+  // 零变化行后端已滤（?include_noop=1 保留审计口径），前端再兜底一次（C1）
+  const changes = profile.recent_changes.filter(
+    (c) => Math.abs(c.new_p - c.old_p) >= 0.0001 || c.evidence_type === "user_override",
+  );
+  const shownChanges = changesExpanded ? changes : changes.slice(0, CHANGES_PAGE_SIZE);
+
+  const chipCls = (on: boolean) =>
+    `rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+      on
+        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+    }`;
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-4 p-4">
+    <div className="space-y-4">
       <PageHeader
         title="AI 眼中的我"
         subtitle="掌握度画像由每次练习、复习与辅导的真实证据持续更新"
         action={
           <button
             type="button"
-            onClick={reload}
-            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
           >
             刷新画像
           </button>
         }
       />
-
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
-      {mastery.length === 0 && recent_changes.length === 0 ? (
-        <EmptyState
-          title="AI 还不认识你"
-          description="完成一次练习或复习后，这里会生成你的掌握度画像"
-          illustration="chart"
-        />
-      ) : (
-        <>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card
-              title="掌握度雷达"
-              extra={
-                <span className="text-xs text-slate-400">
-                  {Math.min(mastery.length, RADAR_MAX_DIMS)} / {mastery.length} 个知识点
-                </span>
-              }
-            >
-              <MasteryRadar items={mastery} />
-            </Card>
+      {/* 雷达（A1）：库 tab + 章节聚合轴 + 少轴条形降级 + 轴下钻（组件内实现） */}
+      <MasteryRadarPanel items={mastery} />
 
-            <Card title="掌握度明细">
-              {mastery.length === 0 ? (
-                <p className="py-3 text-center text-xs text-slate-400">
-                  暂无掌握度记录
-                </p>
-              ) : (
-                <ul className="max-h-96 space-y-1 overflow-y-auto pr-1">
-                  {(mastery as MasteryWithRetention[]).map((m) => (
-                    <li
-                      key={m.kc_id}
-                      className="flex items-center gap-3 rounded-xl px-1.5 py-1.5 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-50/50 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
-                    >
-                      <ProgressRing
-                        value={m.p_mastery}
-                        size={44}
-                        strokeWidth={4.5}
-                        title={`${m.name}：掌握度 ${fmtPct(m.p_mastery)}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <span
-                          className="block truncate text-sm font-medium text-slate-700"
-                          title={m.name}
-                        >
-                          {m.name}
-                        </span>
-                        <span className="block text-xs text-slate-400">
-                          置信 {fmtPct(m.confidence)}
-                        </span>
-                        {/* 遗忘快照（P2-7）：FSRS 确定性预测，<90% 才显示避免噪声 */}
-                        {m.retention_in_3d != null &&
-                          m.retention_in_3d < RETENTION_SHOW_BELOW && (
-                            <span
-                              className="block text-xs text-amber-600"
-                              title={
-                                m.retention_now != null
-                                  ? `当前预计保持率 ${Math.floor(m.retention_now * 100)}%（FSRS 遗忘曲线确定性预测）`
-                                  : undefined
-                              }
-                            >
-                              再不复习，3 天后预计保持率{" "}
-                              {Math.floor(m.retention_in_3d * 100)}%
-                            </span>
-                          )}
-                      </div>
-                      {m.p_mastery < WEAK_THRESHOLD && (
-                        <Link
-                          href="/quiz?weak=1"
-                          title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
-                          className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
-                        >
-                          针对此点练习
-                        </Link>
-                      )}
-                      {/* 可争辩画像（P2-6）：3 题快速验证 → 判分走既有 BKT 链路即重估 */}
-                      <Link
-                        href={`/quiz?kc=${encodeURIComponent(m.name)}&n=3`}
-                        title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
-                        className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100"
-                      >
-                        验证一下
-                      </Link>
-                      <button
-                        type="button"
-                        disabled={overridingId !== null || m.p_mastery >= 0.9}
-                        onClick={() => void override(m)}
-                        title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志；想经做题重估请用「验证一下」"
-                        className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {overridingId === m.kc_id && <Spinner className="h-3 w-3" />}
-                        <span className="flex flex-col items-start leading-tight">
-                          <span>我已掌握</span>
-                          <span className="text-[10px] font-normal text-slate-400">
-                            直接标记，不验证
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card title="错题分布 · 按错因">
-              <CountBars data={error_distribution.by_cause} labels={CAUSE_LABELS} />
-            </Card>
-            <Card title="错题分布 · 按状态">
-              <CountBars data={error_distribution.by_state} labels={STATE_LABELS} />
-            </Card>
-          </div>
-
-          <Card title="最近掌握度变化">
-            {recent_changes.length === 0 ? (
-              <p className="py-3 text-center text-xs text-slate-400">暂无变化记录</p>
-            ) : (
-              <ol className="ml-1.5 space-y-3 border-l-2 border-slate-100 pl-4">
-                {recent_changes.map((c) => {
-                  const up = c.new_p >= c.old_p;
-                  return (
-                    <li key={c.id} className="relative text-sm">
-                      {/* 时间线节点：升绿降橙 */}
-                      <span
-                        aria-hidden
-                        className={`absolute -left-[23px] top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-4 ring-white ${
-                          up ? "bg-emerald-500" : "bg-orange-500"
-                        }`}
-                      >
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="#fff"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className={`h-2 w-2 ${up ? "" : "rotate-180"}`}
-                        >
-                          <path d="M12 19V5m-6 6 6-6 6 6" />
-                        </svg>
-                      </span>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="w-32 shrink-0 text-xs text-slate-400">
-                          {fmtDateTime(c.at)}
-                        </span>
-                        <span
-                          className="min-w-0 flex-1 truncate font-medium text-slate-700"
-                          title={c.kc_name || c.kc_id}
-                        >
-                          {c.kc_name || `KC ${c.kc_id.slice(0, 8)}`}
-                        </span>
-                        <span
-                          className={`font-mono text-xs ${
-                            up ? "text-emerald-600" : "text-orange-600"
-                          }`}
-                        >
-                          {c.old_p.toFixed(2)} → {c.new_p.toFixed(2)}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                          {EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type}
-                          {c.weight !== 1 && ` ×${c.weight}`}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </Card>
-        </>
-      )}
-
-      {/* AI 记住的你（P2-1 记忆条目）：与画像空态无关，独立渲染 —— 记忆可先于掌握度产生 */}
+      {/* 明细折叠树（B1/B2）：科目 → 章节 → KC */}
       <Card
-        title="AI 记住的你"
+        title="掌握度明细"
         extra={
           <span className="text-xs text-slate-400">
-            来自对话与辅导的长期记忆 · 可逐条删除
+            {filterActive ? `${filtered.length} / ${mastery.length}` : mastery.length} 个知识点
           </span>
         }
       >
-        {insights === null ? (
-          <SkeletonList rows={3} />
-        ) : insightsError ? (
-          <p className="py-3 text-center text-xs text-red-500">
-            {insightsError}，点右上角「刷新画像」重试
-          </p>
-        ) : insights.length === 0 ? (
-          <p className="py-4 text-center text-xs leading-relaxed text-slate-400">
-            还没有记忆条目 —— 去
-            <Link
-              href="/chat"
-              className="mx-0.5 font-medium text-indigo-600 hover:underline"
-            >
-              对话
-            </Link>
-            或
-            <Link
-              href="/tutor"
-              className="mx-0.5 font-medium text-indigo-600 hover:underline"
-            >
-              辅导
-            </Link>
-            中学习，AI 会记下你在什么语境下困惑、又在哪里豁然开朗
-          </p>
+        {mastery.length === 0 ? (
+          <EmptyState
+            title="还没有掌握度证据"
+            description="去练习或复习，作答会即时写入画像"
+          />
         ) : (
-          <ul className="max-h-96 space-y-2 overflow-y-auto pr-1">
-            {insights.map((ins) => (
-              <li
-                key={ins.id}
-                className="flex items-start gap-2 rounded-xl border border-slate-100 px-3 py-2 transition-colors hover:border-indigo-100 hover:bg-indigo-50/40"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="flex flex-wrap items-center gap-1.5">
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索知识点名称…"
+                aria-label="搜索知识点"
+                className="w-full max-w-56 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+              />
+              <button type="button" className={chipCls(weakOnly)} onClick={() => setWeakOnly((v) => !v)}>
+                只看薄弱
+              </button>
+              <button type="button" className={chipCls(dueOnly)} onClick={() => setDueOnly((v) => !v)}>
+                只看待复习
+              </button>
+            </div>
+            {tree.length === 0 ? (
+              <p className="py-4 text-center text-xs text-slate-400">没有匹配的知识点</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {tree.map((g) => {
+                  const subjectOpen = subjectOverrides[g.key] ?? true;
+                  return (
+                    <li key={g.key} className="rounded-xl border border-slate-100">
+                      <button
+                        type="button"
+                        aria-expanded={subjectOpen}
+                        onClick={() =>
+                          setSubjectOverrides((prev) => ({ ...prev, [g.key]: !subjectOpen }))
+                        }
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-slate-50"
+                      >
+                        <Chevron open={subjectOpen} />
+                        <span className="text-sm font-semibold text-slate-700">{g.name}</span>
+                        <span className="text-[11px] text-slate-400">
+                          {g.total} 个知识点
+                          {g.weakCount > 0 && (
+                            <span className="ml-1 text-amber-600">· {g.weakCount} 个薄弱</span>
+                          )}
+                        </span>
+                      </button>
+                      {subjectOpen && (
+                        <ul className="space-y-1 px-2 pb-2">
+                          {g.chapters.map((c) => {
+                            // 过滤/搜索时全展开（用户在找东西）；否则默认「含薄弱才展开」
+                            const chapterOpen =
+                              chapterOverrides[c.key] ?? (filterActive || c.weakCount > 0);
+                            return (
+                              <li key={c.key} className="rounded-lg bg-slate-50/60">
+                                <button
+                                  type="button"
+                                  aria-expanded={chapterOpen}
+                                  onClick={() =>
+                                    setChapterOverrides((prev) => ({
+                                      ...prev,
+                                      [c.key]: !chapterOpen,
+                                    }))
+                                  }
+                                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-slate-100/70"
+                                >
+                                  <Chevron open={chapterOpen} className="h-3 w-3" />
+                                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-600">
+                                    {c.name}
+                                  </span>
+                                  <span
+                                    className="font-mono text-[11px]"
+                                    style={{ color: masteryColor(c.mean) }}
+                                    title={`章平均掌握度 ${fmtPct(c.mean)}（${c.items.length} 个知识点）`}
+                                  >
+                                    {fmtPct(c.mean)}
+                                  </span>
+                                  {c.weakCount > 0 && (
+                                    <span className="rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
+                                      {c.weakCount} 薄弱
+                                    </span>
+                                  )}
+                                </button>
+                                {chapterOpen && (
+                                  <ul className="space-y-0.5 px-1 pb-1">
+                                    {c.items.map((m) => (
+                                      <MasteryRow
+                                        key={m.kc_id}
+                                        item={m}
+                                        menuOpen={actionMenuId === m.kc_id}
+                                        overriding={overridingId === m.kc_id}
+                                        overrideDisabled={overridingId !== null}
+                                        onToggleMenu={() =>
+                                          setActionMenuId((cur) =>
+                                            cur === m.kc_id ? null : m.kc_id,
+                                          )
+                                        }
+                                        onCloseMenu={() => setActionMenuId(null)}
+                                        onOverride={() => override(m)}
+                                      />
+                                    ))}
+                                  </ul>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card title="错题分布 · 按错因">
+          <CountBars data={profile.error_distribution.by_cause} labels={CAUSE_LABELS} />
+        </Card>
+        <Card title="错题分布 · 按状态">
+          <CountBars data={profile.error_distribution.by_state} labels={STATE_LABELS} />
+        </Card>
+      </div>
+
+      {/* 最近掌握度变化（C1）：默认 10 条；权重徽章收 tooltip */}
+      <Card
+        title="最近掌握度变化"
+        extra={<span className="text-xs text-slate-400">每次变化可核对到具体作答（F8-A3）</span>}
+      >
+        {changes.length === 0 ? (
+          <p className="py-3 text-center text-xs text-slate-400">暂无变化记录</p>
+        ) : (
+          <>
+            <ul className="divide-y divide-slate-100">
+              {shownChanges.map((c) => {
+                const [oldS, newS] = fmtPair(c.old_p, c.new_p);
+                const up = c.new_p >= c.old_p;
+                return (
+                  <li key={c.id} className="flex items-center gap-2.5 py-1.5 text-xs">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
-                        KIND_LABELS[ins.kind]?.className ?? KIND_BADGE_FALLBACK
+                      aria-hidden
+                      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white ${
+                        up ? "bg-emerald-500" : "bg-orange-500"
                       }`}
                     >
-                      {KIND_LABELS[ins.kind]?.label ?? ins.kind}
+                      {up ? "↑" : "↓"}
                     </span>
-                    {ins.kc_name && (
-                      <span
-                        className="max-w-48 truncate text-xs font-medium text-slate-600"
-                        title={ins.kc_name}
-                      >
-                        {ins.kc_name}
-                      </span>
-                    )}
-                    <span className="text-xs text-slate-400">
-                      {SOURCE_LABELS[ins.source] ?? ins.source} ·{" "}
-                      {fmtDateTime(ins.created_at)}
+                    <span className="shrink-0 font-mono text-slate-400">{fmtDateTime(c.at)}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-slate-600">
+                      {c.kc_name}
                     </span>
-                  </p>
-                  {/* 学生原话 / 误解描述：AI 只作转述来源，掌握度数字不由它改写 */}
-                  <p className="mt-1 text-sm leading-relaxed text-slate-700">
-                    {ins.text}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={deletingInsightId !== null}
-                  onClick={() => void deleteInsight(ins.id)}
-                  title="删除这条记忆（用户纠正权：删除后 AI 不再引用它）"
-                  className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {deletingInsightId === ins.id && <Spinner className="h-3 w-3" />}
-                  删除
-                </button>
-              </li>
-            ))}
+                    <span className={`shrink-0 font-mono ${up ? "text-emerald-600" : "text-orange-600"}`}>
+                      {oldS} → {newS}
+                    </span>
+                    <span
+                      className="shrink-0 cursor-help rounded bg-slate-100 px-1.5 py-px text-[10px] text-slate-500"
+                      title={
+                        c.weight < 1
+                          ? `${EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type} · 证据权重 ×${c.weight}（主观/间接证据降权，系数直接暴露可审计）`
+                          : EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type
+                      }
+                    >
+                      {EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type}
+                      {c.weight < 1 && <span className="ml-0.5 text-slate-400">×{c.weight}</span>}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {changes.length > CHANGES_PAGE_SIZE && (
+              <button
+                type="button"
+                onClick={() => setChangesExpanded((v) => !v)}
+                className="mt-2 w-full rounded-lg border border-slate-100 py-1.5 text-xs text-slate-500 transition-colors hover:border-slate-200 hover:text-slate-700"
+              >
+                {changesExpanded ? "收起" : `展开更多（共 ${changes.length} 条）`}
+              </button>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* AI 记住的你（P2-1）：长期记忆可见可删 */}
+      <Card
+        title="AI 记住的你"
+        extra={<span className="text-xs text-slate-400">来自对话与辅导的长期记忆 · 可逐条删除</span>}
+      >
+        {insights === null ? (
+          <SkeletonList rows={3} />
+        ) : insights.length === 0 ? (
+          <p className="py-4 text-center text-xs text-slate-400">
+            {insightsError ?? (
+              <>
+                还没有记忆条目 —— 去{" "}
+                <Link href="/chat" className="text-indigo-600 hover:underline">
+                  对话
+                </Link>{" "}
+                或{" "}
+                <Link href="/tutor" className="text-indigo-600 hover:underline">
+                  辅导
+                </Link>{" "}
+                中学习，AI 会记下你在什么语境下困惑、又在哪里豁然开朗
+              </>
+            )}
+          </p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {insights.map((it) => {
+              const kind = KIND_LABELS[it.kind];
+              return (
+                <li key={it.id} className="flex items-start gap-2.5 py-2 text-xs">
+                  <span
+                    className={`mt-px shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium ring-1 ring-inset ${
+                      kind?.className ?? KIND_BADGE_FALLBACK
+                    }`}
+                  >
+                    {kind?.label ?? it.kind}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-slate-600">{it.text}</p>
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      {it.kc_name && <span className="mr-1.5">{it.kc_name}</span>}
+                      {SOURCE_LABELS[it.source] ?? it.source} · {fmtDateTime(it.created_at)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={deletingInsightId === it.id}
+                    onClick={() => deleteInsight(it.id)}
+                    title="删除这条记忆（用户纠正权，删除即时生效）"
+                    className="shrink-0 rounded-lg px-1.5 py-0.5 text-slate-300 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                  >
+                    {deletingInsightId === it.id ? <Spinner className="h-3 w-3" /> : "删除"}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </Card>

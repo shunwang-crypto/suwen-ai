@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"极限与连续\", \"导数\", \"泰勒公式\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 557,
+  "completion_tokens": 18
+}

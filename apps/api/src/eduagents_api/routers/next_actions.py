@@ -22,19 +22,19 @@ import uuid
 from datetime import date, datetime
 from urllib.parse import quote
 
-from eduagents_core.mastery import scheduler
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import ErrorItem, KnowledgeComponent, LearnerInsight
+from ..models import KnowledgeComponent, LearnerInsight
 from ..plan_adjust import iter_tasks, latest_plan
 from ..profile_summary import weak_point_kcs
 
-# 到期查询口径与复习页同源 (只 import 不改, reviews 归他线所有)
-from .reviews import _ACTIVE_STATES
+# B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
+# 开场卡与复习页的"到期数"不再各查各的 (此前 5 vs 37 打架)
+from .reviews import due_error_items
 
 router = APIRouter(prefix="/api/next-actions", tags=["next-actions"])
 
@@ -171,15 +171,8 @@ async def _load_snapshots(
 ) -> tuple[int, dict | None, dict | None]:
     """一次事务读齐 (due_count, 最近卡点 insight, 活跃计划快照)。"""
     async with tenant_session(ctx.tenant_id) as session:
-        rows = (
-            await session.scalars(
-                select(ErrorItem).where(
-                    ErrorItem.user_id == ctx.user_id,
-                    ErrorItem.state.in_(_ACTIVE_STATES),
-                )
-            )
-        ).all()
-        due_count = sum(1 for r in rows if scheduler.is_due(r.fsrs_card_json, now_dt))
+        # 到期数 = len(全量到期集合), 与 reviews.today 的 total_due 同一函数 (B3)
+        due_count = len(await due_error_items(session, ctx.user_id, now_dt))
 
         insight_row = (
             await session.execute(

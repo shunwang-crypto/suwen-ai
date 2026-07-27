@@ -1,0 +1,6 @@
+{
+  "text": "{\"ks\": [\"无穷无穷量\", \"等等价无穷小\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 678,
+  "completion_tokens": 16
+}

@@ -1,6 +1,6 @@
 {
-  "text": "该章节开头，,节e列e须e熟e记e的导e数e公公式 e，与e求导e法e则一 e起构e成 e计任e何 e初 e等函 e数导 ee完 e工具 e箱:e的位置 e e章e开部分处 e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e",
+  "text": "该该章节中起列了 e必须熟记的 e些基本初 e函数函数函数导 e公式 e它们在 e整个章节中起中起重要 e位 e作为 e计算 e任何初 e函数导 e的基础 e。",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 460,
-  "completion_tokens": 100
+  "completion_tokens": 50
 }

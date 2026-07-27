@@ -1,6 +1,6 @@
 {
-  "text": "该片段位于高等数学讲义第五章不定积分节，作为微积分基本定理的的详细阐述，并 引出了牛顿-莱布尼茨公式及其应用实例，强调了变上限积分与原函数的关系，简化了定积分的计算方法。",
+  "text": "该片段位于章节起始，详细解释了微积分基本定理，并",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 796,
-  "completion_tokens": 57
+  "completion_tokens": 16
 }

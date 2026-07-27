@@ -28,11 +28,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import array as pg_array
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..error_analysis import CAUSES, classify_error_cause
+from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
     Attempt,
     ErrorItem,
@@ -79,21 +81,42 @@ def _question_public(q: Question) -> dict:
     }
 
 
+def filter_due(rows: list, now_dt: datetime) -> list:
+    """到期过滤 + 排序 (纯函数, F6 到期口径唯一出处): FSRS 到期 (空卡视为到期),
+    按到期时间升序, 空卡按建卡时间。rows 需已限定活跃态 (new/reviewing)。"""
+    due_rows = [r for r in rows if scheduler.is_due(r.fsrs_card_json, now_dt)]
+    due_rows.sort(key=lambda r: scheduler.due_at(r.fsrs_card_json) or r.created_at)
+    return due_rows
+
+
+async def due_error_items(session, user_id, now_dt: datetime) -> list:
+    """全量到期错题 (B3 同源共用函数): reviews 今日队列与 next_actions 开场卡都调这里。
+
+    此前两处各写一份查询, 复习页"5"(截断后) 与开场卡"37"(全量) 数字打架;
+    现在到期集合只有这一个出处, total_due = len(结果), 队列 = 结果[:limit]。
+    """
+    rows = (
+        await session.scalars(
+            select(ErrorItem).where(
+                ErrorItem.user_id == user_id,
+                ErrorItem.state.in_(_ACTIVE_STATES),
+            )
+        )
+    ).all()
+    return filter_due(rows, now_dt)
+
+
 @router.get("/today")
 async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
-    """到期错题队列 (F6-A4): state ∈ {new, reviewing} 且 FSRS 到期 (空卡视为到期)。"""
+    """到期错题队列 (F6-A4): state ∈ {new, reviewing} 且 FSRS 到期 (空卡视为到期)。
+
+    B3: 响应带 total_due (全量到期数, 与 next_actions 同一函数取数), 前端"今日 5 题 /
+    共 37 题到期"两个数字同源; 条目带 subject/kb_name/kb_id (kc_hierarchy 推导)。
+    """
     now_dt = await timectl.now(request.app.state.redis)
     async with tenant_session(ctx.tenant_id) as session:
-        rows = (
-            await session.scalars(
-                select(ErrorItem).where(
-                    ErrorItem.user_id == ctx.user_id,
-                    ErrorItem.state.in_(_ACTIVE_STATES),
-                )
-            )
-        ).all()
-        due_rows = [r for r in rows if scheduler.is_due(r.fsrs_card_json, now_dt)]
-        due_rows.sort(key=lambda r: scheduler.due_at(r.fsrs_card_json) or r.created_at)
+        due_rows = await due_error_items(session, ctx.user_id, now_dt)
+        total_due = len(due_rows)
         items = []
         at_3d = now_dt + _RETENTION_HORIZON
         for row in due_rows[:_TODAY_LIMIT]:
@@ -115,7 +138,20 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
                     "question": _question_public(question),
                 }
             )
-    return {"items": items, "now": now_dt.isoformat()}
+    # 队列条目的库/科目归属 (B3): 按题目 KC 推导, 多 KC 题取首个可解析 KC 的归属
+    meta = await resolve_kc_meta(
+        ctx.tenant_id,
+        [k for it in items for k in it["question"]["kc_ids"]],
+        redis=request.app.state.redis,
+    )
+    for it in items:
+        info = next(
+            (meta[k] for k in it["question"]["kc_ids"] if k in meta), None
+        )
+        it["kb_id"] = info["kb_id"] if info else None
+        it["kb_name"] = info["kb_name"] if info else ""
+        it["subject"] = info["subject"] if info else ""
+    return {"items": items, "total_due": total_due, "now": now_dt.isoformat()}
 
 
 async def _grade_short(
@@ -396,15 +432,17 @@ async def list_errors(
     state: str | None = Query(default=None),
     cause: str | None = Query(default=None),
     kc_id: uuid.UUID | None = Query(default=None),
+    kb_id: uuid.UUID | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """错题列表 (F6): 按状态/错因/知识点筛选, 分页; 含我的作答与正确答案对照。
+    """错题列表 (F6): 按状态/错因/知识点/知识库筛选, 分页; 含我的作答与正确答案对照。
 
     state 除四个真实状态外还接受别名 "active" (= new|reviewing, 即仍在复习队列里的),
     对应前端"待复习"统计卡 —— 让卡片点击与列表筛选严格一致, 不做近似。
     error_count = 该题在 attempts 里的错误作答次数 (复习作答不写 attempts, 故只统计测评路径)。
+    B4: kb_id 过滤经 kc_ids ∩ 该库 KC 集合实现 (jsonb ?| text[]), 不加冗余列不动迁移。
     """
     if state is not None and state not in (*_ALL_STATES, "active"):
         raise HTTPException(status_code=422, detail="INVALID_STATE")
@@ -420,6 +458,21 @@ async def list_errors(
             conditions.append(ErrorItem.cause == cause)
         if kc_id is not None:
             conditions.append(ErrorItem.kc_ids.contains([str(kc_id)]))  # JSONB @>
+        if kb_id is not None:
+            # B4: 先取该库全量 KC id, 再用 jsonb ?| (任意元素命中) 圈定错题
+            kb_kc_ids = [
+                str(k)
+                for k in (
+                    await session.scalars(
+                        select(KnowledgeComponent.id).where(
+                            KnowledgeComponent.kb_id == kb_id
+                        )
+                    )
+                ).all()
+            ]
+            if not kb_kc_ids:
+                return {"items": [], "total": 0, "page": page, "page_size": page_size, "pages": 0}
+            conditions.append(ErrorItem.kc_ids.op("?|")(pg_array(kb_kc_ids)))
         total = int(
             await session.scalar(select(func.count()).select_from(ErrorItem).where(*conditions))
             or 0

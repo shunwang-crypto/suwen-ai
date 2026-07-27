@@ -13,7 +13,14 @@ log = get_logger("usage")
 
 async def persist_usage(event: UsageEvent) -> None:
     """Gateway usage sink -> usage_log row. 每次 LLM 调用都可按 user/feature/model
-    三维归因 (F10-A1 / M1-D4)。失败只记日志, 不打断业务链路。"""
+    三维归因 (F10-A1 / M1-D4)。失败只记日志, 不打断业务链路。
+
+    0006 预付额度: 钱包扣费挂在**同一事务**内 (不新开事务) —— usage_log 行与
+    wallet_ledger/wallet_accounts 一起提交/一起回滚, 不出现"记了用量没扣钱"或
+    反之的单边落账。cost_cny <= 0 (stub/replay/缓存命中/失败返还) 零成本直接跳过;
+    余额允许扣到负值 (进行中调用不打断), 拦截在下一次请求的网关入口 precheck
+    (wallet.WalletBudgetGuard -> 402 INSUFFICIENT_CREDITS)。
+    """
     if not event.tenant_id:
         log.warning("usage_event_without_tenant", feature=event.feature)
         return
@@ -35,5 +42,15 @@ async def persist_usage(event: UsageEvent) -> None:
                     mode=event.mode,
                 )
             )
+            if event.user_id and event.cost_cny > 0:
+                from .wallet import get_wallet_service
+
+                await get_wallet_service().consume(
+                    session,
+                    user_id=uuid.UUID(event.user_id),
+                    cost_cny=event.cost_cny,
+                    request_id=event.request_id,
+                    feature=event.feature,
+                )
     except Exception:
         log.exception("usage_persist_failed")

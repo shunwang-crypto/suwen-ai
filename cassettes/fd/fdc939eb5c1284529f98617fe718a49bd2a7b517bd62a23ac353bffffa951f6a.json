@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"泰勒公式\", \"极限\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 575,
+  "completion_tokens": 13
+}

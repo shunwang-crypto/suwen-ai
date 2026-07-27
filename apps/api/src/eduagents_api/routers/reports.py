@@ -17,13 +17,14 @@ from eduagents_core.config import Settings
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import GatewayError, Tier
-from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD
+from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, REINFORCE_THRESHOLD
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import Date, cast, func, select
 
 from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings, get_gateway
+from ..kc_hierarchy import FALLBACK_CHAPTER, chapter_sort_key, resolve_kc_meta
 from ..models import Attempt, ErrorItem, KcEdge, KnowledgeComponent, MasteryLog, MasteryRecord
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -32,9 +33,13 @@ _TREND_DAYS = 30
 _RADAR_TOP_N = 12
 # 报告薄弱红线与计划补强同源 (thresholds 唯一来源, G6): 两处判定不许漂移
 _WEAK_THRESHOLD = REINFORCE_THRESHOLD
+# C4: "待巩固"档 = 红线以上但未达定向出题线 (与 quiz 薄弱点圈选同源)
+_CONSOLIDATE_THRESHOLD = QUIZ_WEAK_THRESHOLD
 
 
-async def _build_aggregates(session, ctx: AuthContext) -> dict:
+async def _build_aggregates(
+    session, ctx: AuthContext, kb_id: str | None = None, redis=None
+) -> dict:
     # 掌握度全量 + KC 名 (同 profile 口径, F7-A1 可核对)
     mastery_rows = (
         await session.execute(
@@ -60,7 +65,7 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
     ranked = sorted(
         mastery_rows, key=lambda pair: activity.get(str(pair[0].kc_id), 0), reverse=True
     )[:_RADAR_TOP_N]
-    radar = [
+    radar_kcs = [
         {
             "kc_id": str(r.kc_id),
             "name": name,
@@ -69,6 +74,52 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
         }
         for r, name in ranked
     ]
+
+    # A2 雷达语义修复: 单 KC 当轴在真实规模 (3 库 × 152 KC) 下语义错误 —— 异构 KC
+    # 混轴、轴集合随掌握度漂移不可跨时间对比。改为聚合轴:
+    #   传 kb_id -> 轴 = 该库各章 (章内 KC 按证据数加权平均, 无证据按等权);
+    #   不传     -> 轴 = 各知识库 (库级聚合)。
+    # 章序按章号排 (中文数字), 保证轴序稳定; 旧 top12 结构保留在 radar_kcs 兼容。
+    meta = await resolve_kc_meta(
+        ctx.tenant_id, [str(r.kc_id) for r, _ in mastery_rows], redis=redis
+    )
+    scoped = [
+        (r, name)
+        for r, name in mastery_rows
+        if not kb_id or (meta.get(str(r.kc_id)) or {}).get("kb_id") == kb_id
+    ]
+    buckets: dict[str, dict] = {}
+    for r, name in scoped:
+        info = meta.get(str(r.kc_id)) or {}
+        if kb_id:
+            axis_key = info.get("chapter") or FALLBACK_CHAPTER
+        else:
+            axis_key = info.get("kb_name") or "未归库"
+        bucket = buckets.setdefault(
+            axis_key,
+            {"name": axis_key, "kb_id": info.get("kb_id"), "num": 0.0, "den": 0.0, "kcs": []},
+        )
+        # 加权平均: 证据越多的 KC 对章掌握度贡献越大 (无证据仍按 1 计, 不被抹掉)
+        weight = float(activity.get(str(r.kc_id), 0)) + 1.0
+        bucket["num"] += r.p_mastery * weight
+        bucket["den"] += weight
+        bucket["kcs"].append(
+            {"kc_id": str(r.kc_id), "name": name, "p_mastery": round(r.p_mastery, 4)}
+        )
+    axes_kind = "chapter" if kb_id else "kb"
+    radar = [
+        {
+            "key": key,
+            "name": b["name"],
+            "kb_id": b["kb_id"],
+            "p_mastery": round(b["num"] / b["den"], 4) if b["den"] else 0.0,
+            "kc_count": len(b["kcs"]),
+            "weak_count": sum(1 for k in b["kcs"] if k["p_mastery"] < _CONSOLIDATE_THRESHOLD),
+            "kcs": sorted(b["kcs"], key=lambda k: k["p_mastery"]),
+        }
+        for key, b in buckets.items()
+    ]
+    radar.sort(key=lambda a: chapter_sort_key(a["name"]) if kb_id else (0, 0, a["name"]))
 
     # trend: 近 30 天每日答题数与正确率, 无数据日补零 (前端折线连续)。
     # P2-11 唯一决定: 日切在 SQL 侧 AT TIME ZONE 'Asia/Shanghai' (timestamptz ->
@@ -106,8 +157,12 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
             }
         )
 
-    # weak_points: p<0.4, 附相关错题数 + 归因下钻 (kc_edges: from_kc 是 to_kc 的前置)
-    weak_ids = [kc for kc, p in p_by_kc.items() if p < _WEAK_THRESHOLD]
+    # weak_points: p<红线, 附相关错题数 + 归因下钻 (kc_edges: from_kc 是 to_kc 的前置)
+    weak_ids = [
+        kc
+        for kc, p in p_by_kc.items()
+        if p < _WEAK_THRESHOLD and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
+    ]
     prereqs: dict[str, list[str]] = {}
     if weak_ids:
         edges = (
@@ -120,8 +175,17 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
         ).all()
         for e in edges:
             prereqs.setdefault(str(e.to_kc), []).append(str(e.from_kc))
-    weak_points = []
-    for kc in sorted(weak_ids, key=lambda k: p_by_kc[k]):
+    # C4: "薄弱"曾同词双阈值 (报告 0.4 / 出题 0.6) 导致同一用户看到两个数字。
+    # 分层命名: 红线 = 低于补强阈值; 待巩固 = 红线以上但未达定向出题线。两档同结构
+    # 下发, weak_points 保持"红线"旧语义 (actions/narrative 消费方口径不变)。
+    consolidate_ids = [
+        kc
+        for kc, p in p_by_kc.items()
+        if _WEAK_THRESHOLD <= p < _CONSOLIDATE_THRESHOLD
+        and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
+    ]
+    entries = []
+    for kc in sorted(weak_ids + consolidate_ids, key=lambda k: p_by_kc[k]):
         error_count = int(
             await session.scalar(
                 select(func.count()).where(
@@ -136,15 +200,24 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
             for pre in prereqs.get(kc, [])
             if pre in p_by_kc and p_by_kc[pre] < _WEAK_THRESHOLD
         ]
-        weak_points.append(
+        entries.append(
             {
+                "tier": "red" if p_by_kc[kc] < _WEAK_THRESHOLD else "consolidate",
                 "kc_id": kc,
                 "name": name_by_kc.get(kc, ""),
                 "p_mastery": round(p_by_kc[kc], 4),
                 "error_count": error_count,
                 "possible_root_cause": root_cause,
+                # B5: 按科目分节展示 (真实规模下 17+ 张卡平铺不可读)
+                "subject": (meta.get(kc) or {}).get("subject") or "",
+                "kb_id": (meta.get(kc) or {}).get("kb_id"),
+                "kb_name": (meta.get(kc) or {}).get("kb_name") or "",
+                "chapter": (meta.get(kc) or {}).get("chapter") or FALLBACK_CHAPTER,
             }
         )
+
+    weak_points = [e for e in entries if e["tier"] == "red"]
+    consolidate_points = [e for e in entries if e["tier"] == "consolidate"]
 
     # 未归档错题总数 (actions 用)
     open_errors = int(
@@ -157,8 +230,11 @@ async def _build_aggregates(session, ctx: AuthContext) -> dict:
     )
     return {
         "radar": radar,
+        "radar_kcs": radar_kcs,
+        "axes_kind": axes_kind,
         "trend": trend,
         "weak_points": weak_points,
+        "consolidate_points": consolidate_points,
         "open_errors": open_errors,
     }
 
@@ -228,7 +304,10 @@ async def _narrative(
         "你是学情分析师。仅基于下面的 JSON 聚合数据, 输出三段式诊断, 三段分别以"
         "『现状』『归因』『建议』开头。每段必须引用具体知识点名称与数字 (掌握度百分比/"
         "错题数/正确率), 禁止出现没有具体知识点的空话 (如泛泛的『多加练习』)。"
-        "归因段优先引用 possible_root_cause 的前置知识点链条。\n数据:\n"
+        "归因段优先引用 possible_root_cause 的前置知识点链条。\n"
+        "写作要求: 直接以学情结论开口, 严禁出现『基于您提供的数据』『根据 JSON』等"
+        "提示词口吻; 百分比一律取整 (写 82% 不写 81.64%); 末尾以 2-3 条可执行行动"
+        "清单收尾, 每条给出具体知识点与动作。\n数据:\n"
         + json.dumps(payload, ensure_ascii=False, default=str)
     )
     try:
@@ -254,22 +333,32 @@ async def _narrative(
 @router.get("/learning")
 async def learning_report(
     request: Request,
+    kb_id: str | None = None,
     ctx: AuthContext = Depends(api_rate_limited),
     settings: Settings = Depends(get_app_settings),
     gateway=Depends(get_gateway),
 ):
+    """学情报告 (F7)。kb_id 非空 = 单库视图: 雷达轴为该库各章, 薄弱点限该库。"""
     async with tenant_session(ctx.tenant_id) as session:
-        agg = await _build_aggregates(session, ctx)
+        agg = await _build_aggregates(
+            session, ctx, kb_id=kb_id, redis=getattr(request.app.state, "redis", None)
+        )
     actions = _build_actions(agg)
     narrative, note = await _narrative(
         gateway, settings, ctx, getattr(request.state, "request_id", ""), agg, actions
     )
     return {
+        # A2: 聚合轴 (章/库), 每轴带 kc_count/weak_count 与下钻 kcs
         "radar": agg["radar"],
+        "axes_kind": agg["axes_kind"],
+        # 旧 top12 KC 轴保留一版, 供未升级的消费方降级
+        "radar_kcs": agg["radar_kcs"],
         "trend": agg["trend"],
         "weak_points": agg["weak_points"],
-        # 薄弱判定红线随响应下发, 前端文案据此渲染 (不许两侧各写一份数字)
+        # C4: 两档阈值分开命名下发, 消除"薄弱"同词双口径
         "weak_threshold": _WEAK_THRESHOLD,
+        "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
+        "consolidate_points": agg["consolidate_points"],
         "actions": actions,
         "narrative": narrative,
         "narrative_note": note,

@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"泰勒公式\", \"拉格朗日余项\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 717,
+  "completion_tokens": 16
+}

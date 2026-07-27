@@ -28,6 +28,13 @@ export function notifyUnauthorized(): void {
   onUnauthorized?.();
 }
 
+/** 402 INSUFFICIENT_CREDITS 全局回调（CreditsToast 注册 -> 提示额度不足并引导充值）。 */
+let onInsufficientCredits: (() => void) | null = null;
+
+export function setOnInsufficientCredits(handler: (() => void) | null): void {
+  onInsufficientCredits = handler;
+}
+
 /** 后端错误信封 {code, message, request_id} 的统一异常。message 为中文，可直接展示。 */
 export class ApiError extends Error {
   readonly status: number;
@@ -120,7 +127,15 @@ export async function apiFetch(
     if (refreshed) res = await doFetch();
     if (res.status === 401) notifyUnauthorized();
   }
-  if (!res.ok) throw await parseErrorResponse(res);
+  if (!res.ok) {
+    const err = await parseErrorResponse(res);
+    // 402 额度不足：任何功能请求都可能返回。全局提示一次，同时照常抛出，
+    // 调用方仍可按需做内联展示（不吞错、不改调用层契约）。
+    if (err.status === 402 && err.code === "INSUFFICIENT_CREDITS") {
+      onInsufficientCredits?.();
+    }
+    throw err;
+  }
   return res;
 }
 

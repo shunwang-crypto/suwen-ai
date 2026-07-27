@@ -235,13 +235,20 @@ async def test_login_account_bucket_blocks_same_email_across_ips(strict_auth_app
             )
             assert r.status_code == 201, r.text
 
-    # 同一邮箱从 5 个不同 IP 各试错一次: IP 桶全新, 只有账号桶在累计
+    # 同一邮箱从 5 个不同 IP 各试错一次: IP 桶全新, 只有账号桶在累计。
+    # 前 3 次 401 (坏凭证); 第 4/5 次落入登录防爆破 (连续失败 >=3 次强制图形
+    # 验证码, routers/auth.py) → 400 CAPTCHA_REQUIRED — 但账号桶仍在无条件计数
+    # (_auth_rate_limit 在验证码检查之前), 第 6 次的 429 断言不受影响。
     for i in range(5):
         async with _client_for_ip(app, f"10.{seg}.1.{i + 1}") as c:
             r = await c.post(
                 "/api/auth/login", json={"email": email_victim, "password": "wrong-pw"}
             )
-            assert r.status_code == 401, f"第{i + 1}次: {r.status_code}"
+            if i < 3:
+                assert r.status_code == 401, f"第{i + 1}次: {r.status_code}"
+            else:
+                assert r.status_code == 400, f"第{i + 1}次: {r.status_code}"
+                assert r.json()["code"] == "CAPTCHA_REQUIRED"
 
     # 第 6 次换全新 IP 仍应 429 → 证明账号维度桶生效 (纯 IP 桶挡不住)
     async with _client_for_ip(app, f"10.{seg}.1.99") as c:

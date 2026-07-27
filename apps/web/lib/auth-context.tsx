@@ -24,11 +24,25 @@ import type { TokenResponse, UserOut } from "./types";
 
 export type AuthStatus = "loading" | "authed" | "guest";
 
+/** 图形验证码答案（register 必带；login 在后端要求 CAPTCHA_REQUIRED 时补带）。 */
+export interface CaptchaAnswer {
+  captcha_id: string;
+  captcha_answer: string;
+}
+
 interface AuthContextValue {
   user: UserOut | null;
   status: AuthStatus;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  login: (
+    email: string,
+    password: string,
+    captcha?: CaptchaAnswer,
+  ) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    captcha?: CaptchaAnswer,
+  ) => Promise<void>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
 }
@@ -75,22 +89,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [clearAuth]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const token = await apiJson<TokenResponse>("/api/auth/login", {
-      method: "POST",
-      body: { email, password },
-    });
-    setAccessToken(token.access_token);
-    const me = await apiJson<UserOut>("/api/auth/me");
-    setUser(me);
-    setStatus("authed");
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string, captcha?: CaptchaAnswer) => {
+      const token = await apiJson<TokenResponse>("/api/auth/login", {
+        method: "POST",
+        body: { email, password, ...(captcha ?? {}) },
+      });
+      setAccessToken(token.access_token);
+      const me = await apiJson<UserOut>("/api/auth/me");
+      setUser(me);
+      setStatus("authed");
+    },
+    [],
+  );
 
   const register = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string, captcha?: CaptchaAnswer) => {
       await apiJson<UserOut>("/api/auth/register", {
         method: "POST",
-        body: { email, password },
+        body: { email, password, ...(captcha ?? {}) },
       });
       // 注册成功后自动登录
       await login(email, password);

@@ -31,6 +31,7 @@ from ..models import ChatMessage, ChatSession, Document, KnowledgeBase
 from ..profile_summary import ProfileContext, build_profile_context
 from ..schemas import ChatRequestIn, MessageOut, SessionOut, SessionRename
 from ..usage import persist_usage
+from ..wallet import InsufficientCredits
 
 # P0-5 输出侧流式审核 (moderation 线提供 StreamModerationBuffer):
 # feed(text)->list[str] 放行块 / flush()->str / tripped:bool / safe_message:str。
@@ -480,6 +481,18 @@ async def chat(
                         elif ev["kind"] == "end":
                             state = ev["state"]
                         # 其余 kind (custom 等) 向前兼容: 忽略
+                except InsufficientCredits as exc:
+                    # 0006: 余额不足 (子类须先于 BudgetExceeded 捕获) — SSE 已发首字节,
+                    # 无法回 402, 以 event:error 下发同 code + balance (前端弹充值引导)
+                    yield {
+                        "event": "error",
+                        "data": _sse({
+                            "code": "INSUFFICIENT_CREDITS",
+                            "message": "钱包额度已用完，请充值后继续使用 AI 功能",
+                            "balance": format(exc.balance, "f"),
+                        }),
+                    }
+                    return
                 except BudgetExceeded:
                     yield {
                         "event": "error",

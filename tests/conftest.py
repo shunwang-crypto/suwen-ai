@@ -12,6 +12,11 @@ if os.path.exists(_libstdcxx):
 # tests 统一走高限流阈值, 避免 auth 5次/分钟在测试中误触发
 os.environ.setdefault("AUTH_RATE_LIMIT_PER_MINUTE", "10000")
 os.environ.setdefault("API_RATE_LIMIT_PER_MINUTE", "100000")
+os.environ.setdefault("AUTH_FORGOT_RATE_LIMIT_PER_MINUTE", "10000")
+os.environ.setdefault("CAPTCHA_RATE_LIMIT_PER_MINUTE", "100000")
+# 注册验证码测试通道: 既有集成测试大量直接注册, 全局显式关闭;
+# 验证码专项测试用 monkeypatch.setenv("CAPTCHA_REQUIRED_REGISTER", "1") 单独打开
+os.environ.setdefault("CAPTCHA_REQUIRED_REGISTER", "0")
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ.setdefault("GATEWAY_MODE", "stub")
 os.environ.setdefault("EMBEDDING_MODE", "stub")

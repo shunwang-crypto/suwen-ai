@@ -1,7 +1,9 @@
 """F8 "AI 眼中的我": 画像全量读取 + 用户纠正 (最终解释权)。
 
-- GET /api/profile: 掌握度全量 (join KC 名, 附 FSRS 保持率快照) + 错题分布
-  + 最近 10 条掌握度变化流水 (F8-A3)。
+- GET /api/profile: 掌握度全量 (join KC 名, 附 FSRS 保持率快照 + kb/章节元信息,
+  ?kb_id= 单库过滤 — 真实规模 152 KC 需折叠成 库→章→KC 树, B1) + 错题分布
+  + 最近 10 条**有效**掌握度变化流水 (F8-A3; |Δp|<0.01 的零变化行默认过滤,
+  ?include_noop=1 保留全量供审计口径, C1)。
 - GET /api/profile/weak-points: 定向出题将要覆盖的薄弱点预览 (与 POST /api/quiz
   的 from_weak_points 走同一函数, 预览即所得)。
 - POST /api/profile/kc/{kc_id}/override: 用户直改 p_mastery, 确定性直写
@@ -25,6 +27,7 @@ from sqlalchemy import func, select
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
+from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
     ErrorItem,
     KnowledgeComponent,
@@ -37,9 +40,25 @@ from ..profile_summary import QUIZ_WEAK_TOP, weak_point_kcs
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 _RECENT_LOG_LIMIT = 10
+# C1: 过滤零变化行后仍要凑满 10 条有效流水, 多取一些再截断 (单用户流水查询极轻)
+_LOG_SCAN_LIMIT = 50
+# BKT 极小步进 (高掌握度下证据只挪 p 万分位) 在 UI 上是"0.82→0.82"噪声行
+NOOP_EPS = 0.01
 _INSIGHTS_LIMIT = 50  # 记忆条目读取上限 (库内本就每用户 ≤100, 见 services)
 # 遗忘快照 (P2-7) 的第二个时刻点: 现在 + 3 天 ("再不复习, 3 天后…" 的产品口径)
 _RETENTION_HORIZON = timedelta(days=3)
+
+
+def filter_noop_changes(logs: list, *, include_noop: bool, limit: int = _RECENT_LOG_LIMIT) -> list:
+    """C1: 掌握度流水去噪 (纯函数, 单测入口)。
+
+    默认丢弃 |new_p-old_p| < NOOP_EPS 的零变化行 (真实规模账号里这类行淹没了
+    有效变化); include_noop=True 保留全量 (审计口径: 流水与 mastery_log 可逐行核对)。
+    两种口径都在过滤后截前 limit 条 (入参 logs 已按 at 降序)。
+    """
+    if include_noop:
+        return list(logs)[:limit]
+    return [x for x in logs if abs(x.new_p - x.old_p) >= NOOP_EPS][:limit]
 
 
 def _kc_retention_snapshots(
@@ -70,7 +89,12 @@ class OverrideIn(BaseModel):
 
 
 @router.get("")
-async def get_profile(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+async def get_profile(
+    request: Request,
+    kb_id: uuid.UUID | None = None,
+    include_noop: bool = False,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
     # 业务时间经虚拟时钟 (§9): 保持率快照随 time-travel 前进而衰减, 可现场演示
     now_dt = await timectl.now(request.app.state.redis)
     at_3d = now_dt + _RETENTION_HORIZON
@@ -134,15 +158,17 @@ async def get_profile(request: Request, ctx: AuthContext = Depends(api_rate_limi
             ).all()
         }
 
-        # 最近 10 条掌握度变化流水 (F8-A3: 因 X 事件, Y 从 old→new)
-        logs = (
+        # 最近 10 条掌握度变化流水 (F8-A3: 因 X 事件, Y 从 old→new)。
+        # C1: 多取 50 条再过滤零变化行, 保证去噪后仍有 10 条有效变化可看
+        raw_logs = (
             await session.scalars(
                 select(MasteryLog)
                 .where(MasteryLog.user_id == ctx.user_id)
                 .order_by(MasteryLog.at.desc())
-                .limit(_RECENT_LOG_LIMIT)
+                .limit(_LOG_SCAN_LIMIT)
             )
         ).all()
+        logs = filter_noop_changes(raw_logs, include_noop=include_noop)
         kc_names: dict[str, str] = {str(r.kc_id): name for r, name in mastery_rows}
         missing = {str(x.kc_id) for x in logs} - set(kc_names)
         if missing:
@@ -169,10 +195,26 @@ async def get_profile(request: Request, ctx: AuthContext = Depends(api_rate_limi
             for x in logs
         ]
 
+    # B1: kb/章节元信息 (kc_hierarchy 确定性推导 + 5 分钟缓存), 前端折叠 库→章→KC 树
+    meta = await resolve_kc_meta(
+        ctx.tenant_id, [m["kc_id"] for m in mastery], redis=request.app.state.redis
+    )
+    for m in mastery:
+        info = meta.get(m["kc_id"]) or {}
+        m["kb_id"] = info.get("kb_id")
+        m["kb_name"] = info.get("kb_name") or ""
+        m["subject"] = info.get("subject") or ""
+        m["chapter"] = info.get("chapter") or ""
+    if kb_id is not None:
+        mastery = [m for m in mastery if m["kb_id"] == str(kb_id)]
+
     return {
         "mastery": mastery,
+        # kb_id 过滤只作用于 mastery (错题分布/流水是全局学习行为, 不随库切换清零)
+        "kb_id": str(kb_id) if kb_id is not None else None,
         "error_distribution": {"by_cause": by_cause, "by_state": by_state},
         "recent_changes": recent_changes,
+        "include_noop": include_noop,
     }
 
 

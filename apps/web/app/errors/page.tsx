@@ -22,6 +22,7 @@ import type {
   ErrorItemOut,
   ErrorListResponse,
   ErrorStatsResponse,
+  KbOut,
   ReviewVariantResult,
 } from "@/lib/types";
 
@@ -108,6 +109,11 @@ export default function ErrorsPage() {
 
   const [stateFilter, setStateFilter] = useState<string | null>(null);
   const [causeFilter, setCauseFilter] = useState<string | null>(null);
+  // B4 真实规模: 三科目错题交错平铺不可用 —— 科目 tab 走后端 kb_id 过滤 (跨页生效),
+  // 题干搜索为本页本地过滤 (仅当前页, 文案已注明, 不伪装成全库搜索)
+  const [kbs, setKbs] = useState<KbOut[]>([]);
+  const [kbFilter, setKbFilter] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [reloadKey, setReloadKey] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -122,6 +128,7 @@ export default function ErrorsPage() {
       });
       if (stateFilter) params.set("state", stateFilter);
       if (causeFilter) params.set("cause", causeFilter);
+      if (kbFilter) params.set("kb_id", kbFilter);
       const [listRes, statsRes] = await Promise.allSettled([
         apiJson<ErrorListResponse>(`/api/errors?${params.toString()}`),
         apiJson<ErrorStatsResponse>("/api/errors/stats"),
@@ -143,7 +150,23 @@ export default function ErrorsPage() {
     return () => {
       alive = false;
     };
-  }, [stateFilter, causeFilter, page, reloadKey]);
+  }, [stateFilter, causeFilter, kbFilter, page, reloadKey]);
+
+  // 知识库列表 (科目 tab 数据源); 失败静默降级为"全部"单 tab, 不拖垮错题本
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await apiJson<KbOut[]>("/api/kb");
+        if (alive) setKbs(res);
+      } catch {
+        if (alive) setKbs([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const reload = () => {
     setLoading(true);
@@ -298,6 +321,44 @@ export default function ErrorsPage() {
         })}
       </div>
 
+      {/* B4: 科目 tab（后端 kb_id 过滤，跨页生效）+ 题干搜索（当前页本地过滤） */}
+      <div className="flex flex-wrap items-center gap-2">
+        {kbs.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[{ id: null, name: "全部科目" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
+              (tab) => {
+                const on = kbFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id ?? "__all__"}
+                    type="button"
+                    onClick={() => {
+                      setKbFilter(tab.id);
+                      setPage(1);
+                    }}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      on
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                    }`}
+                  >
+                    {tab.name}
+                  </button>
+                );
+              },
+            )}
+          </div>
+        )}
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索题干（本页）…"
+          aria-label="搜索题干"
+          className="w-full max-w-52 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
           title="错因分布"
@@ -439,7 +500,15 @@ export default function ErrorsPage() {
       ) : (
         <>
           <ul className="space-y-4">
-            {list.items.map((item) => {
+            {list.items
+              .filter((item) => {
+                const q = query.trim().toLowerCase();
+                if (!q) return true;
+                // 题干 + 知识点名都参与匹配（题干在 question 子对象里）
+                const hay = `${item.question?.stem ?? ""} ${item.kc_names.join(" ")}`;
+                return hay.toLowerCase().includes(q);
+              })
+              .map((item) => {
               const busy = busyId === item.id;
               return (
                 <li key={item.id}>

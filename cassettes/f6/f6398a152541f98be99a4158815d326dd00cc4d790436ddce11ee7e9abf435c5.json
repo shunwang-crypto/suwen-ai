@@ -1,0 +1,6 @@
+{
+  "text": "{\"kns\": [\"函数极限\", \"基本函数导数表\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 746,
+  "completion_tokens": 15
+}

@@ -16,6 +16,8 @@ from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .wallet import InsufficientCredits
+
 log = get_logger("api")
 
 # 预算 Retry-After 与 budget.py 同口径: 沪时日界, 真实系统时钟
@@ -147,6 +149,10 @@ def install_error_handlers(app: FastAPI) -> None:
             "EMAIL_EXISTS": "该邮箱已注册",
             "BAD_CREDENTIALS": "邮箱或密码错误",
             "REFRESH_INVALID": "会话已失效，请重新登录",
+            # 图形验证码 + 密码找回 (routers/auth.py)
+            "CAPTCHA_REQUIRED": "请先完成图形验证码",
+            "CAPTCHA_INVALID": "验证码错误或已过期，请刷新后重试",
+            "RESET_TOKEN_INVALID": "重置链接无效或已过期，请重新申请",
             "NOT_FOUND": "资源不存在",
             "CONTENT_REJECTED": "内容不符合平台规范，请修改后再试",
             # 画像定向出题 (M4-D2): 掌握度数据不足时不静默降级成普通出题
@@ -164,6 +170,9 @@ def install_error_handlers(app: FastAPI) -> None:
             "KB_FORBIDDEN": "没有权限访问该知识库",
             "RETRIEVAL_UNAVAILABLE": "检索服务暂时不可用，请稍后重试",
             "ORG_READONLY": "机构知识库为只读，仅管理员可修改",
+            # 0006 预付额度 (routers/billing.py)
+            "AMOUNT_NOT_ALLOWED": "充值金额不在可选档位内",
+            "ORDER_NOT_PENDING": "订单不是待支付状态，请勿重复支付",
         }
         return ORJSONResponse(
             status_code=exc.status_code,
@@ -173,6 +182,21 @@ def install_error_handlers(app: FastAPI) -> None:
                 "request_id": getattr(request.state, "request_id", ""),
             },
             headers=getattr(exc, "headers", None) or {},
+        )
+
+    @app.exception_handler(InsufficientCredits)
+    async def insufficient_credits_error(request: Request, exc: InsufficientCredits):
+        # 0006 预付额度: 余额 <=0 在网关入口被拦 (先钱包后预算, wallet.py) -> 402 +
+        # balance 字段 (契约冻结), 前端据此弹充值引导。InsufficientCredits 是
+        # BudgetExceeded 子类, starlette 按 __mro__ 匹配 — 本 handler 优先于 429。
+        return ORJSONResponse(
+            status_code=402,
+            content={
+                "code": "INSUFFICIENT_CREDITS",
+                "message": exc.message or "钱包额度已用完，请充值后继续使用 AI 功能",
+                "request_id": getattr(request.state, "request_id", ""),
+                "balance": format(exc.balance, "f"),
+            },
         )
 
     @app.exception_handler(BudgetExceeded)

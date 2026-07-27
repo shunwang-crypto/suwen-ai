@@ -195,7 +195,12 @@ export default function ReviewsPage() {
         title="今日复习"
         subtitle={
           data
-            ? `业务时间 ${fmtDateTime(data.now)} · 到期 ${data.items.length} 题（每日上限 5 题）`
+            ? `业务时间 ${fmtDateTime(data.now)} · 今日 ${data.items.length} 题${
+                // B3: 总到期数与开场卡同源（后端 total_due），此前两页各显示一个数字互相打架
+                (data.total_due ?? 0) > data.items.length
+                  ? ` · 还有 ${(data.total_due ?? 0) - data.items.length} 题排队中`
+                  : ""
+              }`
             : "按遗忘曲线安排的到期错题，答对两次即攻克"
         }
         action={

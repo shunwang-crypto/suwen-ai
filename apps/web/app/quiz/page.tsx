@@ -59,12 +59,29 @@ interface DifficultyReason {
   reason: string;
 }
 
-/** 薄弱点预览项（/api/profile/weak-points 已附带 zone/reason 定性理由字段）。 */
+/** 薄弱点预览项（/api/profile/weak-points 已附带 zone/reason 定性理由字段；
+ *  subject/kb_name 为后端并行契约的分科目字段，缺失时降级为不分组平铺）。 */
 type WeakPointPreview = WeakPointItem & {
   zone?: string;
   difficulty?: string;
   reason?: string;
+  subject?: string | null;
+  kb_name?: string | null;
 };
+
+/** 预览按科目分组（subject 缺失回退 kb_name，再缺失归入 "" 单组）。 */
+function groupPreviewBySubject(
+  points: WeakPointPreview[],
+): { key: string; items: WeakPointPreview[] }[] {
+  const map = new Map<string, WeakPointPreview[]>();
+  for (const wp of points) {
+    const key = wp.subject?.trim() || wp.kb_name?.trim() || "";
+    const arr = map.get(key);
+    if (arr) arr.push(wp);
+    else map.set(key, [wp]);
+  }
+  return [...map.entries()].map(([key, items]) => ({ key, items }));
+}
 
 // useSyncExternalStore 订阅占位：URL search 在页面生命周期内不变化（跳转即重挂载）
 const emptySubscribe = () => () => {};

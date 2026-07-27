@@ -1,11 +1,12 @@
 "use client";
 
-// 学情报告（F7）：掌握度雷达（共享组件）+ 30 天趋势（答题数/正确率双系列，
-// 纯 SVG、两联面板共享横轴——不做双 Y 轴）+ 薄弱点卡片（错题数 + 前置归因链）
-// + 可执行建议（带跳转）+ narrative 三段式诊断（stub 网关下如实显示 note）。
+// 学情报告（F7）：掌握度雷达（章节聚合轴 + 知识库切换 tab；轴数<5 或移动端降级条形图，
+// 防轴标签重叠）+ 30 天趋势（答题数/正确率双系列，纯 SVG、两联面板共享横轴——不做双 Y 轴）
+// + 薄弱点卡片（按科目分节，「红线/待巩固」两口径分开计数，节内 p 升序 top5 + 展开全部）
+// + 可执行建议（带跳转）+ narrative 三段式诊断（复用 chat 同款 MathText 渲染 + **加粗**）。
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   Card,
@@ -13,15 +14,49 @@ import {
   ErrorBanner,
   PageHeader,
   SkeletonPage,
+  Spinner,
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
 import { ApiError, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import type {
+  KbOut,
   LearningReportResponse,
+  ReportRadarItem,
   ReportTrendPoint,
   ReportWeakPoint,
 } from "@/lib/types";
+
+// ---- 后端并行契约（可选字段 + 空值降级：后端未上线时按旧响应正常工作）----
+
+/** 章节聚合轴的下钻明细项（?kb_id= 时每轴附带）。 */
+interface RadarAxisKcDetail {
+  kc_id?: string;
+  name?: string;
+  p_mastery?: number | null;
+}
+
+/** 雷达轴：章节聚合模式附带 kc_count/weak_count/kcs；KC 模式与旧契约一致。 */
+type RadarAxis = ReportRadarItem & {
+  kc_count?: number | null;
+  weak_count?: number | null;
+  kcs?: RadarAxisKcDetail[] | null;
+};
+
+/** 薄弱点：分科目契约附带 subject；缺失时降级为单节展示。 */
+type SubjectWeakPoint = ReportWeakPoint & { subject?: string | null };
+
+/** 报告响应扩展：axes_kind（"chapter"=章节聚合轴）与「待巩固」阈值。 */
+type ScaledReportResponse = LearningReportResponse & {
+  axes_kind?: string | null;
+  consolidate_threshold?: number | null;
+  /** 待巩固档（红线以上、未达定向出题线），与 weak_points 同结构 */
+  consolidate_points?: SubjectWeakPoint[] | null;
+};
+
+/** 每节薄弱点默认展示条数（p 升序 top5，其余「展开全部」）。 */
+const WEAK_TOP_N = 5;
 
 /** 30 天趋势：上联答题数（柱），下联正确率（折线，固定 0–100% 刻度），共享横轴。 */
 function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
@@ -198,13 +233,20 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
   );
 }
 
-/** 大数字统计卡：渐变数字 + 趋势箭头（近 7 天 vs 前 7 天，均由已拉取的 trend 就地计算）。 */
+/** 大数字统计卡：渐变数字 + 趋势箭头（近 7 天 vs 前 7 天，均由已拉取的 trend 就地计算）。
+ *  薄弱口径分开命名：红线（<红线阈值）为主数字，待巩固另行标注，消除跨页数字打架。 */
 function StatTiles({
   trend,
-  weakCount,
+  redCount,
+  consolidateCount,
+  redPct,
+  consolidatePct,
 }: {
   trend: ReportTrendPoint[];
-  weakCount: number;
+  redCount: number;
+  consolidateCount: number;
+  redPct: number;
+  consolidatePct: number;
 }) {
   const sumAttempts = (arr: ReportTrendPoint[]) =>
     arr.reduce((s, t) => s + t.attempts, 0);
@@ -245,6 +287,7 @@ function StatTiles({
     value: string;
     gradient: string;
     delta?: { up: boolean; text: string } | null;
+    sub?: string | null;
   }[] = [
     {
       key: "attempts",
@@ -281,10 +324,14 @@ function StatTiles({
     },
     {
       key: "weak",
-      label: "薄弱知识点",
-      value: String(weakCount),
-      gradient: "from-amber-600 to-orange-500",
+      label: `红线知识点（<${redPct}%）`,
+      value: String(redCount),
+      gradient: "from-rose-600 to-orange-500",
       delta: null,
+      sub:
+        consolidateCount > 0
+          ? `另有 ${consolidateCount} 个待巩固（<${consolidatePct}%）`
+          : null,
     },
   ];
 
@@ -311,21 +358,166 @@ function StatTiles({
               {t.delta.text}
             </p>
           )}
+          {t.sub && <p className="mt-0.5 text-[11px] text-amber-600">{t.sub}</p>}
         </div>
       ))}
     </div>
   );
 }
 
-/** 薄弱点卡片：掌握度 + 错题数 + 归因链（可能源于《前置 KC》未掌握）。 */
-function WeakPointCard({ wp }: { wp: ReportWeakPoint }) {
+/** 条形图轴视图：轴数<5 的降级形态，也是移动端的雷达替代（标签 truncate 不重叠）。 */
+function AxisBars({ axes }: { axes: RadarAxis[] }) {
+  return (
+    <ul className="space-y-2">
+      {axes.map((a) => {
+        const barColor =
+          a.p_mastery < 0.4
+            ? "bg-rose-400"
+            : a.p_mastery < 0.6
+              ? "bg-amber-400"
+              : "bg-indigo-500";
+        return (
+          <li key={a.kc_id || a.name} className="flex items-center gap-2 text-xs">
+            <span
+              className="w-24 shrink-0 truncate text-slate-600 sm:w-32"
+              title={a.name}
+            >
+              {a.name}
+            </span>
+            <span className="h-2.5 min-w-0 flex-1 rounded-full bg-slate-100">
+              <span
+                className={`block h-full rounded-full ${barColor}`}
+                style={{ width: `${Math.max(a.p_mastery * 100, 2)}%` }}
+              />
+            </span>
+            <span className="w-10 shrink-0 text-right font-mono text-slate-600">
+              {fmtPct(a.p_mastery)}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** 章节聚合轴下钻：每轴 KC 数 / 薄弱数徽章 + KC 明细（后端契约字段缺失时不渲染）。 */
+function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
+  const rows = axes.filter(
+    (a) => a.kc_count != null || a.weak_count != null || (a.kcs?.length ?? 0) > 0,
+  );
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2.5">
+      {rows.map((a) => (
+        <details
+          key={a.kc_id || a.name}
+          className="rounded-lg bg-slate-50/70 px-2.5 py-1.5"
+        >
+          <summary className="flex cursor-pointer flex-wrap items-center gap-1.5 text-xs">
+            <span
+              className="min-w-0 flex-1 truncate font-medium text-slate-700"
+              title={a.name}
+            >
+              {a.name}
+            </span>
+            <span className="shrink-0 font-mono text-slate-500">
+              {fmtPct(a.p_mastery)}
+            </span>
+            {a.kc_count != null && (
+              <span className="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-[10px] text-slate-600">
+                {a.kc_count} 个知识点
+              </span>
+            )}
+            {a.weak_count != null && a.weak_count > 0 && (
+              <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-600">
+                {a.weak_count} 个薄弱
+              </span>
+            )}
+          </summary>
+          {a.kcs && a.kcs.length > 0 ? (
+            <ul className="mt-1.5 space-y-1 border-t border-slate-200/60 pt-1.5">
+              {a.kcs.map((kc, i) => (
+                <li
+                  key={kc.kc_id ?? `${kc.name}-${i}`}
+                  className="flex items-center justify-between gap-2 text-[11px]"
+                >
+                  <span className="min-w-0 truncate text-slate-600" title={kc.name}>
+                    {kc.name ?? "未命名知识点"}
+                  </span>
+                  <span className="shrink-0 font-mono text-slate-500">
+                    {kc.p_mastery != null ? fmtPct(kc.p_mastery) : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-[11px] text-slate-400">该轴暂无下钻明细</p>
+          )}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/** 雷达区：轴数<5 降级条形图；≥5 桌面画雷达、移动端用条形图（防轴标签重叠）。 */
+function RadarPanel({ axes, isChapter }: { axes: RadarAxis[]; isChapter: boolean }) {
+  if (axes.length === 0) {
+    return (
+      <p className="py-6 text-center text-xs text-slate-400">
+        暂无掌握度证据，完成练习后这里会出现掌握度轴
+      </p>
+    );
+  }
+  return (
+    <>
+      {axes.length < 5 ? (
+        <AxisBars axes={axes} />
+      ) : (
+        <>
+          <div className="hidden sm:block">
+            <MasteryRadar items={axes} />
+          </div>
+          <div className="sm:hidden">
+            <AxisBars axes={axes} />
+          </div>
+        </>
+      )}
+      {isChapter && <AxisDrilldown axes={axes} />}
+    </>
+  );
+}
+
+/** 薄弱点卡片：两口径徽章 + 掌握度 + 错题数 + 归因链（可能源于《前置 KC》未掌握）。 */
+function WeakPointCard({
+  wp,
+  isRedline,
+  redPct,
+  consolidatePct,
+}: {
+  wp: SubjectWeakPoint;
+  isRedline: boolean;
+  redPct: number;
+  consolidatePct: number;
+}) {
   return (
     <li className="rounded-2xl border border-slate-200 bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800" title={wp.name}>
           {wp.name}
         </span>
-        <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono text-xs text-amber-700">
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            isRedline ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"
+          }`}
+          title={
+            isRedline
+              ? `掌握度低于红线（${redPct}%）`
+              : `掌握度低于巩固线（${consolidatePct}%）但已过红线`
+          }
+        >
+          {isRedline ? "红线" : "待巩固"}
+        </span>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">
           掌握度 {fmtPct(wp.p_mastery)}
         </span>
         {wp.error_count > 0 && (
@@ -336,7 +528,7 @@ function WeakPointCard({ wp }: { wp: ReportWeakPoint }) {
       </div>
       <div className="mt-2 h-2 rounded-full bg-slate-100">
         <div
-          className="h-full rounded-full bg-amber-500"
+          className={`h-full rounded-full ${isRedline ? "bg-rose-500" : "bg-amber-500"}`}
           style={{ width: `${Math.max(wp.p_mastery * 100, 2)}%` }}
         />
       </div>
@@ -401,17 +593,168 @@ function WeakPointCard({ wp }: { wp: ReportWeakPoint }) {
   );
 }
 
+/** 按科目分组（subject 缺失时全部归入单节，key=""）。 */
+interface WeakGroup {
+  key: string;
+  items: SubjectWeakPoint[];
+  red: number;
+  consolidate: number;
+}
+
+function groupWeakPoints(points: SubjectWeakPoint[], redThreshold: number): WeakGroup[] {
+  const map = new Map<string, WeakGroup>();
+  for (const wp of points) {
+    const key = wp.subject?.trim() ?? "";
+    let g = map.get(key);
+    if (!g) {
+      g = { key, items: [], red: 0, consolidate: 0 };
+      map.set(key, g);
+    }
+    g.items.push(wp);
+    if (wp.p_mastery < redThreshold) g.red += 1;
+    else g.consolidate += 1;
+  }
+  const groups = [...map.values()];
+  for (const g of groups) g.items.sort((a, b) => a.p_mastery - b.p_mastery);
+  return groups;
+}
+
+// ---- AI 三段式诊断：复用 chat 同款 MathText 渲染，行内 **加粗** 局部解析 ----
+
+/** 每次调用新建正则实例：全局正则的 lastIndex 是可变状态，模块级共享会串状态。 */
+const boldRe = () => /\*\*(.+?)\*\*/g;
+
+/** 行内轻量 markdown：**加粗** → <strong>，其余与 chat 答案同款 MathText（公式/换行）。 */
+function MdInline({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  const re = boldRe();
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      nodes.push(<MathText key={`t${last}`} text={text.slice(last, m.index)} />);
+    }
+    nodes.push(
+      <strong key={`b${m.index}`} className="font-semibold text-slate-900">
+        <MathText text={m[1]} />
+      </strong>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (nodes.length === 0) return <MathText text={text} />;
+  if (last < text.length) {
+    nodes.push(<MathText key={`t${last}`} text={text.slice(last)} />);
+  }
+  return <>{nodes}</>;
+}
+
+/** 三段式标题行（**现状** / ## 归因 / 【建议】 等写法都认）。 */
+const NARRATIVE_HEADING_RE =
+  /^\s*(?:\*\*|#{1,4}\s*|【)?\s*(现状|归因|建议)\s*(?:\*\*|】)?\s*[:：]?\s*$/;
+
+function parseNarrative(text: string): {
+  intro: string;
+  sections: { title: string; body: string }[];
+} {
+  const sections: { title: string; body: string }[] = [];
+  const introLines: string[] = [];
+  let cur: { title: string; body: string } | null = null;
+  for (const line of text.split("\n")) {
+    const m = NARRATIVE_HEADING_RE.exec(line);
+    if (m) {
+      cur = { title: m[1], body: "" };
+      sections.push(cur);
+      continue;
+    }
+    if (cur) cur.body += (cur.body ? "\n" : "") + line;
+    else introLines.push(line);
+  }
+  return {
+    intro: introLines.join("\n").trim(),
+    sections: sections
+      .map((s) => ({ title: s.title, body: s.body.trim() }))
+      .filter((s) => s.body.length > 0),
+  };
+}
+
+const SECTION_BADGE_STYLE: Record<string, string> = {
+  现状: "bg-sky-50 text-sky-700",
+  归因: "bg-amber-50 text-amber-700",
+  建议: "bg-emerald-50 text-emerald-700",
+};
+
+/** 诊断正文：三段式解析成分节卡；结构异常（无标题行）整段降级渲染，不崩不裸露星号。 */
+function DiagnosisBody({ narrative }: { narrative: string }) {
+  const { intro, sections } = parseNarrative(narrative);
+  if (sections.length === 0) {
+    return (
+      <p className="text-sm leading-relaxed text-slate-700">
+        <MdInline text={narrative.trim()} />
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {intro && (
+        <p className="text-sm leading-relaxed text-slate-600">
+          <MdInline text={intro} />
+        </p>
+      )}
+      {sections.map((s, i) => (
+        <section
+          key={`${s.title}-${i}`}
+          className="rounded-xl border border-slate-100 bg-slate-50/60 p-3.5"
+        >
+          <h3 className="text-sm font-semibold text-slate-800">
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                SECTION_BADGE_STYLE[s.title] ?? "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {s.title}
+            </span>
+          </h3>
+          <p className="mt-1.5 text-sm leading-relaxed text-slate-700">
+            <MdInline text={s.body} />
+          </p>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export default function ReportsPage() {
-  const [report, setReport] = useState<LearningReportResponse | null>(null);
+  const [report, setReport] = useState<ScaledReportResponse | null>(null);
+  const [kbs, setKbs] = useState<KbOut[]>([]);
+  const [kbId, setKbId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // 知识库列表（tab 数据源）：失败只隐藏 tab，不影响报告主体
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await apiJson<KbOut[]>("/api/kb");
+        if (alive) setKbs(res);
+      } catch {
+        // tab 缺席即全站聚合视图，报告仍可用
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const res = await apiJson<LearningReportResponse>("/api/reports/learning");
+        const res = await apiJson<ScaledReportResponse>(
+          `/api/reports/learning${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
+        );
         if (!alive) return;
         setReport(res);
         setError(null);
@@ -426,7 +769,7 @@ export default function ReportsPage() {
     return () => {
       alive = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, kbId]);
 
   const reload = () => {
     setLoading(true);
@@ -434,7 +777,14 @@ export default function ReportsPage() {
     setReloadKey((k) => k + 1);
   };
 
-  if (loading) {
+  const switchKb = (next: string) => {
+    if (next === kbId || loading) return;
+    setKbId(next);
+    setExpandedGroups({});
+    setLoading(true);
+  };
+
+  if (loading && !report) {
     return (
       <div className="mx-auto w-full max-w-6xl p-4">
         <SkeletonPage />
@@ -450,10 +800,34 @@ export default function ReportsPage() {
     );
   }
 
-  const { radar, trend, weak_points, actions, narrative, narrative_note } = report;
-  const weakPct = Math.round((report.weak_threshold ?? 0.4) * 100);
+  const { trend, actions, narrative, narrative_note } = report;
+  const radarAxes = report.radar as RadarAxis[];
+  // 后端两档分开下发（weak_points=红线 / consolidate_points=待巩固），此处合并后
+  // 由 groupWeakPoints 按科目分节并各自计数；旧后端无 consolidate_points 时自动降级
+  const weakPoints = [
+    ...(report.weak_points as SubjectWeakPoint[]),
+    ...((report.consolidate_points ?? []) as SubjectWeakPoint[]),
+  ];
+  // 两口径阈值：红线（后端 weak_threshold 唯一来源）与待巩固（契约新增，缺省 0.6）
+  const redThreshold = report.weak_threshold ?? 0.4;
+  const consolidateThreshold = report.consolidate_threshold ?? 0.6;
+  const redPct = Math.round(redThreshold * 100);
+  const consolidatePct = Math.round(consolidateThreshold * 100);
+
+  // 章节聚合轴判定：axes_kind 显式声明，或任一轴带聚合字段（后端未上线时恒为 false）
+  const isChapterAxes =
+    report.axes_kind === "chapter" ||
+    radarAxes.some((a) => a.kc_count != null || (a.kcs?.length ?? 0) > 0);
+
+  const weakGroups = groupWeakPoints(weakPoints, redThreshold);
+  const redTotal = weakGroups.reduce((s, g) => s + g.red, 0);
+  const consolidateTotal = weakGroups.reduce((s, g) => s + g.consolidate, 0);
+  // subject 全缺失时是单节降级形态，不渲染科目标签
+  const hasSubjectSections = weakGroups.some((g) => g.key !== "");
+
   const hasAnyData =
-    radar.length > 0 || weak_points.length > 0 || trend.some((t) => t.attempts > 0);
+    radarAxes.length > 0 || weakPoints.length > 0 || trend.some((t) => t.attempts > 0);
+  const switching = loading && report != null;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
@@ -471,102 +845,194 @@ export default function ReportsPage() {
         }
       />
 
-      {!hasAnyData && (
-        <EmptyState
-          title="还没有足够的学习数据"
-          description="完成几次练习或辅导后，这里会生成你的学情报告"
-          illustration="chart"
-        />
-      )}
-
-      {hasAnyData && <StatTiles trend={trend} weakCount={weak_points.length} />}
-
-      {hasAnyData && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card
-            title="掌握度雷达"
-            extra={
-              <span className="text-xs text-slate-400">
-                按证据活动量 Top {Math.min(radar.length, RADAR_MAX_DIMS)}
-              </span>
-            }
-          >
-            <MasteryRadar items={radar} />
-          </Card>
-
-          <Card title="近 30 天趋势">
-            <TrendChart trend={trend} />
-          </Card>
+      {/* 知识库切换 tab：全部=全站聚合；选中某库时后端按 ?kb_id= 下发章节聚合轴 */}
+      {kbs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="按知识库查看报告">
+          <span className="mr-0.5 text-xs text-slate-500">范围：</span>
+          {[{ id: "", name: "全部", subject: "" }, ...kbs].map((kb) => {
+            const active = kbId === kb.id;
+            return (
+              <button
+                key={kb.id || "all"}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                title={kb.subject || undefined}
+                onClick={() => switchKb(kb.id)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                  active
+                    ? "border-indigo-600 bg-indigo-600 text-white"
+                    : "border-slate-300 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                }`}
+              >
+                {kb.name}
+              </button>
+            );
+          })}
+          {switching && <Spinner className="h-3.5 w-3.5" />}
         </div>
       )}
 
-      {hasAnyData && (
-        <Card
-          title="薄弱知识点"
-          extra={
-            <span className="text-xs text-slate-400">掌握度 &lt; {weakPct}% · 附归因下钻</span>
-          }
-        >
-          {weak_points.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">
-              暂无薄弱点，继续保持
-            </p>
+      <div className={`space-y-4 ${switching ? "pointer-events-none opacity-60" : ""}`}>
+        {!hasAnyData && (
+          <EmptyState
+            title="还没有足够的学习数据"
+            description="完成几次练习或辅导后，这里会生成你的学情报告"
+            illustration="chart"
+          />
+        )}
+
+        {hasAnyData && (
+          <StatTiles
+            trend={trend}
+            redCount={redTotal}
+            consolidateCount={consolidateTotal}
+            redPct={redPct}
+            consolidatePct={consolidatePct}
+          />
+        )}
+
+        {hasAnyData && (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card
+              title="掌握度雷达"
+              extra={
+                <span className="text-xs text-slate-400">
+                  {isChapterAxes
+                    ? `章节聚合 · ${radarAxes.length} 轴`
+                    : `按证据活动量 Top ${Math.min(radarAxes.length, RADAR_MAX_DIMS)}`}
+                </span>
+              }
+            >
+              <RadarPanel axes={radarAxes} isChapter={isChapterAxes} />
+            </Card>
+
+            <Card title="近 30 天趋势">
+              <TrendChart trend={trend} />
+            </Card>
+          </div>
+        )}
+
+        {hasAnyData && (
+          <Card
+            title="薄弱知识点"
+            extra={
+              <span className="text-xs text-slate-400">
+                红线 &lt;{redPct}% · 待巩固 &lt;{consolidatePct}% · 附归因下钻
+              </span>
+            }
+          >
+            {weakPoints.length === 0 ? (
+              <p className="py-3 text-center text-xs text-slate-400">
+                暂无薄弱点，继续保持
+              </p>
+            ) : (
+              <div className="space-y-5">
+                {weakGroups.map((g) => {
+                  const groupKey = g.key || "__all__";
+                  const expanded = Boolean(expandedGroups[groupKey]);
+                  const shown = expanded ? g.items : g.items.slice(0, WEAK_TOP_N);
+                  const hidden = g.items.length - shown.length;
+                  return (
+                    <section key={groupKey}>
+                      <header className="mb-2 flex flex-wrap items-center gap-2">
+                        {hasSubjectSections && (
+                          <span className="rounded-lg bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            {g.key || "未分科"}
+                          </span>
+                        )}
+                        <span className="text-xs text-slate-500">
+                          红线{" "}
+                          <b className="font-semibold text-rose-600">{g.red}</b> 个 ·
+                          待巩固{" "}
+                          <b className="font-semibold text-amber-600">
+                            {g.consolidate}
+                          </b>{" "}
+                          个
+                        </span>
+                      </header>
+                      <ul className="grid gap-2.5 md:grid-cols-2">
+                        {shown.map((wp) => (
+                          <WeakPointCard
+                            key={wp.kc_id}
+                            wp={wp}
+                            isRedline={wp.p_mastery < redThreshold}
+                            redPct={redPct}
+                            consolidatePct={consolidatePct}
+                          />
+                        ))}
+                      </ul>
+                      {(hidden > 0 || expanded) && g.items.length > WEAK_TOP_N && (
+                        <div className="mt-2 flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedGroups((prev) => ({
+                                ...prev,
+                                [groupKey]: !expanded,
+                              }))
+                            }
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                          >
+                            {expanded
+                              ? "收起"
+                              : `展开全部 ${g.items.length} 个（还有 ${hidden} 个）`}
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        )}
+
+        <Card title="可执行建议">
+          {actions.length === 0 ? (
+            <p className="py-3 text-center text-xs text-slate-400">暂无建议</p>
           ) : (
-            <ul className="grid gap-2.5 md:grid-cols-2">
-              {weak_points.map((wp) => (
-                <WeakPointCard key={wp.kc_id} wp={wp} />
+            <ul className="space-y-2">
+              {actions.map((a, i) => (
+                <li key={i}>
+                  <Link
+                    href={a.href}
+                    className="group flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40"
+                  >
+                    <span className="min-w-0 flex-1">{a.label}</span>
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-600">
+                      去处理
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
+                        aria-hidden
+                      >
+                        <path d="M5 12h14m-6-6 6 6-6 6" />
+                      </svg>
+                    </span>
+                  </Link>
+                </li>
               ))}
             </ul>
           )}
         </Card>
-      )}
 
-      <Card title="可执行建议">
-        {actions.length === 0 ? (
-          <p className="py-3 text-center text-xs text-slate-400">暂无建议</p>
-        ) : (
-          <ul className="space-y-2">
-            {actions.map((a, i) => (
-              <li key={i}>
-                <Link
-                  href={a.href}
-                  className="group flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40"
-                >
-                  <span className="min-w-0 flex-1">{a.label}</span>
-                  <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-600">
-                    去处理
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
-                      aria-hidden
-                    >
-                      <path d="M5 12h14m-6-6 6 6-6 6" />
-                    </svg>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card title="AI 诊断（三段式）">
-        {narrative ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-            {narrative}
-          </p>
-        ) : (
-          <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs text-slate-500">
-            {narrative_note ?? "暂无诊断"}
-            ：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。
-          </p>
-        )}
-      </Card>
+        <Card title="AI 诊断（三段式）">
+          {narrative && narrative.trim() ? (
+            <DiagnosisBody narrative={narrative} />
+          ) : (
+            <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs text-slate-500">
+              {narrative_note ?? "暂无诊断"}
+              ：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。
+            </p>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

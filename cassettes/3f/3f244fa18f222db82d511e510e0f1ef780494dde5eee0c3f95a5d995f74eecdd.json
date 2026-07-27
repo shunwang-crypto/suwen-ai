@@ -1,0 +1,6 @@
+{
+  "text": "{\"k: [\"\n                        \n  :[\"黎曼和的的极限\"]\n  , \"定定积分\"\n  : \"积分中值定理\"\n  }",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 845,
+  "completion_tokens": 33
+}

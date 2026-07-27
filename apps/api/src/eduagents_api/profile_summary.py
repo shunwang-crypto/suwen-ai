@@ -42,6 +42,7 @@ from eduagents_core.mastery.thresholds import (
     MASTERED_THRESHOLD,
     QUIZ_WEAK_THRESHOLD,
     WEAK_THRESHOLD,
+    ZPD_LOWER,
     difficulty_for_mastery,
     zone_label,
 )
@@ -338,26 +339,61 @@ async def build_profile_summary(
 _DIFFICULTY_LABELS = {"easy": "简单", "mid": "中等", "hard": "困难"}
 
 # 定性区间 -> 派此难度档的解释话术 (P1-1 ZPD 自适应可解释化; 档位见
-# thresholds.difficulty_for_mastery, 语义锚定仿真自适应臂的脚手架原则)
+# thresholds.difficulty_for_mastery, 语义锚定仿真自适应臂的脚手架原则)。
+# C3 差异化: 每个区间给 (区间前段, 区间后段) 两套措辞骨架, 再叠 recent_error
+# 两款衔接语 —— 4 区间 × 2 段位 × 2 错题态 = 16 种组合, 且理由点名 KC,
+# 同卷 5 个 KC 不再出现整段一字不差的复读。措辞纪律不变 (P2-7): 只有定性词,
+# 零掌握度小数; 区间词 (zone_label) 必须原样出现在理由里 (前端/测试同源断言)。
 _ZONE_REASONS = {
-    "较弱": "掌握度较弱，低于最近发展区，先用{difficulty}题打稳地基",
-    "待巩固": "掌握度待巩固，处于最近发展区，用{difficulty}题练最见效",
-    "接近掌握": "接近掌握，用{difficulty}题冲刺达标线",
-    "已掌握": "已掌握，用{difficulty}题保持并挑战",
+    "较弱": (
+        "掌握度较弱，尚在起步，低于最近发展区，先用{difficulty}题把基础概念立起来",
+        "掌握度较弱，有过接触但还没入门，先用{difficulty}题打稳地基",
+    ),
+    "待巩固": (
+        "掌握度待巩固，刚迈进最近发展区，用{difficulty}题小步推进最见效",
+        "掌握度待巩固，已到最近发展区后段，用{difficulty}题练熟就能上台阶",
+    ),
+    "接近掌握": (
+        "接近掌握，还差一段火候，用{difficulty}题继续逼近达标线",
+        "接近掌握，离达标线只差一步，用{difficulty}题冲刺达标",
+    ),
+    "已掌握": (
+        "已掌握，用{difficulty}题保温，防止生疏回退",
+        "已掌握且相当扎实，用{difficulty}题挑战边界、保持手感",
+    ),
 }
+# recent_error 衔接语同样分两款 (按段位错开), 断言锚点"近 7 天答错过"两款皆含
+_RECENT_ERROR_SUFFIXES = ("；近 7 天答错过，优先安排重练", "；近 7 天答错过，趁热订正防再错")
+# 各定性区间的 p 值边界 (与 thresholds.zone_label 同源), 用于判定区间内段位
+_ZONE_BANDS = {
+    "较弱": (0.0, ZPD_LOWER),
+    "待巩固": (ZPD_LOWER, QUIZ_WEAK_THRESHOLD),
+    "接近掌握": (QUIZ_WEAK_THRESHOLD, MASTERED_THRESHOLD),
+    "已掌握": (MASTERED_THRESHOLD, 1.0),
+}
+
+
+def _zone_position(zone: str, p_mastery: float) -> int:
+    """区间内段位: 0 = 前段 (低半区), 1 = 后段 (高半区)。纯确定性。"""
+    lo, hi = _ZONE_BANDS[zone]
+    return 0 if p_mastery < (lo + hi) / 2 else 1
 
 
 def difficulty_rationale(name: str, p_mastery: float, recent_error: bool) -> dict:
     """单个 KC 的难度分档 + 可解释理由 (P1-1: "为什么这套题" 逐条理由)。
 
     理由随蓝图确认卡与薄弱点预览出境展示, 沿用 P2-7 脱敏口径: 只带定性区间词
-    (zone_label), 不带掌握度小数、不带题干/作答原文。
+    (zone_label), 不带掌握度小数、不带题干/作答原文。C3: 措辞按
+    zone × 区间段位 × recent_error 差异化, 并以「KC 名」开头 (同卷理由不复读)。
     """
     zone = zone_label(p_mastery)
     difficulty = difficulty_for_mastery(p_mastery)
-    reason = _ZONE_REASONS[zone].format(difficulty=_DIFFICULTY_LABELS[difficulty])
+    pos = _zone_position(zone, p_mastery)
+    reason = f"「{name}」" + _ZONE_REASONS[zone][pos].format(
+        difficulty=_DIFFICULTY_LABELS[difficulty]
+    )
     if recent_error:
-        reason += "；近 7 天答错过，优先安排"
+        reason += _RECENT_ERROR_SUFFIXES[pos]
     return {"kc_name": name, "zone": zone, "difficulty": difficulty, "reason": reason}
 
 

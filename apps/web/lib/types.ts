@@ -504,6 +504,8 @@ export interface ReviewItem {
 
 export interface ReviewTodayResponse {
   items: ReviewItem[];
+  /** 全量到期数（B3：与开场卡 next-actions 同一后端函数取数，两处数字必须一致） */
+  total_due?: number;
   now: string;
 }
 

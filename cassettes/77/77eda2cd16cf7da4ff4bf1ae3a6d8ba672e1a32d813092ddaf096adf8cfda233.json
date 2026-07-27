@@ -1,0 +1,6 @@
+{
+  "text": "{\"stub\": true, \"tier\": \"cheap\", \"digest\": \"f9b447ea\", \"echo\": \"# chunk 级知识点抽取  ## 角色  你是一名教育内容标注员, 负责为一个文本块 (chunk) 标注其实质涉及的知识点 (KC), 标注结果将挂到检索\"}",
+  "model": "stub-cheap",
+  "prompt_tokens": 540,
+  "completion_tokens": 71
+}

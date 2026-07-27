@@ -10,11 +10,14 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { BalanceBadge } from "@/components/ui/balance-badge";
 import { BrandMark } from "@/components/ui/brand";
+import { CreditsToast } from "@/components/ui/credits-toast";
 import { useAuth } from "@/lib/auth-context";
 
 // "/" 为营销落地页（app/page.tsx）：未登录可见，已登录由下方 effect 跳 /chat
-const PUBLIC_PATHS = ["/", "/login", "/register"];
+// /forgot /reset 为密码找回流程（邮件链接可直达）
+const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot", "/reset"];
 
 // 需要登录但不套侧边导航外壳的全屏聚焦流程（P2-4 Onboarding）
 const BARE_AUTHED_PATHS = ["/onboarding"];
@@ -105,6 +108,18 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     ],
   },
   {
+    label: "账户",
+    items: [
+      {
+        href: "/billing",
+        label: "钱包",
+        icon: icon(
+          "M3 8a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V8Zm18 2h-5a2 2 0 0 0 0 4h5",
+        ),
+      },
+    ],
+  },
+  {
     label: "管理",
     items: [
       {
@@ -146,6 +161,7 @@ const TITLE_MAP: Record<string, string> = {
   "/reports": "学情报告",
   "/profile": "我的画像",
   "/settings": "设置",
+  "/billing": "钱包",
   "/teacher": "组卷导出",
   "/admin": "运营",
   "/evals": "评估看板",
@@ -368,6 +384,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             <h1 className="text-sm font-semibold text-slate-900">{title}</h1>
           </div>
 
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* 余额徽章：点击进 /billing，余额 <1 转琥珀警示 */}
+            <BalanceBadge />
+
           <div className="relative">
             <button
               type="button"
@@ -423,6 +443,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
             </AnimatePresence>
           </div>
+          </div>
         </header>
 
         {/* 路由切换时内容区淡入（key 触发重挂载；仅 opacity 动画，不影响 fixed 定位后代） */}
@@ -433,6 +454,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
+
+      {/* 402 额度不足全局提示（lib/api.ts 拦截后回调展示） */}
+      <CreditsToast />
     </div>
     </MotionConfig>
   );

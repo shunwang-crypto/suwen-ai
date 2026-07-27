@@ -283,3 +283,53 @@ def test_blueprint_mix_skipped_when_sum_mismatch():
     )
     assert [it["difficulty"] for it in blueprint["items"]] == ["mid", "mid"]
     assert enforced == 0
+
+
+# ---------- 回归: generate 的检索调用必须匹配 RetrievalService 真实签名 ----------
+
+
+async def test_generate_calls_retrieval_with_real_signature():
+    """曾因 kb_id= 关键字误用在真检索路径 TypeError (None/fake 检索盖不住, record 冒烟抓出)。
+
+    fake 的 retrieve 签名逐字复刻 RetrievalService.retrieve —— 关键字误用在这里必炸。
+    """
+    from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
+
+    calls: list[tuple] = []
+
+    class _RealSignatureRetrieval:
+        async def retrieve(
+            self,
+            tenant_id,
+            kb_ids,
+            query,
+            *,
+            debug=False,
+        ) -> RetrievalResult:
+            calls.append((tenant_id, kb_ids, query))
+            return RetrievalResult(
+                chunks=[
+                    RetrievedChunk(
+                        chunk_id="c1", text="泰勒公式素材", heading_path="第四章",
+                        doc_id="d1", page_start=1, page_end=1, score=0.9, source="dense",
+                    )
+                ]
+            )
+
+    gateway = FakeGateway([BP_JSON, GEN_JSON])
+    settings = Settings()
+    deps = GraphDeps(
+        settings=settings, gateway=gateway,
+        retrieval=_RealSignatureRetrieval(), web_search=None,
+    )
+    app = build_quiz_graph(deps).compile(checkpointer=MemorySaver())
+    config = cfg("retrieval-signature")
+    state = base_state()
+    state["kb_id"] = "kb-1"
+    await app.ainvoke(state, config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    assert final["validation_errors"] == []
+    assert calls == [("t1", "kb-1", "薄弱点强化练习")]
+    # 素材真实进了出题 prompt
+    gen_prompt = gateway.requests[1].messages[0].content
+    assert "泰勒公式素材" in gen_prompt

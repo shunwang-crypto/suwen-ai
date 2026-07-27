@@ -24,6 +24,7 @@ from .routers import (
     account,
     admin,
     auth,
+    billing,
     chat,
     evals,
     feedback,
@@ -57,13 +58,14 @@ async def lifespan(app: FastAPI):
     get_engine()
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.rate_limiter = RateLimiter(app.state.redis)
-    # 预算强制 (包B): 网关入口预检 — <80% 正常 / 80-100% 降 cheap / ≥100% 拒绝
-    from .budget import create_budget_guard
+    # 网关入口预检 (0006): 先钱包 (余额<=0 -> 402) 后预算 (<80% 正常 / 80-100%
+    # 降 cheap / ≥100% 拒绝 429) — WalletBudgetGuard 组合两者, 见 wallet.py
+    from .wallet import create_billing_guard
 
     app.state.gateway = OpenAIGateway(
         settings,
         usage_sink=persist_usage,
-        budget_guard=create_budget_guard(app.state.redis, settings),
+        budget_guard=create_billing_guard(app.state.redis, settings),
     )
     app.state.storage = create_storage(settings)
     # 两级语义缓存 (包B): L1 Redis 精确 + L2 Qdrant answer_cache
@@ -171,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(account.router)  # P0-4 注销 + P1-8 数据导出
     app.include_router(feedback.router)  # P2-1 用户反馈
     app.include_router(feedback.admin_router)
+    app.include_router(billing.router)  # 0006 预付额度: 钱包/流水/定价/充值订单
     return app
 
 

@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { AuthHero, BrandMark } from "@/components/ui/brand";
+import {
+  CaptchaField,
+  EMPTY_CAPTCHA,
+  type CaptchaState,
+} from "@/components/ui/captcha";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -17,6 +22,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 后端回 CAPTCHA_REQUIRED 时内联展开验证码行（验证码一次性，失败换 key 重挂载刷新）
+  const [needCaptcha, setNeedCaptcha] = useState(false);
+  const [captcha, setCaptcha] = useState<CaptchaState>(EMPTY_CAPTCHA);
+  const [captchaEpoch, setCaptchaEpoch] = useState(0);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -29,12 +38,32 @@ export default function LoginPage() {
       setError("密码长度至少 8 位");
       return;
     }
+    if (needCaptcha && captcha.captchaId && !captcha.answer.trim()) {
+      setError("请输入图中的验证码");
+      return;
+    }
     setSubmitting(true);
     try {
-      await login(email, password);
+      await login(
+        email,
+        password,
+        needCaptcha && captcha.captchaId
+          ? {
+              captcha_id: captcha.captchaId,
+              captcha_answer: captcha.answer.trim(),
+            }
+          : undefined,
+      );
       router.replace("/chat");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "网络异常，请稍后重试");
+      if (err instanceof ApiError && err.code === "CAPTCHA_REQUIRED") {
+        setNeedCaptcha(true);
+        setError("需要完成图形验证码后再登录");
+      } else {
+        setError(err instanceof ApiError ? err.message : "网络异常，请稍后重试");
+      }
+      // 验证码一次性使用：失败后强制换一张
+      if (needCaptcha) setCaptchaEpoch((n) => n + 1);
       setSubmitting(false);
     }
   };
@@ -89,7 +118,7 @@ export default function LoginPage() {
               />
             </label>
 
-            <label className="mb-6 block">
+            <label className="mb-2 block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">
                 密码
               </span>
@@ -103,6 +132,26 @@ export default function LoginPage() {
                 required
               />
             </label>
+
+            <p className="mb-4 text-right">
+              <Link
+                href="/forgot"
+                className="text-xs font-medium text-slate-400 transition-colors hover:text-brand-600"
+              >
+                忘记密码？
+              </Link>
+            </p>
+
+            {needCaptcha && (
+              <CaptchaField
+                key={captchaEpoch}
+                value={captcha}
+                onChange={setCaptcha}
+                disabled={submitting}
+                inputClassName={inputCls}
+                className="mb-4 animate-pop"
+              />
+            )}
 
             <button
               type="submit"

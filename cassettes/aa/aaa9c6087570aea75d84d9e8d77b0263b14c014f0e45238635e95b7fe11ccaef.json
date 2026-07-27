@@ -1,6 +1,6 @@
 {
-  "text": "该片段是第一章第一节关于数列极限定义的核心阐述解释， 描绘 ε-N 语言及其逻辑与应用条件，并 在全文中的基础与关键位置。",
+  "text": "该片段定义了数列极限的ε-N语言，并并强调解释了关键的逻辑顺序 e �e及其应用 e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 1153,
-  "completion_tokens": 35
+  "completion_tokens": 100
 }

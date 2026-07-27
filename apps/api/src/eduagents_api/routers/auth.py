@@ -7,24 +7,56 @@ import jwt as pyjwt
 from eduagents_core.config import Settings
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, text, update
 
+from ..captcha import create_captcha, verify_captcha
 from ..db import plain_session
 from ..deps import AuthContext, current_user, get_app_settings
-from ..models import RefreshToken, User
-from ..schemas import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from ..emailer import create_email_sender
+from ..models import PasswordResetToken, RefreshToken, User
+from ..schemas import (
+    ForgotPasswordIn,
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordIn,
+    TokenResponse,
+    UserOut,
+)
 from ..security import (
     create_access_token,
     hash_password,
     hash_refresh_token,
+    new_password_reset_token,
     new_refresh_token,
     verify_password,
 )
+from ..wallet import get_wallet_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 log = get_logger("auth")
 
 _REFRESH_COOKIE = "edu_refresh"
+
+# 登录防爆破 (同邮箱维度): 连续失败计数, >=3 次后 login 必须携带图形验证码;
+# 成功登录清零。计数键 TTL 15min (滑动: 每次失败重置过期时间)。
+_LOGIN_FAIL_THRESHOLD = 3
+_LOGIN_FAIL_TTL_SECONDS = 900
+
+
+def _login_fail_key(email_hash: str) -> str:
+    return f"login_fail:{email_hash}"
+
+
+async def _mark_service_layer(session) -> None:
+    """password_reset_tokens 的 RLS 服务层标记 (0006, 计费线协调契约)。
+
+    该表 ENABLE+FORCE RLS 且唯一策略 prt_service_all 要求事务内
+    app.billing_service='true' — 必须 set_config(..., is_local=true) 事务级注入
+    (同 db.tenant_session 的 GUC 口径: 连接归池即失效, 不跨请求泄漏)。
+    """
+    await session.execute(
+        text("SELECT set_config('app.billing_service', 'true', true)")
+    )
 
 
 def _email_hash(email: str) -> str:
@@ -88,6 +120,22 @@ async def _issue_refresh(
     return raw
 
 
+@router.get("/captcha")
+async def get_captcha(
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+):
+    """图形验证码 (自托管 Pillow, 零外部依赖): 答案入 Redis TTL 300s, 单次有效。"""
+    await _auth_rate_limit(
+        request,
+        settings,
+        bucket="auth_captcha",
+        per_minute=settings.captcha_rate_limit_per_minute,
+    )
+    captcha_id, image = await create_captcha(request.app.state.redis)
+    return {"captcha_id": captcha_id, "image": image}
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
 async def register(
     body: RegisterRequest,
@@ -95,6 +143,14 @@ async def register(
     settings: Settings = Depends(get_app_settings),
 ):
     await _auth_rate_limit(request, settings)
+    # 注册验证码 (默认强制): 测试通道 = APP_ENV=test 或 CAPTCHA_REQUIRED_REGISTER=0
+    # (tests/conftest.py 显式关闭, 既有大量注册的集成测试不受影响)。
+    # 缺字段与答错统一 400 CAPTCHA_INVALID; verify_captcha 校验即删 (单次)。
+    if settings.captcha_required_register and settings.app_env != "test":
+        if not await verify_captcha(
+            request.app.state.redis, body.captcha_id, body.captcha_answer
+        ):
+            raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
     async with plain_session() as session:
         existing = await session.scalar(select(User).where(User.email == body.email))
         if existing:
@@ -106,6 +162,9 @@ async def register(
         )
         session.add(user)
         await session.flush()
+        # 0006 预付额度: 注册赠送与建号同事务 (原子, 一起提交/一起回滚);
+        # 幂等由 wallet_ledger 唯一部分索引 (user_id) WHERE kind='signup_grant' 兜底
+        await get_wallet_service().grant_signup(session, user.id)
         log.info("user_registered", user_id=str(user.id))
         return UserOut(
             id=user.id, email=user.email, role=user.role, created_at=user.created_at
@@ -125,9 +184,23 @@ async def login(
     await _auth_rate_limit(
         request, settings, extra_keys=(f"acct:{email_hash}:login",)
     )
+    redis = request.app.state.redis
+    # 防爆破: 同邮箱连续失败 >=3 次后必须先过图形验证码 (未带 -> CAPTCHA_REQUIRED,
+    # 带了但答错/过期 -> CAPTCHA_INVALID)。验证码在密码校验**之前**消耗,
+    # 攻击者无法用一张图试多个密码。
+    fail_key = _login_fail_key(email_hash)
+    fails = int(await redis.get(fail_key) or 0)
+    if fails >= _LOGIN_FAIL_THRESHOLD:
+        if not body.captcha_id or not body.captcha_answer:
+            raise HTTPException(status_code=400, detail="CAPTCHA_REQUIRED")
+        if not await verify_captcha(redis, body.captcha_id, body.captcha_answer):
+            raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
     async with plain_session() as session:
         user = await session.scalar(select(User).where(User.email == body.email))
         if user is None or not verify_password(body.password, user.password_hash):
+            # 失败计数 +1, 滑动 15min 过期 (INCR 后无条件 EXPIRE)
+            await redis.incr(fail_key)
+            await redis.expire(fail_key, _LOGIN_FAIL_TTL_SECONDS)
             log.warning(
                 "login_failed",
                 email_hash=email_hash[:16],
@@ -138,6 +211,7 @@ async def login(
             settings, user_id=user.id, tenant_id=user.id, role=user.role
         )
         user_id = user.id
+    await redis.delete(fail_key)  # 成功登录清零失败计数
     raw = await _issue_refresh(user_id, settings)
     _set_refresh_cookie(response, settings, raw)
     log.info("user_login", user_id=str(user_id))
@@ -240,6 +314,116 @@ async def logout(
                 )
         except pyjwt.PyJWTError:
             pass  # 伪造/损坏 token: 登出本身仍然成功
+    return None
+
+
+@router.post("/forgot", status_code=204)
+async def forgot_password(
+    body: ForgotPasswordIn,
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+):
+    """密码找回申请: **恒定 204** (防枚举 — 无论邮箱是否注册, 响应完全一致)。
+
+    存在的用户: 生成 32 字节 urlsafe token, sha256 落 password_reset_tokens
+    (30min 过期, 同用户旧的未用 token 直接作废删除), 通过 EmailSender 发送
+    重置链接 {WEB_ORIGIN}/reset?token=...。token 原文只进邮件, 绝不进响应。
+    """
+    # 独立限流桶 5/min/IP: 防批量骚扰发信 (与 login/register 撞库桶隔离)
+    await _auth_rate_limit(
+        request,
+        settings,
+        bucket="auth_forgot",
+        per_minute=settings.auth_forgot_rate_limit_per_minute,
+    )
+    redis = request.app.state.redis
+    # 验证码在查库**之前**消耗: 无论用户存在与否行为一致, 不成为枚举侧信道
+    if not await verify_captcha(redis, body.captcha_id, body.captcha_answer):
+        raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
+    reset_link = None
+    async with plain_session() as session:
+        await _mark_service_layer(session)  # RLS: password_reset_tokens 仅服务层可写
+        user = await session.scalar(select(User).where(User.email == body.email))
+        if user is not None:
+            raw, token_hash = new_password_reset_token()
+            # 旧未用 token 作废 (删除): 任一时刻每用户至多一个有效重置链接
+            await session.execute(
+                delete(PasswordResetToken).where(
+                    PasswordResetToken.user_id == user.id,
+                    PasswordResetToken.used_at.is_(None),
+                )
+            )
+            session.add(
+                PasswordResetToken(
+                    user_id=user.id,
+                    token_hash=token_hash,
+                    expires_at=datetime.now(UTC)
+                    + timedelta(seconds=settings.password_reset_ttl_seconds),
+                )
+            )
+            reset_link = f"{settings.web_origin}/reset?token={raw}"
+    if reset_link is not None:
+        # 事务提交后再发信 (SMTP 秒级耗时不占 DB 事务); 发信失败不改变 204 口径
+        # (防枚举优先), 但日志如实记录失败, 不伪造"已发送"。
+        sender = create_email_sender(settings, redis)
+        try:
+            await sender.send(
+                to=body.email,
+                subject="EduAgents 密码重置",
+                body=(
+                    "你好,\n\n"
+                    "我们收到了你的密码重置申请。请在 30 分钟内打开以下链接设置新密码:\n\n"
+                    f"{reset_link}\n\n"
+                    "如果这不是你本人的操作, 请忽略本邮件, 你的密码不会被更改。\n"
+                ),
+            )
+        except Exception:  # noqa: BLE001 — SMTP 故障不暴露给请求方 (防枚举)
+            log.exception("password_reset_email_failed", email_hash=_email_hash(body.email)[:16])
+    log.info("password_reset_requested", email_hash=_email_hash(body.email)[:16])
+    return None
+
+
+@router.post("/reset", status_code=204)
+async def reset_password(
+    body: ResetPasswordIn,
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+):
+    """凭一次性 token 改密: 校验 sha256/过期/未用 -> bcrypt 改密 -> 标记 used ->
+    吊销该用户全部 refresh token (与 refresh 重放检测同一吊销口径) -> 204。
+
+    失败一律 400 RESET_TOKEN_INVALID, 不区分"不存在/过期/已用" (不给探测面)。
+    """
+    await _auth_rate_limit(request, settings, bucket="auth_reset")
+    token_hash = hash_refresh_token(body.token)  # 同 sha256 口径 (security.py)
+    now = datetime.now(UTC)
+    async with plain_session() as session:
+        await _mark_service_layer(session)  # RLS: password_reset_tokens 仅服务层可读写
+        row = await session.scalar(
+            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+        )
+        if (
+            row is None
+            or row.used_at is not None
+            or row.expires_at.replace(tzinfo=UTC) < now
+        ):
+            raise HTTPException(status_code=400, detail="RESET_TOKEN_INVALID")
+        user = await session.get(User, row.user_id)
+        if user is None:
+            raise HTTPException(status_code=400, detail="RESET_TOKEN_INVALID")
+        user.password_hash = hash_password(body.new_password, settings.bcrypt_rounds)
+        row.used_at = now  # 单次性: 标记已用, 二次提交同 token 直接 400
+        # 吊销全部 refresh token (复用 refresh 重放检测的全家撤销写法):
+        # 改密后所有已登录会话立即失效, 盗号者手里的 cookie 变废纸
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == row.user_id)
+            .values(revoked=True)
+        )
+        user_id = row.user_id
+    # 改密成功顺手清掉登录失败计数 (用户凭新密码登录不应再被要求验证码)
+    await request.app.state.redis.delete(_login_fail_key(_email_hash(user.email)))
+    log.info("password_reset_completed", user_id=str(user_id))
     return None
 
 

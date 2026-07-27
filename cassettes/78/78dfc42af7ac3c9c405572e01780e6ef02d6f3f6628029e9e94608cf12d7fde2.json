@@ -1,6 +1,6 @@
 {
-  "text": "该片段位于第五章《不定积分与基本积分表》",
+  "text": "该片段位于第五章“不定积分与基本积分表”的的开头部分解释了不定积分的基本概念和 连续函数的性质 pérdida\n",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 563,
-  "completion_tokens": 13
+  "completion_tokens": 31
 }

@@ -17,6 +17,9 @@ def _validate_bcrypt_password_bytes(v: str) -> str:
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    # 图形验证码 (captcha_required_register 开启时必填; 测试通道见 config.py 注释)
+    captcha_id: str | None = Field(default=None, max_length=64)
+    captcha_answer: str | None = Field(default=None, max_length=8)
 
     _password_bytes = field_validator("password")(_validate_bcrypt_password_bytes)
 
@@ -24,6 +27,26 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    # 同邮箱连续失败 >=3 次后要求验证码 (防爆破); 平时无需携带
+    captcha_id: str | None = Field(default=None, max_length=64)
+    captcha_answer: str | None = Field(default=None, max_length=8)
+
+
+class ForgotPasswordIn(BaseModel):
+    """密码找回申请: 恒定 204 (防枚举), 验证码必填 (防批量骚扰发信)。"""
+
+    email: EmailStr
+    captcha_id: str = Field(min_length=1, max_length=64)
+    captcha_answer: str = Field(min_length=1, max_length=8)
+
+
+class ResetPasswordIn(BaseModel):
+    """凭邮件里的一次性 token 改密。"""
+
+    token: str = Field(min_length=16, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    _password_bytes = field_validator("new_password")(_validate_bcrypt_password_bytes)
 
 
 class AccountDeleteIn(BaseModel):

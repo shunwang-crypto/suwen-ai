@@ -1,0 +1,6 @@
+{
+  "text": "{\"k\": [\"夹逼准则\", \"数列极限\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 616,
+  "completion_tokens": 13
+}

@@ -1,6 +1,6 @@
 {
-  "text": "该片段位于“高等数学讲义”第1章“导数与微分”中的“基本初等函数导数表”部分节，详细列出了常见初等函数的导数公式，其中特别提到了 e^(x) 的导数为 e^(x)。",
+  "text": "该 e e � �在导数运算 e 中不动 e， e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e e",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 651,
-  "completion_tokens": 61
+  "completion_tokens": 100
 }

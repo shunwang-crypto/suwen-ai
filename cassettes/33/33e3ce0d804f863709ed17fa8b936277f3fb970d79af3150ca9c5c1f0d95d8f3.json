@@ -1,6 +1,6 @@
 {
-  "text": "这部分内容概述了无穷无穷量的定义和等价无穷无穷量替换定理，并提供了常用等价无穷无穷量表，在是章节的重要组成部分。",
+  "text": "该片段位于章节的开头，定义了无穷无穷量及其分类，并\n",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 760,
-  "completion_tokens": 33
+  "completion_tokens": 16
 }

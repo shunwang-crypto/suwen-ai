@@ -1,0 +1,6 @@
+{
+  "text": "{\"kcs\": [\"微积分基本定理\", \"牛顿-莱布尼茨公式\", \"定积分的应用\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 861,
+  "completion_tokens": 26
+}

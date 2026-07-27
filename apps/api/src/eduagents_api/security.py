@@ -82,3 +82,13 @@ def new_refresh_token() -> tuple[str, str]:
 
 def hash_refresh_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def new_password_reset_token() -> tuple[str, str]:
+    """密码找回 token: 返回 (raw_for_email_link, sha256_hash_for_db)。
+
+    32 字节 urlsafe 随机串, 原文只出现在邮件链接里, 落库仅 sha256
+    (与 refresh token 同口径: 拖库拿不到可用 token)。
+    """
+    raw = secrets.token_urlsafe(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest()

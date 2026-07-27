@@ -1,0 +1,6 @@
+{
+  "text": "{\"kns\": [\"麦克劳林展开\", \"泰勒公式\", \"拉格朗日余项\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 823,
+  "completion_tokens": 23
+}

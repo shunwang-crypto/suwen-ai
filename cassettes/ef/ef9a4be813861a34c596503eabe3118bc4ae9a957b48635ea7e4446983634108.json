@@ -1,5 +1,5 @@
 {
-  "text": "{\"queries\": [\"水浒传作者是谁?\", \"水浒传的作者是？\"]}",
+  "text": "{\"queries\": [\"水浒传作者是谁?\", \"水浒传的作者是谁?\"]}",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "prompt_tokens": 250,
   "completion_tokens": 19

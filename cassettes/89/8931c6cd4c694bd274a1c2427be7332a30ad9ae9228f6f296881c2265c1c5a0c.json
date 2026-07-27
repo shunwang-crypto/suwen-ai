@@ -1,0 +1,6 @@
+{
+  "text": "{\"queries\": \"水浒传的作者是谁?\", \"水浒传的作者名称是什么?\"\t\t\t\t\n\t\t\t\t\n\t\n:\")}} \" \t \t\t\t\n  \t\t\t  \n \t \t}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 251,
+  "completion_tokens": 40
+}

@@ -45,6 +45,28 @@ class Settings(BaseSettings):
     refresh_token_ttl_seconds: int = 14 * 24 * 3600
     bcrypt_rounds: int = 12
 
+    # --- 图形验证码 (自托管 Pillow 生成, 零外部依赖) ---
+    # 注册是否强制验证码: 默认开; 集成测试通道 = APP_ENV=test 或环境变量
+    # CAPTCHA_REQUIRED_REGISTER=0 (tests/conftest.py 已显式关闭, 专项测试再打开)
+    captcha_required_register: bool = True
+    # 验证码图片获取接口独立限流 (登录页可能连刷几张, 比 auth 主桶宽)
+    captcha_rate_limit_per_minute: int = 30
+
+    # --- 密码找回 ---
+    password_reset_ttl_seconds: int = 1800  # 重置 token 有效期 30min
+    # 重置链接的前端地址前缀: {web_origin}/reset?token=...
+    web_origin: str = "http://localhost:3000"
+    # forgot 接口独立限流桶 (5/min/IP), 防批量骚扰发信
+    auth_forgot_rate_limit_per_minute: int = 5
+
+    # --- SMTP 发信 (host/user/password/from 四项齐全才启用真实发送;
+    #     否则退回 DevEmailSender: 只打日志, 不伪造"已发送"的假象) ---
+    smtp_host: str = ""
+    smtp_port: int = 465  # 465=SSL 直连; 其他端口走 STARTTLS
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+
     # --- rate limits (token bucket, per minute capacity) ---
     auth_rate_limit_per_minute: int = 5
     # refresh 单独更宽的桶: 每次整页刷新都会静默续期, 5/min 会把正常刷新用户
@@ -59,6 +81,15 @@ class Settings(BaseSettings):
     # 全站日成本熔断 (P0-2b): ≥80% 全站强制 cheap / ≥100% 拒非 admin / ≥150% 全档熔断;
     # <=0 关闭全局熔断 (仅保留用户日预算)
     global_daily_budget_cny: float = 50.0
+
+    # --- billing (0006 预付额度) ---
+    # 扣费 = 模型真实成本 × billing_markup (Decimal 运算统一在 apps/api/wallet.py,
+    # 本处 float 仅作配置载体, 使用前一律 Decimal(str(...)) 转换, 禁 float 直接参与账目)
+    billing_markup: float = 3.0
+    # 注册赠送额度 (CNY 计价 credit); 幂等由 wallet_ledger 唯一部分索引保证
+    signup_grant_cny: float = 10.0
+    # 支付通道: mock = 演示通道 (confirm 即到账, 仅非 prod); 真实通道留接口未实现
+    payment_provider: str = "mock"
 
     # --- model gateway ---
     # live: real API calls; record: live + save cassette; replay: cassette only;

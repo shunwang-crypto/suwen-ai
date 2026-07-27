@@ -1,0 +1,6 @@
+{
+  "text": "{\"supported\": true}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 2117,
+  "completion_tokens": 5
+}

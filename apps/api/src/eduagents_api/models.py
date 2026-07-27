@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -150,6 +152,33 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     rotated_from: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class PasswordResetToken(Base):
+    """密码找回 token (原文只进邮件链接, 库里只存 sha256, 同 refresh_tokens 口径)。
+
+    协调约定 (计费线 x 认证线, 全仓唯一定义在此): 表由计费线迁移 0006 以
+    ORM 子集 create_all 建出, 本定义即建表结构; 认证线 (routers/auth.py) 只
+    import 使用, 不写迁移。0001 的建表清单已冻结 (_TABLES_AT_0001), 从零重放
+    不会提前建出本表; 新表可直接声明 FK (同 learner_insights, 见 0003 头注释)。
+
+    RLS (0006): ENABLE+FORCE, 仅服务层策略 prt_service_all — 读写都要求事务内
+    set_config('app.billing_service', 'true', true); 用户侧无任何直读路径。
+    单次性: used_at 非空即作废; 同用户重新申请时旧未用行直接删除。
+    """
+
+    __tablename__ = "password_reset_tokens"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -491,3 +520,86 @@ class EvalRun(Base):
     corpus_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     golden_set_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     at: Mapped[datetime] = _created_at()
+
+
+# ---------- 预付额度计费 (0006) ----------
+# 四表由 0006 迁移 create_all 建出 (新表可直接声明 FK, 同 0005 头注释口径);
+# 不追加进 TENANT_TABLES (0001 策略循环已冻结), RLS 由 0006 单独建:
+# 读 = 本人 (app.tenant_id GUC); 写 = 仅服务层 (app.billing_service GUC,
+# WalletService 在事务内 set_config 标记, 见 wallet.py)。金额一律 NUMERIC(12,4)
+# + Python Decimal, 禁 float 参与账目运算。
+
+
+class WalletAccount(Base):
+    """预付钱包 (一人一行, user_id 即主键): balance = CNY 计价的剩余额度。
+
+    - 允许透支为负: 进行中的调用不打断 (扣费在 usage_log 同事务落账),
+      余额 <=0 由下一次请求的网关入口 precheck 拦截 (402 INSUFFICIENT_CREDITS);
+    - 注销: FK CASCADE 随 users 行删除 (FK 级联内部操作不受 RLS 约束)。
+    """
+
+    __tablename__ = "wallet_accounts"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    balance: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WalletLedger(Base):
+    """钱包流水 (append-only: RLS 无 UPDATE/DELETE 策略 + 0006 REVOKE 双保险)。
+
+    - kind 白名单 CHECK: signup_grant/consume/recharge/refund/admin_adjust;
+    - ref: consume=request_id / recharge=order_id (幂等凭证);
+    - 幂等唯一部分索引 (0006): (user_id) WHERE kind='signup_grant' 注册赠送只发一次;
+      (user_id, ref) WHERE kind='consume' 同 request_id 重试不双扣;
+    - 读路径索引 (user_id, created_at DESC): 本人最近 N 条 (同 0005 惯例)。
+    """
+
+    __tablename__ = "wallet_ledger"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    delta: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class PaymentOrder(Base):
+    """充值订单: status 状态机 pending→paid|failed|expired (CHECK 白名单, 0006)。
+
+    幂等: mock-pay/回调入账前必须 SELECT ... FOR UPDATE 且 status='pending' 才能
+    过渡到 paid 并调 recharge_apply — 重复确认返回 409, 不双入账。
+    """
+
+    __tablename__ = "payment_orders"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    amount_cny: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    credits: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    provider: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="mock", server_default="mock"
+    )
+    provider_txn_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# (password_reset_tokens 的 ORM 定义在上方 RefreshToken 之后 — 认证线先落盘,
+#  计费线 0006 引用同一定义建表; 此处不再重复定义, 见该类 docstring 协调注释。)

@@ -35,6 +35,7 @@ def _reset_worker_gateway():
 def test_worker_gateway_singleton_with_guard_and_sink(_reset_worker_gateway):
     from eduagents_api.budget import RedisBudgetGuard
     from eduagents_api.usage import persist_usage
+    from eduagents_api.wallet import WalletBudgetGuard
     from eduagents_worker.enrichment import get_worker_gateway
 
     settings = _settings()
@@ -42,7 +43,9 @@ def test_worker_gateway_singleton_with_guard_and_sink(_reset_worker_gateway):
     gw2 = get_worker_gateway(settings)
     assert gw1 is gw2  # 进程级单例: 断路器状态跨任务共享 (P1-15)
     assert gw1._sink is persist_usage  # 后台支出进 usage_log (P0-2a)
-    assert isinstance(gw1._guard, RedisBudgetGuard)  # 后台任务受预算约束
+    # 0006: 后台任务受 钱包(402)+预算(429) 组合约束 — 组合 guard 内层仍是预算 guard
+    assert isinstance(gw1._guard, WalletBudgetGuard)
+    assert isinstance(gw1._guard._inner, RedisBudgetGuard)
     # reflection / study_guide 引用的是同一工厂
     from eduagents_worker.reflection import reflect_session  # noqa: F401
     from eduagents_worker.study_guide import build_study_guide  # noqa: F401

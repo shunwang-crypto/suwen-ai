@@ -1,0 +1,6 @@
+{
+  "text": "{\"ks\": [\"罗尔定理\", \"拉 栙朗日中值定理\" , \"导数\"]}",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "prompt_tokens": 771,
+  "completion_tokens": 26
+}
