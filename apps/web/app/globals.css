@@ -1,8 +1,18 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f7f7f5;
+  --foreground: #171717;
+
+  /* EduAgents v3：中性工作台底色，品牌色只承担状态与操作。 */
+  --ea-canvas: #f7f7f5;
+  --ea-surface: #ffffff;
+  --ea-surface-muted: #f1f1ee;
+  --ea-line: #e3e3df;
+  --ea-line-strong: #c9c9c4;
+  --ea-ink: #171717;
+  --ea-ink-secondary: #525252;
+  --ea-ink-muted: #8a8a86;
 
   /* 动效时长 tokens（组件内联 CSS 使用） */
   --dur-fast: 150ms;
@@ -24,6 +34,15 @@
    只加不改：旧类名（indigo- / slate- / rounded- 等）语义全部保留。
    ============================================================ */
 @theme {
+  --color-canvas: #f7f7f5;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f1ee;
+  --color-line: #e3e3df;
+  --color-line-strong: #c9c9c4;
+  --color-ink: #171717;
+  --color-ink-secondary: #525252;
+  --color-ink-muted: #8a8a86;
+
   /* 品牌色阶：靛蓝家族（brand-600 与既有 indigo-600 同值，旧页面无感） */
   --color-brand-50: #eef2ff;
   --color-brand-100: #e0e7ff;
@@ -70,12 +89,13 @@
   --shadow-card:
     0 1px 2px 0 rgb(15 23 42 / 0.04), 0 8px 24px -8px rgb(79 70 229 / 0.1);
   --shadow-floating:
-    0 4px 12px -2px rgb(15 23 42 / 0.06),
-    0 20px 48px -12px rgb(79 70 229 / 0.18);
+    0 2px 8px -2px rgb(79 70 229 / 0.08),
+    0 8px 24px -8px rgb(15 23 42 / 0.08);
 
-  /* 圆角体系：卡片 16px（rounded-card）/ 控件 10px（rounded-control） */
+  /* 商业化界面圆角：控件 8px、浮层 12px；大内容卡仍保留 16px。 */
   --radius-card: 1rem;
-  --radius-control: 0.625rem;
+  --radius-control: 0.5rem;
+  --radius-overlay: 0.75rem;
 
   /* 缓动 tokens */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
@@ -268,6 +288,23 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
 ::selection {
   background-color: #c7d2fe;
   color: #1e1b4b;
@@ -288,7 +325,7 @@ body {
 /* 细滚动条，贴合干净的教育产品风 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: #c9c9c4 transparent;
 }
 
 /* KaTeX 块级公式在窄屏下允许横向滚动，避免破版 */

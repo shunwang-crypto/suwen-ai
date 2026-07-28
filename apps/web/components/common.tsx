@@ -58,11 +58,11 @@ export function PageHeader({
     <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <FxStyles />
       <div className="min-w-0">
-        <h2 className="bg-gradient-to-r from-slate-900 to-slate-600 bg-clip-text text-xl font-bold tracking-tight text-transparent">
+        <h2 className="text-2xl font-semibold tracking-[-0.03em] text-ink">
           {title}
         </h2>
         {subtitle && (
-          <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{subtitle}</p>
+          <p className="mt-1.5 text-xs leading-relaxed text-ink-secondary">{subtitle}</p>
         )}
       </div>
       {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
@@ -310,7 +310,7 @@ export function EmptyState({
   children?: ReactNode;
 }) {
   return (
-    <div className="edu-fade-up flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+    <div className="edu-fade-up flex flex-col items-center gap-2 rounded-overlay border border-dashed border-line-strong bg-white px-6 py-12 text-center">
       <FxStyles />
       {illustration ? (
         <Illustration name={illustration} className="mb-1 h-22 w-24" />
@@ -337,7 +337,7 @@ export function EmptyState({
   );
 }
 
-/** 白底圆角卡片容器（16px 圆角 + 柔和带色阴影）。 */
+/** v3 白底内容容器：中性细边，不用彩色阴影制造“仪表盘卡片”感。 */
 export function Card({
   title,
   extra,
@@ -351,12 +351,12 @@ export function Card({
 }) {
   return (
     <section
-      className={`rounded-2xl border border-slate-200 bg-white shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] transition-shadow hover:shadow-[0_6px_26px_-6px_rgba(79,70,229,0.16)] ${className ?? ""}`}
+      className={`rounded-overlay border border-line bg-white ${className ?? ""}`}
     >
       <FxStyles />
       {(title || extra) && (
-        <header className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
-          <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+        <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+          <h2 className="text-sm font-semibold text-ink">{title}</h2>
           {extra}
         </header>
       )}

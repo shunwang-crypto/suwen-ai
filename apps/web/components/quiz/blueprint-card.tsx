@@ -138,7 +138,7 @@ export function BlueprintCard({
           type="button"
           disabled={busy}
           onClick={() => onConfirm({ items, summary: blueprint.summary })}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center gap-2 rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
           确认并生成题目

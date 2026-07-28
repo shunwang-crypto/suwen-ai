@@ -335,14 +335,71 @@ async def test_reports_learning(api):
     assert "导数定义" in labels or "极限" in labels
     assert any(a["href"].startswith("/quiz?kc=") for a in actions)
 
+    # 首屏只返回持久化快照，不等待 LLM；同 scope 再读命中数据库快照。
+    assert body["cached"] is False
+    cached = await api.get("/api/reports/learning", headers=headers)
+    assert cached.status_code == 200
+    assert cached.json()["cached"] is True
+
+    # 后台刷新是独立端点；stub 下不伪造正文，且不影响已返回的确定性报告。
+    refreshed = await api.post("/api/reports/learning/refresh", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_body = refreshed.json()
+    assert refreshed_body["radar"] == body["radar"]
+
     # narrative: stub 网关下如实 null + note, 不许桩文本冒充 (§14)
     from eduagents_core.config import get_settings
 
     if get_settings().gateway_mode == "stub":
-        assert body["narrative"] is None
-        assert body["narrative_note"] == "需 live 网关生成"
+        assert refreshed_body["report_status"] == "unavailable"
+        assert refreshed_body["narrative"] is None
+        assert refreshed_body["narrative_note"] == "需 live 网关生成"
+
+        # 模拟真实模型完成路径：更新后的 server timestamp 必须显式 refresh，防止
+        # SQLAlchemy 在响应序列化阶段触发 MissingGreenlet。
+        from eduagents_api.db import tenant_session
+        from eduagents_api.deps import get_app_settings, get_gateway
+        from eduagents_api.models import LearningReportSnapshot
+        from eduagents_core.gateway import ChatResult
+
+        async with tenant_session(uid) as session:
+            snapshot = await session.scalar(
+                select(LearningReportSnapshot).where(
+                    LearningReportSnapshot.user_id == uuid.UUID(uid),
+                    LearningReportSnapshot.scope_key == "all",
+                )
+            )
+            snapshot.status = "pending"
+            snapshot.prompt_version = "outdated"
+
+        class FakeGateway:
+            async def chat(self, _request):
+                return ChatResult(
+                    text="现状：测试诊断。\n归因：测试归因。\n建议：完成 3 道练习。",
+                    model="fake-live",
+                    tier="standard",
+                    prompt_tokens=10,
+                    completion_tokens=20,
+                    cost_cny=0.0,
+                    latency_ms=1,
+                    mode="live",
+                )
+
+        app = api._transport.app
+        app.dependency_overrides[get_app_settings] = lambda: get_settings().model_copy(
+            update={"gateway_mode": "live"}
+        )
+        app.dependency_overrides[get_gateway] = lambda: FakeGateway()
+        try:
+            live_refresh = await api.post("/api/reports/learning/refresh", headers=headers)
+        finally:
+            app.dependency_overrides.pop(get_app_settings, None)
+            app.dependency_overrides.pop(get_gateway, None)
+        assert live_refresh.status_code == 200, live_refresh.text
+        assert live_refresh.json()["report_status"] == "completed"
+        assert live_refresh.json()["narrative"].startswith("现状")
     else:
-        assert body["narrative"]
+        assert refreshed_body["narrative"]
 
 
 async def test_ops_usage_admin_cross_tenant(api):

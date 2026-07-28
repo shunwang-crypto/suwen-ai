@@ -125,7 +125,7 @@ export function QuizForm({
       <button
         type="submit"
         disabled={!valid || busy}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-2 rounded-control bg-ink py-2.5 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
       >
         {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
         {busy ? "正在生成蓝图…" : "开始出题"}

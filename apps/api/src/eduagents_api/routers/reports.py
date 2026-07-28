@@ -13,25 +13,38 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import GatewayError, Tier
+from eduagents_core.logging import get_logger
 from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, REINFORCE_THRESHOLD
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import Date, cast, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings, get_gateway
 from ..kc_hierarchy import FALLBACK_CHAPTER, chapter_sort_key, resolve_kc_meta
-from ..models import Attempt, ErrorItem, KcEdge, KnowledgeComponent, MasteryLog, MasteryRecord
+from ..models import (
+    Attempt,
+    ErrorItem,
+    KcEdge,
+    KnowledgeComponent,
+    LearningReportSnapshot,
+    MasteryLog,
+    MasteryRecord,
+)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+log = get_logger("reports")
 
 _TREND_DAYS = 30
 _RADAR_TOP_N = 12
@@ -201,16 +214,23 @@ async def _build_aggregates(
         if _WEAK_THRESHOLD <= p < _CONSOLIDATE_THRESHOLD
         and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
     ]
+    # 真实规模下逐 KC COUNT 会退化成 N+1（152 KC 就可能多出上百次往返）。错题本
+    # 本来就是用户级小集合，一次取回 kc_ids 后在内存聚合，查询数恒定为 1。
+    target_ids = set(weak_ids + consolidate_ids)
+    error_counts: Counter[str] = Counter()
+    if target_ids:
+        error_kc_rows = (
+            await session.scalars(
+                select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id)
+            )
+        ).all()
+        for row_ids in error_kc_rows:
+            for row_kc in {str(value) for value in (row_ids or [])} & target_ids:
+                error_counts[row_kc] += 1
+
     entries = []
     for kc in sorted(weak_ids + consolidate_ids, key=lambda k: p_by_kc[k]):
-        error_count = int(
-            await session.scalar(
-                select(func.count()).where(
-                    ErrorItem.user_id == ctx.user_id, ErrorItem.kc_ids.contains([kc])
-                )
-            )
-            or 0
-        )
+        error_count = int(error_counts[kc])
         # 前置里同样未掌握 (p<0.4) 的列为可能根因; 无掌握记录的前置不妄断
         root_cause = [
             {"kc_id": pre, "name": name_by_kc.get(pre, ""), "p_mastery": round(p_by_kc[pre], 4)}
@@ -304,6 +324,45 @@ def _build_actions(agg: dict) -> list[dict]:
     return actions
 
 
+_REPORT_PROMPT_VERSION = "v2"
+
+
+def _report_payload(agg: dict, actions: list[dict]) -> dict:
+    """可持久化的确定性报告。原始证据仍在业务表，快照只负责即时展示。"""
+    return {
+        "radar": agg["radar"],
+        "axes_kind": agg["axes_kind"],
+        "radar_kcs": agg["radar_kcs"],
+        "trend": agg["trend"],
+        "weak_points": agg["weak_points"],
+        "weak_threshold": _WEAK_THRESHOLD,
+        "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
+        "consolidate_points": agg["consolidate_points"],
+        "actions": actions,
+    }
+
+
+def _payload_signature(payload: dict) -> str:
+    stable = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(stable.encode("utf-8")).hexdigest()
+
+
+def _snapshot_response(snapshot: LearningReportSnapshot, *, cached: bool) -> dict:
+    return {
+        **(snapshot.payload_json or {}),
+        "narrative": snapshot.narrative,
+        "narrative_note": snapshot.narrative_note,
+        "report_status": snapshot.status,
+        "report_updated_at": snapshot.updated_at.isoformat(),
+        "cached": cached,
+    }
+
+
+def _scope(kb_id: uuid.UUID | None) -> tuple[str, str | None]:
+    value = str(kb_id) if kb_id is not None else None
+    return value or "all", value
+
+
 async def _narrative(
     gateway, settings: Settings, ctx: AuthContext, request_id: str, agg: dict, actions: list[dict]
 ) -> tuple[str | None, str | None]:
@@ -350,33 +409,152 @@ async def _narrative(
 @router.get("/learning")
 async def learning_report(
     request: Request,
-    kb_id: str | None = None,
+    kb_id: uuid.UUID | None = None,
+    ctx: AuthContext = Depends(api_rate_limited),
+    settings: Settings = Depends(get_app_settings),
+):
+    """立即返回最近快照；首次访问只做确定性聚合，不在页面首屏等待 LLM。"""
+    scope_key, scoped_kb_id = _scope(kb_id)
+    async with tenant_session(ctx.tenant_id) as session:
+        snapshot = await session.scalar(
+            select(LearningReportSnapshot).where(
+                LearningReportSnapshot.user_id == ctx.user_id,
+                LearningReportSnapshot.scope_key == scope_key,
+            )
+        )
+        if snapshot is not None:
+            return _snapshot_response(snapshot, cached=True)
+
+        agg = await _build_aggregates(
+            session,
+            ctx,
+            kb_id=scoped_kb_id,
+            redis=getattr(request.app.state, "redis", None),
+        )
+        actions = _build_actions(agg)
+        payload = _report_payload(agg, actions)
+        unavailable = settings.gateway_mode == "stub"
+        # React 开发模式会主动双跑 effect；数据库唯一约束 + ON CONFLICT 让首次
+        # 快照创建也保持幂等，两个并发 GET 不会有一个变成 500。
+        snapshot = await session.scalar(
+            pg_insert(LearningReportSnapshot)
+            .values(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                scope_key=scope_key,
+                kb_id=kb_id,
+                payload_json=payload,
+                narrative=None,
+                narrative_note=(
+                    "需 live 网关生成" if unavailable else "正在生成最新 AI 诊断"
+                ),
+                status="unavailable" if unavailable else "pending",
+                data_signature=_payload_signature(payload),
+                model=settings.standard_model,
+                prompt_version=_REPORT_PROMPT_VERSION,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    LearningReportSnapshot.user_id,
+                    LearningReportSnapshot.scope_key,
+                ]
+            )
+            .returning(LearningReportSnapshot)
+        )
+        if snapshot is None:
+            snapshot = await session.scalar(
+                select(LearningReportSnapshot).where(
+                    LearningReportSnapshot.user_id == ctx.user_id,
+                    LearningReportSnapshot.scope_key == scope_key,
+                )
+            )
+        if snapshot is None:  # pragma: no cover — DB 冲突行理论上必须可见
+            raise RuntimeError("learning report snapshot upsert failed")
+        return _snapshot_response(snapshot, cached=False)
+
+
+@router.post("/learning/refresh")
+async def refresh_learning_report(
+    request: Request,
+    kb_id: uuid.UUID | None = None,
     ctx: AuthContext = Depends(api_rate_limited),
     settings: Settings = Depends(get_app_settings),
     gateway=Depends(get_gateway),
 ):
-    """学情报告 (F7)。kb_id 非空 = 单库视图: 雷达轴为该库各章, 薄弱点限该库。"""
+    """后台刷新确定性快照与诊断；前端只在诊断卡显示进度，不阻塞已有报告。"""
+    scope_key, scoped_kb_id = _scope(kb_id)
     async with tenant_session(ctx.tenant_id) as session:
         agg = await _build_aggregates(
-            session, ctx, kb_id=kb_id, redis=getattr(request.app.state, "redis", None)
+            session,
+            ctx,
+            kb_id=scoped_kb_id,
+            redis=getattr(request.app.state, "redis", None),
         )
-    actions = _build_actions(agg)
-    narrative, note = await _narrative(
-        gateway, settings, ctx, getattr(request.state, "request_id", ""), agg, actions
+        actions = _build_actions(agg)
+        payload = _report_payload(agg, actions)
+        signature = _payload_signature(payload)
+        snapshot = await session.scalar(
+            select(LearningReportSnapshot).where(
+                LearningReportSnapshot.user_id == ctx.user_id,
+                LearningReportSnapshot.scope_key == scope_key,
+            )
+        )
+        if (
+            snapshot is not None
+            and snapshot.data_signature == signature
+            and snapshot.prompt_version == _REPORT_PROMPT_VERSION
+            and snapshot.status in {"completed", "unavailable"}
+        ):
+            return _snapshot_response(snapshot, cached=True)
+        if snapshot is None:
+            snapshot = LearningReportSnapshot(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                scope_key=scope_key,
+                kb_id=kb_id,
+                payload_json=payload,
+                status="generating",
+                data_signature=signature,
+                model=settings.standard_model,
+                prompt_version=_REPORT_PROMPT_VERSION,
+            )
+            session.add(snapshot)
+        else:
+            snapshot.payload_json = payload
+            snapshot.data_signature = signature
+            snapshot.status = "generating"
+            snapshot.narrative_note = "正在生成最新 AI 诊断"
+            snapshot.model = settings.standard_model
+            snapshot.prompt_version = _REPORT_PROMPT_VERSION
+        await session.flush()
+        snapshot_id = snapshot.id
+
+    try:
+        narrative, note = await _narrative(
+            gateway, settings, ctx, getattr(request.state, "request_id", ""), agg, actions
+        )
+    except Exception:  # noqa: BLE001 — 快照必须从 generating 收口为 failed
+        log.exception("report_narrative_unhandled", user_id=str(ctx.user_id), scope=scope_key)
+        narrative, note = None, "AI 诊断更新失败，当前报告数据仍可正常查看"
+    status = "completed" if narrative else (
+        "unavailable" if settings.gateway_mode == "stub" else "failed"
     )
-    return {
-        # A2: 聚合轴 (章/库), 每轴带 kc_count/weak_count 与下钻 kcs
-        "radar": agg["radar"],
-        "axes_kind": agg["axes_kind"],
-        # 旧 top12 KC 轴保留一版, 供未升级的消费方降级
-        "radar_kcs": agg["radar_kcs"],
-        "trend": agg["trend"],
-        "weak_points": agg["weak_points"],
-        # C4: 两档阈值分开命名下发, 消除"薄弱"同词双口径
-        "weak_threshold": _WEAK_THRESHOLD,
-        "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
-        "consolidate_points": agg["consolidate_points"],
-        "actions": actions,
-        "narrative": narrative,
-        "narrative_note": note,
-    }
+    async with tenant_session(ctx.tenant_id) as session:
+        snapshot = await session.get(LearningReportSnapshot, snapshot_id)
+        if snapshot is None:  # 用户在生成期间注销/清理，不能复活快照
+            return {
+                **payload,
+                "narrative": narrative,
+                "narrative_note": note,
+                "report_status": status,
+                "report_updated_at": datetime.now(CN_TZ).isoformat(),
+                "cached": False,
+            }
+        snapshot.narrative = narrative
+        snapshot.narrative_note = note
+        snapshot.status = status
+        await session.flush()
+        # updated_at 由 server/onupdate 生成，flush 后该属性会过期；显式 refresh 避免
+        # 在同步属性访问中触发异步 IO（SQLAlchemy MissingGreenlet）。
+        await session.refresh(snapshot)
+        return _snapshot_response(snapshot, cached=False)

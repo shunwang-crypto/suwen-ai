@@ -59,7 +59,7 @@ export function CitationsPanel({
   }
 
   return (
-    <div ref={containerRef} className="h-full space-y-2.5 overflow-y-auto p-3">
+    <div ref={containerRef} className="h-full overflow-y-auto px-4">
       {citations.map((c) => {
         const active = activeIdx === c.idx;
         // 来源归属：优先 chat 页传入的 kb 映射，回退引用自带字段（可选扩展字段）
@@ -68,13 +68,6 @@ export function CitationsPanel({
           (c.kb_owner_type === "org" || c.kb_owner_type === "user"
             ? c.kb_owner_type
             : undefined);
-        // 左侧来源色条：机构库琥珀 / 个人库天蓝 / 未知归属靛蓝
-        const stripClass =
-          ownerType === "org"
-            ? "from-amber-500 to-orange-400"
-            : ownerType === "user"
-              ? "from-sky-500 to-cyan-400"
-              : "from-indigo-500 to-violet-400";
         return (
           <button
             key={`${c.chunk_id}-${c.idx}`}
@@ -84,29 +77,19 @@ export function CitationsPanel({
               onSelect(c.idx);
               onOpenContext?.(c);
             }}
-            className={`fx-msg-in relative block w-full overflow-hidden rounded-xl border p-3 pl-4 text-left transition-all duration-200 ${
+            className={`fx-msg-in block w-full border-t border-slate-200 py-4 text-left first:border-t-0 ${
               active
-                ? "-translate-y-0.5 border-indigo-400 bg-indigo-50/70 shadow-md shadow-indigo-600/10 ring-2 ring-indigo-200"
-                : "border-slate-200 bg-white hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/30 hover:shadow-md hover:shadow-indigo-600/5"
+                ? "bg-brand-50/60"
+                : "bg-white hover:bg-slate-50"
             }`}
           >
-            <span
-              aria-hidden
-              className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${stripClass} ${
-                active ? "opacity-100" : "opacity-70"
-              }`}
-            />
             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
               <span
-                className={`flex h-5 min-w-5 items-center justify-center rounded px-1 text-xs font-semibold transition-colors ${
-                  active
-                    ? "bg-indigo-600 text-white"
-                    : "bg-indigo-100 text-indigo-700"
-                }`}
+                className="text-[13px] font-medium text-brand-700"
               >
-                {c.idx}
+                [{c.idx}]
               </span>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">
                 {c.doc_name || "未知文档"}
               </span>
               {c.kb_name && (
@@ -166,7 +149,7 @@ export function CitationsPanel({
               </p>
             )}
             {c.highlight && (
-              <p className="line-clamp-4 border-l-2 border-indigo-200 pl-2 text-xs leading-relaxed text-slate-600">
+              <p className="line-clamp-4 text-xs leading-relaxed text-slate-600">
                 <MathText text={c.highlight} />
               </p>
             )}

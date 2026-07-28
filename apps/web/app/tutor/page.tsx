@@ -15,6 +15,7 @@ import {
   MasteryDelta,
   Spinner,
 } from "@/components/common";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -232,7 +233,7 @@ function ReviewCard({
         <button
           type="button"
           onClick={onReset}
-          className="rounded-xl bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+          className="rounded-control bg-ink px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-black"
         >
           换一道题
         </button>
@@ -343,7 +344,9 @@ export default function TutorPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:flex-row lg:items-start">
+    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <WorkspaceNav workspace="practice" />
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       {/* 左：题目 + 提示阶梯 */}
       <aside className="w-full shrink-0 space-y-4 lg:w-80">
         <Card
@@ -532,7 +535,7 @@ export default function TutorPage() {
               <button
                 type="submit"
                 disabled={!problem.trim() || !input.trim() || sending}
-                className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex shrink-0 items-center gap-1.5 rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {sending && (
                   <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />
@@ -542,6 +545,7 @@ export default function TutorPage() {
             </form>
           )}
         </footer>
+      </div>
       </div>
     </div>
   );

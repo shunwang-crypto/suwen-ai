@@ -492,6 +492,43 @@ class UserPreference(Base):
     )
 
 
+class LearningReportSnapshot(Base):
+    """学情报告最近快照（0007）。
+
+    页面先读最近一次快照，确定性聚合与 AI 诊断在独立刷新请求中更新；因此模型慢、
+    网关失败或用户切换页面都不会让整张报告白屏。scope_key="all" 表示全局，传
+    kb_id 时直接使用 UUID 字符串。一名用户每个 scope 只保留最近一份，原始学习
+    证据仍以 mastery/attempt/error 表为唯一真值。
+    """
+
+    __tablename__ = "learning_report_snapshots"
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope_key", name="uq_learning_report_user_scope"),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    scope_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    kb_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    data_signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    prompt_version: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="v1", server_default="v1"
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class PendingCleanup(Base):
     """删除 outbox (0003, P1-5): 业务删除与清理任务同事务提交, 消灭"PG 已删、
     ARQ 没入队"的永久孤儿。worker cron (process_pending_cleanup) 每分钟消费。

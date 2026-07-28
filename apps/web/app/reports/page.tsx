@@ -18,6 +18,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -53,6 +54,9 @@ type ScaledReportResponse = LearningReportResponse & {
   consolidate_threshold?: number | null;
   /** 待巩固档（红线以上、未达定向出题线），与 weak_points 同结构 */
   consolidate_points?: SubjectWeakPoint[] | null;
+  report_status?: "pending" | "generating" | "completed" | "unavailable" | "failed";
+  report_updated_at?: string | null;
+  cached?: boolean;
 };
 
 /** 每节薄弱点默认展示条数（p 升序 top5，其余「展开全部」）。 */
@@ -728,6 +732,8 @@ export default function ReportsPage() {
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [kbId, setKbId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
@@ -752,12 +758,34 @@ export default function ReportsPage() {
     let alive = true;
     (async () => {
       try {
+        setRefreshError(null);
         const res = await apiJson<ScaledReportResponse>(
           `/api/reports/learning${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
         );
         if (!alive) return;
         setReport(res);
         setError(null);
+        setLoading(false);
+
+        // 首屏数据/旧快照已经可见后再刷新。模型慢只影响 AI 诊断卡，不阻塞整页。
+        setDiagnosisLoading(true);
+        try {
+          const refreshed = await apiJson<ScaledReportResponse>(
+            `/api/reports/learning/refresh${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
+            { method: "POST" },
+          );
+          if (alive) setReport(refreshed);
+        } catch (refreshErr) {
+          if (alive) {
+            setRefreshError(
+              refreshErr instanceof ApiError
+                ? refreshErr.message
+                : "后台更新失败，当前仍显示最近一次报告",
+            );
+          }
+        } finally {
+          if (alive) setDiagnosisLoading(false);
+        }
       } catch (err) {
         if (alive) {
           setError(err instanceof ApiError ? err.message : "学情报告加载失败");
@@ -786,7 +814,12 @@ export default function ReportsPage() {
 
   if (loading && !report) {
     return (
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+        <WorkspaceNav workspace="growth" />
+        <PageHeader
+          title="学情报告"
+          subtitle="正在读取最近一次报告，AI 诊断会在页面展示后单独更新"
+        />
         <SkeletonPage />
       </div>
     );
@@ -794,7 +827,9 @@ export default function ReportsPage() {
 
   if (error || !report) {
     return (
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+        <WorkspaceNav workspace="growth" />
+        <PageHeader title="学情报告" subtitle="最近一次报告暂时无法读取" />
         <ErrorBanner message={error ?? "学情报告加载失败"} onRetry={reload} />
       </div>
     );
@@ -828,19 +863,35 @@ export default function ReportsPage() {
   const hasAnyData =
     radarAxes.length > 0 || weakPoints.length > 0 || trend.some((t) => t.attempts > 0);
   const switching = loading && report != null;
+  const updatedLabel = report.report_updated_at
+    ? new Date(report.report_updated_at).toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <WorkspaceNav workspace="growth" />
       <PageHeader
         title="学情报告"
-        subtitle="近 30 天作答证据聚合：掌握度雷达、趋势、薄弱点归因与可执行建议"
+        subtitle={
+          <>
+            近 30 天作答证据聚合：掌握度雷达、趋势、薄弱点归因与可执行建议
+            {updatedLabel && ` · 更新于 ${updatedLabel}`}
+            {diagnosisLoading && " · 正在后台检查更新"}
+          </>
+        }
         action={
           <button
             type="button"
             onClick={reload}
-            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            disabled={loading || diagnosisLoading}
+            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
           >
-            刷新报告
+            {loading || diagnosisLoading ? "更新中…" : "刷新报告"}
           </button>
         }
       />
@@ -873,7 +924,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className={`space-y-4 ${switching ? "pointer-events-none opacity-60" : ""}`}>
+      <div className="space-y-4">
         {!hasAnyData && (
           <EmptyState
             title="还没有足够的学习数据"
@@ -1022,13 +1073,48 @@ export default function ReportsPage() {
           )}
         </Card>
 
-        <Card title="AI 诊断（三段式）">
+        <Card
+          title="AI 诊断（三段式）"
+          extra={
+            diagnosisLoading ? (
+              <span className="flex items-center gap-1.5 text-xs text-ink-muted">
+                <Spinner className="h-3.5 w-3.5" />
+                后台更新中
+              </span>
+            ) : report.report_status === "completed" ? (
+              <span className="text-xs text-success-600">已更新</span>
+            ) : null
+          }
+        >
+          {refreshError && (
+            <p className="mb-3 rounded-control bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              {refreshError}
+            </p>
+          )}
           {narrative && narrative.trim() ? (
-            <DiagnosisBody narrative={narrative} />
+            <div className={diagnosisLoading ? "opacity-75" : ""}>
+              <DiagnosisBody narrative={narrative} />
+              {diagnosisLoading && (
+                <p className="mt-3 text-xs text-ink-muted">
+                  当前先显示最近一次诊断，更新完成后会自动替换。
+                </p>
+              )}
+            </div>
+          ) : diagnosisLoading ? (
+            <div className="flex items-center gap-3 rounded-control bg-surface-muted px-3.5 py-4">
+              <Spinner className="h-5 w-5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-ink">正在生成最新诊断</p>
+                <p className="mt-0.5 text-xs text-ink-muted">
+                  雷达、趋势和行动建议已经可以查看，你可以继续浏览其它内容。
+                </p>
+              </div>
+            </div>
           ) : (
             <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs text-slate-500">
               {narrative_note ?? "暂无诊断"}
-              ：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。
+              {report.report_status === "unavailable" &&
+                "：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。"}
             </p>
           )}
         </Card>

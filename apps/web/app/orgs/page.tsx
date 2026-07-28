@@ -185,7 +185,7 @@ export default function OrgsPage() {
             <button
               type="submit"
               disabled={!newName.trim() || creating}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-1.5 rounded-control bg-ink py-1.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
             >
               {creating && (
                 <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />
@@ -317,7 +317,7 @@ export default function OrgsPage() {
                     <button
                       type="submit"
                       disabled={!newKbName.trim() || creatingKb}
-                      className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {creatingKb && (
                         <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />

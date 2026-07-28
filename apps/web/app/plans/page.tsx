@@ -18,6 +18,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
@@ -476,7 +477,7 @@ function PlanConfirmCard({
           type="button"
           disabled={invalid || emptied}
           onClick={() => onConfirm(draft)}
-          className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
         >
           {touched ? "确认并保存修改后的计划" : "确认并保存计划"}
         </button>
@@ -747,6 +748,7 @@ export default function PlansPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <WorkspaceNav workspace="plan" />
       <PageHeader
         title="学习计划"
         subtitle="AI 规划分阶段每日任务；计划是活的——勾选完成、按学情插入补强任务"
@@ -754,7 +756,7 @@ export default function PlansPage() {
           <button
             type="button"
             onClick={() => void loadPlans()}
-            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
           >
             刷新列表
           </button>
@@ -851,7 +853,7 @@ export default function PlansPage() {
               <button
                 type="submit"
                 disabled={!goal.trim() || busy || phase === "await_confirm"}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control bg-ink py-2.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                 {busy ? "正在规划…" : "生成计划草案"}

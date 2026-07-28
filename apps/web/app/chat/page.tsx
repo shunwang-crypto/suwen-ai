@@ -174,6 +174,8 @@ function ChatView() {
   const [banner, setBanner] = useState<string | null>(null);
   /** ?q= 自动发问只做一次（router.replace 清参数后 effect 会重跑） */
   const autoAskedRef = useRef(false);
+  /** ?new=1 全局新建入口只消费一次。 */
+  const newChatRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const patchMsg = useCallback(
@@ -322,7 +324,7 @@ function ChatView() {
   useEffect(() => {
     if (sessionsLoading || restoredSessionRef.current) return;
     restoredSessionRef.current = true;
-    if (searchParams.get("q")) return;
+    if (searchParams.get("q") || searchParams.get("new") === "1") return;
     const remembered = window.localStorage.getItem(LAST_CHAT_SESSION_KEY);
     if (remembered && sessions.some((session) => session.id === remembered)) {
       const timer = window.setTimeout(() => void selectSession(remembered), 0);
@@ -390,6 +392,16 @@ function ChatView() {
     setSessionsOpen(false);
     window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
   }, [detachCurrentStream]);
+
+  // 全局导航的“新建对话”使用 ?new=1 明确请求空白会话，避免被上次会话恢复逻辑覆盖。
+  useEffect(() => {
+    if (searchParams.get("new") !== "1" || newChatRequestedRef.current) return;
+    newChatRequestedRef.current = true;
+    queueMicrotask(() => {
+      newSession();
+      router.replace("/chat");
+    });
+  }, [newSession, router, searchParams]);
 
   const renameSession = useCallback(
     async (id: string, title: string) => {
@@ -699,6 +711,14 @@ function ChatView() {
       (m) => m.role === "assistant" && m.citations.length > 0,
     );
   const panelCitations = citedMsg?.citations ?? [];
+  const activeSessionTitle =
+    sessions.find((session) => session.id === activeSessionId)?.title ?? "新对话";
+  const selectedKbLabel =
+    kbIds.length === 0
+      ? "选择范围"
+      : kbIds.length === 1
+        ? (kbs.find((kb) => kb.id === kbIds[0])?.name ?? "1 个知识库")
+        : `已选 ${kbIds.length} 个库`;
 
   // 引用卡点击 → 打开原文抽屉。多库联合检索时优先用引用自带的来源库 kb_id，
   // 回退到该消息发送时绑定的首库
@@ -743,9 +763,9 @@ function ChatView() {
   );
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full min-h-0 bg-canvas">
       {/* 左：会话列表（桌面） */}
-      <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white md:block">
+      <aside className="hidden w-[250px] shrink-0 border-r border-line bg-surface md:block">
         {sessionList}
       </aside>
 
@@ -765,9 +785,9 @@ function ChatView() {
       )}
 
       {/* 中：消息区 */}
-      <section className="flex min-w-0 flex-1 flex-col">
+      <section className="flex min-w-0 flex-1 flex-col bg-canvas">
         {/* 工具栏：知识库选择器 */}
-        <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+        <div className="flex h-[62px] shrink-0 items-center gap-3 border-b border-line bg-canvas px-6">
           <button
             type="button"
             onClick={() => setSessionsOpen(true)}
@@ -788,21 +808,20 @@ function ChatView() {
             </svg>
           </button>
 
+          <h1 className="min-w-0 truncate text-sm font-semibold text-ink">
+            {activeSessionTitle}
+          </h1>
+
+          <span className="flex-1" />
+
           <div className="relative flex min-w-0 items-center gap-2">
-            <span className="hidden shrink-0 text-xs font-medium text-slate-500 sm:block">
-              知识库
-            </span>
             <button
               type="button"
               onClick={() => setKbPickerOpen((v) => !v)}
-              className="flex max-w-56 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 outline-none hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="flex max-w-56 items-center gap-1.5 rounded-control bg-surface-muted px-2.5 py-1.5 text-xs text-ink-secondary outline-none transition-colors hover:text-ink focus:ring-2 focus:ring-brand-100"
             >
               <span className="truncate">
-                {kbIds.length === 0
-                  ? "不绑定（通用模式）"
-                  : kbIds.length === 1
-                    ? (kbs.find((k) => k.id === kbIds[0])?.name ?? "1 个知识库")
-                    : `已选 ${kbIds.length} 个库（联合检索）`}
+                {selectedKbLabel}
               </span>
               <svg
                 viewBox="0 0 24 24"
@@ -825,7 +844,7 @@ function ChatView() {
                   className="fixed inset-0 z-10 cursor-default"
                   onClick={() => setKbPickerOpen(false)}
                 />
-                <div className="absolute left-0 top-full z-20 mt-1.5 max-h-80 w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                <div className="absolute right-0 top-full z-20 mt-1.5 max-h-80 w-72 overflow-y-auto rounded-overlay border border-slate-200 bg-white p-2 shadow-floating">
                   <button
                     type="button"
                     onClick={() => setKbIds([])}
@@ -877,38 +896,30 @@ function ChatView() {
               </>
             )}
           </div>
-          {kbIds.length > 0 && (
-            <span className="hidden rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 sm:block">
-              {kbIds.length > 1 ? "多库联合检索" : "引用溯源问答"}
-            </span>
-          )}
-
-          <span className="flex-1" />
-
-          <button
-            type="button"
-            onClick={() => setCitationsOpen(true)}
-            className="relative rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 xl:hidden"
-            aria-label="打开引用面板"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5"
-              aria-hidden
+          {panelCitations.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setCitationsOpen(true)}
+              className="relative rounded-control p-1.5 text-slate-500 hover:bg-slate-100 xl:hidden"
+              aria-label="打开引用面板"
             >
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6" />
-            </svg>
-            {panelCitations.length > 0 && (
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-5 w-5"
+                aria-hidden
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6" />
+              </svg>
               <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">
                 {panelCitations.length}
               </span>
-            )}
-          </button>
+            </button>
+          )}
         </div>
 
         {banner && (
@@ -927,41 +938,30 @@ function ChatView() {
 
         {/* 消息流 */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
+          <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-6 py-6">
             {messages.length === 0 ? (
-              <div className="fx-fade-up flex flex-col items-center gap-4 py-16 text-center">
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-7 w-7"
-                    aria-hidden
-                  >
-                    <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z" />
-                  </svg>
+              <div className="fx-fade-up flex flex-col items-center gap-3 py-24 text-center">
+                <span className="flex h-10 w-10 items-center justify-center rounded-overlay bg-brand-50 text-xl font-bold text-brand-700">
+                  A
                 </span>
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">
-                    开始新的对话
+                  <h2 className="text-2xl font-bold leading-8 text-slate-900">
+                    今天想从哪里开始？
                   </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    支持数学公式渲染；绑定知识库后回答自带引用溯源。
+                  <p className="mt-2 text-sm text-slate-500">
+                    可以直接提问，也可以从系统根据学习状态整理的下一步开始。
                   </p>
                 </div>
                 {/* F8-A2 主动开场卡：仅新会话（消息为空）首屏；有消息即随本分支隐藏 */}
                 <OpeningCard />
-                <div className="flex flex-wrap justify-center gap-2">
+                <div className="mt-1 flex flex-wrap justify-center gap-2">
                   {SAMPLE_QUESTIONS.map((q, i) => (
                     <button
                       key={q}
                       type="button"
                       onClick={() => void send(q)}
                       style={{ "--fx-delay": `${120 + i * 90}ms` } as CSSProperties}
-                      className="fx-chip-in rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-700"
+                      className="fx-chip-in rounded-control border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 transition-colors hover:border-brand-300 hover:text-brand-700"
                     >
                       {q}
                     </button>
@@ -972,7 +972,7 @@ function ChatView() {
               messages.map((m) =>
                 m.role === "user" ? (
                   <div key={m.id} className="fx-msg-in flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm shadow-indigo-600/20">
+                    <div className="max-w-[85%] rounded-control bg-brand-50 px-3.5 py-2.5 text-sm leading-[22px] text-slate-900">
                       <span className="whitespace-pre-wrap break-words">
                         {m.content}
                       </span>
@@ -980,7 +980,18 @@ function ChatView() {
                   </div>
                 ) : (
                   <div key={m.id} className="fx-msg-in flex justify-start">
-                    <div className="w-full max-w-[95%]">
+                    <div className="w-full">
+                      <div className="mb-3 flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-brand-600 text-[13px] font-medium text-white">
+                          AI
+                        </span>
+                        <span className="text-[13px] font-medium text-slate-900">
+                          EduAgents 助教
+                        </span>
+                        <span className="truncate text-xs text-slate-400">
+                          {m.kbName ? `基于「${m.kbName}」知识库` : "通用模式"}
+                        </span>
+                      </div>
                       <ProcessTimeline
                         items={m.timeline}
                         streaming={Boolean(m.streaming)}
@@ -1031,10 +1042,10 @@ function ChatView() {
 
                       {(m.content || m.streaming) && (
                         <div
-                          className={`rounded-2xl rounded-bl-md border px-4 py-2.5 text-sm leading-relaxed text-slate-800 ${
+                          className={`text-sm leading-[1.75] text-slate-800 ${
                             m.done?.refused
-                              ? "border-amber-200 bg-amber-50/50"
-                              : "border-slate-200 bg-white"
+                              ? "rounded-control border border-amber-200 bg-amber-50/50 px-3.5 py-3"
+                              : ""
                           }`}
                         >
                           {m.content ? (
@@ -1121,7 +1132,7 @@ function ChatView() {
                                     "--fx-delay": `${qi * 80}ms`,
                                   } as CSSProperties
                                 }
-                                className="fx-chip-in rounded-full border border-indigo-200 bg-indigo-50/60 px-3 py-1.5 text-xs text-indigo-700 transition-colors hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                className="fx-chip-in rounded-control border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 transition-colors hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {q}
                               </button>
@@ -1139,7 +1150,7 @@ function ChatView() {
                                     "--fx-delay": `${(m.followups?.length ?? 0) * 80}ms`,
                                   } as CSSProperties
                                 }
-                                className="fx-chip-in flex items-center gap-1 rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                                className="fx-chip-in flex items-center gap-1 rounded-control border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 transition-colors hover:bg-brand-100"
                               >
                                 <svg
                                   viewBox="0 0 24 24"
@@ -1176,17 +1187,22 @@ function ChatView() {
                         </div>
                       )}
 
-                      {m.done?.usage && (
-                        <p className="mt-1.5 px-1 text-xs text-slate-400">
-                          {m.done.usage.latency_ms != null &&
-                            `耗时 ${m.done.usage.latency_ms}ms`}
-                          {m.done.usage.cost_cny != null &&
-                            ` · ¥${m.done.usage.cost_cny}`}
-                          {m.done.usage.mode &&
-                            ` · ${MODE_LABELS[m.done.usage.mode] ?? m.done.usage.mode}`}
-                          {m.citations.length > 0 &&
-                            ` · ${m.citations.length} 条引用`}
-                        </p>
+                      {!m.streaming && m.done && !m.errorText && (
+                        <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full bg-sky-500"
+                            aria-hidden
+                          />
+                          <span>
+                            回答完成
+                            {m.done.usage?.latency_ms != null &&
+                              ` · ${(m.done.usage.latency_ms / 1000).toFixed(1)} 秒`}
+                            {m.done.usage?.mode &&
+                              ` · ${MODE_LABELS[m.done.usage.mode] ?? m.done.usage.mode}`}
+                            {m.citations.length > 0 &&
+                              ` · ${m.citations.length} 条引用`}
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1197,64 +1213,94 @@ function ChatView() {
         </div>
 
         {/* 输入区 */}
-        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
-          <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+        <div className="shrink-0 bg-slate-50 px-4 pb-6 pt-3">
+          <div className="mx-auto flex h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-overlay border border-slate-200 bg-white p-3 shadow-floating">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleComposerKey}
-              rows={2}
+              rows={1}
               maxLength={8000}
               placeholder={
                 streaming ? "正在生成回答…" : "输入问题，Enter 发送，Shift+Enter 换行"
               }
               disabled={streaming}
-              className="min-h-11 flex-1 resize-none rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+              className="h-9 w-full resize-none border-0 bg-transparent p-0 text-sm leading-[22px] text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
             />
-            {streaming ? (
+
+            <div className="flex h-8 items-center gap-2">
               <button
                 type="button"
-                onClick={stop}
-                className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 px-4 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+                onClick={() => setKbPickerOpen(true)}
+                className="flex h-8 max-w-56 items-center gap-1.5 rounded-control border border-slate-200 bg-slate-100 px-2.5 text-[13px] font-medium text-slate-600 transition-colors hover:bg-slate-200"
               >
-                <span className="h-2.5 w-2.5 rounded-sm bg-slate-500" />
-                停止
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void send()}
-                disabled={!input.trim()}
-                className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                发送
+                <span className="truncate">知识库 · {selectedKbLabel}</span>
                 <svg
-                  viewBox="0 0 24 24"
+                  viewBox="0 0 12 12"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2"
+                  strokeWidth="1.4"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-4 w-4"
+                  className="h-3 w-3 shrink-0 text-slate-400"
                   aria-hidden
                 >
-                  <path d="m22 2-7 20-4-9-9-4Zm0 0L11 13" />
+                  <path d="m3.5 4.5 2.5 2.5 2.5-2.5" />
                 </svg>
               </button>
-            )}
+
+              <span className="flex-1" />
+              <span className="hidden text-xs text-slate-400 sm:block">
+                Enter 发送
+              </span>
+
+              {streaming ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  title="停止生成"
+                  aria-label="停止生成"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-slate-300 text-slate-600 transition-colors hover:bg-slate-100"
+                >
+                  <span className="h-2.5 w-2.5 rounded-sm bg-slate-500" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={!input.trim()}
+                  title="发送"
+                  aria-label="发送"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-brand-600 text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                    aria-hidden
+                  >
+                    <path d="M8 12V4M4.5 7.5 8 4l3.5 3.5" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </section>
 
       {/* 右：引用面板（桌面）—— 无引用时不渲染，对话区自动占满宽度（移动端抽屉不受影响） */}
       {panelCitations.length > 0 && (
-      <aside className="hidden w-80 shrink-0 flex-col border-l border-slate-200 bg-white xl:flex">
-        <div className="flex h-11 shrink-0 items-center border-b border-slate-100 px-4">
-          <h2 className="text-sm font-semibold text-slate-800">
-            引用溯源
+      <aside className="hidden w-[248px] shrink-0 flex-col border-l border-slate-200 bg-white xl:flex">
+        <div className="flex h-14 shrink-0 items-center border-b border-slate-100 px-4">
+          <h2 className="text-base font-medium text-slate-900">
+            引用
             {panelCitations.length > 0 && (
-              <span className="ml-1.5 text-xs font-normal text-slate-400">
-                {panelCitations.length} 条
+              <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-brand-50 px-1.5 py-0.5 text-xs font-normal text-brand-700">
+                {panelCitations.length}
               </span>
             )}
           </h2>

@@ -553,8 +553,12 @@ async def test_export_user_data(client):
     names = set(zf.namelist())
     assert {"profile.json", "chunks.json", "uploads_manifest.json"} <= names
     tables = {n for n in names if n.startswith("tables/")}
-    assert len(tables) == 14  # 14 张业务表逐表 JSON (0005 起含长期记忆/偏好两表)
-    assert {"tables/learner_insights.json", "tables/user_preferences.json"} <= tables
+    assert len(tables) == 15  # 0007 起含长期记忆/偏好与学情报告快照
+    assert {
+        "tables/learner_insights.json",
+        "tables/user_preferences.json",
+        "tables/learning_report_snapshots.json",
+    } <= tables
     kbs = json.loads(zf.read("tables/knowledge_bases.json"))
     assert any(row["id"] == kb_id for row in kbs)
     manifest = json.loads(zf.read("uploads_manifest.json"))

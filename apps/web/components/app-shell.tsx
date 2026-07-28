@@ -15,7 +15,7 @@ import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
 import { useAuth } from "@/lib/auth-context";
 
-// "/" 为营销落地页（app/page.tsx）：未登录可见，已登录由下方 effect 跳 /chat
+// "/" 为营销落地页（app/page.tsx）：未登录可见，已登录由下方 effect 跳 /today
 // /forgot /reset 为密码找回流程（邮件链接可直达）
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot", "/reset"];
 
@@ -26,6 +26,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: ReactNode;
+  /** 同一工作台下的二级页面仍高亮主入口。 */
+  activePaths?: string[];
   adminOnly?: boolean;
   /** teacher 或 admin 可见 */
   teacherOnly?: boolean;
@@ -48,85 +50,45 @@ function icon(d: string): ReactNode {
   );
 }
 
-/** 导航分组：学习（学生日常）/ 管理（机构与教学运营） */
+/** v3 导航：学生端固定五个工作台；旧功能通过工作台二级导航进入。 */
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
-    label: "学习",
+    label: "",
     items: [
       {
-        href: "/chat",
-        label: "对话",
-        icon: icon("M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"),
+        href: "/today",
+        label: "今日",
+        icon: icon("M4 5h16v15H4zM8 3v4M16 3v4M4 10h16M8 14h3M8 17h6"),
       },
       {
-        href: "/kb",
-        label: "知识库",
-        icon: icon("M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Zm0 0a2 2 0 0 0 2 2h13"),
+        href: "/chat",
+        label: "学习",
+        activePaths: ["/chat", "/kb"],
+        icon: icon("M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"),
       },
       {
         href: "/quiz",
         label: "练习",
+        activePaths: ["/quiz", "/tutor"],
         icon: icon("M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9 2 2 4-4"),
       },
       {
-        href: "/tutor",
-        label: "辅导",
-        icon: icon("M12 4 2 9l10 5 10-5-10-5Zm-6 7.8V16c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.2M22 9v5"),
-      },
-      {
         href: "/plans",
-        label: "学习计划",
+        label: "计划",
+        activePaths: ["/plans", "/reviews"],
         icon: icon("M8 2v4M16 2v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm4 9h6"),
       },
       {
-        href: "/reviews",
-        label: "复习",
-        icon: icon("M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"),
-      },
-      {
-        href: "/errors",
-        label: "错题本",
-        icon: icon("M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Zm7 5-4 6m0-6 4 6"),
-      },
-      {
-        href: "/reports",
-        label: "学情报告",
-        icon: icon("M3 3v18h18M8 17V9m4 8V5m4 12v-6"),
-      },
-      {
         href: "/profile",
-        label: "我的画像",
-        icon: icon("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"),
-      },
-      {
-        href: "/settings",
-        label: "设置",
-        icon: icon(
-          "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
-        ),
-      },
-    ],
-  },
-  {
-    label: "账户",
-    items: [
-      {
-        href: "/billing",
-        label: "钱包",
-        icon: icon(
-          "M3 8a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V8Zm18 2h-5a2 2 0 0 0 0 4h5",
-        ),
+        label: "成长",
+        activePaths: ["/profile", "/reports", "/errors"],
+        icon: icon("M4 19V9m5 10V5m5 14v-7m5 7V3M3 21h18"),
       },
     ],
   },
   {
     label: "管理",
     items: [
-      {
-        href: "/orgs",
-        label: "机构",
-        icon: icon("M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"),
-      },
       {
         href: "/teacher",
         label: "组卷导出",
@@ -150,6 +112,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 ];
 
 const TITLE_MAP: Record<string, string> = {
+  "/today": "今日",
   "/chat": "对话",
   "/kb": "知识库",
   "/orgs": "机构",
@@ -160,28 +123,12 @@ const TITLE_MAP: Record<string, string> = {
   "/errors": "错题本",
   "/reports": "学情报告",
   "/profile": "我的画像",
-  "/settings": "设置",
+  "/settings": "个人中心",
   "/billing": "钱包",
   "/teacher": "组卷导出",
   "/admin": "运营",
   "/evals": "评估看板",
 };
-
-/** 确定性头像配色：同一邮箱永远同一渐变（完整类名字面量，Tailwind 可静态提取） */
-const AVATAR_GRADIENTS = [
-  "from-indigo-500 to-violet-500",
-  "from-sky-500 to-indigo-500",
-  "from-emerald-500 to-teal-500",
-  "from-amber-500 to-orange-500",
-  "from-rose-500 to-pink-500",
-  "from-violet-500 to-fuchsia-500",
-];
-
-function avatarGradient(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
-}
 
 function NavLinks({
   isAdmin,
@@ -195,7 +142,7 @@ function NavLinks({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex flex-1 flex-col overflow-y-auto p-3">
+    <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-3">
       {NAV_GROUPS.map((group) => {
         const items = group.items.filter(
           (item) =>
@@ -203,35 +150,36 @@ function NavLinks({
         );
         if (items.length === 0) return null;
         return (
-          <div key={group.label} className="mt-5 flex flex-col gap-1 first:mt-1">
-            <p className="px-3 pb-1 text-[11px] font-medium tracking-widest text-slate-400">
-              {group.label}
-            </p>
+          <div key={group.label || "primary"} className="mt-5 flex flex-col gap-1 first:mt-3">
+            {group.label && (
+              <p className="px-3 pb-1 text-[10px] font-medium tracking-[0.08em] text-ink-muted">
+                {group.label}
+              </p>
+            )}
             {items.map((item) => {
-              const active =
-                pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const paths = item.activePaths ?? [item.href];
+              const active = paths.some(
+                (path) => pathname === path || pathname.startsWith(`${path}/`),
+              );
               return (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={onNavigate}
-                  className={`group relative flex items-center gap-3 rounded-control px-3 py-2 text-sm font-medium transition-colors duration-200 ${
+                  className={`group relative flex h-10 items-center gap-3 rounded-control px-3 text-[13px] font-medium transition-colors duration-150 ${
                     active
-                      ? "bg-brand-50/90 text-brand-700 shadow-subtle"
-                      : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+                      ? "bg-surface-muted text-ink"
+                      : "text-ink-secondary hover:bg-surface-muted hover:text-ink"
                   }`}
                 >
                   {active && (
-                    <span
-                      aria-hidden
-                      className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-brand-gradient"
-                    />
+                    <span className="absolute -left-4 h-7 w-[3px] rounded-r bg-brand-600" aria-hidden />
                   )}
                   <span
-                    className={`transition-[transform,color] duration-200 group-hover:scale-110 ${
+                    className={`transition-colors duration-150 ${
                       active
-                        ? "text-brand-600"
-                        : "text-slate-400 group-hover:text-brand-600"
+                        ? "text-ink"
+                        : "text-ink-muted group-hover:text-ink"
                     }`}
                   >
                     {item.icon}
@@ -249,8 +197,13 @@ function NavLinks({
 
 function Brand() {
   return (
-    <div className="flex h-14 shrink-0 items-center border-b border-slate-200/60 px-5">
-      <BrandMark size={28} withWordmark className="text-slate-900" />
+    <div className="flex h-[72px] shrink-0 items-center px-5">
+      <Link href="/today" className="flex items-center gap-3" aria-label="EduAgents 今日">
+        <span className="flex h-7 w-7 items-center justify-center rounded-[7px] bg-ink text-xs font-bold text-white">
+          E
+        </span>
+        <span className="text-sm font-bold tracking-[-0.01em] text-ink">EduAgents</span>
+      </Link>
     </div>
   );
 }
@@ -266,7 +219,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isPublic) {
-      if (status === "authed") router.replace("/chat");
+      if (status === "authed") router.replace("/today");
       return;
     }
     if (status === "guest") router.replace("/login");
@@ -299,6 +252,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const isAdmin = user?.role === "admin";
   const isTeacher = user?.role === "teacher" || isAdmin;
+  const isChatRoute = pathname === "/chat" || pathname.startsWith("/chat/");
+  const isAccountRoute = ["/settings", "/orgs", "/billing"].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  );
   const title =
     Object.entries(TITLE_MAP).find(
       ([p]) => pathname === p || pathname.startsWith(`${p}/`),
@@ -313,13 +270,109 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     // reducedMotion="user"：偏好减少动效时，framer-motion（WAAPI）动画同步降级
     <MotionConfig reducedMotion="user">
-    <div className="flex h-dvh overflow-hidden bg-slate-50">
-      {/* 桌面端侧边导航：浅色渐变底 */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-slate-200/70 bg-gradient-to-b from-white via-slate-50 to-brand-50/50 md:flex">
+    <div className="flex h-dvh overflow-hidden bg-canvas">
+      {/* 桌面端侧边导航：v3 固定 220px，内容滚动而导航保持稳定。 */}
+      <aside className="hidden w-[220px] shrink-0 flex-col border-r border-line bg-surface md:flex">
         <Brand />
         <NavLinks isAdmin={isAdmin} isTeacher={isTeacher} pathname={pathname} />
-        <div className="border-t border-slate-200/60 p-4 text-xs text-slate-400">
-          多智能体学习平台
+        <div className="relative border-t border-line p-4">
+          {isAccountRoute && (
+            <span className="absolute left-0 top-3 h-9 w-[3px] rounded-r bg-brand-600" aria-hidden />
+          )}
+          <div className={`flex items-center rounded-control p-1 ${isAccountRoute ? "bg-surface-muted" : ""}`}>
+            <Link
+              href="/settings"
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left"
+            >
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-ink text-[13px] font-medium text-white">
+              {(user?.email?.[0] ?? "学").toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium text-slate-900">
+                {user?.email}
+              </span>
+              <span className="block text-xs text-slate-400">
+                {isAdmin ? "管理员" : isTeacher ? "教师" : "学习者"}
+              </span>
+            </span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((value) => !value)}
+              className="rounded-control px-2 py-1.5 text-lg leading-none text-ink-muted hover:bg-white hover:text-ink"
+              aria-label="打开账户菜单"
+            >
+              ···
+            </button>
+          </div>
+          {menuOpen && (
+            <>
+              <button
+                type="button"
+                aria-label="关闭菜单"
+                className="fixed inset-0 z-10 cursor-default"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div className="absolute bottom-[72px] left-4 z-20 w-[188px] rounded-overlay border border-line bg-white p-1.5 shadow-floating">
+                <Link
+                  href="/settings"
+                  onClick={() => setMenuOpen(false)}
+                  className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                >
+                  个人中心
+                </Link>
+                <Link
+                  href="/orgs"
+                  onClick={() => setMenuOpen(false)}
+                  className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                >
+                  机构与权限
+                </Link>
+                <Link
+                  href="/billing"
+                  onClick={() => setMenuOpen(false)}
+                  className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                >
+                  钱包与额度
+                </Link>
+                {isTeacher && (
+                  <Link
+                    href="/teacher"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    组卷导出
+                  </Link>
+                )}
+                {isAdmin && (
+                  <>
+                    <Link
+                      href="/admin"
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      运营管理
+                    </Link>
+                    <Link
+                      href="/evals"
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      评估看板
+                    </Link>
+                  </>
+                )}
+                <div className="my-1 border-t border-line" />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="w-full rounded-control px-3 py-2 text-left text-sm text-danger-600 hover:bg-danger-50"
+                >
+                  退出登录
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -341,7 +394,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={() => setDrawerOpen(false)}
             />
             <motion.aside
-              className="absolute inset-y-0 left-0 flex w-64 flex-col bg-gradient-to-b from-white via-slate-50 to-brand-50/50 shadow-floating"
+              className="absolute inset-y-0 left-0 flex w-[260px] flex-col bg-surface shadow-floating"
               initial={{ x: -280 }}
               animate={{ x: 0 }}
               exit={{ x: -280 }}
@@ -354,6 +407,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 pathname={pathname}
                 onNavigate={() => setDrawerOpen(false)}
               />
+              <Link
+                href="/settings"
+                onClick={() => setDrawerOpen(false)}
+                className="mx-4 mb-5 flex items-center gap-3 border-t border-line px-2 pt-4 text-[13px] font-medium text-ink-secondary"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white">
+                  {(user?.email?.[0] ?? "学").toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1 truncate">个人中心</span>
+              </Link>
             </motion.aside>
           </motion.div>
         )}
@@ -361,7 +424,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 顶栏：毛玻璃 */}
-        <header className="glass z-10 flex h-14 shrink-0 items-center justify-between border-b border-slate-200/60 px-4">
+        <header className="glass z-10 flex h-14 shrink-0 items-center justify-between border-b border-line px-4 md:hidden">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -394,11 +457,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={() => setMenuOpen((v) => !v)}
               className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition-colors hover:bg-slate-100"
             >
-              <span
-                className={`flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br text-sm font-semibold text-white shadow-subtle ${avatarGradient(
-                  user?.email ?? "?",
-                )}`}
-              >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-sm font-semibold text-white shadow-subtle">
                 {(user?.email?.[0] ?? "?").toUpperCase()}
               </span>
               <span className="hidden max-w-40 truncate text-sm text-slate-700 sm:block">
@@ -432,6 +491,55 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </p>
                   </div>
                   <div className="my-1 border-t border-slate-100" />
+                  <Link
+                    href="/settings"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    个人中心
+                  </Link>
+                  <Link
+                    href="/orgs"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    机构与权限
+                  </Link>
+                  <Link
+                    href="/billing"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    钱包与额度
+                  </Link>
+                  {isTeacher && (
+                    <Link
+                      href="/teacher"
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      组卷导出
+                    </Link>
+                  )}
+                  {isAdmin && (
+                    <>
+                      <Link
+                        href="/admin"
+                        onClick={() => setMenuOpen(false)}
+                        className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                      >
+                        运营管理
+                      </Link>
+                      <Link
+                        href="/evals"
+                        onClick={() => setMenuOpen(false)}
+                        className="block rounded-control px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                      >
+                        评估看板
+                      </Link>
+                    </>
+                  )}
+                  <div className="my-1 border-t border-slate-100" />
                   <button
                     type="button"
                     onClick={handleLogout}
@@ -449,7 +557,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* 路由切换时内容区淡入（key 触发重挂载；仅 opacity 动画，不影响 fixed 定位后代） */}
         <main
           key={pathname}
-          className="min-h-0 flex-1 animate-fade-in overflow-y-auto"
+          className={`min-h-0 flex-1 animate-fade-in ${
+            isChatRoute ? "overflow-hidden" : "overflow-y-auto"
+          }`}
         >
           {children}
         </main>

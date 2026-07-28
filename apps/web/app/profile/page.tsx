@@ -26,6 +26,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { MasteryRadarPanel } from "@/components/mastery-radar";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
@@ -523,10 +524,17 @@ export default function ProfilePage() {
     }
   };
 
-  if (loading) return <SkeletonPage />;
+  if (loading)
+    return (
+      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+        <WorkspaceNav workspace="growth" />
+        <SkeletonPage />
+      </div>
+    );
   if (error || !profile) {
     return (
-      <div className="space-y-4">
+      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+        <WorkspaceNav workspace="growth" />
         <PageHeader title="我的画像" subtitle="AI 眼中的我" />
         <ErrorBanner message={error ?? "画像为空"} />
         <button
@@ -562,7 +570,8 @@ export default function ProfilePage() {
     }`;
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <WorkspaceNav workspace="growth" />
       <PageHeader
         title="AI 眼中的我"
         subtitle="掌握度画像由每次练习、复习与辅导的真实证据持续更新"
@@ -570,7 +579,7 @@ export default function ProfilePage() {
           <button
             type="button"
             onClick={() => setReloadKey((k) => k + 1)}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            className="rounded-control bg-ink px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-black"
           >
             刷新画像
           </button>

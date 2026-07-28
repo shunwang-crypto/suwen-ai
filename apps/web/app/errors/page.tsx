@@ -16,6 +16,7 @@ import {
   fmtDateTime,
   fmtRelative,
 } from "@/components/common";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -263,6 +264,7 @@ export default function ErrorsPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4">
+      <WorkspaceNav workspace="growth" />
       <PageHeader
         title="错题本"
         subtitle="测评与复习中的错题自动归集；错因五分类可随时修正，攻克后自动退出复习队列"
@@ -270,7 +272,7 @@ export default function ErrorsPage() {
           <button
             type="button"
             onClick={reload}
-            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
           >
             刷新
           </button>

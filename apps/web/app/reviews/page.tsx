@@ -20,6 +20,7 @@ import {
   fmtRelative,
 } from "@/components/common";
 import { QuestionAnswer, QuestionMeta } from "@/components/quiz/question-answer";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { Celebrate } from "@/components/ui/celebrate";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
@@ -191,6 +192,7 @@ export default function ReviewsPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
+      <WorkspaceNav workspace="plan" />
       <PageHeader
         title="今日复习"
         subtitle={
@@ -207,7 +209,7 @@ export default function ReviewsPage() {
           <button
             type="button"
             onClick={reload}
-            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
           >
             刷新队列
           </button>
@@ -404,7 +406,7 @@ export default function ReviewsPage() {
                         type="button"
                         disabled={st.submitting || !st.value.trim()}
                         onClick={() => void submit(item)}
-                        className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex items-center gap-1.5 rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {st.submitting && (
                           <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />

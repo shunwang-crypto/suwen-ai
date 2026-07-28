@@ -10,6 +10,7 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 
 import type { SessionOut } from "@/lib/types";
 
@@ -149,12 +150,16 @@ export function SessionList({
     : undefined;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="p-3">
+    <div className="flex h-full flex-col bg-surface">
+      <div className="flex h-[62px] shrink-0 items-center gap-2 px-4">
+        <h2 className="text-sm font-semibold text-ink">会话</h2>
+        <span className="flex-1" />
         <button
           type="button"
           onClick={onNew}
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+          title="新建对话"
+          aria-label="新建对话"
+          className="flex h-8 w-8 items-center justify-center rounded-control border border-line text-ink-secondary transition-colors hover:border-line-strong hover:text-ink"
         >
           <svg
             viewBox="0 0 24 24"
@@ -167,11 +172,26 @@ export function SessionList({
           >
             <path d="M12 5v14M5 12h14" />
           </svg>
-          新建对话
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <nav aria-label="学习工作台功能" className="mx-3 mb-2 grid grid-cols-2 rounded-control bg-surface-muted p-1">
+        <Link
+          href="/chat"
+          aria-current="page"
+          className="rounded-[7px] bg-ink px-2 py-1.5 text-center text-xs font-medium text-white"
+        >
+          学习对话
+        </Link>
+        <Link
+          href="/kb"
+          className="rounded-[7px] px-2 py-1.5 text-center text-xs font-medium text-ink-secondary hover:bg-white hover:text-ink"
+        >
+          知识库
+        </Link>
+      </nav>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {loading ? (
           <p className="px-3 py-2 text-sm text-slate-400">加载中…</p>
         ) : sessions.length === 0 ? (
@@ -187,13 +207,13 @@ export function SessionList({
               return (
                 <Fragment key={s.id}>
                   {index === 0 && pinned && (
-                    <li className="px-3 pb-1 pt-1 text-[11px] font-semibold text-slate-400">
+                    <li className="px-1 pb-0.5 pt-1 text-xs font-normal text-slate-400">
                       置顶
                     </li>
                   )}
                   {!pinned && (index === 0 || previousPinned) && (
-                    <li className="px-3 pb-1 pt-2 text-[11px] font-semibold text-slate-400">
-                      最近
+                    <li className="px-1 pb-0.5 pt-2 text-xs font-normal text-slate-400">
+                      最近 7 天
                     </li>
                   )}
                   <li className="group relative">
@@ -205,19 +225,33 @@ export function SessionList({
                         onBlur={() => void commitRename(s.id)}
                         onKeyDown={(e) => handleKey(e, s.id)}
                         maxLength={255}
-                        className="w-full rounded-lg border border-indigo-400 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-2 ring-indigo-100"
+                        className="h-11 w-full rounded-control border border-brand-400 bg-white px-3 text-sm text-slate-900 outline-none ring-2 ring-brand-100"
                       />
                     ) : (
                       <>
                         <button
                           type="button"
                           onClick={() => onSelect(s.id)}
-                          className={`flex w-full items-center gap-2 rounded-lg py-2 pl-3 pr-3 text-left text-sm transition-[background-color,color,padding] group-hover:pr-10 ${
+                          className={`flex h-12 w-full items-center gap-2 rounded-control py-2 pl-3 pr-2 text-left text-[13px] transition-[background-color,color,padding] group-hover:pr-9 ${
                             active
-                              ? "bg-indigo-50 text-indigo-800"
-                              : "text-slate-700 hover:bg-slate-100"
+                              ? "bg-surface-muted font-medium text-ink"
+                              : "text-ink-secondary hover:bg-surface-muted hover:text-ink"
                           }`}
                         >
+                          {pinned && (
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                              aria-label="已置顶"
+                            >
+                              <path d="M12 17v5M5 3h14M7 3l1 7-3 4h14l-3-4 1-7" />
+                            </svg>
+                          )}
                           <span
                             title={s.title || "未命名会话"}
                             className="min-w-0 flex-1 truncate"
@@ -230,7 +264,7 @@ export function SessionList({
                                 role="status"
                                 aria-label="正在生成回答"
                                 title="正在生成回答"
-                                className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-indigo-100 border-t-indigo-500"
+                                className="h-3 w-3 animate-spin rounded-full border-2 border-brand-100 border-t-brand-600"
                               />
                             )}
                             {indicator === "completed" && (
@@ -238,7 +272,7 @@ export function SessionList({
                                 role="status"
                                 aria-label="回答已完成"
                                 title="回答已完成"
-                                className="h-3 w-3 rounded-full bg-sky-500 shadow-sm shadow-sky-300"
+                                className="h-2 w-2 rounded-full bg-sky-500"
                               />
                             )}
                           </span>
@@ -250,7 +284,7 @@ export function SessionList({
                             aria-label={`打开“${s.title || "未命名会话"}”的操作菜单`}
                             data-session-menu-root
                             onClick={(event) => openMenu(event, s.id)}
-                            className="rounded-md p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                            className="rounded-control p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
                           >
                             <svg
                               viewBox="0 0 24 24"
@@ -273,6 +307,10 @@ export function SessionList({
           </ul>
         )}
       </div>
+
+      <p className="shrink-0 border-t border-slate-200 px-4 py-3 text-xs text-slate-400">
+        共 {sessions.length} 个对话 · 自动保存
+      </p>
 
       {menu &&
         menuSession &&

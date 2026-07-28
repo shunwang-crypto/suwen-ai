@@ -1,7 +1,6 @@
 "use client";
 
-// 营销落地页（未登录首页）。已登录分支保留原跳转逻辑 → /chat
-// （AppShell 将 "/" 视作公开路径，authed 时也会 replace 到 /chat，双保险）。
+// 营销落地页（未登录首页）。已登录用户进入 v3「今日」总览。
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -17,9 +16,9 @@ export default function Home() {
   const { status } = useAuth();
   const router = useRouter();
 
-  // 已登录仍跳 /chat（原 redirect("/chat") 逻辑保留于此分支）
+  // 已登录跳总览；AppShell 同步处理，避免恢复登录态时闪回营销页。
   useEffect(() => {
-    if (status === "authed") router.replace("/chat");
+    if (status === "authed") router.replace("/today");
   }, [status, router]);
 
   if (status === "authed") {
@@ -27,7 +26,7 @@ export default function Home() {
       <div className="flex h-dvh items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-3 text-slate-400">
           <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
-          <span className="text-sm">正在进入对话…</span>
+          <span className="text-sm">正在进入今日学习…</span>
         </div>
       </div>
     );

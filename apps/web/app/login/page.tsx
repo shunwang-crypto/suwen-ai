@@ -54,7 +54,7 @@ export default function LoginPage() {
             }
           : undefined,
       );
-      router.replace("/chat");
+      router.replace("/today");
     } catch (err) {
       if (err instanceof ApiError && err.code === "CAPTCHA_REQUIRED") {
         setNeedCaptcha(true);

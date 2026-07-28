@@ -24,6 +24,7 @@ import { DocumentTable, isDocActive } from "@/components/kb/document-table";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import type { DocumentOut, KbOut } from "@/lib/types";
 
@@ -271,6 +272,7 @@ export default function KbPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+      <WorkspaceNav workspace="learn" />
       <PageHeader
         title="知识库管理"
         subtitle="上传讲义/教材或导入网页，自动进入 解析 → 切块 → 向量化 → 知识增强 流水线"
@@ -284,7 +286,7 @@ export default function KbPage() {
             <button
               type="button"
               onClick={() => setShowCreate((v) => !v)}
-              className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
+              className="rounded-control bg-ink px-2.5 py-1 text-xs font-semibold text-white hover:bg-black"
             >
               新建
             </button>
@@ -309,7 +311,7 @@ export default function KbPage() {
               <button
                 type="submit"
                 disabled={!newName.trim() || creating}
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-1.5 rounded-control bg-ink py-1.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {creating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
                 创建

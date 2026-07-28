@@ -1,7 +1,7 @@
 """用户数据导出 (P1-8, 个保法第 45 条可携带权)。
 
-export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (14 张业务表 JSON,
-含 0005 的 learner_insights/user_preferences — 个性化数据同属可携带权范围) +
+export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (15 张业务表 JSON,
+含个性化记忆/偏好与 0007 学情报告快照 — 均属可携带权范围) +
 chunk 文本 + 上传文件清单, 打 ZIP 存对象存储 exports/{uid}/{ts}.zip,
 完成后写 Redis export:{uid}=path (24h TTL)。下载经 API 流式转发
 (routers/account.py, LocalStorage 无预签名概念)。
@@ -57,6 +57,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         ErrorItem,
         KnowledgeBase,
         LearnerInsight,
+        LearningReportSnapshot,
         MasteryLog,
         MasteryRecord,
         Plan,
@@ -71,7 +72,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
     settings = ctx.get("settings") or get_settings()
     tenant_id = str(tenant_id)
 
-    # 14 张业务表 (RLS 租户会话天然只见本人行, 不越权)
+    # 15 张业务表 (RLS 租户会话天然只见本人行, 不越权)
     tables = {
         "knowledge_bases": KnowledgeBase,
         "documents": Document,
@@ -88,6 +89,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         # 0005 (P2-1): 长期记忆与偏好 — 个性化数据同属个保法可携带权范围
         "learner_insights": LearnerInsight,
         "user_preferences": UserPreference,
+        "learning_report_snapshots": LearningReportSnapshot,
     }
     dumped: dict[str, list[dict]] = {}
     async with tenant_session(tenant_id) as session:

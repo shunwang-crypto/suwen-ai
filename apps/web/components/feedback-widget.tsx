@@ -156,7 +156,7 @@ export function FeedbackWidget() {
           setError(null);
         }}
         aria-label="提交反馈"
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-1.5 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition-colors hover:bg-indigo-700"
+        className="fixed bottom-28 right-4 z-40 flex items-center gap-1.5 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition-colors hover:bg-indigo-700 sm:bottom-5 sm:right-5"
       >
         <svg
           viewBox="0 0 24 24"
@@ -174,7 +174,7 @@ export function FeedbackWidget() {
       </button>
 
       {open && (
-        <div className="fixed bottom-20 right-5 z-40 w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+        <div className="fixed bottom-40 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:bottom-20 sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))]">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
               {(
