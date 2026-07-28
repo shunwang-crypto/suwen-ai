@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"不定积分\", \"基本积分\", \"基本积分表\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 740,
-  "completion_tokens": 16
-}

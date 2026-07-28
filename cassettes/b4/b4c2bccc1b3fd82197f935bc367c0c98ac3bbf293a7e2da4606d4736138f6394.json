@@ -1,6 +1,0 @@
-{
-  "text": "{\"{\":\"\",\"\":\"e\"}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 606,
-  "completion_tokens": 12
-}

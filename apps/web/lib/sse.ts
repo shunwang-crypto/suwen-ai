@@ -1,5 +1,5 @@
 // SSE 客户端：fetch + ReadableStream 自实现（原生 EventSource 无法带 Authorization 头）。
-// 解析 event:/data: 行，产出 {event, data}；七类事件见 docs/api-contract.md。
+// 解析 event:/data: 行，产出 {event, data}；九类契约事件见 docs/api-contract.md。
 
 import {
   API_BASE,
@@ -15,8 +15,9 @@ export interface SseMessage {
   data: unknown;
 }
 
-/** 契约定义的七类事件名 + followups（追问 chips，done 前下发）。 */
+/** 契约事件名；session 在任务启动后立即下发，供切页后恢复后台运行状态。 */
 export const SSE_EVENT_NAMES = [
+  "session",
   "token",
   "node_update",
   "trace_event",
@@ -106,6 +107,17 @@ export async function* streamSse(
   if (!res.ok) throw await parseErrorResponse(res);
   if (!res.body) {
     throw new ApiError(res.status, "NO_STREAM", "服务端未返回流式响应");
+  }
+
+  // 新会话必须在生成完成前就进入会话栏。部分反向代理会短暂缓冲首个小 SSE
+  // 数据帧，因此优先从响应头即时公布；后续同值 session 事件允许幂等处理。
+  const chatSessionId = res.headers.get("X-Chat-Session-ID");
+  const chatRunId = res.headers.get("X-Chat-Run-ID");
+  if (chatSessionId && chatRunId) {
+    yield {
+      event: "session",
+      data: { session_id: chatSessionId, run_id: chatRunId },
+    };
   }
 
   const reader = res.body.getReader();

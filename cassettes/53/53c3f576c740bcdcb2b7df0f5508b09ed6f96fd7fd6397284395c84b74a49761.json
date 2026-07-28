@@ -1,6 +1,0 @@
-{
-  "text": "{\"queries\": [\"水浒传的作者是？\", \"《水浒传》 的创作者是谁？\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 251,
-  "completion_tokens": 23
-}

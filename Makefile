@@ -44,7 +44,7 @@ lint:
 gen-corpus:
 	$(PY) scripts/gen_corpus.py
 
-seed:          ## 演示账号 + 高数知识库 + 摄取语料 (幂等)
+seed:          ## 学生/管理员演示账号 + 学生知识库 + 摄取语料 (幂等)
 	$(PY) scripts/seed_demo.py
 
 eval-retrieval:  ## 检索评估 (需先 make seed; TENANT/KB 从 seed 输出取)

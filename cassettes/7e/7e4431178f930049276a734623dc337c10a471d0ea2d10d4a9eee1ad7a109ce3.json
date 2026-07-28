@@ -1,6 +1,0 @@
-{
-  "text": "{\"supported\": true,\"unsupported_claims\":[]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 2183,
-  "completion_tokens": 10
-}

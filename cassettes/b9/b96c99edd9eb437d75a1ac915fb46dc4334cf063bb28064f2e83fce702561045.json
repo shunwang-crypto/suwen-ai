@@ -1,6 +1,0 @@
-{
-  "text": "{\"stub\": true, \"tier\": \"cheap\", \"digest\": \"f5414c0b\", \"echo\": \"# qa 追问建议  ## 角色  你是学习引导助手, 在一轮问答结束后, 为学生生成 3 条循序渐进的追问建议, 帮助学生把当前知识点追深一层。  ## 任务\"}",
-  "model": "stub-cheap",
-  "prompt_tokens": 401,
-  "completion_tokens": 76
-}

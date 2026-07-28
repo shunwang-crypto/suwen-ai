@@ -24,6 +24,21 @@ ADAPTIVE_EASY_BELOW = 0.5
 #: 难度档位 (与出题 difficulty_mix 的键一致)
 DIFFICULTIES = ("easy", "mid", "hard")
 
+# --- 证据强度档位 (语义独立于掌握度阈值, 故单独命名, 不许与上面几档混用) ---
+# mastery_records.confidence 是证据累计分, **不是**校准过的统计置信概率 ——
+# 界面上写"置信 100%"会与我们自己的校准实验结论冲突, 故只对外给定性档。
+EVIDENCE_MODERATE_ABOVE = 0.4
+EVIDENCE_STRONG_ABOVE = 0.8
+
+
+def evidence_strength(score: float) -> str:
+    """证据累计分 -> 定性档 limited/moderate/strong (前后端同一出处)。"""
+    if score < EVIDENCE_MODERATE_ABOVE:
+        return "limited"
+    if score < EVIDENCE_STRONG_ABOVE:
+        return "moderate"
+    return "strong"
+
 
 def difficulty_for_mastery(p_mastery: float) -> str:
     """按当前掌握度估计匹配难度档 (脚手架原则, 同仿真自适应臂):

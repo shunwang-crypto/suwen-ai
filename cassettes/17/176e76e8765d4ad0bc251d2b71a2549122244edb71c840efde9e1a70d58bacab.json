@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"不定积分\", \"定^x\" , \"e^x\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 687,
-  "completion_tokens": 19
-}

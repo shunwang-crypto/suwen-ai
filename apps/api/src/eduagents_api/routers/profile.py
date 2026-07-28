@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 from eduagents_core.mastery import scheduler
 from eduagents_core.mastery.bkt import BktParams
-from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD
+from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, evidence_strength
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -48,19 +48,9 @@ _INSIGHTS_LIMIT = 50  # 记忆条目读取上限 (库内本就每用户 ≤100, 
 # 遗忘快照 (P2-7) 的第二个时刻点: 现在 + 3 天 ("再不复习, 3 天后…" 的产品口径)
 _RETENTION_HORIZON = timedelta(days=3)
 
-
-def evidence_strength(score: float) -> str:
-    """把内部证据累计分映射为定性档位。
-
-    ``mastery_records.confidence`` 是历史实现中的证据累计分，不是经过校准的统计
-    置信概率。API 保留原字段兼容旧消费方，同时下发定性语义，避免产品把 1.0
-    错读成“模型判断 100% 正确”。
-    """
-    if score < 0.4:
-        return "limited"
-    if score < 0.8:
-        return "moderate"
-    return "strong"
+# evidence_strength 唯一实现在 eduagents_core.mastery.thresholds (前后端同源),
+# 此处再导出保持既有 import 路径可用
+__all__ = ["evidence_strength", "router"]
 
 
 def filter_noop_changes(logs: list, *, include_noop: bool, limit: int = _RECENT_LOG_LIMIT) -> list:

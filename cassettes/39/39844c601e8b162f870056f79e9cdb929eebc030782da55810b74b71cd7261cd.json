@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"基本初等函数表表\", \"导数\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 714,
-  "completion_tokens": 15
-}

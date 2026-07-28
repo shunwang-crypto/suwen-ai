@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcn\": [\"基本初等函数导数表表表\",\",\",\",^x的导数\",\",\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 576,
-  "completion_tokens": 27
-}

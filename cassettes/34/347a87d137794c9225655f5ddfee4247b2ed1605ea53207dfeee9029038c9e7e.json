@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"无穷无穷量\", \"等价无穷无穷替换\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 575,
-  "completion_tokens": 15
-}

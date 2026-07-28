@@ -412,6 +412,55 @@ async def test_quiz_from_weak_points_without_data_rejected(client):
     assert r.json()["code"] == "NO_WEAK_POINTS"
 
 
+async def test_quiz_from_weak_points_empty_kb_does_not_fallback_cross_subject(client):
+    """显式选中无薄弱点的科目时返回空，不得回退到其他科目混卷。"""
+    uid, headers = await _register(client, "vlse-kb-scope")
+    math_ids = await _seed_kb(uid)
+    await _seed_profile(uid, math_ids)
+
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import KnowledgeBase, KnowledgeComponent, MasteryRecord
+
+    tid = uuid.UUID(uid)
+    async with tenant_session(uid) as s:
+        physics = KnowledgeBase(tenant_id=tid, name="大学物理", subject="physics")
+        s.add(physics)
+        await s.flush()
+        mechanics = KnowledgeComponent(
+            tenant_id=tid,
+            kb_id=physics.id,
+            canonical_name="机械能守恒",
+            aliases=[],
+        )
+        s.add(mechanics)
+        await s.flush()
+        s.add(
+            MasteryRecord(
+                tenant_id=tid,
+                user_id=tid,
+                kc_id=mechanics.id,
+                p_mastery=0.92,
+                confidence=0.6,
+                last_seen=datetime.now(UTC),
+            )
+        )
+        physics_id = str(physics.id)
+
+    r = await client.get(
+        f"/api/profile/weak-points?kb_id={physics_id}", headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["weak_points"] == []
+
+    r = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={"from_weak_points": True, "kb_id": physics_id},
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "NO_WEAK_POINTS"
+
+
 # ---------- ③ Reflection 对话洞察 (§5.5) ----------
 
 

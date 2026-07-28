@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"换元积分法\", \"分积分法\", \"三角换元\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 776,
-  "completion_tokens": 19
-}

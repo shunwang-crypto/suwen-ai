@@ -264,14 +264,22 @@ async def test_reports_learning(api):
     assert r.status_code == 200, r.text
     body = r.json()
 
-    # 全局 radar: 轴按知识库聚合；证据数加权平均可由 3 个 KC 核对。
-    assert body["axes_kind"] == "kb"
-    assert len(body["radar"]) == 1
-    axis = body["radar"][0]
-    assert axis["name"] == "高等数学" and axis["kb_id"] == ids["kb_id"]
-    assert axis["kc_count"] == 3 and axis["weak_count"] == 2
-    assert axis["p_mastery"] == pytest.approx(0.3857)
-    assert [x["kc_id"] for x in axis["kcs"]] == [ids["kc_a"], ids["kc_b"], ids["kc_c"]]
+    # 全局 radar: 该账号只有一个知识库，自动下钻为章节轴，
+    # 避免只有一根知识库轴的无信息量图表。
+    assert body["axes_kind"] == "chapter"
+    assert [x["name"] for x in body["radar"]] == [
+        "第一章 极限",
+        "第二章 导数",
+        "第十二章 泰勒公式",
+    ]
+    assert [x["kcs"][0]["kc_id"] for x in body["radar"]] == [
+        ids["kc_a"],
+        ids["kc_b"],
+        ids["kc_c"],
+    ]
+    assert [x["p_mastery"] for x in body["radar"]] == pytest.approx([0.2, 0.35, 0.9])
+    assert [x["weak_count"] for x in body["radar"]] == [1, 1, 0]
+    assert all(x["kb_id"] == ids["kb_id"] for x in body["radar"])
 
     # 兼容字段仍保留活动量 top KC，旧消费方不会被静默破坏。
     assert len(body["radar_kcs"]) == 3
@@ -293,6 +301,7 @@ async def test_reports_learning(api):
         ids["kc_b"],
         ids["kc_c"],
     ]
+    assert chapter_body["radar"] == body["radar"]
 
     # trend: 恰好 30 天, 与作答记录可核对 (F7-A1); P2-11 后日切按 Asia/Shanghai
     trend = body["trend"]

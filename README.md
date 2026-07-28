@@ -48,10 +48,13 @@ make migrate
 make seed
 ```
 
-`make seed` 完成后可使用：
+`make seed` 会幂等校正两个演示账号的角色和密码：
 
-- 账号：`demo@eduagents.cn`
-- 密码：`demo-pass-123`
+- 学生端（含预置知识库和历史作答）：`demo@eduagents.cn` / `demo-pass-123`
+- 管理端（运营、评估页面）：`admin@eduagents.cn` / `admin-pass-123`
+
+日常学习功能请使用学生账号；管理员账号不重复持有学生语料。若本地曾手动修改
+演示账号角色或密码，重新运行 `make seed` 即可恢复上述基线。
 
 如果仓库已经存在 `.env`、依赖和数据库，日常启动只需再次执行
 `make dev-infra`，无需重复安装；拉取到新迁移后再执行一次 `make migrate`。

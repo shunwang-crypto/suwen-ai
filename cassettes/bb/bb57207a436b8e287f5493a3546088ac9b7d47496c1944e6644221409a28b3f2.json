@@ -1,6 +1,0 @@
-{
-  "text": "{\"score\": 0.0, \"reason\": \"学生答案'42'与正确答案'-1/12'不符，且未展示任何解题过程，完全错误。\"}",
-  "model": "deepseek-v4-flash",
-  "prompt_tokens": 199,
-  "completion_tokens": 37
-}

@@ -1,6 +1,0 @@
-{
-  "text": "{\"kns\": [\"泰勒公式\", \"麦克劳林级数\", \"麦克劳林展开\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 778,
-  "completion_tokens": 22
-}

@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"无穷无穷量\", \"等价无穷小替换定原则\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 661,
-  "completion_tokens": 18
-}

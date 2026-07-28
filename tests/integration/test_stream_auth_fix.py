@@ -1,6 +1,6 @@
 """会话流与认证安全线集成验收 (PRODUCTION_GAP_REVIEW):
 
-- P0-6   流中途断开 → 已下发部分带 truncated 落库
+- P0-6   流中途断开 → 后台继续生成并落完整答案；显式停止才截断
 - 登出漏洞 过期 access token 登出仍 204 且 refresh 被撤销
 - P0-1   登录账号维度桶: 同邮箱第 6 次 429, 不同邮箱不受影响
 - P1-2   /api/health/ready: Qdrant 不可达 → 503; /live 恒 200
@@ -66,22 +66,42 @@ async def _register_login(client: AsyncClient, email: str | None = None) -> tupl
 # ---------------------------------------------------------------------------
 
 
+class _DelayedGateway:
+    """先下发首段，客户端断开后再完成，用来证明生成任务不依赖 SSE 连接。"""
+
+    async def stream_chat(self, req):
+        from eduagents_core.gateway import ChatResult, StreamDelta
+
+        yield StreamDelta(text="勾股定理内容如下。")
+        await asyncio.sleep(0.2)
+        yield StreamDelta(text="直角三角形两直角边平方和等于斜边平方。")
+        yield ChatResult(
+            text="勾股定理内容如下。直角三角形两直角边平方和等于斜边平方。",
+            model="test-model",
+            tier="standard",
+            prompt_tokens=10,
+            completion_tokens=20,
+            cost_cny=0.0,
+            latency_ms=200,
+            mode="live",
+        )
+
+
 class _HangingGateway:
-    """先下发一句完整回答, 然后永远挂起 — 确保测试能在流中间稳定断开。"""
+    """用于显式停止测试：下发部分内容后保持运行，直到 stop 接口取消。"""
 
     async def stream_chat(self, req):
         from eduagents_core.gateway import StreamDelta
 
-        yield StreamDelta(text="勾股定理内容如下。")
-        yield StreamDelta(text="直角三角形两直角边平方和等于斜边平方。")
-        await asyncio.Event().wait()  # 挂起直到被取消 (模拟上游慢)
+        yield StreamDelta(text="正在生成的前半段。")
+        await asyncio.Event().wait()
 
 
-async def test_stream_cancel_persists_truncated_message(app_client):
+async def test_stream_disconnect_continues_background_run(app_client):
     app, client = app_client
     token, _uid = await _register_login(client)
     real_gateway = app.state.gateway
-    app.state.gateway = _HangingGateway()
+    app.state.gateway = _DelayedGateway()
     try:
         body = json.dumps({"message": "讲讲勾股定理"}).encode()
         got_token_event = asyncio.Event()
@@ -131,7 +151,7 @@ async def test_stream_cancel_persists_truncated_message(app_client):
         app.state.gateway = real_gateway
 
     headers = {"Authorization": f"Bearer {token}"}
-    # 持久化是断流后 spawn 的后台任务 — 轮询等它完成
+    # SSE 已断开，但生成任务独立运行；轮询等待完整答案落库。
     assistant = None
     for _ in range(50):
         sessions = (await client.get("/api/chat/sessions", headers=headers)).json()
@@ -146,9 +166,94 @@ async def test_stream_cancel_persists_truncated_message(app_client):
                 assistant = found[0]
                 break
         await asyncio.sleep(0.1)
-    assert assistant is not None, "断流后已下发的半截答案必须落库 (P0-6)"
-    assert assistant["content"].startswith("勾股定理"), assistant
-    assert assistant["meta"].get("truncated") is True, assistant["meta"]
+    assert assistant is not None, "断流后后台任务必须继续并落库 (P0-6)"
+    assert assistant["content"] == (
+        "勾股定理内容如下。直角三角形两直角边平方和等于斜边平方。"
+    ), assistant
+    assert assistant["meta"].get("truncated") is not True, assistant["meta"]
+
+
+async def test_explicit_stop_cancels_background_run(app_client):
+    app, client = app_client
+    token, _uid = await _register_login(client)
+    real_gateway = app.state.gateway
+    app.state.gateway = _HangingGateway()
+    body = json.dumps({"message": "写一篇很长的说明"}).encode()
+    got_token_event = asyncio.Event()
+    sent_body = False
+
+    async def receive():
+        nonlocal sent_body
+        if not sent_body:
+            sent_body = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await asyncio.Event().wait()
+
+    async def send(message):
+        if message["type"] == "http.response.body" and b"event: token" in (
+            message.get("body") or b""
+        ):
+            got_token_event.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/chat",
+        "raw_path": b"/api/chat",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+            (b"accept", b"text/event-stream"),
+            (b"authorization", f"Bearer {token}".encode()),
+        ],
+        "client": ("127.0.0.1", 40002),
+        "server": ("test", 80),
+        "state": {},
+    }
+    request_task = asyncio.create_task(app(scope, receive, send))
+    try:
+        await asyncio.wait_for(got_token_event.wait(), timeout=30)
+        headers = {"Authorization": f"Bearer {token}"}
+        sessions = (await client.get("/api/chat/sessions", headers=headers)).json()
+        session_id = sessions[0]["id"]
+        status = (
+            await client.get(
+                f"/api/chat/sessions/{session_id}/run", headers=headers
+            )
+        ).json()
+        assert status["status"] == "running"
+        stopped = await client.post(
+            f"/api/chat/runs/{status['run_id']}/stop", headers=headers
+        )
+        assert stopped.status_code == 202, stopped.text
+        await asyncio.wait_for(request_task, timeout=15)
+
+        assistant = None
+        for _ in range(50):
+            msgs = (
+                await client.get(
+                    f"/api/chat/sessions/{session_id}/messages", headers=headers
+                )
+            ).json()
+            found = [m for m in msgs if m["role"] == "assistant"]
+            if found:
+                assistant = found[0]
+                break
+            await asyncio.sleep(0.1)
+        assert assistant is not None
+        assert assistant["content"] == "正在生成的前半段。"
+        assert assistant["meta"].get("truncated") is True
+    finally:
+        app.state.gateway = real_gateway
+        if not request_task.done():
+            request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,0 @@
-{
-  "text": "这是文档的摘要部分，概述了整本讲义的内容范围和结构 kuk",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 257,
-  "completion_tokens": 17
-}

@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"求导法则\"]}",
-  "model": "deepseek-v4-flash",
-  "prompt_tokens": 807,
-  "completion_tokens": 10
-}

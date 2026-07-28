@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"罗尔拉格朗日中值定理\", \"费马引理\" , \"闭区间上连续函数的最值定理\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 792,
-  "completion_tokens": 34
-}

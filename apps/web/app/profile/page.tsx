@@ -59,12 +59,12 @@ const EVIDENCE_STRENGTH_LABELS = {
   strong: "较充分",
 } as const;
 
-/** confidence 是内部证据累计分，不是校准后的统计概率；只向用户展示定性档位。 */
-function evidenceStrengthLabel(item: MasteryWithMeta): string {
-  const level =
-    item.evidence_strength ??
-    (item.confidence < 0.4 ? "limited" : item.confidence < 0.8 ? "moderate" : "strong");
-  return EVIDENCE_STRENGTH_LABELS[level];
+/** confidence 是内部证据累计分，不是校准后的统计概率；只向用户展示定性档位。
+ *  档位判定的唯一出处在后端（eduagents_core.mastery.thresholds.evidence_strength），
+ *  前端不复刻阈值：字段缺失（旧后端）时只标「未知」，不猜。 */
+function evidenceStrengthLabel(item: MasteryWithMeta): string | null {
+  const level = item.evidence_strength;
+  return level ? EVIDENCE_STRENGTH_LABELS[level] : null;
 }
 
 /** 掌握度低于此值视为薄弱点（与后端 profile_summary.QUIZ_WEAK_THRESHOLD 同口径）。 */
@@ -312,12 +312,14 @@ function MasteryRow({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
-            <span
-              className="cursor-help"
-              title="证据强度表示有效练习、复习或用户确认的积累程度，不是统计置信概率"
-            >
-              证据 {evidenceStrengthLabel(item)}
-            </span>
+            {evidenceStrengthLabel(item) && (
+              <span
+                className="cursor-help"
+                title="证据强度表示有效练习、复习或用户确认的积累程度，不是统计置信概率"
+              >
+                证据 {evidenceStrengthLabel(item)}
+              </span>
+            )}
             {/* 遗忘快照（P2-7）缩成徽章，整句进 tooltip；<90% 才显示避免噪声 */}
             {ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
               <span

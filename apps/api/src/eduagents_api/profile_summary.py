@@ -436,7 +436,9 @@ async def weak_point_kcs(
         ).all()
     recent_kc_ids = {str(k) for item in recent for k in (item.kc_ids or [])}
     kb_set = set(ids)
-    scoped = [r for r in rows if not kb_set or str(r[3]) in kb_set] or list(rows)
+    # 显式传入知识库时必须严格限定范围：该库没有薄弱点就返回空，
+    # 不得回退到其他库，否则前端选“大学物理”仍会拿到高数题。
+    scoped = [r for r in rows if str(r[3]) in kb_set] if kb_set else list(rows)
     items = []
     for kc_id, p, name, _kb in scoped:
         recent = str(kc_id) in recent_kc_ids

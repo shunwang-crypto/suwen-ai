@@ -1,6 +1,0 @@
-{
-  "text": "该片段是第三章微分中值定理中罗尔定理的定义和几何直观的说明，处于于章的开篇，作用是定义和解释该定理，为后续应用做准备。",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 723,
-  "completion_tokens": 46
-}

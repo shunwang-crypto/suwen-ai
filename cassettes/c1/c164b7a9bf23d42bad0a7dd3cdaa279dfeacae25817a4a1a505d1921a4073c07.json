@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"罗尔尔拉定定理\", \"拉格朗日中值定理\" , \"柯柯西中值定理\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 614,
-  "completion_tokens": 33
-}

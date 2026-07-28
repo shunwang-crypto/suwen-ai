@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"函数的连续\", \"零点存在定理\", \"最值定理\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 760,
-  "completion_tokens": 21
-}

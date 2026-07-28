@@ -23,6 +23,7 @@ import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
+  ChatRunStatusOut,
   CitationData,
   DoneData,
   ErrorEventData,
@@ -32,6 +33,7 @@ import type {
   MessageOut,
   NodeUpdateData,
   SessionOut,
+  SessionEventData,
   TokenEventData,
   TraceEventData,
 } from "@/lib/types";
@@ -74,10 +76,51 @@ const SAMPLE_QUESTIONS = [
   "帮我梳理二次函数 $y=ax^2+bx+c$ 的图像性质",
 ];
 
+const LAST_CHAT_SESSION_KEY = "eduagents:last-chat-session";
+const CHAT_SESSION_STATUS_KEY = "eduagents:chat-session-status";
+
+type SessionIndicator = "running" | "completed";
+
+function readSessionIndicators(): Record<string, SessionIndicator> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = JSON.parse(
+      window.localStorage.getItem(CHAT_SESSION_STATUS_KEY) ?? "{}",
+    ) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        ([, value]) => value === "running" || value === "completed",
+      ),
+    ) as Record<string, SessionIndicator>;
+  } catch {
+    return {};
+  }
+}
+
 function genId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function historyToMessages(history: MessageOut[]): ChatMsg[] {
+  return history.map((m) => ({
+    id: m.id,
+    role: m.role === "user" ? "user" : "assistant",
+    content: m.content,
+    timeline: [],
+    citations: Array.isArray(m.meta?.citations)
+      ? (m.meta.citations as CitationData[])
+      : [],
+    followups: Array.isArray(m.meta?.followups)
+      ? (m.meta.followups as string[])
+      : [],
+    truncated: Boolean(m.meta?.truncated),
+  }));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -104,7 +147,16 @@ function ChatView() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [sessionIndicators, setSessionIndicators] = useState<
+    Record<string, SessionIndicator>
+  >(readSessionIndicators);
   const abortRef = useRef<AbortController | null>(null);
+  const detachedControllersRef = useRef(new WeakSet<AbortController>());
+  const stoppedControllersRef = useRef(new WeakSet<AbortController>());
+  /** 每次切换会话/新建会话递增，防旧流完成后覆盖当前视图。 */
+  const viewEpochRef = useRef(0);
+  const restoredSessionRef = useRef(false);
 
   // 引用联动
   const [activeCitation, setActiveCitation] = useState<number | null>(null);
@@ -130,6 +182,36 @@ function ChatView() {
     },
     [],
   );
+
+  const detachCurrentStream = useCallback(() => {
+    const controller = abortRef.current;
+    if (!controller) return;
+    detachedControllersRef.current.add(controller);
+    controller.abort();
+    if (abortRef.current === controller) abortRef.current = null;
+  }, []);
+
+  // 离开 /chat 只断开当前页面的 SSE 订阅；后端生成任务继续运行并最终落库。
+  useEffect(
+    () => () => {
+      viewEpochRef.current += 1;
+      detachCurrentStream();
+    },
+    [detachCurrentStream],
+  );
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      CHAT_SESSION_STATUS_KEY,
+      JSON.stringify(sessionIndicators),
+    );
+  }, [sessionIndicators]);
+
+  useEffect(() => {
+    if (activeSessionId) {
+      window.localStorage.setItem(LAST_CHAT_SESSION_KEY, activeSessionId);
+    }
+  }, [activeSessionId]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -169,38 +251,145 @@ function ChatView() {
   }, [messages]);
 
   const selectSession = useCallback(async (id: string) => {
-    abortRef.current?.abort();
+    detachCurrentStream();
+    const epoch = ++viewEpochRef.current;
     setActiveSessionId(id);
+    // 蓝点代表“后台回答已完成但尚未查看”；进入会话即视为已读。
+    setSessionIndicators((prev) => {
+      if (prev[id] !== "completed") return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setActiveRunId(null);
+    setStreaming(false);
     setSessionsOpen(false);
     setActiveCitation(null);
     setCitationMsgId(null);
     try {
-      const history = await apiJson<MessageOut[]>(
-        `/api/chat/sessions/${id}/messages`,
-      );
-      setMessages(
-        history.map((m) => ({
-          id: m.id,
-          role: m.role === "user" ? "user" : "assistant",
-          content: m.content,
-          timeline: [],
-          citations: [],
-          truncated: Boolean(m.meta?.truncated),
-        })),
-      );
+      let [history, run] = await Promise.all([
+        apiJson<MessageOut[]>(`/api/chat/sessions/${id}/messages`),
+        apiJson<ChatRunStatusOut>(`/api/chat/sessions/${id}/run`),
+      ]);
+      if (viewEpochRef.current !== epoch) return;
+      setMessages(historyToMessages(history));
+      if (run.status !== "running" || !run.run_id) {
+        setSessionIndicators((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        return;
+      }
+
+      setSessionIndicators((prev) => ({ ...prev, [id]: "running" }));
+      setActiveRunId(run.run_id);
+      setStreaming(true);
+      // SSE 已在切换时主动解绑；这里只轻量轮询任务状态，完成后一次性取最终历史。
+      while (viewEpochRef.current === epoch && run.status === "running") {
+        await wait(1200);
+        if (viewEpochRef.current !== epoch) return;
+        run = await apiJson<ChatRunStatusOut>(`/api/chat/sessions/${id}/run`);
+      }
+      if (viewEpochRef.current !== epoch) return;
+      // 显式停止时，后台的 truncated 落库任务可能比状态清理晚几十毫秒。
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        history = await apiJson<MessageOut[]>(`/api/chat/sessions/${id}/messages`);
+        if (history.at(-1)?.role === "assistant" || attempt === 4) break;
+        await wait(120);
+      }
+      if (viewEpochRef.current !== epoch) return;
+      setMessages(historyToMessages(history));
+      setSessionIndicators((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setActiveRunId(null);
+      setStreaming(false);
+      void loadSessions();
     } catch (err) {
+      if (viewEpochRef.current !== epoch) return;
+      setActiveRunId(null);
+      setStreaming(false);
       setBanner(err instanceof ApiError ? err.message : "历史消息加载失败");
     }
-  }, []);
+  }, [detachCurrentStream, loadSessions]);
+
+  // 从其他功能页返回 /chat 时恢复上次查看的会话；带 ?q= 的推荐问题仍开启新对话。
+  useEffect(() => {
+    if (sessionsLoading || restoredSessionRef.current) return;
+    restoredSessionRef.current = true;
+    if (searchParams.get("q")) return;
+    const remembered = window.localStorage.getItem(LAST_CHAT_SESSION_KEY);
+    if (remembered && sessions.some((session) => session.id === remembered)) {
+      const timer = window.setTimeout(() => void selectSession(remembered), 0);
+      return () => window.clearTimeout(timer);
+    } else if (remembered) {
+      window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+    }
+  }, [searchParams, selectSession, sessions, sessionsLoading]);
+
+  // 页面离开期间没有 SSE 订阅：只轮询本机记住的运行中会话，完成后换成蓝点。
+  useEffect(() => {
+    const knownIds = new Set(sessions.map((session) => session.id));
+    const runningIds = Object.entries(sessionIndicators)
+      .filter(([id, status]) => status === "running" && knownIds.has(id))
+      .map(([id]) => id);
+    if (runningIds.length === 0) return;
+
+    let disposed = false;
+    const refresh = async () => {
+      const results = await Promise.allSettled(
+        runningIds.map(async (id) => ({
+          id,
+          run: await apiJson<ChatRunStatusOut>(
+            `/api/chat/sessions/${id}/run`,
+          ),
+        })),
+      );
+      if (disposed) return;
+      setSessionIndicators((prev) => {
+        let next = prev;
+        for (const result of results) {
+          if (
+            result.status === "fulfilled" &&
+            result.value.run.status === "idle" &&
+            prev[result.value.id] === "running"
+          ) {
+            if (next === prev) next = { ...prev };
+            if (result.value.id === activeSessionId) {
+              delete next[result.value.id];
+            } else {
+              next[result.value.id] = "completed";
+            }
+          }
+        }
+        return next;
+      });
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeSessionId, sessionIndicators, sessions]);
 
   const newSession = useCallback(() => {
-    abortRef.current?.abort();
+    detachCurrentStream();
+    viewEpochRef.current += 1;
     setActiveSessionId(null);
+    setActiveRunId(null);
+    setStreaming(false);
     setMessages([]);
     setActiveCitation(null);
     setCitationMsgId(null);
     setSessionsOpen(false);
-  }, []);
+    window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+  }, [detachCurrentStream]);
 
   const renameSession = useCallback(
     async (id: string, title: string) => {
@@ -219,18 +408,29 @@ function ChatView() {
 
   const deleteSession = useCallback(
     async (id: string) => {
+      if (id === activeSessionId && activeRunId) {
+        setBanner("回答仍在后台生成，请先点击停止后再删除会话");
+        return;
+      }
       try {
         await apiJson<void>(`/api/chat/sessions/${id}`, { method: "DELETE" });
         if (id === activeSessionId) {
           setActiveSessionId(null);
           setMessages([]);
+          window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
         }
+        setSessionIndicators((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
         await loadSessions();
       } catch (err) {
         setBanner(err instanceof ApiError ? err.message : "删除失败");
       }
     },
-    [activeSessionId, loadSessions],
+    [activeRunId, activeSessionId, loadSessions],
   );
 
   const send = useCallback(
@@ -261,6 +461,8 @@ function ChatView() {
       };
       setMessages((prev) => [...prev, userMsg, asstMsg]);
       setStreaming(true);
+      setActiveRunId(null);
+      const runEpoch = viewEpochRef.current;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -274,7 +476,24 @@ function ChatView() {
         for await (const msg of streamSse("/api/chat", body, {
           signal: controller.signal,
         })) {
+          if (viewEpochRef.current !== runEpoch) continue;
           switch (msg.event) {
+            case "session": {
+              const d = msg.data as SessionEventData;
+              setActiveSessionId(d.session_id);
+              setActiveRunId(d.run_id);
+              setSessionIndicators((prev) => ({
+                ...prev,
+                [d.session_id]: "running",
+              }));
+              window.localStorage.setItem(
+                LAST_CHAT_SESSION_KEY,
+                d.session_id,
+              );
+              // 新会话在模型完成前就进入左栏，切走后仍可随时点回来查看运行状态。
+              void loadSessions();
+              break;
+            }
             case "token": {
               const d = msg.data as TokenEventData;
               const attempt = d.attempt ?? 0;
@@ -332,7 +551,17 @@ function ChatView() {
             case "done": {
               const d = msg.data as DoneData;
               patchMsg(asstId, (m) => ({ ...m, done: d, stalled: false }));
-              if (d.session_id) setActiveSessionId(d.session_id);
+              if (d.session_id) {
+                setActiveSessionId(d.session_id);
+                // 当前会话的答案已经呈现在眼前，完成时直接记为已读。
+                setSessionIndicators((prev) => {
+                  if (!(d.session_id in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[d.session_id];
+                  return next;
+                });
+              }
+              setActiveRunId(null);
               void loadSessions();
               break;
             }
@@ -342,6 +571,14 @@ function ChatView() {
                 ...m,
                 errorText: d.message || d.code,
               }));
+              if (activeSessionId) {
+                setSessionIndicators((prev) => {
+                  if (!(activeSessionId in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[activeSessionId];
+                  return next;
+                });
+              }
               break;
             }
             default:
@@ -350,9 +587,17 @@ function ChatView() {
         }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
-          // 手动停止：服务端 finally 会把已下发部分落库并标 truncated（P0-6），
-          // 本地同步标记，展示「回答未完成」角标 + 重问入口
-          patchMsg(asstId, (m) => ({ ...m, truncated: true, stalled: false }));
+          // 切换会话/页面只是解绑订阅，后台继续；只有显式停止才标记半截回答。
+          if (
+            stoppedControllersRef.current.has(controller) &&
+            viewEpochRef.current === runEpoch
+          ) {
+            patchMsg(asstId, (m) => ({
+              ...m,
+              truncated: true,
+              stalled: false,
+            }));
+          }
         } else {
           const msg =
             err instanceof ApiError
@@ -363,17 +608,46 @@ function ChatView() {
           patchMsg(asstId, (m) => ({ ...m, errorText: msg }));
         }
       } finally {
-        patchMsg(asstId, (m) => ({ ...m, streaming: false }));
-        setStreaming(false);
-        abortRef.current = null;
+        if (viewEpochRef.current === runEpoch) {
+          patchMsg(asstId, (m) => ({ ...m, streaming: false }));
+          setStreaming(false);
+          setActiveRunId(null);
+        }
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
     [input, streaming, activeSessionId, kbIds, kbs, patchMsg, loadSessions],
   );
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    if (!activeRunId) {
+      setBanner("任务正在初始化，请稍后再停止");
+      return;
+    }
+    void apiJson(`/api/chat/runs/${activeRunId}/stop`, { method: "POST" }).catch(
+      (err) => {
+        if (!(err instanceof ApiError && err.status === 404)) {
+          setBanner(err instanceof ApiError ? err.message : "停止任务失败");
+        }
+      },
+    );
+    const controller = abortRef.current;
+    if (controller) {
+      stoppedControllersRef.current.add(controller);
+      controller.abort();
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+    setActiveRunId(null);
+    setStreaming(false);
+    if (activeSessionId) {
+      setSessionIndicators((prev) => {
+        if (!(activeSessionId in prev)) return prev;
+        const next = { ...prev };
+        delete next[activeSessionId];
+        return next;
+      });
+    }
+  }, [activeRunId, activeSessionId]);
 
   /** truncated 消息的「重新提问」：回溯到该助手消息之前最近的用户消息重发 */
   const retryFrom = useCallback(
@@ -460,6 +734,7 @@ function ChatView() {
       sessions={sessions}
       activeId={activeSessionId}
       loading={sessionsLoading}
+      indicators={sessionIndicators}
       onSelect={(id) => void selectSession(id)}
       onNew={newSession}
       onRename={renameSession}
@@ -971,7 +1246,8 @@ function ChatView() {
         </div>
       </section>
 
-      {/* 右：引用面板（桌面） */}
+      {/* 右：引用面板（桌面）—— 无引用时不渲染，对话区自动占满宽度（移动端抽屉不受影响） */}
+      {panelCitations.length > 0 && (
       <aside className="hidden w-80 shrink-0 flex-col border-l border-slate-200 bg-white xl:flex">
         <div className="flex h-11 shrink-0 items-center border-b border-slate-100 px-4">
           <h2 className="text-sm font-semibold text-slate-800">
@@ -985,6 +1261,7 @@ function ChatView() {
         </div>
         <div className="min-h-0 flex-1">{citationsPanel}</div>
       </aside>
+      )}
 
       {/* 右：引用面板（移动端抽屉） */}
       {citationsOpen && (

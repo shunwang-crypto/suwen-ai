@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"定积分\", \"定定积分的应用\" ]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 848,
-  "completion_tokens": 15
-}

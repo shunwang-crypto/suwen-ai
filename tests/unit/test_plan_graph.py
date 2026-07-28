@@ -159,21 +159,116 @@ async def test_reject_leaves_plan_unconfirmed():
 
 
 async def test_approve_with_edited_plan_takes_user_version():
-    _, graph, config, _ = await run_to_interrupt(make_script())
+    _, graph, config, _ = await run_to_interrupt(
+        make_script(),
+        input_overrides={"kb_id": "", "total_days": 3, "kc_order": ["极限", "导数"]},
+    )
     edited = {
         "stages": [
             {
                 "name": "用户改过",
                 "days": [
-                    {"day": 1, "tasks": [{"title": "自定任务", "minutes": 50, "kc_names": [], "resource_ref": None}]}
+                    {
+                        "day": 9,
+                        "tasks": [
+                            {
+                                "title": "先学导数",
+                                "minutes": 120,
+                                "kc_names": ["导数"],
+                                "resource_ref": 99,
+                            }
+                        ],
+                    },
+                    {
+                        "day": 3,
+                        "tasks": [
+                            {
+                                "title": "再学极限",
+                                "minutes": 10,
+                                "kc_names": ["极限"],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
                 ],
             }
         ]
     }
     final = await graph.ainvoke(Command(resume={"approved": True, "plan": edited}), config)
     assert final["plan_confirmed"] is True
-    assert final["plan"] == edited
+    days = flat_days(final["plan"])
+    assert len(days) == 3
+    assert [day["day"] for day in days] == [1, 2, 3]
+    assert days[0]["tasks"][0]["kc_names"] == ["极限"]
+    assert days[1]["tasks"][0]["kc_names"] == ["导数"]
+    assert all(
+        abs(sum(task["minutes"] for task in day["tasks"]) - 60) < 0.15 * 60
+        for day in days
+    )
+    total_minutes = sum(task["minutes"] for day in days for task in day["tasks"])
+    assert abs(total_minutes - 3 * 60) < 0.15 * 3 * 60
+    assert days[1]["tasks"][0]["resource_ref"] is None
     assert any(e.get("event") == "plan_approved_with_edits" for e in final["trace"])
+    confirm_fixes = [
+        e
+        for e in final["trace"]
+        if e.get("node") == "confirm_plan" and e.get("event") == "fix"
+    ]
+    assert {e["fix"] for e in confirm_fixes} >= {
+        "total_days_padded",
+        "kc_order_deferred",
+        "resource_ref_nulled",
+        "day_minutes_scaled",
+    }
+
+
+async def test_approve_with_empty_edited_day_fills_task():
+    _, graph, config, _ = await run_to_interrupt(make_script())
+    edited = {
+        "stages": [
+            {
+                "name": "用户改过",
+                "days": [
+                    {"day": 1, "tasks": []},
+                    {
+                        "day": 2,
+                        "tasks": [
+                            {
+                                "title": "保留任务",
+                                "minutes": 60,
+                                "kc_names": [],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    final = await graph.ainvoke(Command(resume={"approved": True, "plan": edited}), config)
+    days = flat_days(final["plan"])
+    assert days[0]["tasks"] == [
+        {"title": "自主复习", "minutes": 60, "kc_names": [], "resource_ref": None}
+    ]
+    assert any(
+        e.get("node") == "confirm_plan"
+        and e.get("event") == "fix"
+        and e.get("fix") == "empty_day_filled"
+        for e in final["trace"]
+    )
+
+
+async def test_approve_with_invalid_edited_plan_keeps_hardened_draft():
+    _, graph, config, state = await run_to_interrupt(make_script())
+    original = state["plan"]
+    final = await graph.ainvoke(
+        Command(resume={"approved": True, "plan": {"stages": []}}), config
+    )
+    assert final["plan_confirmed"] is True
+    assert final["plan"] == original
+    assert any(
+        e.get("event") == "plan_approved_invalid_edits_ignored" for e in final["trace"]
+    )
 
 
 # ---------------------------------------------------------------- 程序性硬校验
@@ -201,12 +296,52 @@ async def test_overbudget_day_minutes_scaled_into_range():
     budget = 1.0 * 60
     for day in flat_days(state["plan"]):
         total = sum(t["minutes"] for t in day["tasks"])
-        assert 0.7 * budget <= total <= 1.15 * budget, day
+        assert abs(total - budget) < 0.15 * budget, day
     # 比例缩放: 120/120 -> 30/30
     day1 = flat_days(state["plan"])[0]
     assert [t["minutes"] for t in day1["tasks"]] == [30, 30]
     scaled = [e for e in fix_events(state) if e["fix"] == "day_minutes_scaled"]
     assert len(scaled) == 2  # 超预算日 + 欠预算日都被修正并记录 trace
+
+
+async def test_exact_fifteen_percent_budget_boundary_is_scaled():
+    draft = {
+        "stages": [
+            {
+                "name": "边界预算",
+                "days": [
+                    {
+                        "day": 1,
+                        "tasks": [
+                            {
+                                "title": "下边界",
+                                "minutes": 51,
+                                "kc_names": [],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
+                    {
+                        "day": 2,
+                        "tasks": [
+                            {
+                                "title": "上边界",
+                                "minutes": 69,
+                                "kc_names": [],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    _, _, _, state = await run_to_interrupt(make_script(draft))
+    assert [sum(t["minutes"] for t in day["tasks"]) for day in flat_days(state["plan"])] == [
+        60,
+        60,
+    ]
+    assert len([e for e in fix_events(state) if e["fix"] == "day_minutes_scaled"]) == 2
 
 
 async def test_total_days_padded_when_draft_too_short():

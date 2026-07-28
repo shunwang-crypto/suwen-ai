@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"莱布尼茨公式\", \"高阶导数\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 944,
-  "completion_tokens": 17
-}

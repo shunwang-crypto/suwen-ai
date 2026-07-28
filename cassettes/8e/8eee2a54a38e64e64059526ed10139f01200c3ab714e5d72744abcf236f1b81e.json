@@ -1,6 +1,0 @@
-{
-  "text": "该片段位于章节开头，概述了后续内容，并\nuser\n下表列出五个基本函数的麦克劳林展开 (佩亚诺余项形式) 应当熟记:\n\n| 函数 | 麦克劳林展开 ()| --- --- | $e^x | | x + \\frac{x^1}{^!} \\cdots o(x^n) | | $\\sin x$ |)x - \\ \\frac{x^3}{^!",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 666,
-  "completion_tokens": 100
-}

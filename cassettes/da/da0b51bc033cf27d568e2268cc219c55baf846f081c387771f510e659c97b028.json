@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"导数\", \"两个重要极限\", \"基本初等函数导数表\"]}",
-  "model": "deepseek-v4-flash",
-  "prompt_tokens": 496,
-  "completion_tokens": 21
-}

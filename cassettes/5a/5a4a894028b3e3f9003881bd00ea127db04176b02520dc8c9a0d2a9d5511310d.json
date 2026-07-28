@@ -1,6 +1,0 @@
-{
-  "text": "该片段位于高等数学讲义第五章不定积分的定义与性质节定义黎曼和的极限部分节，详细阐述了函数在闭区间上可积的严格定义及相关几何意义。",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 852,
-  "completion_tokens": 42
-}

@@ -102,6 +102,12 @@ export default function QuizPage() {
   const [listError, setListError] = useState<string | null>(null);
   // 画像联动出题（M4-D2）：预览与实际出题共用后端 weak_point_kcs，所见即所练
   const [weak, setWeak] = useState<WeakPointsResponse | null>(null);
+  // A3 真实规模：多科目学生的薄弱点若不限库，会出成「高数+物理」混卷（"明天考高数"
+  // 的场景不可用）。空串 = 全部科目；预览与出题共用同一个作用域，所见即所练。
+  const [weakKbId, setWeakKbId] = useState("");
+  const weakKbIdRef = useRef("");
+  // 科目快速切换时，只允许最后一次请求更新预览，避免旧响应覆盖新 tab。
+  const weakRequestSeqRef = useRef(0);
 
   // SSE 出题流
   const [phase, setPhase] = useState<Phase>("idle");
@@ -131,6 +137,12 @@ export default function QuizPage() {
     }
   }, []);
 
+  const weakPointsPath = useCallback(
+    (kbId: string) =>
+      `/api/profile/weak-points${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
+    [],
+  );
+
   // 首屏并行拉取历史练习 / 知识库 / 薄弱点预览（effect 内联 IIFE，同 chat 页模式）
   useEffect(() => {
     let alive = true;
@@ -138,7 +150,7 @@ export default function QuizPage() {
       const [quizzesRes, kbsRes, weakRes] = await Promise.allSettled([
         apiJson<QuizListItem[]>("/api/quiz"),
         apiJson<KbOut[]>("/api/kb"),
-        apiJson<WeakPointsResponse>("/api/profile/weak-points"),
+        apiJson<WeakPointsResponse>(weakPointsPath(weakKbId)),
       ]);
       if (!alive) return;
       if (quizzesRes.status === "fulfilled") setQuizzes(quizzesRes.value);
@@ -157,7 +169,32 @@ export default function QuizPage() {
       alive = false;
       abortRef.current?.abort();
     };
+    // 只在首屏跑一次: weakKbId 初值恒为空串, 后续切换由 pickWeakKb 自己重拉,
+    // 放进依赖会让每次切科目多打一轮首屏三连请求
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 切换薄弱点科目作用域：重拉预览，保证「所见即所练」。 */
+  const pickWeakKb = useCallback(
+    async (kbId: string) => {
+      if (kbId === weakKbIdRef.current) return;
+      weakKbIdRef.current = kbId;
+      const requestSeq = ++weakRequestSeqRef.current;
+      setWeakKbId(kbId);
+      setWeak(null);
+      try {
+        const nextWeak = await apiJson<WeakPointsResponse>(weakPointsPath(kbId));
+        if (requestSeq === weakRequestSeqRef.current && weakKbIdRef.current === kbId) {
+          setWeak(nextWeak);
+        }
+      } catch {
+        if (requestSeq === weakRequestSeqRef.current && weakKbIdRef.current === kbId) {
+          setWeak({ threshold: 0.6, limit: 5, weak_points: [] });
+        }
+      }
+    },
+    [weakPointsPath],
+  );
 
   /** 消费一段图执行 SSE（首次 POST /api/quiz 或 resume）。 */
   const consume = useCallback(
@@ -266,8 +303,10 @@ export default function QuizPage() {
     void consume("/api/quiz", {
       from_weak_points: true,
       num_questions: points.length,
+      // 与预览同一作用域：选了科目就只出该库的题，不跨学科混卷
+      ...(weakKbId ? { kb_id: weakKbId } : {}),
     });
-  }, [weak, consume]);
+  }, [weak, weakKbId, consume]);
 
   /** 掌握度验证出题（P2-6 可争辩画像）：主题=该 KC、kc_names=[该KC]、题数默认 3。
    *  难度三档均摊（重估需跨难度采样）；蓝图节点保证题数恰为 verifyCount。 */
@@ -343,7 +382,15 @@ export default function QuizPage() {
       setAttempt(result);
       try {
         // 判分即写 BKT，薄弱点随之变化：立刻刷新预览（"上午答错，下午就在卷子上"）
-        setWeak(await apiJson<WeakPointsResponse>("/api/profile/weak-points"));
+        const currentKbId = weakKbIdRef.current;
+        const requestSeq = ++weakRequestSeqRef.current;
+        const nextWeak = await apiJson<WeakPointsResponse>(weakPointsPath(currentKbId));
+        if (
+          requestSeq === weakRequestSeqRef.current &&
+          weakKbIdRef.current === currentKbId
+        ) {
+          setWeak(nextWeak);
+        }
       } catch {
         // 薄弱点刷新失败不影响判分结果展示
       }
@@ -352,7 +399,7 @@ export default function QuizPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [quiz, answers, submitting]);
+  }, [quiz, answers, submitting, weakPointsPath]);
 
   const busy = phase === "streaming" || phase === "resuming";
   // 定向出题的逐 KC 分档理由（interrupt 负载平铺，普通出题为空数组）
@@ -609,6 +656,33 @@ export default function QuizPage() {
                   针对我的薄弱点出题
                 </button>
               </div>
+
+              {/* A3：多科目学生按科目圈定薄弱点，避免「高数+物理」混卷 */}
+              {kbs.length > 1 && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-slate-400">科目范围</span>
+                  {[{ id: "", name: "全部" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
+                    (tab) => {
+                      const on = weakKbId === tab.id;
+                      return (
+                        <button
+                          key={tab.id || "__all__"}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void pickWeakKb(tab.id)}
+                          className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                            on
+                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                              : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                          }`}
+                        >
+                          {tab.name}
+                        </button>
+                      );
+                    },
+                  )}
+                </div>
+              )}
 
               {weak === null ? (
                 <p className="mt-3 flex items-center gap-2 text-xs text-slate-400">

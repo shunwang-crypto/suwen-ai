@@ -46,6 +46,7 @@ const EVENT_LABELS: Record<string, string> = {
   draft_fallback: "草案降级（确定性兜底）",
   plan_approved: "计划已确认",
   plan_approved_with_edits: "计划已确认（含编辑）",
+  plan_approved_invalid_edits_ignored: "无效编辑已忽略（服务端校验未通过，按原草案保存）",
   plan_rejected: "计划已取消",
 };
 

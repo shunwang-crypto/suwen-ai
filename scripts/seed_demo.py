@@ -1,5 +1,5 @@
-"""演示种子: 创建演示账号 + 高等数学知识库 + 摄取 corpus/calculus.md。
-幂等: 重复执行复用已有账号/知识库, 文档按内容哈希去重。
+"""演示种子: 创建学生/管理员账号 + 学生知识库 + 摄取 corpus/calculus.md。
+幂等: 重复执行会校正账号角色与密码, 复用已有知识库, 文档按内容哈希去重。
 用法: make seed  (输出 tenant_id / kb_id, 供评估 CLI 与演示登录使用)
 """
 from __future__ import annotations
@@ -15,12 +15,15 @@ from sqlalchemy import select
 REPO = Path(__file__).resolve().parents[1]
 DEMO_EMAIL = "demo@eduagents.cn"
 DEMO_PASSWORD = "demo-pass-123"
+ADMIN_EMAIL = "admin@eduagents.cn"
+ADMIN_PASSWORD = "admin-pass-123"
 
 
 async def main() -> None:
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import Document, KnowledgeBase, User
     from eduagents_api.security import hash_password
+    from eduagents_api.wallet import get_wallet_service
     from eduagents_core.config import get_settings
     from eduagents_core.storage import create_storage
     from eduagents_worker.ingestion import ingest_document
@@ -33,16 +36,28 @@ async def main() -> None:
     data = corpus.read_bytes()
 
     async with plain_session() as session:
-        user = await session.scalar(select(User).where(User.email == DEMO_EMAIL))
-        if user is None:
-            user = User(
+        demo_user = await session.scalar(select(User).where(User.email == DEMO_EMAIL))
+        if demo_user is None:
+            demo_user = User(
                 email=DEMO_EMAIL,
-                password_hash=hash_password(DEMO_PASSWORD, settings.bcrypt_rounds),
-                role="student",
             )
-            session.add(user)
-            await session.flush()
-        user_id = str(user.id)
+            session.add(demo_user)
+        demo_user.role = "student"
+        demo_user.password_hash = hash_password(DEMO_PASSWORD, settings.bcrypt_rounds)
+
+        admin_user = await session.scalar(select(User).where(User.email == ADMIN_EMAIL))
+        if admin_user is None:
+            admin_user = User(email=ADMIN_EMAIL)
+            session.add(admin_user)
+        admin_user.role = "admin"
+        admin_user.password_hash = hash_password(ADMIN_PASSWORD, settings.bcrypt_rounds)
+
+        await session.flush()
+        # 直建账号也走与注册相同的幂等赠额，避免 live 模式被钱包预检拦截。
+        wallet = get_wallet_service()
+        await wallet.grant_signup(session, demo_user.id)
+        await wallet.grant_signup(session, admin_user.id)
+        user_id = str(demo_user.id)
 
     async with tenant_session(user_id) as session:
         kb = await session.scalar(
@@ -50,7 +65,7 @@ async def main() -> None:
         )
         if kb is None:
             kb = KnowledgeBase(
-                tenant_id=user.id, name="高等数学讲义", subject="math"
+                tenant_id=demo_user.id, name="高等数学讲义", subject="math"
             )
             session.add(kb)
             await session.flush()
@@ -63,7 +78,7 @@ async def main() -> None:
         )
         if doc is None:
             doc = Document(
-                tenant_id=user.id,
+                tenant_id=demo_user.id,
                 kb_id=kb.id,
                 filename="calculus.md",
                 content_hash=content_hash,
@@ -83,9 +98,10 @@ async def main() -> None:
             print(f"摄取失败: {outcome}", file=sys.stderr)
             raise SystemExit(1)
 
-    await seed_history(user, kb_id)
+    await seed_history(demo_user, kb_id)
 
-    print(f"demo 账号: {DEMO_EMAIL} / {DEMO_PASSWORD}")
+    print(f"学生账号: {DEMO_EMAIL} / {DEMO_PASSWORD}")
+    print(f"管理员账号: {ADMIN_EMAIL} / {ADMIN_PASSWORD}")
     print(f"tenant_id={user_id}")
     print(f"kb_id={kb_id}")
     print(f"doc_id={doc_id} status=ready")

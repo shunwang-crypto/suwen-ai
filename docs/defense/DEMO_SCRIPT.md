@@ -12,7 +12,7 @@
 |---|---|---|---|
 | 0.1 | 基础设施在跑 | `make dev-infra` | PostgreSQL + Redis 可用 |
 | 0.2 | 迁移到 head | `make migrate` | 无报错 |
-| 0.3 | 演示数据就位 | `make seed` | 输出 `demo 账号: demo@eduagents.cn / demo-pass-123`、`tenant_id=…`、`kb_id=…`、`doc_id=… status=ready` |
+| 0.3 | 演示数据就位 | `make seed` | 输出学生账号 `demo@eduagents.cn / demo-pass-123`、管理员账号 `admin@eduagents.cn / admin-pass-123`，以及 `tenant_id=…`、`kb_id=…`、`doc_id=… status=ready` |
 | 0.4 | **网关模式不是 stub** | `.env` 中 `GATEWAY_MODE=replay`（推荐）或 `live` | `curl localhost:8000/api/health` 返回的 `gateway_mode` 与预期一致 |
 | 0.5 | API 在跑 | `make api` | `http://127.0.0.1:8000/api/docs` 可打开 |
 | 0.6 | Worker 在跑 | `make worker` | 无报错（摄取/增强异步任务需要它） |
@@ -23,13 +23,11 @@
 
 > ### ⚠ 三条会前必读的真实约束（不解决就会当场翻车）
 >
-> **C1 · `make seed` 不生产历史作答。** `scripts/seed_demo.py` 只建演示账号 + 知识库 + 摄取 `corpus/calculus.md`，**不写任何 attempt / error_item / mastery 记录**。因此**首次登录时「复习」页和「我的画像」页是空的**。
-> → 本剧本的设计对策：**第 3 步现场做题现场答错**，用真实作答把错题打进队列，第 4、5 步才有东西看。这样反而更可信，但**第 3 步不能跳过**。
-> → 若想更保险，会前先用 demo 账号手动跑一遍第 3 步（做错同样的题），让画像上先有一条历史，现场再叠加一次。
+> **C1 · `make seed` 会生产一组真实链路历史作答。** `scripts/seed_demo.py` 会调用正式判分链路写入 2 对 1 错的演示卷，连带产生错题、BKT 和掌握度流水；重复执行会按演示卷标题幂等跳过。因此首次登录时「复习」和「我的画像」已有基线数据，第 3 步现场作答是在该基线上继续累积。
 >
-> **C2 · demo 账号是 `student`，进不去运营页的 time-travel 控件。** `seed_demo.py` 写死 `role="student"`，而 `/admin` 路由与 `/api/admin/time-travel` 都要求 admin（`require_admin`）。
+> **C2 · 学生与管理员演示账号已分离。** `demo@eduagents.cn` 每次 seed 都会校正为 `student`，保留全部学习语料和历史；`admin@eduagents.cn` 会校正为 `admin`，只用于运营/评估页面，不重复摄取学生语料。
 > → 本剧本的设计对策：**第 4 步用终端 `make time-travel DAYS=3` 推进虚拟时钟**（`scripts/time_travel.py` 直连 Redis 累加偏移，与 API 同一个偏移键），不依赖运营页。
-> → 若希望在界面上按按钮（观感更好），会前需手动把 demo 账号的 role 改成 admin，或另建一个 admin 演示账号；**这属于尚未落地的 seed 能力，不要临场才发现**。
+> → 若要在界面上操作 time-travel，请另开无痕窗口登录管理员账号；不要把学生账号临时提权，否则学生导航和演示状态会漂移。
 >
 > **C3 · `GATEWAY_MODE=stub` 下出题会失败、回答是开发桩横幅。** stub 模式产出的是「【开发桩响应 · 非真实模型输出】」文本，出题子图拿不到合法 JSON（`scripts/smoke_golden_path.py` 在 stub 下会显式 SKIP 掉 quiz 全链路）。
 > → **必须用 `replay`（已录制 109 个 cassette，见 `cassettes/`）或 `live`**。replay 更稳，断网也能跑，界面上会有「离线回放」标注，这是诚实的工程能力展示而非造假。

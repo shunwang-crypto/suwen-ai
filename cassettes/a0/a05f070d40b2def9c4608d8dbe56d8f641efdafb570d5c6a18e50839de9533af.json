@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"不定积分\", \"定积分\", \"导数\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 601,
-  "completion_tokens": 15
-}

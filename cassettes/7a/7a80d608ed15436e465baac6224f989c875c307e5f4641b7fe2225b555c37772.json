@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"对数求导法\", \"幂指函数求导\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 593,
-  "completion_tokens": 18
-}

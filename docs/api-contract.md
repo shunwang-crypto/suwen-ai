@@ -21,6 +21,8 @@
 | POST | /api/chat | {message, session_id?} → SSE 流（见下）；无 session_id 自动建会话 |
 | GET | /api/chat/sessions | 会话列表（按更新时间倒序，≤100） |
 | GET | /api/chat/sessions/{id}/messages | 历史消息（他人会话 → 404，不泄漏存在性） |
+| GET | /api/chat/sessions/{id}/run | 查询该会话的生成状态 → {status: running\|idle, run_id?} |
+| POST | /api/chat/runs/{run_id}/stop | 显式停止后台生成 → 202；不存在或非本人任务 → 404 |
 | PATCH | /api/chat/sessions/{id} | {title} 重命名 |
 | DELETE | /api/chat/sessions/{id} | → 204，级联删消息 |
 
@@ -30,17 +32,24 @@
 | GET | /api/health | {status, gateway_mode, checks:{postgres, redis}} |
 | GET | /api/docs | OpenAPI 文档 |
 
-## SSE 事件协议（七类，M1 实现四类，M3 补全）
+## SSE 事件协议（九类）
 
 ```json
+{"event":"session","data":{"session_id":"…","run_id":"…"}}
 {"event":"token","data":{"text":"泰勒"}}
 {"event":"node_update","data":{"node":"generate","status":"running","detail":"生成回答中"}}
 {"event":"trace_event","data":{"type":"router","route":"kb","reason":"…"}}          // M3
 {"event":"citation","data":{"idx":1,"doc_id":"…","chunk_id":"…","page":42,"highlight":"…","doc_name":"…"}}  // M2
+{"event":"followups","data":{"questions":["…"]}}
 {"event":"interrupt","data":{"kind":"blueprint_confirm","payload":{},"resume_url":"/api/threads/{id}/resume"}}  // M3
 {"event":"error","data":{"code":"GENERATION_FAILED","message":"…"}}
 {"event":"done","data":{"session_id":"…","usage":{"cost_cny":0.002,"mode":"live","latency_ms":1234}}}
 ```
+
+`POST /api/chat` 返回头同时暴露 `X-Chat-Session-ID` 和 `X-Chat-Run-ID`，供前端在
+首个 SSE 帧被代理短暂缓冲时立即识别任务。SSE 订阅断开（切换会话、切换页面或刷新）
+不会取消生成；任务会在 API 进程内继续。只有调用 `POST /api/chat/runs/{run_id}/stop`
+才会主动取消。返回原会话时，客户端先查询 `/run`，任务结束后重新读取历史消息。
 
 ### 知识库（M2，用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |

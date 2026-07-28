@@ -122,6 +122,8 @@ async def lifespan(app: FastAPI):
         log.exception("graph_runtime_unavailable")
     log.info("app_started", env=settings.app_env, gateway_mode=settings.gateway_mode)
     yield
+    # 先停止仍在后台生成的对话，再关闭其依赖的图运行时/Redis/数据库连接。
+    await chat.shutdown_chat_runs()
     if getattr(app.state, "graphs", None) is not None:
         await app.state.graphs.stop()
     await app.state.arq.aclose()
@@ -148,6 +150,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Chat-Session-ID", "X-Chat-Run-ID"],
     )
     install_error_handlers(app)
     app.include_router(health.router)

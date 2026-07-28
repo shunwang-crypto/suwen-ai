@@ -1,6 +1,0 @@
-{
-  "text": "该片段位于高等数学讲义第四章泰勒公式常函数的麦克劳林展开节中，作为具体^^ 的x 麦克劳林展开式的的具体例子，并展示了泰勒公式的特点和应用展开的形式。",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 833,
-  "completion_tokens": 49
-}

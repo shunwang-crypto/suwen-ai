@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Coroutine
+from dataclasses import dataclass
 
 import orjson
 from eduagents_core.gateway import (
@@ -78,10 +79,39 @@ _BLOCKED_FALLBACK = (
 _bg_tasks: set[asyncio.Task] = set()
 
 
-def _spawn(coro: Coroutine) -> None:
-    task = asyncio.create_task(coro)
+@dataclass(slots=True)
+class _ActiveChatRun:
+    task: asyncio.Task
+    user_id: uuid.UUID
+    session_id: uuid.UUID
+
+
+# 生成任务与 SSE 订阅解耦：客户端切换会话/页面只会断开订阅，任务继续运行。
+# 当前部署为单 API 进程，因此运行句柄保存在进程内；最终答案仍以 PG 为准。
+_active_runs: dict[str, _ActiveChatRun] = {}
+_session_runs: dict[uuid.UUID, str] = {}
+
+
+def _track_task(task: asyncio.Task) -> asyncio.Task:
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+def _spawn(coro: Coroutine) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    return _track_task(task)
+
+
+async def shutdown_chat_runs() -> None:
+    """应用关闭时收束后台生成，避免热重载遗留孤儿任务。"""
+    tasks = [run.task for run in _active_runs.values() if not run.task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _active_runs.clear()
+    _session_runs.clear()
 
 
 def _new_mod_buffer(strict: bool = False):
@@ -214,6 +244,10 @@ async def chat(
             chat_session = await session.get(ChatSession, body.session_id)
             if chat_session is None or chat_session.user_id != ctx.user_id:
                 raise HTTPException(status_code=404, detail="NOT_FOUND")
+            active_run_id = _session_runs.get(chat_session.id)
+            active_run = _active_runs.get(active_run_id or "")
+            if active_run is not None and not active_run.task.done():
+                raise HTTPException(status_code=409, detail="CHAT_RUN_ALREADY_ACTIVE")
         else:
             chat_session = ChatSession(
                 tenant_id=ctx.tenant_id,
@@ -755,7 +789,89 @@ async def chat(
                         )
                     )
 
-    return EventSourceResponse(event_stream())
+    # 生产任务与客户端 SSE 订阅分离。EventSourceResponse 在浏览器切换页面时只会
+    # 取消下面的 subscriber；producer 由模块级强引用持有，继续生成并把最终答案落 PG。
+    run_id = request_id or uuid.uuid4().hex
+    event_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    event_queue.put_nowait(
+        {
+            "event": "session",
+            "data": _sse({"session_id": str(session_id), "run_id": run_id}),
+        }
+    )
+
+    async def producer() -> None:
+        try:
+            async for event in event_stream():
+                event_queue.put_nowait(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — 后台异常须落日志并通知仍在线的订阅者
+            log.exception("chat_background_run_failed", run_id=run_id)
+            event_queue.put_nowait(
+                {
+                    "event": "error",
+                    "data": _sse(
+                        {"code": "GENERATION_FAILED", "message": "回答生成失败，请重试"}
+                    ),
+                }
+            )
+        finally:
+            current = _active_runs.get(run_id)
+            if current is not None and current.task is asyncio.current_task():
+                _active_runs.pop(run_id, None)
+            if _session_runs.get(session_id) == run_id:
+                _session_runs.pop(session_id, None)
+            event_queue.put_nowait(None)
+
+    task = _track_task(asyncio.create_task(producer()))
+    _active_runs[run_id] = _ActiveChatRun(
+        task=task, user_id=ctx.user_id, session_id=session_id
+    )
+    _session_runs[session_id] = run_id
+
+    async def subscriber():
+        while True:
+            event = await event_queue.get()
+            if event is None:
+                return
+            yield event
+
+    return EventSourceResponse(
+        subscriber(),
+        headers={
+            # 代理层可能短暂缓冲首个很小的 SSE 帧；响应头让前端能立即把运行中
+            # 的新会话放进左栏。SSE session 事件仍保留给非浏览器客户端。
+            "X-Chat-Session-ID": str(session_id),
+            "X-Chat-Run-ID": run_id,
+        },
+    )
+
+
+@router.get("/sessions/{session_id}/run")
+async def session_run_status(
+    session_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """查询会话是否仍有后台生成，用于离开页面后恢复等待状态。"""
+    async with tenant_session(ctx.tenant_id) as session:
+        owner = await session.get(ChatSession, session_id)
+        if owner is None or owner.user_id != ctx.user_id:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+    run_id = _session_runs.get(session_id)
+    run = _active_runs.get(run_id or "")
+    if run is None or run.task.done():
+        return {"status": "idle", "run_id": None}
+    return {"status": "running", "run_id": run_id}
+
+
+@router.post("/runs/{run_id}/stop", status_code=202)
+async def stop_chat_run(run_id: str, ctx: AuthContext = Depends(api_rate_limited)):
+    """只有显式点击“停止”才取消后台生成；页面/会话切换不会调用本接口。"""
+    run = _active_runs.get(run_id)
+    if run is None or run.task.done() or run.user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail="CHAT_RUN_NOT_FOUND")
+    run.task.cancel()
+    return {"status": "stopping"}
 
 
 @router.get("/sessions", response_model=list[SessionOut])

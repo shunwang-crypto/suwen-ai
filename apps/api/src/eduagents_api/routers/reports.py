@@ -1,9 +1,12 @@
 """F7 学情分析报告数据面。
 
 - radar: 全局按知识库聚合；传 kb_id 时按章节聚合，并附 KC 下钻明细。
+  单库用户的全局视图自动下钻为章节轴 (一根库轴的"光杆图"无信息量), axes_kind 如实标注。
 - radar_kcs: 按活动量 top12 KC 的兼容字段 (F7-A1: 与作答记录同源可核对)。
 - trend: 近 30 天每日答题数与正确率 (attempts 聚合, 无数据日补零)。
-- weak_points: p<0.4 的 KC + 相关错题数 + 归因下钻 (沿 kc_edges 找未掌握前置)。
+- weak_points: 低于补强红线 (REINFORCE_THRESHOLD) 的 KC + 相关错题数 + 归因下钻
+  (沿 kc_edges 找未掌握前置); consolidate_points 为"待巩固"档 (红线以上、未达定向
+  出题线 QUIZ_WEAK_THRESHOLD), 两档同结构分开下发, 消除"薄弱"同词双口径 (C4)。
 - actions: 规则生成的可执行建议, 必须引用具体 KC 名/数量 (F7-A2/A3, 禁止空话)。
 - narrative: standard 档 LLM 三段式诊断; stub 网关下如实返回 null (§14 禁止桩文本冒充)。
 """
@@ -89,10 +92,21 @@ async def _build_aggregates(
         for r, name in mastery_rows
         if not kb_id or (meta.get(str(r.kc_id)) or {}).get("kb_id") == kb_id
     ]
+    # 单库用户的全局视图: 库轴只有一根 = 一根光杆图, 没有可比性也没有信息量。
+    # 此时自动下钻到那唯一一个库的章节轴 (数据同源, 只是换个聚合粒度)。
+    effective_kb_id = kb_id
+    if not kb_id:
+        distinct_kbs = {
+            (meta.get(str(r.kc_id)) or {}).get("kb_id")
+            for r, _ in scoped
+            if (meta.get(str(r.kc_id)) or {}).get("kb_id")
+        }
+        if len(distinct_kbs) == 1:
+            effective_kb_id = next(iter(distinct_kbs))
     buckets: dict[str, dict] = {}
     for r, name in scoped:
         info = meta.get(str(r.kc_id)) or {}
-        if kb_id:
+        if effective_kb_id:
             axis_key = info.get("chapter") or FALLBACK_CHAPTER
         else:
             axis_key = info.get("kb_name") or "未归库"
@@ -107,7 +121,7 @@ async def _build_aggregates(
         bucket["kcs"].append(
             {"kc_id": str(r.kc_id), "name": name, "p_mastery": round(r.p_mastery, 4)}
         )
-    axes_kind = "chapter" if kb_id else "kb"
+    axes_kind = "chapter" if effective_kb_id else "kb"
     radar = [
         {
             "key": key,
@@ -120,7 +134,9 @@ async def _build_aggregates(
         }
         for key, b in buckets.items()
     ]
-    radar.sort(key=lambda a: chapter_sort_key(a["name"]) if kb_id else (0, 0, a["name"]))
+    radar.sort(
+        key=lambda a: chapter_sort_key(a["name"]) if effective_kb_id else (0, 0, a["name"])
+    )
 
     # trend: 近 30 天每日答题数与正确率, 无数据日补零 (前端折线连续)。
     # P2-11 唯一决定: 日切在 SQL 侧 AT TIME ZONE 'Asia/Shanghai' (timestamptz ->

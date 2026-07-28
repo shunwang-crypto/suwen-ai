@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"对数求导法\", \"导数\" ]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 606,
-  "completion_tokens": 16
-}

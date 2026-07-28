@@ -33,6 +33,7 @@ import type {
   PlanDetail,
   PlanListItem,
   PlanStructure,
+  PlanTask,
   PlanResource,
   PlanToggleResult,
 } from "@/lib/types";
@@ -231,7 +232,12 @@ function PlanCalendar({
   );
 }
 
-/** interrupt=plan_confirm 的阶段树预览卡片。 */
+/** 草案编辑器（F3「生成后供用户编辑确认」）：本地副本编辑，确认时整份回传。
+ *
+ * 作用域刻意收窄——只做标题 / 分钟数 / 删除 / 同天上下移，不做拖拽与跨天移动：
+ * 服务端 confirm_plan 会对回传计划重跑硬校验链（总天数 / 日预算 / 资源引用 /
+ * 先修序），保存后以服务端返回为准，故前端只需拦住明显非法输入。
+ */
 function PlanConfirmCard({
   plan,
   resources,
@@ -240,28 +246,89 @@ function PlanConfirmCard({
 }: {
   plan: PlanStructure;
   resources: PlanResource[];
-  onConfirm: () => void;
+  onConfirm: (edited: PlanStructure) => void;
   onCancel: () => void;
 }) {
-  const totalDays = plan.stages.reduce((s, st) => s + (st.days?.length ?? 0), 0);
+  // 本地草案副本：编辑不影响 interrupt 原始负载（取消后重新打开仍是原稿）
+  const [draft, setDraft] = useState<PlanStructure>(() =>
+    JSON.parse(JSON.stringify(plan)) as PlanStructure,
+  );
+  const [touched, setTouched] = useState(false);
+
+  const totalDays = draft.stages.reduce((s, st) => s + (st.days?.length ?? 0), 0);
+  const totalTasks = draft.stages.reduce(
+    (s, st) => s + (st.days ?? []).reduce((x, d) => x + d.tasks.length, 0),
+    0,
+  );
+
+  /** 就地校验：标题非空 + 分钟为正整数；有错则禁止确认。 */
+  const invalid = draft.stages.some((st) =>
+    (st.days ?? []).some((d) =>
+      d.tasks.some(
+        (t) =>
+          !t.title.trim() ||
+          !Number.isInteger(t.minutes) ||
+          t.minutes <= 0 ||
+          t.minutes > 1440,
+      ),
+    ),
+  );
+  const emptied = totalTasks === 0;
+
+  /** 以不可变方式改写某一天的任务列表。 */
+  const mutateDay = (
+    si: number,
+    di: number,
+    fn: (tasks: PlanTask[]) => PlanTask[],
+  ) => {
+    setTouched(true);
+    setDraft((prev) => {
+      const next = JSON.parse(JSON.stringify(prev)) as PlanStructure;
+      const day = next.stages[si]?.days?.[di];
+      if (day) day.tasks = fn(day.tasks);
+      return next;
+    });
+  };
+
+  const editTask = (si: number, di: number, ti: number, patch: Partial<PlanTask>) =>
+    mutateDay(si, di, (tasks) =>
+      tasks.map((t, i) => (i === ti ? { ...t, ...patch } : t)),
+    );
+
+  const removeTask = (si: number, di: number, ti: number) =>
+    mutateDay(si, di, (tasks) => tasks.filter((_, i) => i !== ti));
+
+  /** 同一天内上下移动（跨天移动交给服务端预算校验，前端不做）。 */
+  const moveTask = (si: number, di: number, ti: number, dir: -1 | 1) =>
+    mutateDay(si, di, (tasks) => {
+      const to = ti + dir;
+      if (to < 0 || to >= tasks.length) return tasks;
+      const next = [...tasks];
+      [next[ti], next[to]] = [next[to], next[ti]];
+      return next;
+    });
+
+  const iconBtn =
+    "rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
+
   return (
     <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
       <h3 className="text-sm font-semibold text-slate-900">学习计划草案待确认</h3>
       <p className="mt-0.5 text-xs text-slate-500">
-        共 {plan.stages.length} 个阶段 / {totalDays} 天
+        共 {draft.stages.length} 个阶段 / {totalDays} 天 / {totalTasks} 个任务
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
-        ，确认后计划才会保存。
+        ，可直接修改任务标题与时长，确认后才会保存。
       </p>
 
       <ul className="mt-3 space-y-2">
-        {plan.stages.map((stage, i) => {
-          const color = STAGE_COLORS[i % STAGE_COLORS.length];
+        {draft.stages.map((stage, si) => {
+          const color = STAGE_COLORS[si % STAGE_COLORS.length];
           const minutes = (stage.days ?? []).reduce(
             (s, d) => s + d.tasks.reduce((x, t) => x + (t.minutes || 0), 0),
             0,
           );
           return (
-            <li key={i} className="rounded-xl border border-indigo-100 bg-white p-3">
+            <li key={si} className="rounded-xl border border-indigo-100 bg-white p-3">
               <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-slate-800">
                 <span className={`h-2 w-2 rounded-full ${color.bar}`} />
                 {stage.name}
@@ -269,18 +336,97 @@ function PlanConfirmCard({
                   {stage.days?.length ?? 0} 天 · 约 {Math.round(minutes / 60)} 小时
                 </span>
               </p>
-              <ul className="mt-1.5 space-y-0.5 pl-4">
-                {(stage.days ?? []).slice(0, 3).map((d) => (
-                  <li key={d.day} className="text-xs text-slate-500">
-                    第 {d.day} 天：
-                    {d.tasks.map((t) => t.title).join("；") || "自主安排"}
+              <ul className="mt-2 space-y-2">
+                {(stage.days ?? []).map((d, di) => (
+                  <li key={d.day} className="rounded-lg bg-slate-50/70 p-2">
+                    <p className="mb-1 text-[11px] font-medium text-slate-500">
+                      第 {d.day} 天
+                    </p>
+                    {d.tasks.length === 0 ? (
+                      <p className="px-1 text-[11px] text-amber-600">
+                        本日已无任务，保存时服务端会按预算补一条自主复习
+                      </p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {d.tasks.map((t, ti) => {
+                          const titleBad = !t.title.trim();
+                          const minutesBad =
+                            !Number.isInteger(t.minutes) ||
+                            t.minutes <= 0 ||
+                            t.minutes > 1440;
+                          return (
+                            <li key={ti} className="flex flex-wrap items-center gap-1.5">
+                              <input
+                                value={t.title}
+                                onChange={(e) =>
+                                  editTask(si, di, ti, { title: e.target.value })
+                                }
+                                aria-label={`第 ${d.day} 天任务 ${ti + 1} 标题`}
+                                aria-invalid={titleBad}
+                                className={`min-w-0 flex-1 rounded-lg border px-2 py-1 text-xs outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
+                                  titleBad
+                                    ? "border-rose-300 bg-rose-50"
+                                    : "border-slate-200 focus:border-indigo-300"
+                                }`}
+                              />
+                              <input
+                                type="number"
+                                min={1}
+                                max={1440}
+                                step={5}
+                                value={t.minutes}
+                                onChange={(e) =>
+                                  editTask(si, di, ti, {
+                                    minutes: Number(e.target.value),
+                                  })
+                                }
+                                aria-label={`第 ${d.day} 天任务 ${ti + 1} 分钟数`}
+                                aria-invalid={minutesBad}
+                                className={`w-16 shrink-0 rounded-lg border px-1.5 py-1 text-right text-xs outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
+                                  minutesBad
+                                    ? "border-rose-300 bg-rose-50"
+                                    : "border-slate-200 focus:border-indigo-300"
+                                }`}
+                              />
+                              <span className="shrink-0 text-[11px] text-slate-400">分钟</span>
+                              <span className="flex shrink-0 items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => moveTask(si, di, ti, -1)}
+                                  disabled={ti === 0}
+                                  title="在本日内上移"
+                                  aria-label="上移"
+                                  className={iconBtn}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveTask(si, di, ti, 1)}
+                                  disabled={ti === d.tasks.length - 1}
+                                  title="在本日内下移"
+                                  aria-label="下移"
+                                  className={iconBtn}
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeTask(si, di, ti)}
+                                  title="删除该任务"
+                                  aria-label="删除"
+                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:border-rose-300 hover:text-rose-600"
+                                >
+                                  删除
+                                </button>
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </li>
                 ))}
-                {(stage.days?.length ?? 0) > 3 && (
-                  <li className="text-xs text-slate-400">
-                    …另有 {(stage.days?.length ?? 0) - 3} 天
-                  </li>
-                )}
               </ul>
             </li>
           );
@@ -305,6 +451,19 @@ function PlanConfirmCard({
         </details>
       )}
 
+      {(invalid || emptied) && (
+        <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          {emptied
+            ? "计划不能全部删空，至少保留一个任务。"
+            : "请修正标红项：任务标题不能为空，时长需为 1–1440 之间的整数分钟。"}
+        </p>
+      )}
+      {touched && !invalid && !emptied && (
+        <p className="mt-2 text-[11px] text-slate-400">
+          已修改草案；保存时服务端会重新校验总时长与先修顺序，并以校验后的版本为准。
+        </p>
+      )}
+
       <div className="mt-3 flex items-center justify-end gap-2">
         <button
           type="button"
@@ -315,10 +474,11 @@ function PlanConfirmCard({
         </button>
         <button
           type="button"
-          onClick={onConfirm}
-          className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+          disabled={invalid || emptied}
+          onClick={() => onConfirm(draft)}
+          className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          确认并保存计划
+          {touched ? "确认并保存修改后的计划" : "确认并保存计划"}
         </button>
       </div>
     </div>
@@ -574,10 +734,13 @@ export default function PlansPage() {
     });
   };
 
-  const resume = (approved: boolean) => {
+  const resume = (approved: boolean, plan?: PlanStructure) => {
     if (!interruptData) return;
     setPhase("resuming");
-    void consume(interruptData.resume_url, { value: { approved } });
+    // 编辑版随 approved 一起回传; 服务端 confirm_plan 会重跑硬校验并以其结果为准
+    void consume(interruptData.resume_url, {
+      value: approved ? { approved: true, ...(plan ? { plan } : {}) } : { approved: false },
+    });
   };
 
   const busy = phase === "streaming" || phase === "resuming";
@@ -743,7 +906,7 @@ export default function PlansPage() {
             <PlanConfirmCard
               plan={interruptData.plan}
               resources={interruptData.resources ?? []}
-              onConfirm={() => resume(true)}
+              onConfirm={(edited) => resume(true, edited)}
               onCancel={() => resume(false)}
             />
           )}

@@ -62,7 +62,17 @@ export interface OrgMemberOut {
   joined_at: string;
 }
 
-// ---- SSE 事件数据（七类 + followups）----
+// ---- SSE 事件数据 ----
+
+export interface SessionEventData {
+  session_id: string;
+  run_id: string;
+}
+
+export interface ChatRunStatusOut {
+  status: "running" | "idle";
+  run_id: string | null;
+}
 
 export interface TokenEventData {
   text: string;

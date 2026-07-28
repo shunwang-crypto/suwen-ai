@@ -1,6 +1,0 @@
-{
-  "text": "该x \\to  0 时的一个例说明如何处理减法形式的等价无穷小替换",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 674,
-  "completion_tokens": 23
-}

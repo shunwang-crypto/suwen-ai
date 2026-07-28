@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"数列极限\", \"极限唯一性性\", \"单调有界准则\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 834,
-  "completion_tokens": 20
-}

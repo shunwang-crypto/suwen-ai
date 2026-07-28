@@ -1,6 +1,0 @@
-{
-  "text": "{\"ks\": [\"定定积分\", \"弧莱朗日中值定理\", \"弧莱布尼茨公式\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 880,
-  "completion_tokens": 28
-}

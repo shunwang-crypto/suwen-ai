@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"基本初等函数导数表\", \"求导法则\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 502,
-  "completion_tokens": 18
-}

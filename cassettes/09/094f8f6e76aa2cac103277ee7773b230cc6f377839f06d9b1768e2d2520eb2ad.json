@@ -1,6 +1,0 @@
-{
-  "text": "{\"grades\": [{\"idx\": 1, \"relevant\": true}, {\"idx\": 2, \"relevant\": true}, {\"idx\": 3, \"relevant\": false}, {\"idx\": 4, \"relevant\": false}, {\"idx\": 5, \"relevant\": false}]}",
-  "model": "deepseek-v4-flash",
-  "prompt_tokens": 1785,
-  "completion_tokens": 60
-}

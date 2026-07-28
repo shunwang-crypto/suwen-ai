@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"泰勒公式\", \"拉格朗日中值定理\", \"拉格朗日余项\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 812,
-  "completion_tokens": 27
-}

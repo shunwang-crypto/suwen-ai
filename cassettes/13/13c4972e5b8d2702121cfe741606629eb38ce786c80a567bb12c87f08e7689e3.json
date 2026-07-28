@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"换元积分法\", \"凑微分法\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 821,
-  "completion_tokens": 16
-}

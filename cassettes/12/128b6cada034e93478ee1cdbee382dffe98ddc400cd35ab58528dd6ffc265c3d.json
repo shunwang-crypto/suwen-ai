@@ -1,6 +1,0 @@
-{
-  "text": "{\"kcs\": [\"定积分\", \"积分中值定理\", \"拉格朗日余项\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 837,
-  "completion_tokens": 23
-}

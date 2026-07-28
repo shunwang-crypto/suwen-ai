@@ -1,6 +1,0 @@
-{
-  "text": "{\"grades\": [{\"idx\": 110555, \"relevant\": \"false\"},{\"idx\":  \" \"  \t  \t   ,  \"relevant\": \"false\"}]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 1859,
-  "completion_tokens": 42
-}

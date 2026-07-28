@@ -1,6 +1,0 @@
-{
-  "text": "{\"k\": [\"泰勒公式\", \"麦克劳林展开\", \"洛必达法则\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 771,
-  "completion_tokens": 20
-}

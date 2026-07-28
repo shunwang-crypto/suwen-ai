@@ -1,6 +1,0 @@
-{
-  "text": "{\"ks\": [\"函数的连续\", \"导数\", \"切线斜率\"]}",
-  "model": "Qwen/Qwen2.5-7B-Instruct",
-  "prompt_tokens": 796,
-  "completion_tokens": 19
-}

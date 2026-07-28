@@ -30,7 +30,7 @@ from .state import GraphDeps, PlanState
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
 _DEFAULT_MASTERY = 0.3  # 无证据时的保守掌握度初值
-_DAY_MIN_RATIO = 0.7  # 每日任务分钟和下限 = 0.7 * 预算
+_DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
 _DAY_MAX_RATIO = 1.15  # 上限 = 1.15 * 预算
 _TOPIC_LIMIT = 5  # gather_resources 逐 topic 检索的 topic 上限
 _KB_TOP_K = 3  # 每 topic 取知识库 top3
@@ -296,7 +296,7 @@ def _fix_resource_refs(plan: dict, n_resources: int, fixes: list[dict]) -> None:
 
 
 def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> None:
-    """每日任务分钟和硬校验: 超出 [0.7, 1.15]*预算 时按比例缩放到预算值 (F3-A1)。"""
+    """每日任务分钟和硬校验: 不在 (0.85, 1.15)*预算内时按比例缩放 (F3-A1)。"""
     low = _DAY_MIN_RATIO * budget_minutes
     high = _DAY_MAX_RATIO * budget_minutes
     target = max(int(round(budget_minutes)), 1)
@@ -309,7 +309,7 @@ def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> No
             fixes.append({"fix": "empty_day_filled", "day": day["day"]})
             continue
         total = sum(t["minutes"] for t in tasks)
-        if low <= total <= high:
+        if low < total < high:
             continue
         factor = budget_minutes / total
         for task in tasks:
@@ -326,6 +326,23 @@ def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> No
                 "to": sum(t["minutes"] for t in tasks),
             }
         )
+
+
+def _harden_plan(
+    plan: dict,
+    *,
+    total_days: int,
+    budget_minutes: float,
+    kc_order: list[str],
+    n_resources: int,
+    fixes: list[dict],
+) -> None:
+    """对已结构化计划执行统一硬校验；生成与用户编辑路径必须共用此顺序。"""
+    _fix_total_days(plan, total_days, budget_minutes, fixes)
+    _renumber_days(plan)
+    _fix_kc_order(plan, kc_order, fixes)
+    _fix_resource_refs(plan, n_resources, fixes)
+    _fix_day_minutes(plan, budget_minutes, fixes)
 
 
 # ---------------------------------------------------------------- 图构建
@@ -494,12 +511,14 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         if plan is None:
             plan = _fallback_plan(state, total_days, budget_minutes)
             fixes.append({"fix": "draft_fallback", "reason": "llm_json_unparsable_after_retry"})
-        # 硬校验顺序: 天数 -> 编号 -> KC 先后 (会挪动任务所在日) -> 资源引用 -> 每日分钟缩放
-        _fix_total_days(plan, total_days, budget_minutes, fixes)
-        _renumber_days(plan)
-        _fix_kc_order(plan, kc_order, fixes)
-        _fix_resource_refs(plan, len(resources), fixes)
-        _fix_day_minutes(plan, budget_minutes, fixes)
+        _harden_plan(
+            plan,
+            total_days=total_days,
+            budget_minutes=budget_minutes,
+            kc_order=kc_order,
+            n_resources=len(resources),
+            fixes=fixes,
+        )
         trace = [{"node": "draft_plan", "event": "drafted", "fix_count": len(fixes)}]
         trace.extend({"node": "draft_plan", "event": "fix", **fix} for fix in fixes)
         return {"plan": plan, "trace": trace}
@@ -520,12 +539,32 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             return {"trace": [{"node": "confirm_plan", "event": "plan_rejected"}]}
         updates: dict[str, Any] = {"plan_confirmed": True}
         event = "plan_approved"
-        if isinstance(decision, dict):
-            edited = decision.get("plan")
-            if isinstance(edited, dict) and edited.get("stages"):
-                updates["plan"] = edited  # 用户在确认界面编辑后的版本, 以用户为准
+        fixes: list[dict] = []
+        if isinstance(decision, dict) and "plan" in decision:
+            edited = _coerce_plan(decision.get("plan"))
+            if edited is None:
+                # resume 是公开 HTTP 输入：非法结构不能覆盖已通过硬校验的原计划。
+                event = "plan_approved_invalid_edits_ignored"
+            else:
+                total_days = max(int(state.get("total_days") or 1), 1)
+                budget_minutes = max(
+                    float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0
+                )
+                resources = state.get("resources") or []
+                kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
+                _harden_plan(
+                    edited,
+                    total_days=total_days,
+                    budget_minutes=budget_minutes,
+                    kc_order=kc_order,
+                    n_resources=len(resources),
+                    fixes=fixes,
+                )
+                updates["plan"] = edited
                 event = "plan_approved_with_edits"
-        updates["trace"] = [{"node": "confirm_plan", "event": event}]
+        trace = [{"node": "confirm_plan", "event": event, "fix_count": len(fixes)}]
+        trace.extend({"node": "confirm_plan", "event": "fix", **fix} for fix in fixes)
+        updates["trace"] = trace
         return updates
 
     graph = StateGraph(PlanGraphState)
