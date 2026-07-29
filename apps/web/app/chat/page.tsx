@@ -1,6 +1,6 @@
 "use client";
 
-// 主对话界面：会话列表 / 流式消息（token 增量 + 过程时间线）/ 引用面板。
+// 主对话界面：会话列表 / 流式消息（token 增量）/ 引用面板。
 // SSE 走 fetch+ReadableStream（lib/sse.ts），支持契约七类事件。
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -18,7 +18,7 @@ import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
 import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
-import { ProcessTimeline, type TimelineItem } from "@/components/chat/timeline";
+import type { TimelineItem } from "@/components/chat/timeline";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
@@ -765,7 +765,7 @@ function ChatView() {
   return (
     <div className="flex h-full min-h-0 bg-canvas">
       {/* 左：会话列表（桌面） */}
-      <aside className="hidden w-[250px] shrink-0 border-r border-line bg-surface md:block">
+      <aside className="hidden w-[218px] shrink-0 border-r border-line bg-surface md:block">
         {sessionList}
       </aside>
 
@@ -787,7 +787,7 @@ function ChatView() {
       {/* 中：消息区 */}
       <section className="flex min-w-0 flex-1 flex-col bg-canvas">
         {/* 工具栏：知识库选择器 */}
-        <div className="flex h-[62px] shrink-0 items-center gap-3 border-b border-line bg-canvas px-6">
+        <div className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-[#fafaf9] px-5">
           <button
             type="button"
             onClick={() => setSessionsOpen(true)}
@@ -992,11 +992,6 @@ function ChatView() {
                           {m.kbName ? `基于「${m.kbName}」知识库` : "通用模式"}
                         </span>
                       </div>
-                      <ProcessTimeline
-                        items={m.timeline}
-                        streaming={Boolean(m.streaming)}
-                      />
-
                       {m.done?.refused && (
                         <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50/60 px-3 py-2 text-xs text-amber-700">
                           {/* 温和插画感小图标：放大镜找不到内容的守护小盾 */}
@@ -1213,8 +1208,8 @@ function ChatView() {
         </div>
 
         {/* 输入区 */}
-        <div className="shrink-0 bg-slate-50 px-4 pb-6 pt-3">
-          <div className="mx-auto flex h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-overlay border border-slate-200 bg-white p-3 shadow-floating">
+        <div className="shrink-0 bg-canvas px-4 pb-6 pt-3">
+          <div className="mx-auto flex h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-[12px] border border-line bg-white p-3 shadow-subtle">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1294,7 +1289,7 @@ function ChatView() {
 
       {/* 右：引用面板（桌面）—— 无引用时不渲染，对话区自动占满宽度（移动端抽屉不受影响） */}
       {panelCitations.length > 0 && (
-      <aside className="hidden w-[248px] shrink-0 flex-col border-l border-slate-200 bg-white xl:flex">
+      <aside className="hidden w-[318px] shrink-0 flex-col border-l border-line bg-white xl:flex">
         <div className="flex h-14 shrink-0 items-center border-b border-slate-100 px-4">
           <h2 className="text-base font-medium text-slate-900">
             引用

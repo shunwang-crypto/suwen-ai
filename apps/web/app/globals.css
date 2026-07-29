@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7f7f5;
+  --background: #f5f4f1;
   --foreground: #171717;
 
   /* EduAgents v3：中性工作台底色，品牌色只承担状态与操作。 */
-  --ea-canvas: #f7f7f5;
+  --ea-canvas: #f5f4f1;
   --ea-surface: #ffffff;
-  --ea-surface-muted: #f1f1ee;
-  --ea-line: #e3e3df;
-  --ea-line-strong: #c9c9c4;
+  --ea-surface-muted: #f3f2ef;
+  --ea-line: #e9e8e5;
+  --ea-line-strong: #d6d4cf;
   --ea-ink: #171717;
   --ea-ink-secondary: #525252;
   --ea-ink-muted: #8a8a86;
@@ -34,11 +34,11 @@
    只加不改：旧类名（indigo- / slate- / rounded- 等）语义全部保留。
    ============================================================ */
 @theme {
-  --color-canvas: #f7f7f5;
+  --color-canvas: #f5f4f1;
   --color-surface: #ffffff;
-  --color-surface-muted: #f1f1ee;
-  --color-line: #e3e3df;
-  --color-line-strong: #c9c9c4;
+  --color-surface-muted: #f3f2ef;
+  --color-line: #e9e8e5;
+  --color-line-strong: #d6d4cf;
   --color-ink: #171717;
   --color-ink-secondary: #525252;
   --color-ink-muted: #8a8a86;
@@ -50,7 +50,7 @@
   --color-brand-300: #a5b4fc;
   --color-brand-400: #818cf8;
   --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
+  --color-brand-600: #4338ca;
   --color-brand-700: #4338ca;
   --color-brand-800: #3730a3;
   --color-brand-900: #312e81;
@@ -84,18 +84,16 @@
   --color-info-700: #0369a1;
 
   /* 阴影三级：冷调、带品牌色的阴影 */
-  --shadow-subtle:
-    0 1px 2px 0 rgb(79 70 229 / 0.05), 0 1px 3px 0 rgb(15 23 42 / 0.04);
-  --shadow-card:
-    0 1px 2px 0 rgb(15 23 42 / 0.04), 0 8px 24px -8px rgb(79 70 229 / 0.1);
+  --shadow-subtle: 0 1px 2px rgb(28 25 23 / 0.04);
+  --shadow-card: 0 1px 2px rgb(28 25 23 / 0.04);
   --shadow-floating:
-    0 2px 8px -2px rgb(79 70 229 / 0.08),
-    0 8px 24px -8px rgb(15 23 42 / 0.08);
+    0 4px 12px rgb(28 25 23 / 0.08),
+    0 18px 40px rgb(28 25 23 / 0.1);
 
   /* 商业化界面圆角：控件 8px、浮层 12px；大内容卡仍保留 16px。 */
   --radius-card: 1rem;
   --radius-control: 0.5rem;
-  --radius-overlay: 0.75rem;
+  --radius-overlay: 0.875rem;
 
   /* 缓动 tokens */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
@@ -301,7 +299,7 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid #4f46e5;
+  outline: 2px solid #4338ca;
   outline-offset: 2px;
 }
 
