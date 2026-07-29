@@ -16,7 +16,6 @@ import {
   fmtDateTime,
   fmtRelative,
 } from "@/components/common";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -263,8 +262,7 @@ export default function ErrorsPage() {
   const filtered = stateFilter !== null || causeFilter !== null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-4 p-4">
-      <WorkspaceNav workspace="growth" />
+    <div className="mx-auto w-full max-w-[1100px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="错题本"
         subtitle="测评与复习中的错题自动归集；错因五分类可随时修正，攻克后自动退出复习队列"

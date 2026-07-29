@@ -10,12 +10,12 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import Link from "next/link";
 
 import {
   Card,
   EmptyState,
   ErrorBanner,
-  PageHeader,
   SkeletonList,
   Spinner,
 } from "@/components/common";
@@ -24,7 +24,6 @@ import { DocumentTable, isDocActive } from "@/components/kb/document-table";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import type { DocumentOut, KbOut } from "@/lib/types";
 
@@ -271,241 +270,63 @@ export default function KbPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-      <WorkspaceNav workspace="learn" />
-      <PageHeader
-        title="知识库管理"
-        subtitle="上传讲义/教材或导入网页，自动进入 解析 → 切块 → 向量化 → 知识增强 流水线"
-      />
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-      {/* 左：库列表 */}
-      <aside className="w-full shrink-0 lg:w-64">
-        <Card
-          title="知识库"
-          extra={
-            <button
-              type="button"
-              onClick={() => setShowCreate((v) => !v)}
-              className="rounded-control bg-ink px-2.5 py-1 text-xs font-semibold text-white hover:bg-black"
-            >
-              新建
-            </button>
-          }
-        >
-          {showCreate && (
-            <form onSubmit={createKb} className="mb-3 space-y-2">
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                maxLength={255}
-                placeholder="库名称（如：高等数学）"
-                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-              />
-              <input
-                value={newSubject}
-                onChange={(e) => setNewSubject(e.target.value)}
-                maxLength={64}
-                placeholder="学科（可选，默认 general）"
-                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-              />
-              <button
-                type="submit"
-                disabled={!newName.trim() || creating}
-                className="flex w-full items-center justify-center gap-1.5 rounded-control bg-ink py-1.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {creating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
-                创建
-              </button>
-            </form>
-          )}
+    <div className="mx-auto w-full max-w-[1100px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
+      {kbError && <ErrorBanner message={kbError} onRetry={reloadKbs} />}
+      {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
-          {kbError && (
-            <div className="mb-2">
-              <ErrorBanner message={kbError} onRetry={reloadKbs} />
-            </div>
-          )}
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[10px] text-ink-muted">知识库 {selected ? <><span className="mx-1">/</span><span className="text-ink-secondary">{selected.name}</span></> : null}</p>
+          <div className="mt-2 flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-50 text-[15px] font-semibold text-success-600">{selected?.name?.[0] ?? "知"}</span>
+            <div className="min-w-0"><h1 className="truncate text-[21px] font-semibold tracking-[-0.03em] text-ink">{selected?.name ?? "知识库"}</h1><p className="mt-0.5 text-[11px] text-ink-muted">{selected ? `${docs?.length ?? 0} 份资料 · ${docs?.filter((doc) => doc.status === "ready").length ?? 0} 就绪 · ${selected.subject}` : "把课程资料整理成可检索、可引用的学习空间"}</p></div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-[12px] text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
+          <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-[12px] font-medium text-white hover:bg-brand-800">新建知识库</button>
+          {selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-[12px] text-danger-600 hover:bg-danger-50">删除</button>}
+        </div>
+      </header>
 
-          {kbs === null ? (
-            <SkeletonList rows={3} />
-          ) : kbs.length === 0 ? (
-            <p className="py-4 text-center text-xs text-slate-400">
-              还没有知识库，点击「新建」开始
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {(["user", "org"] as const).map((ownerType) => {
-                const group = kbs.filter((k) => k.owner_type === ownerType);
-                if (group.length === 0) return null;
-                return (
-                  <div key={ownerType}>
-                    <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      {ownerType === "user" ? "个人库" : "机构库"}
-                    </p>
-                    <ul className="space-y-1">
-                      {group.map((kb) => (
-                        <li key={kb.id} className="group flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedId(kb.id)}
-                            className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-all duration-200 ${
-                              kb.id === selectedId
-                                ? "bg-indigo-50 font-medium text-indigo-700"
-                                : "text-slate-600 hover:-translate-y-0.5 hover:bg-slate-100 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <span className="min-w-0 truncate">{kb.name}</span>
-                              {kb.owner_type === "org" && (
-                                <span
-                                  className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
-                                  title={`机构：${kb.org_name ?? ""}${kb.writable ? "（可管理）" : "（只读）"}`}
-                                >
-                                  {kb.org_name ?? "机构"}
-                                </span>
-                              )}
-                            </span>
-                            <span className="block truncate text-xs font-normal text-slate-400">
-                              {kb.subject} · v{kb.kb_version}
-                              {kb.owner_type === "org" && !kb.writable && " · 只读"}
-                            </span>
-                          </button>
-                          {kb.writable && (
-                            <button
-                              type="button"
-                              onClick={() => void deleteKb(kb)}
-                              className="shrink-0 rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                              aria-label={`删除知识库 ${kb.name}`}
-                            >
-                              <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className="h-4 w-4"
-                                aria-hidden
-                              >
-                                <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                              </svg>
-                            </button>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      </aside>
-
-      {/* 右：选中库详情 */}
-      <div className="min-w-0 flex-1 space-y-4">
-        {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
-
-        {!selected ? (
-          <EmptyState
-            title="选择或新建一个知识库"
-            description="上传讲义/教材后，对话与出题即可引用溯源"
-            illustration="docs"
-          />
-        ) : (
-          <>
-            <Card
-              title={`文档 · ${selected.name}`}
-              extra={
-                selected.owner_type === "org" ? (
-                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
-                    {selected.org_name ?? "机构"} ·{" "}
-                    {selected.writable ? "管理员" : "成员只读"}
-                  </span>
-                ) : undefined
-              }
-            >
-              <div className="space-y-4">
-                {selected.writable ? (
-                  <UploadZone
-                    uploading={uploading}
-                    importing={importing}
-                    onFiles={(f) => void uploadFiles(f)}
-                    onImportUrl={(u) => void importUrl(u)}
-                  />
-                ) : (
-                  <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
-                    机构库由管理员统一维护；你可以在对话页勾选该库进行联合检索问答。
-                  </p>
-                )}
-                {docsError && (
-                  <ErrorBanner
-                    message={docsError}
-                    onRetry={() => void loadDocs(selected.id)}
-                  />
-                )}
-                {docs === null || docsKbId !== selected.id ? (
-                  <SkeletonList rows={3} />
-                ) : docs.length === 0 ? (
-                  <p className="py-2 text-center text-xs text-slate-400">
-                    {selected.writable
-                      ? "暂无文档，拖拽上传后自动进入 解析 → 切块 → 向量化 → 知识增强 流水线"
-                      : "该机构库暂无文档"}
-                  </p>
-                ) : (
-                  <DocumentTable
-                    documents={docs}
-                    busyDocId={busyDocId}
-                    onPreview={setPreviewDoc}
-                    onReindex={(d) => void reindexDoc(d)}
-                    onDelete={(d) => void deleteDoc(d)}
-                    readOnly={!selected.writable}
-                  />
-                )}
-              </div>
-            </Card>
-
-            {/* 学习指南（对标 NotebookLM Source guide）：摄取完成后「下一步干嘛」 */}
-            <Card
-              title="学习指南"
-              extra={
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
-                  摄取后自动生成
-                </span>
-              }
-            >
-              <StudyGuidePanel
-                key={selected.id}
-                kbId={selected.id}
-                kbName={selected.name}
-                writable={selected.writable}
-              />
-            </Card>
-
-            {/* 检索调试与写操作同权限：机构库仅 admin 可见（后端同样 403 兜底） */}
-            {selected.writable && (
-              <Card
-                title="检索调试面板"
-                extra={
-                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
-                    过程全透明
-                  </span>
-                }
-              >
-                <RetrieveDebug kbId={selected.id} />
-              </Card>
-            )}
-          </>
-        )}
-      </div>
-
-      {previewDoc && selectedId && (
-        <ChunksDrawer
-          kbId={selectedId}
-          doc={previewDoc}
-          onClose={() => setPreviewDoc(null)}
-        />
+      {showCreate && (
+        <form onSubmit={createKb} className="grid gap-2 rounded-[12px] border border-line bg-white p-4 sm:grid-cols-[minmax(0,1fr)_220px_auto]">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={255} placeholder="知识库名称" className="h-9 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
+          <input value={newSubject} onChange={(e) => setNewSubject(e.target.value)} maxLength={64} placeholder="学科（可选）" className="h-9 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
+          <button type="submit" disabled={!newName.trim() || creating} className="flex h-9 items-center justify-center gap-1.5 rounded-[8px] bg-brand-600 px-4 text-[12px] font-medium text-white disabled:opacity-40">{creating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}创建</button>
+        </form>
       )}
-      </div>
+
+      {kbs === null ? <div className="rounded-[14px] border border-line bg-white p-5"><SkeletonList rows={4} /></div> : kbs.length === 0 ? (
+        <EmptyState title="建立第一个知识库" description="新账号不会显示示例教材。创建知识库后即可上传真实资料并生成学习指南。" illustration="docs"><button type="button" onClick={() => setShowCreate(true)} className="mt-2 rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white">新建知识库</button></EmptyState>
+      ) : !selected ? (
+        <EmptyState title="选择一个知识库" description="从上方选择已有知识库，或创建新的资料空间。" illustration="docs" />
+      ) : (
+        <>
+          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] bg-brand-700 px-5 py-4 text-white">
+            <div><h2 className="text-[13px] font-semibold">用这个知识库开始学习</h2><p className="mt-1 text-[10px] text-indigo-100">AI 只会引用这里的真实资料和来源；辅导与练习也可沿用当前范围。</p></div>
+            <div className="flex flex-wrap gap-2"><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white px-3.5 py-2 text-[11px] font-medium text-brand-700">对话</Link><Link href={`/tutor?kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-[11px] font-medium text-white ring-1 ring-inset ring-white/15">分级辅导</Link><Link href={`/quiz?kb=${encodeURIComponent(selected.id)}&topic=${encodeURIComponent(selected.name)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-[11px] font-medium text-white ring-1 ring-inset ring-white/15">智能练习</Link></div>
+          </section>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_230px] lg:items-start">
+            <Card title="学习指南" extra={<span className="text-[10px] text-ink-muted">基于已就绪资料生成</span>}><StudyGuidePanel key={selected.id} kbId={selected.id} kbName={selected.name} writable={selected.writable} /></Card>
+            <aside className="space-y-4">
+              <section className="rounded-[14px] border border-line bg-white p-4"><h2 className="text-[12px] font-semibold text-ink">接入 AI 学习</h2><p className="mt-1 text-[10px] leading-4 text-ink-muted">在 AI 对话中使用当前知识库，回答会附带可打开的引用来源。</p><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="mt-3 flex h-8 items-center justify-center rounded-[7px] bg-brand-600 text-[11px] font-medium text-white">用这个知识库提问</Link>{selected.writable && <details className="mt-2"><summary className="cursor-pointer text-center text-[10px] text-ink-muted">检索检查（高级工具）</summary><div className="mt-3"><RetrieveDebug kbId={selected.id} /></div></details>}</section>
+              <section className="rounded-[14px] border border-line bg-white p-4 text-[11px]"><dl className="space-y-2.5"><div className="flex justify-between"><dt className="text-ink-muted">归属</dt><dd className="font-medium text-ink">{selected.owner_type === "org" ? selected.org_name ?? "机构" : "个人"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">权限</dt><dd className="font-medium text-ink">{selected.writable ? "可编辑" : "只读"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">版本</dt><dd className="font-medium text-ink">v{selected.kb_version}</dd></div></dl></section>
+            </aside>
+          </div>
+
+          <Card title={`学习资料 · ${docs?.length ?? 0}`} extra={selected.owner_type === "org" ? <span className="text-[10px] text-ink-muted">{selected.org_name ?? "机构"} · {selected.writable ? "可管理" : "成员只读"}</span> : undefined}>
+            <div className="space-y-4">
+              {selected.writable ? <UploadZone uploading={uploading} importing={importing} onFiles={(files) => void uploadFiles(files)} onImportUrl={(url) => void importUrl(url)} /> : <p className="rounded-[9px] border border-dashed border-line-strong bg-[#fafaf9] px-4 py-3 text-[11px] text-ink-muted">机构库由管理员维护；你仍可以检索、对话和查看引用。</p>}
+              {docsError && <ErrorBanner message={docsError} onRetry={() => void loadDocs(selected.id)} />}
+              {docs === null || docsKbId !== selected.id ? <SkeletonList rows={3} /> : docs.length === 0 ? <p className="py-6 text-center text-[11px] text-ink-muted">{selected.writable ? "暂无资料。上传文件或导入网页后会自动解析、切块并建立索引。" : "该机构库暂无资料。"}</p> : <DocumentTable documents={docs} busyDocId={busyDocId} onPreview={setPreviewDoc} onReindex={(doc) => void reindexDoc(doc)} onDelete={(doc) => void deleteDoc(doc)} readOnly={!selected.writable} />}
+            </div>
+          </Card>
+        </>
+      )}
+
+      {previewDoc && selectedId && <ChunksDrawer kbId={selectedId} doc={previewDoc} onClose={() => setPreviewDoc(null)} />}
     </div>
   );
 }

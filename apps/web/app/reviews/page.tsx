@@ -20,7 +20,6 @@ import {
   fmtRelative,
 } from "@/components/common";
 import { QuestionAnswer, QuestionMeta } from "@/components/quiz/question-answer";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { Celebrate } from "@/components/ui/celebrate";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
@@ -191,8 +190,7 @@ export default function ReviewsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
-      <WorkspaceNav workspace="plan" />
+    <div className="mx-auto w-full max-w-[980px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="今日复习"
         subtitle={

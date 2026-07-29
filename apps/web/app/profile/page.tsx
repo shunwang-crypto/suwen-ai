@@ -26,7 +26,6 @@ import {
   fmtPct,
 } from "@/components/common";
 import { MasteryRadarPanel } from "@/components/mastery-radar";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
@@ -526,15 +525,13 @@ export default function ProfilePage() {
 
   if (loading)
     return (
-      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-        <WorkspaceNav workspace="growth" />
+      <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
         <SkeletonPage />
       </div>
     );
   if (error || !profile) {
     return (
-      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-        <WorkspaceNav workspace="growth" />
+      <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
         <PageHeader title="我的画像" subtitle="AI 眼中的我" />
         <ErrorBanner message={error ?? "画像为空"} />
         <button
@@ -570,8 +567,7 @@ export default function ProfilePage() {
     }`;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-      <WorkspaceNav workspace="growth" />
+    <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="AI 眼中的我"
         subtitle="掌握度画像由每次练习、复习与辅导的真实证据持续更新"

@@ -18,7 +18,6 @@ import {
   fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
@@ -747,8 +746,7 @@ export default function PlansPage() {
   const busy = phase === "streaming" || phase === "resuming";
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-      <WorkspaceNav workspace="plan" />
+    <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="学习计划"
         subtitle="AI 规划分阶段每日任务；计划是活的——勾选完成、按学情插入补强任务"

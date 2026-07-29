@@ -8,14 +8,11 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  Card,
-  EmptyState,
   ErrorBanner,
   FxStyles,
   MasteryDelta,
   Spinner,
 } from "@/components/common";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -344,208 +341,68 @@ export default function TutorPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-      <WorkspaceNav workspace="practice" />
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-      {/* 左：题目 + 提示阶梯 */}
-      <aside className="w-full shrink-0 space-y-4 lg:w-80">
-        <Card
-          title="题目"
-          extra={
-            started && (
-              <button
-                type="button"
-                onClick={reset}
-                className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
-              >
-                换一道题
-              </button>
-            )
-          }
-        >
-          <textarea
-            value={problem}
-            onChange={(e) => setProblem(e.target.value)}
-            disabled={started}
-            rows={5}
-            maxLength={4000}
-            placeholder={"粘贴题干，支持数学公式：行内 $x^2$，块级 $$\\int_0^1 x\\,dx$$"}
-            className="w-full resize-y rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-500"
-          />
-          {problem.trim() && (
-            <div className="mt-2 rounded-xl bg-slate-50 p-3">
-              <p className="mb-1 text-xs text-slate-400">预览</p>
-              <MathText
-                text={problem}
-                className="text-sm leading-relaxed text-slate-800"
-              />
-            </div>
-          )}
-          {started && (
-            <p className="mt-2 text-xs text-slate-400">
-              会话进行中题目已锁定，点「换一道题」开始新会话
-            </p>
-          )}
-        </Card>
-
-        <Card
-          title="提示阶梯"
-          extra={
-            started &&
-            stuckType && (
-              <span className="text-xs text-slate-400">
-                卡点：{STUCK_LABELS[stuckType] ?? stuckType}
-              </span>
-            )
-          }
-        >
-          <HintLadder level={hintLevel} active={started} />
-          <p className="mt-2 text-xs leading-relaxed text-slate-400">
-            老师不会直接给答案：先引导你说出思路，逐层给提示；索要答案会被温和坚持一次，第
-            3 层才展开完整解答。
-          </p>
-        </Card>
-      </aside>
-
-      {/* 右：对话区 */}
-      <div className="flex min-h-[70dvh] min-w-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)]">
-        <header className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
-          <h2 className="text-sm font-semibold text-slate-800">苏格拉底辅导</h2>
-          {started && <HintBadge level={hintLevel} />}
-        </header>
-
-        <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-          {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-
-          {!started ? (
-            <EmptyState
-              title="从一道让你卡住的题开始"
-              description="左侧粘贴题目，然后告诉老师你的思路或者卡在哪一步"
-              illustration="chat"
-            />
-          ) : (
-            messages.map((m, i) =>
-              m.role === "user" ? (
-                <div key={i} className="edu-fade-up flex justify-end">
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2 text-sm text-white">
-                    <MathText text={m.content} />
-                  </div>
-                </div>
-              ) : (
-                <div key={i} className="edu-fade-up flex flex-col items-start gap-1">
-                  <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-800">
-                    <MathText text={m.content} />
-                  </div>
-                  {m.hintLevel != null && <HintBadge level={m.hintLevel} />}
-                </div>
-              ),
-            )
-          )}
-
-          {sending && (
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <Spinner className="h-3.5 w-3.5" />
-              老师思考中…
-            </div>
-          )}
-
-          {/* 第 3 层已给完整解答但尚未确认解决：引导生成复盘 */}
-          {!ended && !sending && hintLevel === 3 && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3 text-sm">
-              <p className="text-amber-800">
-                已给出完整解答。理解之后告诉老师，生成本次辅导复盘卡。
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void send(FINISH_PHRASE)}
-                  className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
-                >
-                  我理解了，生成复盘
-                </button>
-                <button
-                  type="button"
-                  onClick={reset}
-                  className="rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
-                >
-                  换一道题
-                </button>
-              </div>
-            </div>
-          )}
-
-          {ended && summary && (
-            <ReviewCard
-              summary={summary}
-              changes={masteryChanges}
-              onReset={reset}
-            />
-          )}
+    <div className="mx-auto w-full max-w-[1080px] space-y-5 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
+      <section className="relative overflow-hidden rounded-[12px] border border-line bg-white px-5 py-4">
+        <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">本次学习对象</span><span className="text-ink-muted">由你的真实题目建立辅导上下文</span></div>
+          {started && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
+        {started ? (
+          <div className="mt-3"><MathText text={problem} className="text-[14px] font-medium leading-6 text-ink" /><p className="mt-2 text-[10px] text-ink-muted">引导强度 · {HINT_LEVELS[hintLevel]} · {hintLevel + 1}/4</p></div>
+        ) : (
+          <div className="mt-3">
+            <textarea value={problem} onChange={(e) => setProblem(e.target.value)} rows={3} maxLength={4000} placeholder={"粘贴让你卡住的题目，支持 $x^2$ 和 $$\\int_0^1 x\\,dx$$"} className="w-full resize-y rounded-[9px] border border-line-strong bg-[#fafaf9] px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted focus:border-brand-400 focus:ring-2 focus:ring-brand-50" />
+            <p className="mt-2 text-[10px] text-ink-muted">题目不会被写死；开始辅导后锁定，换题会建立新的辅导线程。</p>
+          </div>
+        )}
+      </section>
 
-        {/* 输入区 */}
-        <footer className="border-t border-slate-100 p-3">
-          {ended ? (
-            <p className="py-1 text-center text-xs text-slate-400">
-              本次辅导已结束，点复盘卡里的「换一道题」继续
-            </p>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_266px] lg:items-start">
+        <main ref={listRef} className="min-w-0 space-y-3">
+          {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+          {!started && (
+            <div className="flex items-start gap-3 py-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
+              <div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]">先把题目放在上方，再告诉我你已经想到哪一步。我会先判断你的卡点，再逐层给提示。</div></div>
+            </div>
+          )}
+
+          {messages.map((message, index) => message.role === "user" ? (
+            <article key={index} className="ml-10 overflow-hidden rounded-[10px] border border-line bg-white">
+              <div className="px-4 py-3"><p className="text-[10px] font-medium text-ink-muted">你的第 {Math.floor(index / 2) + 1} 步</p><div className="mt-2 text-[13px] leading-6 text-ink"><MathText text={message.content} /></div></div>
+              {stuckType && index === messages.length - 2 && <div className="border-t border-warning-100 bg-warning-50 px-4 py-2.5"><div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-warning-700">↩ 建议调整</span><span className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700">卡点 · {STUCK_LABELS[stuckType] ?? stuckType}</span></div></div>}
+            </article>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submit();
-              }}
-              className="flex items-end gap-2"
-            >
-              <button
-                type="button"
-                disabled={!problem.trim() || sending}
-                onClick={() => void send(HINT_PHRASE)}
-                title={`发送固定话术「${HINT_PHRASE}」`}
-                className="flex shrink-0 items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-4 w-4"
-                  aria-hidden
-                >
-                  <path d="M9 18h6m-5 3h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1.1 1.3 1.1 2.1h4.8c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3Z" />
-                </svg>
-                要个提示
-              </button>
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                maxLength={4000}
-                placeholder={
-                  problem.trim()
-                    ? started
-                      ? "回应老师的问题，或说出你的下一步想法…"
-                      : "先说说你的思路，或者卡在哪一步…"
-                    : "请先在左侧输入题目"
-                }
-                disabled={!problem.trim() || sending}
-                className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3.5 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
-              />
-              <button
-                type="submit"
-                disabled={!problem.trim() || !input.trim() || sending}
-                className="flex shrink-0 items-center gap-1.5 rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {sending && (
-                  <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />
-                )}
-                发送
-              </button>
+            <div key={index} className="flex items-start gap-3 py-2">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
+              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MathText text={message.content} /></div></div>
+            </div>
+          ))}
+
+          {sending && <div className="ml-10 flex items-center gap-2 py-2 text-[11px] text-ink-muted"><Spinner className="h-3.5 w-3.5" />老师正在整理下一步提示…</div>}
+
+          {!ended && !sending && hintLevel === 3 && started && (
+            <div className="ml-10 rounded-[10px] border border-warning-200 bg-warning-50 p-3 text-[12px] text-warning-700"><p>完整解答已经展开。确认理解后，系统会把本次真实卡点写入复盘。</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void send(FINISH_PHRASE)} className="rounded-[7px] bg-brand-600 px-3 py-1.5 font-medium text-white">我已理解，生成复盘</button><button type="button" onClick={reset} className="rounded-[7px] border border-line-strong bg-white px-3 py-1.5">换一道题</button></div></div>
+          )}
+
+          {ended && summary && <ReviewCard summary={summary} changes={masteryChanges} onReset={reset} />}
+
+          {!ended && (
+            <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-[12px] border border-line bg-white p-3 shadow-subtle sm:ml-10">
+              <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!problem.trim() || sending} placeholder={problem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "先说说你的思路，或者卡在哪一步……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
+              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-[10px] text-ink-muted sm:block">Ctrl / ⌘ + Enter 记入</span><span className="flex-1" /><button type="button" disabled={!problem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">要个提示</button><button type="submit" disabled={!problem.trim() || !input.trim() || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-[11px] font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}记入解题过程</button></div>
             </form>
           )}
-        </footer>
-      </div>
+        </main>
+
+        <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
+          <div className="flex items-center justify-between"><h2 className="text-[12px] font-semibold text-ink">提示支持</h2><span className="text-[10px] text-ink-muted">卡了再用</span></div>
+          <div className="mt-4"><HintLadder level={hintLevel} active={started} /></div>
+          <button type="button" disabled={!problem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
+          {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-[11px] font-medium text-success-700">我认为已解出，进入理解确认</button>}
+          <p className="mt-3 text-[10px] leading-5 text-ink-muted">提示逐层加深。系统只根据你的输入和真实辅导结果调整层级，不会把演示中的固定失败写进流程。</p>
+        </aside>
       </div>
     </div>
   );

@@ -3,6 +3,7 @@
 // 练习（F5）：发起表单 → SSE 流（过程时间线 + interrupt 蓝图确认）→ resume →
 // 题目作答（四种控件，MathText 渲染）→ 逐题结果 + 掌握度变化；历史卷可重开。
 
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -23,8 +24,7 @@ import {
   fmtDateTime,
   fmtPct,
 } from "@/components/common";
-import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
-import { WorkspaceNav } from "@/components/workspace-nav";
+import type { FlowItem } from "@/components/flow-timeline";
 import { BlueprintCard } from "@/components/quiz/blueprint-card";
 import { QuizForm, type QuizFormValue } from "@/components/quiz/quiz-form";
 import {
@@ -76,6 +76,26 @@ interface ActiveQuiz {
   questions: QuizQuestion[];
 }
 
+function PracticeSteps({ current }: { current: number }) {
+  const labels = ["设置", "蓝图确认", "作答", "查看结果"];
+  return (
+    <ol className="flex flex-wrap items-center gap-2 border-b border-line pb-4 text-[11px]">
+      {labels.map((label, index) => {
+        const step = index + 1;
+        const done = step < current;
+        const active = step === current;
+        return (
+          <li key={label} className="flex items-center gap-2">
+            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${done ? "bg-success-50 text-success-600" : active ? "bg-brand-600 text-white" : "bg-[#efede9] text-ink-muted"}`}>{done ? "✓" : step}</span>
+            <span className={active ? "font-semibold text-ink" : done ? "text-success-600" : "text-ink-muted"}>{label}</span>
+            {index < labels.length - 1 && <span className="h-px w-7 bg-line sm:w-12" aria-hidden />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export default function QuizPage() {
   // URL 预填（/quiz?topic=..&kb=..，来自对话页「考考我」chip）。
   // SSR 快照为空串、客户端快照读真实 search：无水合不匹配，也无需 Suspense。
@@ -112,7 +132,7 @@ export default function QuizPage() {
 
   // SSE 出题流
   const [phase, setPhase] = useState<Phase>("idle");
-  const [timeline, setTimeline] = useState<FlowItem[]>([]);
+  const [, setTimeline] = useState<FlowItem[]>([]);
   const [interruptData, setInterruptData] = useState<GraphInterruptData | null>(null);
   const [flowError, setFlowError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -412,10 +432,11 @@ export default function QuizPage() {
   const answeredCount = quiz
     ? quiz.questions.filter((q) => (answers[q.id] ?? "").trim()).length
     : 0;
+  const practiceStage = attempt ? 4 : quiz ? 3 : phase === "await_confirm" || phase === "resuming" ? 2 : 1;
 
   return (
     <div className="mx-auto w-full max-w-[1120px] space-y-5 px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
-      <WorkspaceNav workspace="practice" />
+      {practiceStage > 1 && <PracticeSteps current={practiceStage} />}
       {flowError && (
         <ErrorBanner message={flowError} onClose={() => setFlowError(null)} />
       )}
@@ -459,6 +480,17 @@ export default function QuizPage() {
               </button>
             }
           />
+
+          {attempt && (
+            <section className="rounded-[14px] border border-line bg-white p-5">
+              <div className="flex flex-wrap items-center gap-5">
+                <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{attempt.correct}/{attempt.total}</strong><span className="text-[9px] text-ink-muted">答对</span></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span></div><p className="mt-1 text-[11px] leading-5 text-ink-muted">结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。</p></div>
+              </div>
+              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-[10px] font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-[10px] font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · {result.scored_reason || "查看解析后再次练习"}</li>)}</ul></div></div>
+              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-[11px] font-semibold text-warning-700">学习计划已更新</p><p className="mt-0.5 text-[10px] text-warning-600">{attempt.plan_adjustment.reason}</p></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-[10px] font-medium text-warning-700">前往学习计划 →</Link></div>}
+            </section>
+          )}
 
           {quiz.questions.length === 0 ? (
             <EmptyState
@@ -594,9 +626,9 @@ export default function QuizPage() {
         <div className="space-y-4">
           <PageHeader
             title="智能练习"
-            subtitle="从主题或知识库发起 AI 出题，蓝图确认后生成题目；判分即时更新画像"
+            subtitle="根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。"
           />
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="space-y-4">
           <div className="min-w-0 flex-1 space-y-4">
             {/* 掌握度验证（P2-6 可争辩画像）：画像页「验证一下」跳转入口 */}
             {verifyKc && (
@@ -629,7 +661,7 @@ export default function QuizPage() {
 
             {/* 画像联动出题（M4-D2）：主按钮 + 将要练的 KC 预览 */}
             <section
-              className={`rounded-overlay border bg-white p-5 ${
+              className={`rounded-[14px] border bg-gradient-to-br from-brand-50/80 to-white p-5 ${
                 fromWeakLink
                   ? "border-indigo-400 ring-2 ring-indigo-100"
                   : "border-line"
@@ -637,11 +669,11 @@ export default function QuizPage() {
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-slate-800">
-                    针对我的薄弱点出题
+                  <h2 className="text-[16px] font-semibold text-ink">
+                    为你推荐的练习
                   </h2>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    知识点由学情画像自动选取（掌握度
+                    根据真实学情画像自动选择知识点（掌握度
                     {weak ? ` < ${fmtPct(weak.threshold)}` : "偏低"}
                     ，近 7 天错过的优先）
                   </p>
@@ -650,12 +682,12 @@ export default function QuizPage() {
                   type="button"
                   disabled={busy || !weak || weak.weak_points.length === 0}
                   onClick={startWeakQuiz}
-                  className="flex shrink-0 items-center gap-2 rounded-control bg-ink px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex shrink-0 items-center gap-2 rounded-[8px] bg-brand-600 px-5 py-2.5 text-[12px] font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy && (
                     <Spinner className="h-4 w-4 border-white/40 border-t-white" />
                   )}
-                  针对我的薄弱点出题
+                  开始个性化练习
                 </button>
               </div>
 
@@ -742,20 +774,10 @@ export default function QuizPage() {
               )}
             </section>
 
-            <Card title="发起练习">
-              <QuizForm
-                key={`${prefillTopic}|${prefillKb}`}
-                kbs={kbs}
-                busy={busy}
-                onSubmit={startQuiz}
-                initialTopic={prefillTopic}
-                initialKbId={prefillKb}
-              />
-            </Card>
-
-            {(timeline.length > 0 || busy) && (
-              <FlowTimeline items={timeline} streaming={busy} />
-            )}
+            <details className="group rounded-[14px] border border-line bg-white" open={Boolean(prefillTopic || prefillKb)}>
+              <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4"><div><h2 className="text-[13px] font-semibold text-ink">自定义练习</h2><p className="mt-0.5 text-[10px] text-ink-muted">自选主题、资料范围和难度，生成一组专属练习</p></div><span className="text-[11px] font-medium text-brand-700 group-open:hidden">展开设置⌄</span><span className="hidden text-[11px] font-medium text-brand-700 group-open:inline">收起设置⌃</span></summary>
+              <div className="border-t border-line p-5"><QuizForm key={`${prefillTopic}|${prefillKb}`} kbs={kbs} busy={busy} onSubmit={startQuiz} initialTopic={prefillTopic} initialKbId={prefillKb} /></div>
+            </details>
 
             {phase === "await_confirm" && interruptData?.blueprint && (
               <div className="space-y-2">
@@ -802,8 +824,8 @@ export default function QuizPage() {
             )}
           </div>
 
-          <aside className="w-full shrink-0 lg:w-80">
-            <Card title="历史练习">
+          <section className="w-full">
+            <Card title="最近练习">
               {listError && (
                 <div className="mb-2">
                   <ErrorBanner message={listError} onRetry={() => void loadQuizzes()} />
@@ -816,14 +838,14 @@ export default function QuizPage() {
                   还没有练习记录
                 </p>
               ) : (
-                <ul className="space-y-1">
+                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {quizzes.map((qz) => (
                     <li key={qz.id}>
                       <button
                         type="button"
                         disabled={quizLoading}
                         onClick={() => void openQuiz(qz.id)}
-                        className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-50 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.20)] disabled:opacity-50 motion-reduce:hover:translate-y-0"
+                        className="w-full rounded-[10px] border border-line bg-[#fafaf9] px-4 py-3 text-left text-[12px] text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/40 disabled:opacity-50"
                       >
                         <span className="block truncate font-medium">
                           {qz.title || "未命名练习"}
@@ -837,7 +859,7 @@ export default function QuizPage() {
                 </ul>
               )}
             </Card>
-          </aside>
+          </section>
           </div>
         </div>
       )}

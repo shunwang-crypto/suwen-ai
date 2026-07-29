@@ -294,6 +294,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isChatRoute = isActive(pathname, "/chat");
   const title = Object.entries(TITLE_MAP).find(([path]) => isActive(pathname, path))?.[1] ?? "EduAgents";
   const initial = (user?.email?.[0] ?? "学").toUpperCase();
+  const displayName = user?.email?.split("@")[0] || "同学";
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hour12: false }).format(new Date()));
+  const greeting = hour < 6 ? "夜深了" : hour < 12 ? "上午好" : hour < 18 ? "下午好" : "晚上好";
+  const todayLabel = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(new Date());
 
   const handleLogout = async () => {
     setMenuOpen(false);
@@ -327,9 +336,23 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
                 <Icon><path d="M4 6h16M4 12h16M4 18h16" /></Icon>
               </button>
-              <h1 className="truncate text-[13px] font-semibold text-ink md:text-[14px]">{title}</h1>
+              {pathname === "/today" ? (
+                <div className="min-w-0">
+                  <h1 className="truncate text-[14px] font-semibold leading-5 text-ink">{greeting}，{displayName}</h1>
+                  <p className="truncate text-[10px] leading-4 text-ink-muted">{todayLabel}</p>
+                </div>
+              ) : (
+                <h1 className="truncate text-[13px] font-semibold text-ink md:text-[14px]">{title}</h1>
+              )}
             </div>
 
+            <div className="flex items-center gap-2">
+              {pathname === "/today" && (
+                <Link href="/chat?new=1" className="hidden h-8 items-center gap-1.5 rounded-[7px] border border-line-strong bg-white px-3 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700 sm:flex">
+                  <Icon><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-9.5A7.5 7.5 0 0 1 10.5 4h2A7.5 7.5 0 0 1 20 11.5Z" /></Icon>
+                  问 AI 助手
+                </Link>
+              )}
             <div className="relative">
               {menuOpen && <button type="button" aria-label="关闭账户菜单" className="fixed inset-0 z-40 cursor-default" onClick={() => setMenuOpen(false)} />}
               <button
@@ -346,6 +369,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <AnimatePresence>
                 {menuOpen && <AccountMenu email={user?.email ?? ""} isAdmin={isAdmin} isTeacher={isTeacher} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />}
               </AnimatePresence>
+            </div>
             </div>
           </header>
 

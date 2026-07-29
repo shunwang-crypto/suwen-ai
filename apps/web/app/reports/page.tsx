@@ -18,7 +18,6 @@ import {
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
-import { WorkspaceNav } from "@/components/workspace-nav";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -814,8 +813,7 @@ export default function ReportsPage() {
 
   if (loading && !report) {
     return (
-      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-        <WorkspaceNav workspace="growth" />
+      <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
         <PageHeader
           title="学情报告"
           subtitle="正在读取最近一次报告，AI 诊断会在页面展示后单独更新"
@@ -827,8 +825,7 @@ export default function ReportsPage() {
 
   if (error || !report) {
     return (
-      <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-        <WorkspaceNav workspace="growth" />
+      <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
         <PageHeader title="学情报告" subtitle="最近一次报告暂时无法读取" />
         <ErrorBanner message={error ?? "学情报告加载失败"} onRetry={reload} />
       </div>
@@ -873,8 +870,7 @@ export default function ReportsPage() {
     : null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
-      <WorkspaceNav workspace="growth" />
+    <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="学情报告"
         subtitle={

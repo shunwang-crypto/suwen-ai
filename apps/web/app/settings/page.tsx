@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiJson } from "@/lib/api";
@@ -54,6 +54,7 @@ const PRESET_INTERESTS = ["篮球", "足球", "动漫", "游戏", "音乐", "科
 const INTERESTS_MAX = 8;
 const INTEREST_CHAR_MAX = 20;
 const GOAL_MAX = 200;
+const emptySubscribe = () => () => {};
 
 function Chip({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: ReactNode; title?: string }) {
   return (
@@ -92,7 +93,13 @@ function InlineNotice({ children, tone = "success" }: { children: ReactNode; ton
 export default function SettingsPage() {
   const router = useRouter();
   const { user, logout } = useAuth();
-  const [section, setSection] = useState<SettingsSection>("profile");
+  const search = useSyncExternalStore(emptySubscribe, () => window.location.search, () => "");
+  const requestedSection = new URLSearchParams(search).get("section");
+  const querySection = SECTIONS.some((item) => item.id === requestedSection)
+    ? requestedSection as SettingsSection
+    : "profile";
+  const [sectionOverride, setSection] = useState<SettingsSection | null>(null);
+  const section = sectionOverride ?? querySection;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);

@@ -52,11 +52,11 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition-all duration-200 ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-[12px] transition-colors ${
                 checked
-                  ? "border-indigo-400 bg-gradient-to-r from-indigo-50 to-indigo-50/30 text-indigo-900 shadow-[0_2px_10px_-2px_rgba(79,70,229,0.25)] ring-1 ring-inset ring-indigo-200"
-                  : "border-slate-200 bg-white text-slate-700 hover:-translate-y-px hover:border-indigo-300 hover:shadow-[0_3px_10px_-3px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
-              } ${disabled ? "cursor-default opacity-70 hover:translate-y-0 hover:shadow-none" : ""}`}
+                  ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
+                  : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
+              } ${disabled ? "cursor-default opacity-70" : ""}`}
             >
               <input
                 type="radio"
@@ -93,11 +93,11 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition-all duration-200 ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-[12px] transition-colors ${
                 checked
-                  ? "border-indigo-400 bg-gradient-to-r from-indigo-50 to-indigo-50/30 text-indigo-900 shadow-[0_2px_10px_-2px_rgba(79,70,229,0.25)] ring-1 ring-inset ring-indigo-200"
-                  : "border-slate-200 bg-white text-slate-700 hover:-translate-y-px hover:border-indigo-300 hover:shadow-[0_3px_10px_-3px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
-              } ${disabled ? "cursor-default opacity-70 hover:translate-y-0 hover:shadow-none" : ""}`}
+                  ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
+                  : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
+              } ${disabled ? "cursor-default opacity-70" : ""}`}
             >
               <input
                 type="checkbox"
