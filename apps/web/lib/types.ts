@@ -500,6 +500,16 @@ export interface LearningReportResponse {
   actions: ReportAction[];
   narrative: string | null;
   narrative_note: string | null;
+  metrics?: {
+    attempt_count: number;
+    active_days: number;
+    accuracy: number | null;
+    newly_mastered_count: number;
+    slipped_count: number;
+    attempt_count_delta: number;
+    active_days_delta: number;
+    accuracy_delta: number | null;
+  };
 }
 
 // ---- 复习（F6，对齐 routers/reviews.py）----

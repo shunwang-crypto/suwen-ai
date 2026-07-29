@@ -240,12 +240,14 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
  *  薄弱口径分开命名：红线（<红线阈值）为主数字，待巩固另行标注，消除跨页数字打架。 */
 function StatTiles({
   trend,
+  metrics,
   redCount,
   consolidateCount,
   redPct,
   consolidatePct,
 }: {
   trend: ReportTrendPoint[];
+  metrics?: LearningReportResponse["metrics"];
   redCount: number;
   consolidateCount: number;
   redPct: number;
@@ -268,6 +270,9 @@ function StatTiles({
   const acc7 = accOf(last7);
   const accPrev7 = accOf(prev7);
   const accDelta = acc7 != null && accPrev7 != null ? acc7 - accPrev7 : null;
+  const attemptDeltaValue = metrics?.attempt_count_delta ?? attemptsDelta;
+  const accuracyDeltaValue = metrics?.accuracy_delta ?? accDelta;
+  const activeDaysDeltaValue = metrics?.active_days_delta ?? null;
 
   const TrendArrow = ({ up }: { up: boolean }) => (
     <svg
@@ -288,67 +293,68 @@ function StatTiles({
     key: string;
     label: string;
     value: string;
-    gradient: string;
     delta?: { up: boolean; text: string } | null;
     sub?: string | null;
   }[] = [
     {
       key: "attempts",
-      label: "近 30 天答题",
-      value: String(total),
-      gradient: "from-indigo-600 to-violet-500",
+      label: "学习投入",
+      value: `${metrics?.attempt_count ?? total} 次作答`,
       delta:
-        attemptsDelta !== 0
+        attemptDeltaValue !== 0
           ? {
-              up: attemptsDelta > 0,
-              text: `${attemptsDelta > 0 ? "+" : ""}${attemptsDelta} 较前 7 天`,
+              up: attemptDeltaValue > 0,
+              text: `${attemptDeltaValue > 0 ? "+" : ""}${attemptDeltaValue} 较上期`,
             }
           : null,
     },
     {
       key: "accuracy",
       label: "总体正确率",
-      value: acc != null ? fmtPct(acc) : "—",
-      gradient: "from-emerald-600 to-teal-500",
+      value: (metrics?.accuracy ?? acc) != null ? fmtPct((metrics?.accuracy ?? acc) as number) : "—",
       delta:
-        accDelta != null && Math.round(accDelta * 100) !== 0
+        accuracyDeltaValue != null && Math.round(accuracyDeltaValue * 100) !== 0
           ? {
-              up: accDelta > 0,
-              text: `${accDelta > 0 ? "+" : ""}${Math.round(accDelta * 100)}pp 较前 7 天`,
+              up: accuracyDeltaValue > 0,
+              text: `${accuracyDeltaValue > 0 ? "+" : ""}${Math.round(accuracyDeltaValue * 100)}pp 较上期`,
             }
           : null,
     },
     {
       key: "days",
       label: "活跃天数",
-      value: `${activeDays}`,
-      gradient: "from-sky-600 to-cyan-500",
-      delta: null,
+      value: `${metrics?.active_days ?? activeDays} / 30 天`,
+      delta:
+        activeDaysDeltaValue != null && activeDaysDeltaValue !== 0
+          ? {
+              up: activeDaysDeltaValue > 0,
+              text: `${activeDaysDeltaValue > 0 ? "+" : ""}${activeDaysDeltaValue} 天较上期`,
+            }
+          : null,
     },
     {
       key: "weak",
-      label: `红线知识点（<${redPct}%）`,
-      value: String(redCount),
-      gradient: "from-rose-600 to-orange-500",
+      label: "掌握变化",
+      value: `+${metrics?.newly_mastered_count ?? 0} 个知识点`,
       delta: null,
       sub:
-        consolidateCount > 0
-          ? `另有 ${consolidateCount} 个待巩固（<${consolidatePct}%）`
-          : null,
+        metrics
+          ? `新掌握 ${metrics.newly_mastered_count} · 滑落 ${metrics.slipped_count}`
+          : redCount + consolidateCount > 0
+            ? `${redCount} 个红线（<${redPct}%）· ${consolidateCount} 个待巩固（<${consolidatePct}%）`
+            : null,
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 overflow-hidden rounded-[14px] border border-line bg-white lg:grid-cols-4">
       {tiles.map((t) => (
         <div
           key={t.key}
-          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_26px_-6px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
+          className="border-r border-line bg-white px-4 py-3 last:border-r-0"
         >
           <p className="text-xs text-slate-500">{t.label}</p>
-          <p
-            className={`mt-0.5 bg-gradient-to-br ${t.gradient} bg-clip-text font-mono text-2xl font-bold text-transparent`}
-          >
+          <p className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-ink">
             {t.value}
           </p>
           {t.delta && (
@@ -697,16 +703,16 @@ function DiagnosisBody({ narrative }: { narrative: string }) {
     );
   }
   return (
-    <div className="space-y-3">
+    <div className="grid gap-4 md:grid-cols-3">
       {intro && (
-        <p className="text-sm leading-relaxed text-slate-600">
+        <p className="text-sm leading-relaxed text-slate-600 md:col-span-3">
           <MdInline text={intro} />
         </p>
       )}
       {sections.map((s, i) => (
         <section
           key={`${s.title}-${i}`}
-          className="rounded-xl border border-slate-100 bg-slate-50/60 p-3.5"
+          className="border-l-2 border-line-strong pl-3.5"
         >
           <h3 className="text-sm font-semibold text-slate-800">
             <span
@@ -885,7 +891,7 @@ export default function ReportsPage() {
             type="button"
             onClick={reload}
             disabled={loading || diagnosisLoading}
-            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading || diagnosisLoading ? "更新中…" : "刷新报告"}
           </button>
@@ -920,27 +926,34 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         {!hasAnyData && (
-          <EmptyState
-            title="还没有足够的学习数据"
-            description="完成几次练习或辅导后，这里会生成你的学情报告"
-            illustration="chart"
-          />
+          <div className="order-1 space-y-3">
+            <EmptyState
+              title="还没有足够的学习数据"
+              description="完成几次练习或辅导后，这里会生成你的学情报告"
+              illustration="chart"
+            />
+            <div className="flex justify-center gap-2">
+              <Link href="/quiz" className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-800">开始摸底练习</Link>
+              <Link href="/plans" className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700">制定学习计划</Link>
+            </div>
+          </div>
         )}
 
         {hasAnyData && (
-          <StatTiles
+          <div className="order-1"><StatTiles
             trend={trend}
+            metrics={report.metrics}
             redCount={redTotal}
             consolidateCount={consolidateTotal}
             redPct={redPct}
             consolidatePct={consolidatePct}
-          />
+          /></div>
         )}
 
         {hasAnyData && (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="order-3 grid gap-4 lg:grid-cols-2">
             <Card
               title="掌握度雷达"
               extra={
@@ -963,6 +976,7 @@ export default function ReportsPage() {
         {hasAnyData && (
           <Card
             title="薄弱知识点"
+            className="order-4"
             extra={
               <span className="text-xs text-slate-400">
                 红线 &lt;{redPct}% · 待巩固 &lt;{consolidatePct}% · 附归因下钻
@@ -1035,18 +1049,18 @@ export default function ReportsPage() {
           </Card>
         )}
 
-        <Card title="可执行建议">
+        {hasAnyData && <Card title="下一步建议" className="order-5">
           {actions.length === 0 ? (
             <p className="py-3 text-center text-xs text-slate-400">暂无建议</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="grid gap-3 md:grid-cols-2">
               {actions.map((a, i) => (
                 <li key={i}>
                   <Link
                     href={a.href}
-                    className="group flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40"
+                    className="group flex items-start justify-between gap-3 rounded-[11px] border border-line px-4 py-3 text-[12px] text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/30"
                   >
-                    <span className="min-w-0 flex-1">{a.label}</span>
+                    <span className="flex min-w-0 flex-1 gap-2"><b className="text-[10px] font-medium text-ink-muted">{String(i + 1).padStart(2, "0")}</b><span>{a.label}</span></span>
                     <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-600">
                       去处理
                       <svg
@@ -1067,10 +1081,11 @@ export default function ReportsPage() {
               ))}
             </ul>
           )}
-        </Card>
+        </Card>}
 
-        <Card
+        {hasAnyData && <Card
           title="AI 诊断（三段式）"
+          className="order-2"
           extra={
             diagnosisLoading ? (
               <span className="flex items-center gap-1.5 text-xs text-ink-muted">
@@ -1113,7 +1128,7 @@ export default function ReportsPage() {
                 "：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。"}
             </p>
           )}
-        </Card>
+        </Card>}
       </div>
     </div>
   );

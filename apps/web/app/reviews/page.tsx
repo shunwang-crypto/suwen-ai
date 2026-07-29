@@ -41,11 +41,11 @@ const CAUSE_LABELS: Record<string, string> = {
 
 /** 错因五色语义化徽章样式（与错题本同一套色）。 */
 const CAUSE_BADGE_STYLES: Record<string, string> = {
-  concept_confusion: "bg-violet-50 text-violet-700 ring-violet-200/70",
-  formula_error: "bg-sky-50 text-sky-700 ring-sky-200/70",
-  calc_slip: "bg-amber-50 text-amber-700 ring-amber-200/70",
-  misread: "bg-orange-50 text-orange-700 ring-orange-200/70",
-  knowledge_gap: "bg-rose-50 text-rose-700 ring-rose-200/70",
+  concept_confusion: "bg-brand-50 text-brand-700 ring-brand-100",
+  formula_error: "bg-warning-50 text-warning-700 ring-warning-500/20",
+  calc_slip: "bg-warning-50 text-warning-700 ring-warning-500/20",
+  misread: "bg-warning-50 text-warning-700 ring-warning-500/20",
+  knowledge_gap: "bg-danger-50 text-danger-700 ring-danger-500/20",
 };
 const CAUSE_BADGE_FALLBACK = "bg-slate-100 text-slate-600 ring-slate-200/70";
 
@@ -100,6 +100,7 @@ export default function ReviewsPage() {
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [states, setStates] = useState<Record<string, ItemState>>({});
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -112,6 +113,7 @@ export default function ReviewsPage() {
         if (!alive) return;
         setData(res);
         setStates({});
+        setCurrentIndex(0);
         setError(null);
       } catch (err) {
         if (alive) {
@@ -207,7 +209,7 @@ export default function ReviewsPage() {
           <button
             type="button"
             onClick={reload}
-            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
+            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
           >
             刷新队列
           </button>
@@ -241,8 +243,11 @@ export default function ReviewsPage() {
           illustration="calendar"
         />
       ) : (
+        <>
+        <div className="flex flex-wrap items-center justify-between gap-3 py-1 text-[11px]"><p><strong className="text-ink">第 {currentIndex + 1} 题</strong><span className="ml-3 text-ink-muted">今日 {data.items.length} 题 · 已完成 {Object.values(states).filter((state) => state.result).length} · 剩余 {Math.max(0, data.items.length - Object.values(states).filter((state) => state.result).length)}</span></p><button type="button" onClick={() => window.history.back()} className="text-ink-secondary hover:text-brand-700">← 暂时退出</button></div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-line" aria-label={`复习进度 ${currentIndex + 1}/${data.items.length}`}><div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${((currentIndex + 1) / data.items.length) * 100}%` }} /></div>
         <ul className="space-y-4">
-          {(data.items as ReviewItemWithRetention[]).map((item) => {
+          {(data.items as ReviewItemWithRetention[]).slice(currentIndex, currentIndex + 1).map((item) => {
             const st = states[item.error_item_id] ?? initialItemState;
             const mastered = st.result?.state === "mastered";
             const wrong = Boolean(st.result && !st.result.correct);
@@ -388,6 +393,7 @@ export default function ReviewsPage() {
                       {item.question.type === "short" && (
                         <AppealEntry questionId={item.question.id} />
                       )}
+                      <div className="mt-3 flex justify-end"><button type="button" onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : reload()} className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-800">{currentIndex < data.items.length - 1 ? "继续下一题 →" : "完成今日复习"}</button></div>
                     </div>
                   ) : (
                     <div className="mt-3 flex items-center justify-end gap-2">
@@ -418,6 +424,7 @@ export default function ReviewsPage() {
             );
           })}
         </ul>
+        </>
       )}
     </div>
   );

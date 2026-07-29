@@ -17,7 +17,7 @@ import {
   fmtDateTime,
   fmtPct,
 } from "@/components/common";
-import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
+import type { FlowItem } from "@/components/flow-timeline";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
@@ -47,11 +47,11 @@ const TRIGGER_LABELS: Record<string, string> = {
 
 /** 阶段配色（固定顺序分配，不随过滤变化）。 */
 const STAGE_COLORS = [
-  { chip: "bg-indigo-50 text-indigo-700", bar: "bg-indigo-400" },
-  { chip: "bg-violet-50 text-violet-700", bar: "bg-violet-400" },
-  { chip: "bg-sky-50 text-sky-700", bar: "bg-sky-400" },
-  { chip: "bg-emerald-50 text-emerald-700", bar: "bg-emerald-400" },
-  { chip: "bg-amber-50 text-amber-700", bar: "bg-amber-400" },
+  { chip: "bg-success-50 text-success-700", bar: "bg-success-500" },
+  { chip: "bg-brand-50 text-brand-700", bar: "bg-brand-600" },
+  { chip: "bg-surface-muted text-ink-muted", bar: "bg-line-strong" },
+  { chip: "bg-surface-muted text-ink-muted", bar: "bg-line-strong" },
+  { chip: "bg-surface-muted text-ink-muted", bar: "bg-line-strong" },
 ];
 
 interface FlatDay {
@@ -120,114 +120,29 @@ function PlanCalendar({
   if (days.length === 0) {
     return <EmptyState title="该计划暂无日程" illustration="map" />;
   }
-  const weeks: FlatDay[][] = [];
-  for (let i = 0; i < days.length; i += 7) {
-    weeks.push(days.slice(i, i + 7));
-  }
+  const currentIndex = Math.max(0, days.findIndex((day) => day.tasks.some((task) => !task.done)));
+  const currentDay = days[currentIndex] ?? days[0];
+  const upcoming = days.slice(currentIndex, currentIndex + 7);
   return (
-    <div className="space-y-4">
-      {/* 阶段图例 */}
-      <div className="flex flex-wrap gap-1.5">
-        {structure.stages.map((s, i) => {
-          const color = STAGE_COLORS[i % STAGE_COLORS.length];
-          return (
-            <span
-              key={i}
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${color.chip}`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${color.bar}`} />
-              {s.name}（{s.days?.length ?? 0} 天）
-            </span>
-          );
-        })}
-      </div>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
+      <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-[10px] text-ink-muted">{currentDay.tasks.filter((task) => task.done).length}/{currentDay.tasks.length} 完成</span></header>
+        <ul className="divide-y divide-line">
+          {currentDay.tasks.map((task, index) => {
+            const key = task.task_key;
+            const done = Boolean(task.done);
+            const busy = Boolean(key && pendingKeys?.has(key));
+            const isNew = Boolean(key && highlightKeys?.has(key));
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><p className={`truncate text-[12px] ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} /></p><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+          })}
+        </ul>
+        <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
+      </section>
 
-      {weeks.map((week, wi) => (
-        <div key={wi}>
-          <p className="mb-1.5 text-xs font-medium text-slate-400">第 {wi + 1} 周</p>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-7">
-            {week.map((d) => {
-              const color = STAGE_COLORS[d.stageIdx % STAGE_COLORS.length];
-              const total = d.tasks.reduce((s, t) => s + (t.minutes || 0), 0);
-              return (
-                <div
-                  key={d.day}
-                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_6px_18px_-6px_rgba(79,70,229,0.20)] motion-reduce:hover:translate-y-0"
-                >
-                  <div className={`h-1 ${color.bar}`} />
-                  <div className="flex items-center justify-between px-2.5 pt-2">
-                    <span className="text-xs font-semibold text-slate-700">
-                      第 {d.day} 天
-                    </span>
-                    <span className="text-[10px] text-slate-400">{total} 分钟</span>
-                  </div>
-                  <ul className="space-y-1 p-2">
-                    {d.tasks.map((t, ti) => {
-                      const key = t.task_key;
-                      const done = Boolean(t.done);
-                      const busy = Boolean(key && pendingKeys?.has(key));
-                      const isNew = Boolean(key && highlightKeys?.has(key));
-                      return (
-                        <li
-                          key={key ?? ti}
-                          className={`rounded-lg px-2 py-1.5 transition-all duration-500 ${
-                            isNew
-                              ? "edu-pulse-hl bg-amber-50 ring-1 ring-amber-300"
-                              : done
-                                ? "bg-emerald-50/70 opacity-70"
-                                : "bg-slate-50"
-                          }`}
-                          title={d.stageName}
-                        >
-                          <div className="flex items-start gap-1.5">
-                            {onToggle && key && (
-                              <input
-                                type="checkbox"
-                                checked={done}
-                                disabled={busy}
-                                onChange={() => onToggle(key, !done)}
-                                aria-label={`标记完成：${t.title}`}
-                                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-indigo-600 disabled:opacity-40"
-                              />
-                            )}
-                            <p
-                              className={`min-w-0 flex-1 text-xs leading-snug transition-colors duration-500 ${
-                                done
-                                  ? "text-slate-400 line-through decoration-emerald-500/60"
-                                  : "text-slate-700"
-                              }`}
-                            >
-                              <MathText text={t.title} />
-                            </p>
-                          </div>
-                          <p className="mt-0.5 flex flex-wrap items-center gap-1">
-                            <span className="rounded bg-white px-1 py-0.5 text-[10px] font-medium text-slate-500">
-                              {t.minutes} 分钟
-                            </span>
-                            {isNew && (
-                              <span className="rounded bg-amber-500 px-1 py-0.5 text-[10px] font-medium text-white">
-                                新插入
-                              </span>
-                            )}
-                            {t.kc_names.map((kc) => (
-                              <span
-                                key={kc}
-                                className={`max-w-24 truncate rounded px-1 py-0.5 text-[10px] ${color.chip}`}
-                              >
-                                {kc}
-                              </span>
-                            ))}
-                          </p>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><span className="text-[10px] font-medium text-brand-700">查看完整计划</span></header>
+        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => task.done).length; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-[9px] font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-[12px] font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-[10px] text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟</p></div><span className={`text-[10px] ${done === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{done === day.tasks.length ? `✓ ${done}/${day.tasks.length}` : day.day === currentDay.day ? `${done}/${day.tasks.length} 进行中` : "待开始"}</span></li>; })}</ol>
+      </section>
     </div>
   );
 }
@@ -312,8 +227,9 @@ function PlanConfirmCard({
     "rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
 
   return (
-    <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
-      <h3 className="text-sm font-semibold text-slate-900">学习计划草案待确认</h3>
+    <div className="rounded-[14px] border border-line bg-white p-5">
+      <p className="text-[10px] font-medium text-brand-700">草案确认</p>
+      <h3 className="mt-2 text-[22px] font-semibold tracking-[-0.03em] text-ink">{totalDays} 天学习计划</h3>
       <p className="mt-0.5 text-xs text-slate-500">
         共 {draft.stages.length} 个阶段 / {totalDays} 天 / {totalTasks} 个任务
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
@@ -468,7 +384,7 @@ function PlanConfirmCard({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:bg-surface-muted"
         >
           取消
         </button>
@@ -476,7 +392,7 @@ function PlanConfirmCard({
           type="button"
           disabled={invalid || emptied}
           onClick={() => onConfirm(draft)}
-          className="rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {touched ? "确认并保存修改后的计划" : "确认并保存计划"}
         </button>
@@ -507,6 +423,7 @@ export default function PlansPage() {
   const [kbId, setKbId] = useState("");
   const [hours, setHours] = useState(1.5);
   const [totalDays, setTotalDays] = useState(14);
+  const [showCreate, setShowCreate] = useState(false);
 
   // SSE 流
   const [phase, setPhase] = useState<Phase>("idle");
@@ -753,10 +670,10 @@ export default function PlansPage() {
         action={
           <button
             type="button"
-            onClick={() => void loadPlans()}
-            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
+            onClick={() => setShowCreate((value) => !value)}
+            className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-brand-800"
           >
-            刷新列表
+            新建计划
           </button>
         }
       />
@@ -778,10 +695,10 @@ export default function PlansPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+      <div className="space-y-4">
         {/* 左：发起 + 列表 */}
-        <aside className="w-full shrink-0 space-y-4 lg:w-80">
-          <Card title="制定学习计划">
+        <aside className="w-full shrink-0 space-y-4">
+          {(showCreate || plans?.length === 0) && <Card title="制定学习计划">
             <form onSubmit={startPlan} className="space-y-3">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-500">
@@ -851,13 +768,13 @@ export default function PlansPage() {
               <button
                 type="submit"
                 disabled={!goal.trim() || busy || phase === "await_confirm"}
-                className="flex w-full items-center justify-center gap-2 rounded-control bg-ink py-2.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-[8px] bg-brand-600 py-2.5 text-[12px] font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                 {busy ? "正在规划…" : "生成计划草案"}
               </button>
             </form>
-          </Card>
+          </Card>}
 
           <Card title="我的计划">
             {listError && (
@@ -872,16 +789,16 @@ export default function PlansPage() {
                 还没有学习计划
               </p>
             ) : (
-              <ul className="space-y-1">
+              <ul className="flex gap-2 overflow-x-auto pb-1">
                 {plans.map((p) => (
-                  <li key={p.id}>
+                  <li key={p.id} className="min-w-[240px] flex-1">
                     <button
                       type="button"
                       onClick={() => selectPlan(p)}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-all duration-200 ${
+                      className={`w-full rounded-[9px] border px-3 py-2 text-left text-[12px] transition-colors ${
                         selected?.id === p.id
-                          ? "bg-indigo-50 text-indigo-700"
-                          : "text-slate-700 hover:-translate-y-0.5 hover:bg-slate-100 hover:shadow-[0_4px_14px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
+                          ? "border-brand-300 bg-brand-50 text-brand-700"
+                          : "border-line bg-white text-ink-secondary hover:border-brand-200"
                       }`}
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
@@ -898,10 +815,6 @@ export default function PlansPage() {
 
         {/* 右：流程 / 日历 */}
         <div className="min-w-0 flex-1 space-y-4">
-          {(timeline.length > 0 || busy) && (
-            <FlowTimeline items={timeline} streaming={busy} />
-          )}
-
           {phase === "await_confirm" && interruptData?.plan && (
             <PlanConfirmCard
               plan={interruptData.plan}

@@ -3,6 +3,7 @@
 // 错题本（F6）：统计卡片（点击筛选）+ 错因分布条形（纯 CSS，同 profile 页风格，点击筛选）
 // + 错题卡片列表（我的答案 vs 正确答案 / 解析 / 可改错因 / 变式重练 / 归档）+ 分页 + 空态。
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
@@ -36,32 +37,32 @@ const CAUSE_LABELS: Record<string, string> = {
 };
 const CAUSE_ORDER = Object.keys(CAUSE_LABELS);
 
-/** 错因五色语义化（徽章底色 + 分布条颜色，与复习页同一套色）。 */
+/** 错因使用产品语义色；主色只承担概念类与主要操作。 */
 const CAUSE_COLORS: Record<string, { badge: string; bar: string; active: string }> = {
   concept_confusion: {
-    badge: "bg-violet-50 text-violet-700 ring-violet-200/70",
-    bar: "bg-violet-400",
-    active: "bg-violet-600",
+    badge: "bg-brand-50 text-brand-700 ring-brand-100",
+    bar: "bg-brand-400",
+    active: "bg-brand-600",
   },
   formula_error: {
-    badge: "bg-sky-50 text-sky-700 ring-sky-200/70",
-    bar: "bg-sky-400",
-    active: "bg-sky-600",
+    badge: "bg-warning-50 text-warning-700 ring-warning-500/20",
+    bar: "bg-warning-500",
+    active: "bg-warning-600",
   },
   calc_slip: {
-    badge: "bg-amber-50 text-amber-700 ring-amber-200/70",
-    bar: "bg-amber-400",
-    active: "bg-amber-600",
+    badge: "bg-warning-50 text-warning-700 ring-warning-500/20",
+    bar: "bg-warning-500",
+    active: "bg-warning-600",
   },
   misread: {
-    badge: "bg-orange-50 text-orange-700 ring-orange-200/70",
-    bar: "bg-orange-400",
-    active: "bg-orange-600",
+    badge: "bg-warning-50 text-warning-700 ring-warning-500/20",
+    bar: "bg-warning-500",
+    active: "bg-warning-600",
   },
   knowledge_gap: {
-    badge: "bg-rose-50 text-rose-700 ring-rose-200/70",
-    bar: "bg-rose-400",
-    active: "bg-rose-600",
+    badge: "bg-danger-50 text-danger-700 ring-danger-500/20",
+    bar: "bg-danger-500",
+    active: "bg-danger-600",
   },
 };
 const CAUSE_COLOR_FALLBACK = {
@@ -81,10 +82,10 @@ const PAGE_SIZE = 10;
 
 /** 顶部统计卡片：state=null 表示"全部"。 */
 const STAT_CARDS: { key: string; label: string; state: string | null }[] = [
-  { key: "total", label: "总错题数", state: null },
+  { key: "total", label: "在库错题", state: null },
   { key: "active", label: "待复习", state: "active" },
   { key: "mastered", label: "已攻克", state: "mastered" },
-  { key: "archived", label: "归档", state: "archived" },
+  { key: "archived", label: "已归档", state: "archived" },
 ];
 
 function StateBadge({ state }: { state: string }) {
@@ -109,14 +110,27 @@ export default function ErrorsPage() {
 
   const [stateFilter, setStateFilter] = useState<string | null>(null);
   const [causeFilter, setCauseFilter] = useState<string | null>(null);
-  // B4 真实规模: 三科目错题交错平铺不可用 —— 科目 tab 走后端 kb_id 过滤 (跨页生效),
-  // 题干搜索为本页本地过滤 (仅当前页, 文案已注明, 不伪装成全库搜索)
+  // B4 真实规模: 科目 tab 与全文搜索都走后端过滤，结果数和翻页保持一致。
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [kbFilter, setKbFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [reloadKey, setReloadKey] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = query.trim();
+      if (next !== searchQuery) {
+        setSearchQuery(next);
+        setPage(1);
+        setLoading(true);
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query, searchQuery]);
 
   // 列表 + 统计并行拉取（首个 setState 在 await 之后）
   useEffect(() => {
@@ -129,6 +143,7 @@ export default function ErrorsPage() {
       if (stateFilter) params.set("state", stateFilter);
       if (causeFilter) params.set("cause", causeFilter);
       if (kbFilter) params.set("kb_id", kbFilter);
+      if (searchQuery) params.set("q", searchQuery);
       const [listRes, statsRes] = await Promise.allSettled([
         apiJson<ErrorListResponse>(`/api/errors?${params.toString()}`),
         apiJson<ErrorStatsResponse>("/api/errors/stats"),
@@ -150,7 +165,7 @@ export default function ErrorsPage() {
     return () => {
       alive = false;
     };
-  }, [stateFilter, causeFilter, kbFilter, page, reloadKey]);
+  }, [stateFilter, causeFilter, kbFilter, searchQuery, page, reloadKey]);
 
   // 知识库列表 (科目 tab 数据源); 失败静默降级为"全部"单 tab, 不拖垮错题本
   useEffect(() => {
@@ -260,17 +275,18 @@ export default function ErrorsPage() {
   };
 
   const filtered = stateFilter !== null || causeFilter !== null;
+  const selectedItem = list?.items.find((item) => item.id === selectedItemId) ?? null;
 
   return (
     <div className="mx-auto w-full max-w-[1100px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
         title="错题本"
-        subtitle="测评与复习中的错题自动归集；错因五分类可随时修正，攻克后自动退出复习队列"
+        subtitle="沉淀每一道错误，看清原因，再决定下一步该练什么。"
         action={
           <button
             type="button"
             onClick={reload}
-            className="rounded-control bg-ink px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-black"
+            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700"
           >
             刷新
           </button>
@@ -293,7 +309,6 @@ export default function ErrorsPage() {
         </div>
       )}
 
-      {/* 统计卡片：点击筛选 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {STAT_CARDS.map((card) => {
           const active = stateFilter === card.state;
@@ -302,10 +317,10 @@ export default function ErrorsPage() {
               key={card.key}
               type="button"
               onClick={() => pickState(card.state)}
-              className={`rounded-2xl border px-4 py-3 text-left shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_26px_-6px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0 ${
+              className={`rounded-[12px] border px-4 py-3 text-left transition-colors ${
                 active
-                  ? "border-indigo-300 bg-indigo-50"
-                  : "border-slate-200 bg-white hover:border-indigo-200"
+                  ? "border-brand-400 bg-brand-50"
+                  : "border-line bg-white hover:border-brand-200"
               }`}
             >
               <p className="text-xs text-slate-500">{card.label}</p>
@@ -321,8 +336,8 @@ export default function ErrorsPage() {
         })}
       </div>
 
-      {/* B4: 科目 tab（后端 kb_id 过滤，跨页生效）+ 题干搜索（当前页本地过滤） */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-line bg-white p-2.5">
+        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索全部错题 · 题目、知识点、解析" aria-label="搜索全部错题" className="h-9 min-w-[220px] flex-1 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
         {kbs.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             {[{ id: null, name: "全部科目" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
@@ -336,7 +351,7 @@ export default function ErrorsPage() {
                       setKbFilter(tab.id);
                       setPage(1);
                     }}
-                    className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    className={`rounded-[7px] border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
                       on
                         ? "border-indigo-300 bg-indigo-50 text-indigo-700"
                         : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
@@ -349,19 +364,13 @@ export default function ErrorsPage() {
             )}
           </div>
         )}
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索题干（本页）…"
-          aria-label="搜索题干"
-          className="w-full max-w-52 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
-        />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <Card title="错题洞察" extra={<span className="text-[10px] text-ink-muted">包含已归档记录 · 点击分布快速筛选</span>}>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card
           title="错因分布"
+          className="border-0"
           extra={
             causeFilter && (
               <button
@@ -416,7 +425,7 @@ export default function ErrorsPage() {
           )}
         </Card>
 
-        <Card title="高频知识点 Top 10">
+        <Card title="高频知识点" className="border-0">
           {!stats || stats.by_kc.length === 0 ? (
             <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
           ) : (
@@ -438,6 +447,7 @@ export default function ErrorsPage() {
           )}
         </Card>
       </div>
+      </Card>
 
       {filtered && (
         <p className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -499,22 +509,16 @@ export default function ErrorsPage() {
         />
       ) : (
         <>
-          <ul className="space-y-4">
-            {list.items
-              .filter((item) => {
-                const q = query.trim().toLowerCase();
-                if (!q) return true;
-                // 题干 + 知识点名都参与匹配（题干在 question 子对象里）
-                const hay = `${item.question?.stem ?? ""} ${item.kc_names.join(" ")}`;
-                return hay.toLowerCase().includes(q);
-              })
-              .map((item) => {
+          <div className="flex items-center justify-between text-[10px] text-ink-muted"><span>{filtered || searchQuery ? "已应用筛选条件" : "未使用筛选条件"}</span><span>{list.total} 条结果</span></div>
+          <ul className="space-y-2">
+            {list.items.map((item) => {
               const busy = busyId === item.id;
               return (
-                <li key={item.id}>
-                  <Card className="transition-all duration-200 hover:-translate-y-0.5 motion-reduce:hover:translate-y-0">
-                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                      <StateBadge state={item.state} />
+                <li key={item.id} className="rounded-[12px] border border-line bg-white p-4">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[13px] font-semibold text-ink">{item.question?.stem ? <MathText text={item.question.stem} /> : "原题已删除"}</h2><StateBadge state={item.state} /></div>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <label
                         className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ring-inset ${
                           (CAUSE_COLORS[item.cause] ?? CAUSE_COLOR_FALLBACK).badge
@@ -537,88 +541,32 @@ export default function ErrorsPage() {
                       {item.kc_names.map((kc) => (
                         <span
                           key={kc}
-                          className="max-w-32 truncate rounded-full bg-violet-50 px-2 py-0.5 text-xs text-violet-700"
+                          className="max-w-32 truncate rounded-full bg-brand-50 px-2 py-0.5 text-xs text-brand-700"
                         >
                           {kc}
                         </span>
                       ))}
                       {item.is_variant && (
-                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600">
+                        <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
                           变式题
                         </span>
                       )}
-                      <span className="flex-1" />
-                      <span
-                        className="text-xs text-slate-400"
-                        title={item.next_due ? fmtDateTime(item.next_due) : undefined}
-                      >
-                        错 {item.error_count} 次
-                        {item.next_due && ` · 下次复习 ${fmtRelative(item.next_due)}`}
-                      </span>
-                    </div>
-
-                    {item.question ? (
-                      <>
-                        <p className="mb-2 text-sm leading-relaxed text-slate-800">
-                          <MathText text={item.question.stem} />
-                        </p>
-                        {item.question.options.length > 0 && (
-                          <ol className="mb-2 space-y-0.5 text-xs text-slate-500">
-                            {item.question.options.map((opt, i) => (
-                              <li key={i}>
-                                <span className="mr-1 font-medium text-slate-400">
-                                  {String.fromCharCode(65 + i)}.
-                                </span>
-                                <MathText text={opt} />
-                              </li>
-                            ))}
-                          </ol>
-                        )}
-                        <div className="flex flex-wrap gap-2 text-xs">
-                          <span className="rounded-lg border border-red-200 bg-red-50/60 px-2.5 py-1 text-red-700">
-                            我的答案：{item.my_answer || "（未作答）"}
-                          </span>
-                          <span className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-1 text-emerald-700">
-                            正确答案：<MathText text={item.question.answer} />
-                          </span>
+                      <span className="text-[10px] text-ink-muted">错 {item.error_count} 次{item.next_due && ` · 下次 ${fmtRelative(item.next_due)}`}</span>
                         </div>
-                        {item.question.explanation && (
-                          <details className="mt-2 rounded-xl bg-slate-50 px-3 py-2">
-                            <summary className="cursor-pointer text-xs font-medium text-slate-600">
-                              查看解析
-                            </summary>
-                            <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                              <MathText text={item.question.explanation} />
-                            </p>
-                          </details>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-sm text-slate-400">原题已被删除</p>
-                    )}
-
-                    <div className="mt-3 flex items-center justify-end gap-2">
+                      </div>
+                    <div className="flex shrink-0 items-center gap-2">
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => void makeVariant(item)}
-                        className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex items-center gap-1.5 rounded-[7px] bg-brand-50 px-3 py-1.5 text-[11px] font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-50"
                       >
                         {busy && <Spinner className="h-3.5 w-3.5" />}
-                        变式重练
+                        变式练习
                       </button>
-                      {item.state !== "archived" && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void archive(item)}
-                          className="rounded-xl border border-slate-300 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          归档
-                        </button>
-                      )}
+                      <button type="button" onClick={() => setSelectedItemId(item.id)} className="rounded-[7px] px-3 py-1.5 text-[11px] font-medium text-ink-secondary hover:bg-surface-muted">查看详情</button>
                     </div>
-                  </Card>
+                    </div>
                 </li>
               );
             })}
@@ -654,6 +602,21 @@ export default function ErrorsPage() {
             </div>
           )}
         </>
+      )}
+
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <button type="button" aria-label="关闭错题详情" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setSelectedItemId(null)} />
+          <aside className="relative flex h-full w-full max-w-[580px] flex-col border-l border-line bg-white shadow-floating">
+            <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><div className="flex items-center gap-2"><StateBadge state={selectedItem.state} /><span className="text-[10px] text-ink-muted">{selectedItem.kc_names.join(" · ") || "未关联知识点"}</span></div><h2 className="mt-2 text-[18px] font-semibold text-ink">错题详情</h2></div><button type="button" onClick={() => setSelectedItemId(null)} className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted" aria-label="关闭">✕</button></header>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+              {selectedItem.question ? <><section><p className="text-[10px] font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-[10px] font-semibold text-danger-600">我的答案</p><p className="mt-2 text-[12px] text-ink-secondary">{selectedItem.my_answer || "（未作答）"}</p></div><div className="rounded-[10px] border border-success-200 bg-success-50 p-4"><p className="text-[10px] font-semibold text-success-600">正确答案</p><div className="mt-2 text-[12px] text-ink-secondary"><MathText text={selectedItem.question.answer} /></div></div></div>{selectedItem.question.explanation && <section><p className="text-[10px] font-semibold text-ink-muted">解析</p><div className="mt-2 text-[12px] leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-[12px] text-ink-muted">原题已删除，历史记录仍保留。</p>}
+              <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-[11px] text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-[11px] text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
+              <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">加入日期</p><strong className="mt-1 block text-[11px] text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">下次复习</p><strong className="mt-1 block text-[11px] text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
+            </div>
+            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]"><button type="button" disabled={busyId === selectedItem.id} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">生成变式题去练习</button><Link href="/tutor" className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state !== "archived" && <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
+          </aside>
+        </div>
       )}
     </div>
   );

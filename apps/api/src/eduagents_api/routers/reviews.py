@@ -27,7 +27,7 @@ from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import array as pg_array
 
 from .. import timectl
@@ -145,9 +145,7 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
         redis=request.app.state.redis,
     )
     for it in items:
-        info = next(
-            (meta[k] for k in it["question"]["kc_ids"] if k in meta), None
-        )
+        info = next((meta[k] for k in it["question"]["kc_ids"] if k in meta), None)
         it["kb_id"] = info["kb_id"] if info else None
         it["kb_name"] = info["kb_name"] if info else ""
         it["subject"] = info["subject"] if info else ""
@@ -433,16 +431,18 @@ async def list_errors(
     cause: str | None = Query(default=None),
     kc_id: uuid.UUID | None = Query(default=None),
     kb_id: uuid.UUID | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """错题列表 (F6): 按状态/错因/知识点/知识库筛选, 分页; 含我的作答与正确答案对照。
+    """错题列表 (F6): 按状态/错因/知识点/知识库及全文搜索筛选, 分页; 含答案对照。
 
     state 除四个真实状态外还接受别名 "active" (= new|reviewing, 即仍在复习队列里的),
     对应前端"待复习"统计卡 —— 让卡片点击与列表筛选严格一致, 不做近似。
     error_count = 该题在 attempts 里的错误作答次数 (复习作答不写 attempts, 故只统计测评路径)。
     B4: kb_id 过滤经 kc_ids ∩ 该库 KC 集合实现 (jsonb ?| text[]), 不加冗余列不动迁移。
+    q 覆盖题干、解析和知识点名，搜索在分页前完成，结果数与翻页保持真实。
     """
     if state is not None and state not in (*_ALL_STATES, "active"):
         raise HTTPException(status_code=422, detail="INVALID_STATE")
@@ -464,15 +464,36 @@ async def list_errors(
                 str(k)
                 for k in (
                     await session.scalars(
-                        select(KnowledgeComponent.id).where(
-                            KnowledgeComponent.kb_id == kb_id
-                        )
+                        select(KnowledgeComponent.id).where(KnowledgeComponent.kb_id == kb_id)
                     )
                 ).all()
             ]
             if not kb_kc_ids:
                 return {"items": [], "total": 0, "page": page, "page_size": page_size, "pages": 0}
             conditions.append(ErrorItem.kc_ids.op("?|")(pg_array(kb_kc_ids)))
+        search = (q or "").strip()
+        if search:
+            pattern = f"%{search}%"
+            matched_kc_ids = [
+                str(value)
+                for value in (
+                    await session.scalars(
+                        select(KnowledgeComponent.id).where(
+                            KnowledgeComponent.canonical_name.ilike(pattern)
+                        )
+                    )
+                ).all()
+            ]
+            question_matches = select(Question.id).where(
+                or_(
+                    Question.stem.ilike(pattern),
+                    Question.explanation.ilike(pattern),
+                )
+            )
+            search_conditions = [ErrorItem.question_id.in_(question_matches)]
+            if matched_kc_ids:
+                search_conditions.append(ErrorItem.kc_ids.op("?|")(pg_array(matched_kc_ids)))
+            conditions.append(or_(*search_conditions))
         total = int(
             await session.scalar(select(func.count()).select_from(ErrorItem).where(*conditions))
             or 0
@@ -593,9 +614,7 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
                 counter[str(kc_id)] = counter.get(str(kc_id), 0) + 1
         top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:_KC_TOP_N]
         name_map = await _kc_names(session, [kc_id for kc_id, _ in top])
-        by_kc = [
-            {"kc_id": kc_id, "name": name_map.get(kc_id, ""), "count": n} for kc_id, n in top
-        ]
+        by_kc = [{"kc_id": kc_id, "name": name_map.get(kc_id, ""), "count": n} for kc_id, n in top]
     # 五分类/状态补零, 前端画分布图不必自己兜底
     return {
         "total": sum(by_state.values()),
@@ -613,9 +632,7 @@ async def _load_error_item(session, error_item_id: uuid.UUID, ctx: AuthContext) 
 
 
 @errors_router.post("/{error_item_id}/archive")
-async def archive_error(
-    error_item_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)
-):
+async def archive_error(error_item_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """手动归档: state→archived, 退出复习队列 (today 只取 new/reviewing)。"""
     async with tenant_session(ctx.tenant_id) as session:
         item = await _load_error_item(session, error_item_id, ctx)
@@ -779,8 +796,10 @@ async def appeal_score(
                     f"[申诉复核维持原判: 复核分 {new_score:.2f}, 原分 {old_score:.2f}]"
                 ).strip()
         log.info(
-            "appeal_kept", attempt_id=str(attempt_id),
-            old_score=old_score, new_score=new_score,
+            "appeal_kept",
+            attempt_id=str(attempt_id),
+            old_score=old_score,
+            new_score=new_score,
         )
         return {
             "status": "kept",
@@ -844,8 +863,11 @@ async def appeal_score(
                 evidence_type="appeal_regrade",
             )
     log.info(
-        "appeal_adjusted", attempt_id=str(attempt_id),
-        old_score=old_score, new_score=new_score, crossed=crossed,
+        "appeal_adjusted",
+        attempt_id=str(attempt_id),
+        old_score=old_score,
+        new_score=new_score,
+        crossed=crossed,
     )
     return {
         "status": "adjusted",

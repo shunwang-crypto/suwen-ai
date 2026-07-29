@@ -147,9 +147,7 @@ async def _build_aggregates(
         }
         for key, b in buckets.items()
     ]
-    radar.sort(
-        key=lambda a: chapter_sort_key(a["name"]) if effective_kb_id else (0, 0, a["name"])
-    )
+    radar.sort(key=lambda a: chapter_sort_key(a["name"]) if effective_kb_id else (0, 0, a["name"]))
 
     # trend: 近 30 天每日答题数与正确率, 无数据日补零 (前端折线连续)。
     # P2-11 唯一决定: 日切在 SQL 侧 AT TIME ZONE 'Asia/Shanghai' (timestamptz ->
@@ -187,6 +185,64 @@ async def _build_aggregates(
             }
         )
 
+    # Figma 报告新增的可核对指标：只使用真实 Attempt / MasteryLog 证据。
+    # 仓库当前没有可靠的前台停留时长，因此明确返回作答次数，不用次数推算“学习小时”。
+    current_attempts = sum(item[0] for item in daily.values())
+    current_correct = sum(item[1] for item in daily.values())
+    active_days = sum(1 for total, _ in daily.values() if total > 0)
+    previous_since = since - timedelta(days=_TREND_DAYS)
+    previous_row = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(Attempt.is_correct.is_(True)),
+                func.count(func.distinct(day_col)),
+            ).where(
+                Attempt.user_id == ctx.user_id,
+                Attempt.at >= previous_since,
+                Attempt.at < since,
+            )
+        )
+    ).one()
+    previous_attempts = int(previous_row[0] or 0)
+    previous_correct = int(previous_row[1] or 0)
+    previous_active_days = int(previous_row[2] or 0)
+
+    scoped_kc_ids = [r.kc_id for r, _ in scoped]
+    mastery_log_query = select(MasteryLog).where(
+        MasteryLog.user_id == ctx.user_id,
+        MasteryLog.at >= since,
+    )
+    if kb_id:
+        mastery_log_query = mastery_log_query.where(MasteryLog.kc_id.in_(scoped_kc_ids))
+    recent_mastery_logs = (await session.scalars(mastery_log_query)).all()
+    newly_mastered = {
+        str(item.kc_id)
+        for item in recent_mastery_logs
+        if item.old_p < _CONSOLIDATE_THRESHOLD <= item.new_p
+    }
+    slipped = {
+        str(item.kc_id)
+        for item in recent_mastery_logs
+        if item.old_p >= _CONSOLIDATE_THRESHOLD > item.new_p
+    }
+    current_accuracy = current_correct / current_attempts if current_attempts else None
+    previous_accuracy = previous_correct / previous_attempts if previous_attempts else None
+    metrics = {
+        "attempt_count": current_attempts,
+        "active_days": active_days,
+        "accuracy": round(current_accuracy, 4) if current_accuracy is not None else None,
+        "newly_mastered_count": len(newly_mastered),
+        "slipped_count": len(slipped),
+        "attempt_count_delta": current_attempts - previous_attempts,
+        "active_days_delta": active_days - previous_active_days,
+        "accuracy_delta": (
+            round(current_accuracy - previous_accuracy, 4)
+            if current_accuracy is not None and previous_accuracy is not None
+            else None
+        ),
+    }
+
     # weak_points: p<红线, 附相关错题数 + 归因下钻 (kc_edges: from_kc 是 to_kc 的前置)
     weak_ids = [
         kc
@@ -220,9 +276,7 @@ async def _build_aggregates(
     error_counts: Counter[str] = Counter()
     if target_ids:
         error_kc_rows = (
-            await session.scalars(
-                select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id)
-            )
+            await session.scalars(select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id))
         ).all()
         for row_ids in error_kc_rows:
             for row_kc in {str(value) for value in (row_ids or [])} & target_ids:
@@ -270,6 +324,7 @@ async def _build_aggregates(
         "radar_kcs": radar_kcs,
         "axes_kind": axes_kind,
         "trend": trend,
+        "metrics": metrics,
         "weak_points": weak_points,
         "consolidate_points": consolidate_points,
         "open_errors": open_errors,
@@ -334,6 +389,7 @@ def _report_payload(agg: dict, actions: list[dict]) -> dict:
         "axes_kind": agg["axes_kind"],
         "radar_kcs": agg["radar_kcs"],
         "trend": agg["trend"],
+        "metrics": agg["metrics"],
         "weak_points": agg["weak_points"],
         "weak_threshold": _WEAK_THRESHOLD,
         "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
@@ -445,9 +501,7 @@ async def learning_report(
                 kb_id=kb_id,
                 payload_json=payload,
                 narrative=None,
-                narrative_note=(
-                    "需 live 网关生成" if unavailable else "正在生成最新 AI 诊断"
-                ),
+                narrative_note=("需 live 网关生成" if unavailable else "正在生成最新 AI 诊断"),
                 status="unavailable" if unavailable else "pending",
                 data_signature=_payload_signature(payload),
                 model=settings.standard_model,
@@ -536,8 +590,10 @@ async def refresh_learning_report(
     except Exception:  # noqa: BLE001 — 快照必须从 generating 收口为 failed
         log.exception("report_narrative_unhandled", user_id=str(ctx.user_id), scope=scope_key)
         narrative, note = None, "AI 诊断更新失败，当前报告数据仍可正常查看"
-    status = "completed" if narrative else (
-        "unavailable" if settings.gateway_mode == "stub" else "failed"
+    status = (
+        "completed"
+        if narrative
+        else ("unavailable" if settings.gateway_mode == "stub" else "failed")
     )
     async with tenant_session(ctx.tenant_id) as session:
         snapshot = await session.get(LearningReportSnapshot, snapshot_id)

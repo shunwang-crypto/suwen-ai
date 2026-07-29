@@ -558,6 +558,11 @@ export default function ProfilePage() {
     (c) => Math.abs(c.new_p - c.old_p) >= 0.0001 || c.evidence_type === "user_override",
   );
   const shownChanges = changesExpanded ? changes : changes.slice(0, CHANGES_PAGE_SIZE);
+  const consolidateItems = [...mastery].filter((item) => item.p_mastery < 0.5).sort((a, b) => a.p_mastery - b.p_mastery);
+  const dueItems = [...mastery].filter((item) => isDue(item)).sort((a, b) => (a.retention_in_3d ?? 1) - (b.retention_in_3d ?? 1));
+  const verifyItems = mastery.filter((item) => item.evidence_strength === "limited" || !item.evidence_strength);
+  const strongest = [...mastery].sort((a, b) => b.p_mastery - a.p_mastery)[0];
+  const weakest = [...mastery].sort((a, b) => a.p_mastery - b.p_mastery)[0];
 
   const chipCls = (on: boolean) =>
     `rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
@@ -569,19 +574,30 @@ export default function ProfilePage() {
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
-        title="AI 眼中的我"
-        subtitle="掌握度画像由每次练习、复习与辅导的真实证据持续更新"
+        title="学习画像"
+        subtitle="系统此刻如何认识你，以及你接下来能做什么。"
         action={
           <button
             type="button"
             onClick={() => setReloadKey((k) => k + 1)}
-            className="rounded-control bg-ink px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-black"
+            className="rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
           >
             刷新画像
           </button>
         }
       />
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
+
+      <section className="rounded-[14px] bg-brand-700 p-5 text-white sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[11px] font-medium text-indigo-100">系统此刻如何认识你</p><p className="mt-3 max-w-4xl text-[15px] font-medium leading-7">{mastery.length === 0 ? "还没有足够的真实作答证据。完成第一次练习、复习或辅导后，这里会逐步形成你的学习画像。" : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实证据持续更新。</>}</p></div><button type="button" onClick={() => setReloadKey((key) => key + 1)} className="rounded-[7px] bg-white/10 px-3 py-2 text-[11px] font-medium text-white hover:bg-white/15">刷新</button></div>
+        {changes[0] && <p className="mt-3 text-[10px] text-indigo-200">最近更新 {fmtDateTime(changes[0].at)} · {EVIDENCE_LABELS[changes[0].evidence_type] ?? changes[0].evidence_type}</p>}
+      </section>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-warning-50 text-warning-600">↯</span><strong className="text-[20px] text-ink">{consolidateItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待巩固</h2><p className="mt-1 text-[10px] text-ink-muted">掌握较薄弱，最值得先动手</p><ul className="mt-3 space-y-2">{consolidateItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/quiz?weak=1" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始巩固练习 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-warning-50 text-warning-600">◷</span><strong className="text-[20px] text-ink">{dueItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待复习</h2><p className="mt-1 text-[10px] text-ink-muted">掌握过，但快要遗忘</p><ul className="mt-3 space-y-2">{dueItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/reviews" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始今日复习 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-brand-50 text-brand-700">✓</span><strong className="text-[20px] text-ink">{verifyItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待验证</h2><p className="mt-1 text-[10px] text-ink-muted">记录太少，画像还不确定</p><ul className="mt-3 space-y-2">{verifyItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-brand-500">•</span>{item.name}</li>)}</ul><Link href={verifyItems[0] ? `/quiz?kc=${encodeURIComponent(verifyItems[0].name)}&n=3` : "/quiz"} className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">做几道题验证 →</Link></section>
+      </div>
 
       {/* 雷达（A1）：库 tab + 章节聚合轴 + 少轴条形降级 + 轴下钻（组件内实现） */}
       <MasteryRadarPanel items={mastery} />
