@@ -5,7 +5,7 @@
 // （误解 + 复习建议 + 掌握度变化）；换题重置 thread_local_id 开新会话。
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   ErrorBanner,
@@ -16,10 +16,13 @@ import {
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
+  KbOut,
   MasteryChange,
   TutorSessionSummary,
   TutorTurnResult,
 } from "@/lib/types";
+
+const emptySubscribe = () => () => {};
 
 const HINT_LEVELS = ["引导提问", "方向提示", "关键步骤", "完整解答"];
 
@@ -246,7 +249,17 @@ function ReviewCard({
 }
 
 export default function TutorPage() {
+  const search = useSyncExternalStore(
+    emptySubscribe,
+    () => window.location.search,
+    () => "",
+  );
+  const urlParams = new URLSearchParams(search);
+  const prefilledProblem = urlParams.get("problem") ?? "";
+  const sourceKbId = urlParams.get("kb") ?? "";
   const [problem, setProblem] = useState("");
+  const [problemTouched, setProblemTouched] = useState(false);
+  const [sourceKb, setSourceKb] = useState<KbOut | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<TutorMessage[]>([]);
   const [input, setInput] = useState("");
@@ -259,7 +272,23 @@ export default function TutorPage() {
 
   const started = messages.length > 0;
   const ended = summary !== null;
+  const effectiveProblem = problemTouched ? problem : prefilledProblem;
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!sourceKbId) return;
+    let alive = true;
+    void apiJson<KbOut[]>("/api/kb")
+      .then((items) => {
+        if (alive) setSourceKb(items.find((item) => item.id === sourceKbId) ?? null);
+      })
+      .catch(() => {
+        if (alive) setSourceKb(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sourceKbId]);
 
   // 新消息自动滚到底部
   useEffect(() => {
@@ -269,7 +298,7 @@ export default function TutorPage() {
 
   const send = async (text: string) => {
     const message = text.trim();
-    const prob = problem.trim();
+    const prob = effectiveProblem.trim();
     if (!message || !prob || sending || ended) return;
     setSending(true);
     setError(null);
@@ -348,11 +377,21 @@ export default function TutorPage() {
           <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">本次学习对象</span><span className="text-ink-muted">由你的真实题目建立辅导上下文</span></div>
           {started && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
+        {sourceKbId && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-[10px] text-brand-700">
+            <span>
+              来自知识库：{sourceKb?.name ?? "正在确认资料范围…"}。分级辅导围绕具体题目逐层引导，不会把资料库名称当成题目内容。
+            </span>
+            <Link href={`/chat?new=1&kb=${encodeURIComponent(sourceKbId)}`} className="font-semibold hover:underline">
+              改为基于资料提问 →
+            </Link>
+          </div>
+        )}
         {started ? (
-          <div className="mt-3"><MathText text={problem} className="text-[14px] font-medium leading-6 text-ink" /><p className="mt-2 text-[10px] text-ink-muted">引导强度 · {HINT_LEVELS[hintLevel]} · {hintLevel + 1}/4</p></div>
+          <div className="mt-3"><MathText text={effectiveProblem} className="text-[14px] font-medium leading-6 text-ink" /><p className="mt-2 text-[10px] text-ink-muted">引导强度 · {HINT_LEVELS[hintLevel]} · {hintLevel + 1}/4</p></div>
         ) : (
           <div className="mt-3">
-            <textarea value={problem} onChange={(e) => setProblem(e.target.value)} rows={3} maxLength={4000} placeholder={"粘贴让你卡住的题目，支持 $x^2$ 和 $$\\int_0^1 x\\,dx$$"} className="w-full resize-y rounded-[9px] border border-line-strong bg-[#fafaf9] px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted focus:border-brand-400 focus:ring-2 focus:ring-brand-50" />
+            <textarea value={effectiveProblem} onChange={(e) => { setProblemTouched(true); setProblem(e.target.value); }} rows={3} maxLength={4000} placeholder={"粘贴让你卡住的题目，支持 $x^2$ 和 $$\\int_0^1 x\\,dx$$"} className="w-full resize-y rounded-[9px] border border-line-strong bg-[#fafaf9] px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted focus:border-brand-400 focus:ring-2 focus:ring-brand-50" />
             <p className="mt-2 text-[10px] text-ink-muted">题目不会被写死；开始辅导后锁定，换题会建立新的辅导线程。</p>
           </div>
         )}

@@ -31,8 +31,13 @@ class FakeCauseGateway:
             payload = {"score": 0.1, "reason": "fake"}
         return ChatResult(
             text=json.dumps(payload, ensure_ascii=False),
-            model="fake", tier=req.tier.value, prompt_tokens=1,
-            completion_tokens=1, cost_cny=0.0, latency_ms=1, mode="live",
+            model="fake",
+            tier=req.tier.value,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_cny=0.0,
+            latency_ms=1,
+            mode="live",
         )
 
 
@@ -133,17 +138,25 @@ async def test_plan_alive_and_error_book(client):
         session.add_all([kc_weak, kc_quiz])
         await session.flush()
         plan = Plan(
-            tenant_id=uid, user_id=uid, goal="两周掌握微积分基础",
-            budget_hours=1.5, structure_json=_structure(),
+            tenant_id=uid,
+            user_id=uid,
+            goal="两周掌握微积分基础",
+            budget_hours=1.5,
+            structure_json=_structure(),
         )
         session.add(plan)
         quiz = Quiz(tenant_id=uid, user_id=uid, title="低分测评卷", status="ready")
         session.add(quiz)
         await session.flush()
         q_quiz = Question(
-            tenant_id=uid, quiz_id=quiz.id, type="single",
-            stem="$\\int_0^1 x\\,dx$ 的值是?", options_json=["1/2", "1", "2", "0"],
-            answer="A", explanation="牛顿-莱布尼茨公式。", kc_ids=[str(kc_quiz.id)],
+            tenant_id=uid,
+            quiz_id=quiz.id,
+            type="single",
+            stem="$\\int_0^1 x\\,dx$ 的值是?",
+            options_json=["1/2", "1", "2", "0"],
+            answer="A",
+            explanation="牛顿-莱布尼茨公式。",
+            kc_ids=[str(kc_quiz.id)],
         )
         session.add(q_quiz)
         await session.flush()
@@ -160,8 +173,11 @@ async def test_plan_alive_and_error_book(client):
     # task_key = 三层 0 基下标
     keys = [t["task_key"] for t in tasks]
     assert keys == [
-        "stage0.day0.task0", "stage0.day1.task0", "stage0.day2.task0",
-        "stage1.day0.task0", "stage1.day0.task1",
+        "stage0.day0.task0",
+        "stage0.day1.task0",
+        "stage0.day2.task0",
+        "stage1.day0.task0",
+        "stage1.day0.task1",
     ]
 
     r = await client.post(
@@ -179,7 +195,8 @@ async def test_plan_alive_and_error_book(client):
     # 幂等置位 + 取反回滚
     r = await client.post(
         f"/api/plans/{plan_id}/tasks/stage0.day1.task0/toggle",
-        headers=headers, json={"done": True},
+        headers=headers,
+        json={"done": True},
     )
     assert r.json()["done"] is True
     r = await client.post(
@@ -201,8 +218,11 @@ async def test_plan_alive_and_error_book(client):
     async with tenant_session(uid) as session:
         session.add(
             MasteryRecord(
-                tenant_id=uid, user_id=uid, kc_id=uuid.UUID(kc_weak_id),
-                p_mastery=0.15, confidence=0.8,
+                tenant_id=uid,
+                user_id=uid,
+                kc_id=uuid.UUID(kc_weak_id),
+                p_mastery=0.15,
+                confidence=0.8,
             )
         )
 
@@ -273,19 +293,32 @@ async def test_plan_alive_and_error_book(client):
     # 低分测评已自动入本一条 (kc_quiz, cause=knowledge_gap, state=new)
     async with tenant_session(uid) as session:
         q2 = Question(
-            tenant_id=uid, quiz_id=uuid.UUID(quiz_id), type="single",
-            stem="洛必达法则的使用前提是?", options_json=["0/0 或 ∞/∞", "任意极限", "连续", "可积"],
-            answer="A", explanation="未定式才可用。", kc_ids=[kc_weak_id],
+            tenant_id=uid,
+            quiz_id=uuid.UUID(quiz_id),
+            type="single",
+            stem="洛必达法则的使用前提是?",
+            options_json=["0/0 或 ∞/∞", "任意极限", "连续", "可积"],
+            answer="A",
+            explanation="未定式才可用。",
+            kc_ids=[kc_weak_id],
         )
         session.add(q2)
         await session.flush()
         e_mastered = ErrorItem(
-            tenant_id=uid, user_id=uid, question_id=q2.id, kc_ids=[kc_weak_id],
-            cause="calc_slip", state="mastered",
+            tenant_id=uid,
+            user_id=uid,
+            question_id=q2.id,
+            kc_ids=[kc_weak_id],
+            cause="calc_slip",
+            state="mastered",
         )
         e_active = ErrorItem(
-            tenant_id=uid, user_id=uid, question_id=q2.id, kc_ids=[kc_weak_id],
-            cause="concept_confusion", state="new",
+            tenant_id=uid,
+            user_id=uid,
+            question_id=q2.id,
+            kc_ids=[kc_weak_id],
+            cause="concept_confusion",
+            state="new",
         )
         session.add_all([e_mastered, e_active])
         await session.flush()
@@ -306,14 +339,10 @@ async def test_plan_alive_and_error_book(client):
     r = await client.get("/api/errors?state=mastered", headers=headers)
     assert [i["id"] for i in r.json()["items"]] == [e_mastered_id]
     r = await client.get("/api/errors?state=new", headers=headers)
-    assert sorted(i["id"] for i in r.json()["items"]) == sorted(
-        [e_active_id, quiz_item["id"]]
-    )
+    assert sorted(i["id"] for i in r.json()["items"]) == sorted([e_active_id, quiz_item["id"]])
     # state=active 别名 (new|reviewing) 对应前端"待复习"统计卡
     r = await client.get("/api/errors?state=active", headers=headers)
-    assert sorted(i["id"] for i in r.json()["items"]) == sorted(
-        [e_active_id, quiz_item["id"]]
-    )
+    assert sorted(i["id"] for i in r.json()["items"]) == sorted([e_active_id, quiz_item["id"]])
     # 按错因筛选
     r = await client.get("/api/errors?cause=concept_confusion", headers=headers)
     assert [i["id"] for i in r.json()["items"]] == [e_active_id]
@@ -356,6 +385,12 @@ async def test_plan_alive_and_error_book(client):
     assert e_active_id not in [i["error_item_id"] for i in r.json()["items"]]
     r = await client.get("/api/errors?state=archived", headers=headers)
     assert [i["id"] for i in r.json()["items"]] == [e_active_id]
+
+    # 已归档错题可恢复，原卡片/历史不重建，重新进入活跃复习状态。
+    r = await client.post(f"/api/errors/{e_active_id}/restore", headers=headers)
+    assert r.status_code == 200 and r.json()["state"] == "reviewing"
+    r = await client.get("/api/reviews/today", headers=headers)
+    assert e_active_id in [i["error_item_id"] for i in r.json()["items"]]
 
     # ---- ⑥ 错因修正持久化 + 复习答错自动分类 --------------------------------------
     r = await client.post(

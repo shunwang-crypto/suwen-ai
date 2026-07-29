@@ -5,7 +5,14 @@
 // 「计划是活的」：任务复选框（乐观更新+失败回滚）、头部进度条、
 // 「根据学情调整计划」插入补强任务并高亮、调整历史时间线。
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+} from "react";
 
 import {
   Card,
@@ -39,6 +46,8 @@ import type {
 } from "@/lib/types";
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
+
+const emptySubscribe = () => () => {};
 
 const TRIGGER_LABELS: Record<string, string> = {
   manual: "手动调整",
@@ -402,6 +411,12 @@ function PlanConfirmCard({
 }
 
 export default function PlansPage() {
+  const search = useSyncExternalStore(
+    emptySubscribe,
+    () => window.location.search,
+    () => "",
+  );
+  const requestedPlanId = new URLSearchParams(search).get("id");
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [plans, setPlans] = useState<PlanListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -456,7 +471,14 @@ export default function PlansPage() {
         apiJson<KbOut[]>("/api/kb"),
       ]);
       if (!alive) return;
-      if (plansRes.status === "fulfilled") setPlans(plansRes.value);
+      if (plansRes.status === "fulfilled") {
+        setPlans(plansRes.value);
+        setSelected(
+          plansRes.value.find((plan) => plan.id === requestedPlanId) ??
+            plansRes.value[0] ??
+            null,
+        );
+      }
       else {
         setPlans([]);
         setListError("计划列表加载失败");
@@ -467,7 +489,7 @@ export default function PlansPage() {
       alive = false;
       abortRef.current?.abort();
     };
-  }, []);
+  }, [requestedPlanId]);
 
   // 选中计划后拉详情 + 调整历史（detailKey 自增可强制重拉；首个 setState 在 await 之后）
   const selectedPlanId = selected?.id ?? "";

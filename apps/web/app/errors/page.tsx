@@ -243,6 +243,24 @@ export default function ErrorsPage() {
     }
   };
 
+  const restore = async (item: ErrorItemOut) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    setBanner(null);
+    try {
+      await apiJson<{ id: string; state: string }>(`/api/errors/${item.id}/restore`, {
+        method: "POST",
+        body: {},
+      });
+      setNotice("已恢复到复习队列，将按原有记忆进度重新安排。");
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setBanner(err instanceof ApiError ? err.message : "恢复失败，请重试");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const makeVariant = async (item: ErrorItemOut) => {
     if (busyId) return;
     setBusyId(item.id);
@@ -614,7 +632,7 @@ export default function ErrorsPage() {
               <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-[11px] text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-[11px] text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
               <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">加入日期</p><strong className="mt-1 block text-[11px] text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">下次复习</p><strong className="mt-1 block text-[11px] text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
             </div>
-            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]"><button type="button" disabled={busyId === selectedItem.id} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">生成变式题去练习</button><Link href="/tutor" className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state !== "archived" && <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
+            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]"><button type="button" disabled={busyId === selectedItem.id} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">生成变式题去练习</button><Link href={selectedItem.question ? `/tutor?problem=${encodeURIComponent(selectedItem.question.stem)}` : "/tutor"} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-[12px] font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
           </aside>
         </div>
       )}

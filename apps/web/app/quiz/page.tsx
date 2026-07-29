@@ -145,6 +145,8 @@ export default function QuizPage() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [attempt, setAttempt] = useState<AttemptResult | null>(null);
+  const [resultFilter, setResultFilter] = useState<"all" | "correct" | "wrong">("all");
+  const [showResultDetails, setShowResultDetails] = useState(true);
 
   // 首个 setState 在 await 之后（effect 内不允许同步 setState）
   const loadQuizzes = useCallback(async () => {
@@ -401,6 +403,8 @@ export default function QuizPage() {
         },
       });
       setAttempt(result);
+      setResultFilter("all");
+      setShowResultDetails(true);
       try {
         // 判分即写 BKT，薄弱点随之变化：立刻刷新预览（"上午答错，下午就在卷子上"）
         const currentKbId = weakKbIdRef.current;
@@ -428,6 +432,14 @@ export default function QuizPage() {
     (interruptData?.difficulty_reasons as DifficultyReason[] | undefined) ?? [];
   const resultByQid = new Map(
     (attempt?.results ?? []).map((r) => [r.question_id, r]),
+  );
+  const visibleQuestions = (quiz?.questions ?? []).filter((question) => {
+    if (!attempt || resultFilter === "all") return true;
+    const result = resultByQid.get(question.id);
+    return resultFilter === "correct" ? result?.correct : result && !result.correct;
+  });
+  const wrongQuestions = (quiz?.questions ?? []).filter(
+    (question) => attempt && resultByQid.get(question.id)?.correct === false,
   );
   const answeredCount = quiz
     ? quiz.questions.filter((q) => (answers[q.id] ?? "").trim()).length
@@ -489,6 +501,18 @@ export default function QuizPage() {
               </div>
               <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-[10px] font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-[10px] font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · {result.scored_reason || "查看解析后再次练习"}</li>)}</ul></div></div>
               {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-[11px] font-semibold text-warning-700">学习计划已更新</p><p className="mt-0.5 text-[10px] text-warning-600">{attempt.plan_adjustment.reason}</p></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-[10px] font-medium text-warning-700">前往学习计划 →</Link></div>}
+              <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setAttempt(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
+                <Link href={wrongQuestions[0] ? `/tutor?problem=${encodeURIComponent(wrongQuestions[0].stem)}` : "/tutor"} className="rounded-[8px] border border-brand-200 bg-brand-50 px-3 py-2 text-center text-[11px] font-medium text-brand-700">进入分级辅导</Link>
+                <Link href="/profile" className="rounded-[8px] border border-line-strong px-3 py-2 text-center text-[11px] font-medium text-ink-secondary">查看学习画像</Link>
+                <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); }} className="rounded-[8px] border border-line-strong px-3 py-2 text-[11px] font-medium text-ink-secondary">返回智能练习</button>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex gap-1.5" aria-label="筛选答题结果">
+                  {([['all', `全部 ${attempt.total}`], ['wrong', `错题 ${attempt.total - attempt.correct}`], ['correct', `正确 ${attempt.correct}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setResultFilter(value)} className={`rounded-[7px] px-2.5 py-1 text-[10px] font-medium ${resultFilter === value ? "bg-brand-50 text-brand-700" : "text-ink-muted hover:bg-surface-muted"}`}>{label}</button>)}
+                </div>
+                <button type="button" onClick={() => setShowResultDetails((value) => !value)} className="text-[10px] font-medium text-brand-700">{showResultDetails ? "收起逐题结果⌃" : "展开逐题结果⌄"}</button>
+              </div>
             </section>
           )}
 
@@ -498,9 +522,10 @@ export default function QuizPage() {
               description="可能生成未完成，请重新发起"
               illustration="target"
             />
-          ) : (
+          ) : (!attempt || showResultDetails) ? (
             <ol className="space-y-4">
-              {quiz.questions.map((q, i) => {
+              {visibleQuestions.map((q) => {
+                const i = quiz.questions.findIndex((question) => question.id === q.id);
                 const result = resultByQid.get(q.id);
                 return (
                   <li
@@ -603,7 +628,7 @@ export default function QuizPage() {
                 );
               })}
             </ol>
-          )}
+          ) : null}
 
           {!attempt && quiz.questions.length > 0 && (
             <div className="flex justify-end">

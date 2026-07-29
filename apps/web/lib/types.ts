@@ -535,6 +535,8 @@ export interface ReviewAnswerResult {
   /** 答错时由错因自动分类刷新（stub 网关不分类，保留原值） */
   cause: string;
   next_due: string;
+  answer: string;
+  explanation: string;
   mastery_changes: MasteryChange[];
 }
 

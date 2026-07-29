@@ -77,6 +77,8 @@ export default function TodayPage() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
+  const [tasksExpanded, setTasksExpanded] = useState(true);
+  const [openWeakId, setOpenWeakId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -210,8 +212,8 @@ export default function TodayPage() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start">
         <div className="space-y-4">
-          <SectionCard title={<>今日任务 <span className="ml-1 font-normal text-ink-muted">{view.progress ? `${view.progress.done}/${view.progress.total} 完成` : ""}</span></>} extra={<Link href="/plans" className="text-[11px] font-medium text-brand-700 hover:underline">查看完整计划 →</Link>}>
-            {view.tasks.length > 0 ? (
+          <SectionCard title={<>今日任务 <span className="ml-1 font-normal text-ink-muted">{view.progress ? `${view.progress.done}/${view.progress.total} 完成` : ""}</span></>} extra={<div className="flex items-center gap-3"><button type="button" onClick={() => setTasksExpanded((value) => !value)} className="text-[11px] text-ink-muted hover:text-brand-700">{tasksExpanded ? "收起⌃" : "展开⌄"}</button><Link href="/plans" className="text-[11px] font-medium text-brand-700 hover:underline">查看完整计划 →</Link></div>}>
+            {tasksExpanded && (view.tasks.length > 0 ? (
               <ul className="divide-y divide-line">
                 {view.tasks.map((task, index) => (
                   <li key={task.task_key ?? `${task.day}-${index}`} className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
@@ -224,17 +226,21 @@ export default function TodayPage() {
                   </li>
                 ))}
               </ul>
-            ) : <EmptyRow>还没有今日任务。先创建一个学习计划。</EmptyRow>}
+            ) : <EmptyRow>还没有今日任务。先创建一个学习计划。</EmptyRow>)}
           </SectionCard>
 
           <SectionCard title="需要加强" extra={<Link href="/errors" className="text-[11px] text-ink-muted hover:text-brand-700">查看错题本 →</Link>}>
             {view.weak.length > 0 ? (
               <ul className="divide-y divide-line">
                 {view.weak.map((item) => (
-                  <li key={item.kc_id} className="flex min-h-[50px] items-center gap-3 px-4 py-3">
+                  <li key={item.kc_id} className="px-4 py-3">
+                    <div className="flex min-h-[26px] items-center gap-3">
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning-500" />
                     <div className="min-w-0 flex-1"><p className="truncate text-[12px] font-medium text-ink">{item.name}</p><p className="mt-0.5 text-[10px] text-ink-muted">{item.subject || item.kb_name || "知识点"} · 当前掌握 {Math.round(item.p_mastery * 100)}%</p></div>
+                    <button type="button" onClick={() => setOpenWeakId((current) => current === item.kc_id ? null : item.kc_id)} className="text-[11px] text-ink-muted hover:text-brand-700">详情</button>
                     <Link href={`/quiz?kc=${encodeURIComponent(item.name)}&n=3`} className="text-[11px] text-brand-700 hover:underline">练一下</Link>
+                    </div>
+                    {openWeakId === item.kc_id && <div className="ml-4 mt-2 rounded-[8px] bg-[#f7f6f3] px-3 py-2 text-[10px] leading-5 text-ink-muted">证据强度：{item.evidence_strength === "strong" ? "充分" : item.evidence_strength === "moderate" ? "一般" : "有限"}{item.last_seen ? ` · 最近练习 ${new Date(item.last_seen).toLocaleDateString("zh-CN")}` : " · 尚无近期练习"}。建议用 3 道定向题重新验证。</div>}
                   </li>
                 ))}
               </ul>

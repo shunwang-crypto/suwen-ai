@@ -298,6 +298,8 @@ async def answer_review(
         "state": state,
         "cause": cause,
         "next_due": next_due.isoformat(),
+        "answer": question.answer,
+        "explanation": question.explanation,
         "mastery_changes": changes,
     }
 
@@ -637,6 +639,16 @@ async def archive_error(error_item_id: uuid.UUID, ctx: AuthContext = Depends(api
     async with tenant_session(ctx.tenant_id) as session:
         item = await _load_error_item(session, error_item_id, ctx)
         item.state = "archived"
+        return {"id": str(item.id), "state": item.state}
+
+
+@errors_router.post("/{error_item_id}/restore")
+async def restore_error(error_item_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+    """将已归档错题恢复到复习队列；保留原 FSRS 卡片与历史证据。"""
+    async with tenant_session(ctx.tenant_id) as session:
+        item = await _load_error_item(session, error_item_id, ctx)
+        if item.state == "archived":
+            item.state = "reviewing"
         return {"id": str(item.id), "state": item.state}
 
 

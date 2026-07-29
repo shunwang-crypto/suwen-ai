@@ -39,8 +39,13 @@ class FakeReviewGateway:
             payload = {"score": 0.2, "reason": "fake"}
         return ChatResult(
             text=json.dumps(payload, ensure_ascii=False),
-            model="fake", tier=req.tier.value, prompt_tokens=1,
-            completion_tokens=1, cost_cny=0.0, latency_ms=1, mode="live",
+            model="fake",
+            tier=req.tier.value,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_cny=0.0,
+            latency_ms=1,
+            mode="live",
         )
 
 
@@ -105,10 +110,14 @@ async def test_reviews_fsrs_time_travel_flow(client):
         session.add(quiz)
         await session.flush()
         q1 = Question(
-            tenant_id=uid, quiz_id=quiz.id, type="single",
+            tenant_id=uid,
+            quiz_id=quiz.id,
+            type="single",
             stem="泰勒公式在 $x_0=0$ 处的特例称为?",
             options_json=["麦克劳林公式", "洛必达法则", "拉格朗日中值定理", "柯西公式"],
-            answer="A", explanation="展开点为 0 的特例。", kc_ids=[str(kc.id)],
+            answer="A",
+            explanation="展开点为 0 的特例。",
+            kc_ids=[str(kc.id)],
         )
         session.add(q1)
         await session.flush()
@@ -132,6 +141,8 @@ async def test_reviews_fsrs_time_travel_flow(client):
     body = r.json()
     assert r.status_code == 200, r.text
     assert body["correct"] is True and body["state"] == "reviewing"
+    assert body["answer"] == "A"
+    assert body["explanation"] == "展开点为 0 的特例。"
     assert body["mastery_changes"] and body["mastery_changes"][0]["kc_id"] == kc_id
     assert datetime.fromisoformat(body["next_due"]) > await timectl.now(redis)
     r = await client.get("/api/reviews/today", headers=headers)
@@ -163,9 +174,7 @@ async def test_reviews_fsrs_time_travel_flow(client):
 
     # e) 答错路径: streak 清零 + BKT 下降 + mastery_log(evidence_type="review")
     async with tenant_session(uid) as session:
-        e2 = ErrorItem(
-            tenant_id=uid, user_id=uid, question_id=uuid.UUID(q1_id), kc_ids=[kc_id]
-        )
+        e2 = ErrorItem(tenant_id=uid, user_id=uid, question_id=uuid.UUID(q1_id), kc_ids=[kc_id])
         session.add(e2)
         await session.flush()
         e2_id = str(e2.id)
@@ -178,6 +187,8 @@ async def test_reviews_fsrs_time_travel_flow(client):
     r = await client.post(f"/api/reviews/{e2_id}/answer", headers=headers, json={"response": "B"})
     body = r.json()
     assert body["correct"] is False and body["state"] == "reviewing"
+    assert body["answer"] == "A"
+    assert body["explanation"] == "展开点为 0 的特例。"
     async with tenant_session(uid) as session:
         item = await session.get(ErrorItem, uuid.UUID(e2_id))
         assert item.fsrs_card_json["streak"] == 0

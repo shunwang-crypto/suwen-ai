@@ -40,13 +40,34 @@ function Icon({ children }: { children: ReactNode }) {
   );
 }
 
+function FigmaNavIcon({ name }: { name: string }) {
+  const asset = `/figma/icons/${name}.svg`;
+  return (
+    <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center" aria-hidden>
+      <span
+        className="block h-[14px] w-[14px] bg-current"
+        style={{
+          WebkitMaskImage: `url(${asset})`,
+          maskImage: `url(${asset})`,
+          WebkitMaskPosition: "center",
+          maskPosition: "center",
+          WebkitMaskRepeat: "no-repeat",
+          maskRepeat: "no-repeat",
+          WebkitMaskSize: "contain",
+          maskSize: "contain",
+        }}
+      />
+    </span>
+  );
+}
+
 const NAV_GROUPS: NavGroup[] = [
   {
     items: [
       {
         href: "/today",
         label: "今日",
-        icon: <Icon><path d="M5 4.5h14v15H5zM8 2.8v3.4m8-3.4v3.4M5 9h14m-9 4h4m-4 3h6" /></Icon>,
+        icon: <FigmaNavIcon name="today" />,
       },
     ],
   },
@@ -56,17 +77,17 @@ const NAV_GROUPS: NavGroup[] = [
       {
         href: "/chat",
         label: "AI 对话",
-        icon: <Icon><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-9.5A7.5 7.5 0 0 1 10.5 4h2A7.5 7.5 0 0 1 20 11.5Z" /></Icon>,
+        icon: <FigmaNavIcon name="chat" />,
       },
       {
         href: "/tutor",
         label: "分级辅导",
-        icon: <Icon><path d="M4 5.5 12 3l8 2.5-8 2.5-8-2.5Zm2 2.2V15c2 2.4 4 3.5 6 3.5s4-1.1 6-3.5V7.7M20 6v7" /></Icon>,
+        icon: <FigmaNavIcon name="tutor" />,
       },
       {
         href: "/kb",
         label: "知识库",
-        icon: <Icon><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4Zm0 12.8A3.2 3.2 0 0 1 8.2 14H19M9 8h6" /></Icon>,
+        icon: <FigmaNavIcon name="knowledge" />,
       },
     ],
   },
@@ -76,17 +97,17 @@ const NAV_GROUPS: NavGroup[] = [
       {
         href: "/quiz",
         label: "智能练习",
-        icon: <Icon><path d="M7 4h10a2 2 0 0 1 2 2v14H5V6a2 2 0 0 1 2-2Zm2 5h6m-6 4h6m-6 4h3" /></Icon>,
+        icon: <FigmaNavIcon name="practice" />,
       },
       {
         href: "/reviews",
         label: "今日复习",
-        icon: <Icon><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6M12 8v4l2.8 1.8" /></Icon>,
+        icon: <FigmaNavIcon name="review" />,
       },
       {
         href: "/errors",
         label: "错题本",
-        icon: <Icon><path d="M6 3.5h12v17H6zM9 8l6 6m0-6-6 6m0 3h6" /></Icon>,
+        icon: <FigmaNavIcon name="errors" />,
       },
     ],
   },
@@ -96,17 +117,17 @@ const NAV_GROUPS: NavGroup[] = [
       {
         href: "/plans",
         label: "学习计划",
-        icon: <Icon><path d="M5 4.5h14v15H5zM8 2.8v3.4m8-3.4v3.4M5 9h14m-9 4h4m-4 3h6" /></Icon>,
+        icon: <FigmaNavIcon name="plans" />,
       },
       {
         href: "/profile",
         label: "学习画像",
-        icon: <Icon><circle cx="12" cy="8" r="3.5" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0M18 5l1 1 2-2" /></Icon>,
+        icon: <FigmaNavIcon name="profile" />,
       },
       {
         href: "/reports",
         label: "学情报告",
-        icon: <Icon><path d="M5 20V9m4 11V4m5 16v-7m5 7V7M3 20.5h18" /></Icon>,
+        icon: <FigmaNavIcon name="reports" />,
       },
     ],
   },
@@ -116,12 +137,12 @@ const UTILITY_ITEMS: NavItem[] = [
   {
     href: "/orgs",
     label: "机构",
-    icon: <Icon><path d="M4 20h16M6 20V8l6-4 6 4v12M9 11h2m2 0h2m-6 4h2m2 0h2" /></Icon>,
+    icon: <FigmaNavIcon name="orgs" />,
   },
   {
     href: "/billing",
     label: "钱包",
-    icon: <Icon><path d="M4 6.5h14a2 2 0 0 1 2 2v9H6a2 2 0 0 1-2-2v-9Zm0 2h14V5H6a2 2 0 0 0-2 2m11 6h2" /></Icon>,
+    icon: <FigmaNavIcon name="billing" />,
   },
 ];
 
