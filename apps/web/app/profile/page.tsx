@@ -76,6 +76,38 @@ const RETENTION_SHOW_BELOW = 0.9;
 /** 最近掌握度变化默认显示条数（C1：超出收进「展开更多」）。 */
 const CHANGES_PAGE_SIZE = 10;
 
+function ActionIcon({ kind }: { kind: "consolidate" | "review" | "verify" }) {
+  return (
+    <span
+      className={`flex h-8 w-8 items-center justify-center rounded-[8px] ${
+        kind === "verify"
+          ? "bg-brand-50 text-brand-700"
+          : "bg-warning-50 text-warning-600"
+      }`}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-4 w-4"
+        aria-hidden
+      >
+        {kind === "consolidate" && <path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z" />}
+        {kind === "review" && (
+          <>
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M12 7.5V12l3 2" />
+          </>
+        )}
+        {kind === "verify" && <path d="m5 12.5 4.2 4L19 7" />}
+      </svg>
+    </span>
+  );
+}
+
 /**
  * 掌握度行 + 后端附带/并行契约字段（共享 types.ts 不改，页面局部扩展）：
  * retention_*（P2-7 遗忘快照，已上线）；kb_id/kb_name/subject/chapter/aliases
@@ -594,9 +626,9 @@ export default function ProfilePage() {
       </section>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-warning-50 text-warning-600">↯</span><strong className="text-[20px] text-ink">{consolidateItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待巩固</h2><p className="mt-1 text-[10px] text-ink-muted">掌握较薄弱，最值得先动手</p><ul className="mt-3 space-y-2">{consolidateItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/quiz?weak=1" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始巩固练习 →</Link></section>
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-warning-50 text-warning-600">◷</span><strong className="text-[20px] text-ink">{dueItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待复习</h2><p className="mt-1 text-[10px] text-ink-muted">掌握过，但快要遗忘</p><ul className="mt-3 space-y-2">{dueItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/reviews" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始今日复习 →</Link></section>
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-brand-50 text-brand-700">✓</span><strong className="text-[20px] text-ink">{verifyItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待验证</h2><p className="mt-1 text-[10px] text-ink-muted">记录太少，画像还不确定</p><ul className="mt-3 space-y-2">{verifyItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-brand-500">•</span>{item.name}</li>)}</ul><Link href={verifyItems[0] ? `/quiz?kc=${encodeURIComponent(verifyItems[0].name)}&n=3` : "/quiz"} className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">做几道题验证 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="consolidate" /><strong className="text-[20px] text-ink">{consolidateItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待巩固</h2><p className="mt-1 text-[10px] text-ink-muted">掌握较薄弱，最值得先动手</p><ul className="mt-3 space-y-2">{consolidateItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/quiz?weak=1" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始巩固练习 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="review" /><strong className="text-[20px] text-ink">{dueItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待复习</h2><p className="mt-1 text-[10px] text-ink-muted">掌握过，但快要遗忘</p><ul className="mt-3 space-y-2">{dueItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/reviews" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始今日复习 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="verify" /><strong className="text-[20px] text-ink">{verifyItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待验证</h2><p className="mt-1 text-[10px] text-ink-muted">记录太少，画像还不确定</p><ul className="mt-3 space-y-2">{verifyItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-brand-500">•</span>{item.name}</li>)}</ul><Link href={verifyItems[0] ? `/quiz?kc=${encodeURIComponent(verifyItems[0].name)}&n=3` : "/quiz"} className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">做几道题验证 →</Link></section>
       </div>
 
       {/* 雷达（A1）：库 tab + 章节聚合轴 + 少轴条形降级 + 轴下钻（组件内实现） */}
