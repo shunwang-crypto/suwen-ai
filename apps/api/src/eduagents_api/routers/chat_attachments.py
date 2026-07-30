@@ -139,6 +139,8 @@ async def attachment_capabilities(settings=Depends(get_app_settings)):
         "document_suffixes": sorted(_DOCUMENT_SUFFIXES),
         "image_suffixes": sorted(_IMAGE_SUFFIXES) if settings.vision_model else [],
         "vision_enabled": bool(settings.vision_model),
+        "thinking_enabled": bool(settings.strong_api_key and settings.strong_model),
+        "web_search_enabled": bool(settings.tavily_api_key),
     }
 
 

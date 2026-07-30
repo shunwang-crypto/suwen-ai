@@ -71,7 +71,7 @@ class FakeRetrieval:
 
 
 def make_web_search(results: list[dict], from_cache: bool = False):
-    async def _search(query: str):
+    async def _search(query: str, *, required: bool = False):
         _search.calls.append(query)
         return (list(results), from_cache)
 
@@ -229,6 +229,26 @@ async def test_rule_route_web_keyword_prefers_web():
     ws = [e for e in out["trace"] if e["type"] == "web_search"][0]
     assert ws["from_cache"] is False
     assert "verify" not in trace_types(out)  # web 路径不做 kb 支撑校验
+
+
+async def test_explicit_web_mode_forces_search_without_keyword():
+    web = make_web_search(
+        [{"title": "官方资料", "url": "https://example.com", "content": "检索内容"}]
+    )
+    gw = FakeGateway(
+        {
+            "qa_generate": ["以下依据网络搜索结果：检索内容 [1]"],
+            "qa_followups": followups_script(),
+        }
+    )
+    state = init_state("介绍一下这个主题")
+    state["requested_route"] = "web"
+    out = await run(make_deps(gw, web_search=web), state)
+    assert out["route"] == "web"
+    assert web.calls == ["介绍一下这个主题"]
+    router_ev = [e for e in out["trace"] if e["type"] == "router"][0]
+    assert router_ev["reason"] == "用户显式选择网页搜索"
+    assert gw.calls("qa_router") == []
 
 
 async def test_router_llm_fallback_on_ambiguous_query():

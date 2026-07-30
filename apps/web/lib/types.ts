@@ -45,6 +45,8 @@ export interface ChatAttachmentCapabilities {
   document_suffixes: string[];
   image_suffixes: string[];
   vision_enabled: boolean;
+  thinking_enabled: boolean;
+  web_search_enabled: boolean;
 }
 
 export interface KbOut {
@@ -128,6 +130,8 @@ export interface CitationData {
   /** 联合检索：引用来源库（多库问答时标注归属） */
   kb_id?: string;
   kb_name?: string;
+  source_type?: "kb" | "web";
+  url?: string;
   [key: string]: unknown;
 }
 

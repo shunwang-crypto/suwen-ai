@@ -13,6 +13,10 @@ log = get_logger("web_search")
 _CACHE_TTL_SECONDS = 900  # §9: 短 TTL 缓存, Tavily 不可达时返回缓存并标注
 
 
+class WebSearchUnavailable(RuntimeError):
+    """显式联网请求无法访问搜索服务，且没有可用缓存。"""
+
+
 class TavilySearch:
     """联网搜索 (Tavily) + 内存 TTL 缓存兜底。
 
@@ -29,7 +33,7 @@ class TavilySearch:
         return bool(self._api_key)
 
     async def search(
-        self, query: str, max_results: int = 5
+        self, query: str, max_results: int = 5, *, raise_on_failure: bool = False
     ) -> tuple[list[dict[str, Any]], bool]:
         if not self._api_key:
             return [], False
@@ -60,4 +64,6 @@ class TavilySearch:
             log.warning("tavily_failed", error=str(exc))
             if cached and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
                 return cached[1], True
+            if raise_on_failure:
+                raise WebSearchUnavailable("Tavily search failed") from exc
             return [], False

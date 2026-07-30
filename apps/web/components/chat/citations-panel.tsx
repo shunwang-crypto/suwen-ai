@@ -50,7 +50,7 @@ export function CitationsPanel({
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6M9 13h6M9 17h6" />
         </svg>
         <p className="text-sm text-slate-400">
-          暂无引用。绑定知识库提问后，
+          暂无引用。使用知识库或网页搜索后，
           <br />
           回答的依据会展示在这里。
         </p>
@@ -75,7 +75,11 @@ export function CitationsPanel({
             data-citation-idx={c.idx}
             onClick={() => {
               onSelect(c.idx);
-              onOpenContext?.(c);
+              if (c.source_type === "web" && c.url) {
+                window.open(c.url, "_blank", "noopener,noreferrer");
+              } else {
+                onOpenContext?.(c);
+              }
             }}
             className={`fx-msg-in block w-full border-t border-slate-200 py-4 text-left first:border-t-0 ${
               active
@@ -92,6 +96,9 @@ export function CitationsPanel({
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">
                 {c.doc_name || "未知文档"}
               </span>
+              {c.source_type === "web" && (
+                <span className="text-[10px] text-ink-muted">打开网页 ↗</span>
+              )}
               {c.kb_name && (
                 <span
                   className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${

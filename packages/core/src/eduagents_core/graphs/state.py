@@ -39,6 +39,7 @@ class QaState(TypedDict, total=False):
     kb_id: str  # 空串 = 未绑定知识库 (联合检索时为 kb_ids[0], 路由判定用)
     kb_ids: list[str]  # Wave3 联合检索: 多库列表 (个人+机构), 检索层 MatchAny
     owner_ids: list[str]  # 上述库的 owner_id 集 (Qdrant tenant 纵深过滤)
+    requested_route: str  # 用户显式选择: web | kb；空串时仍由规则/LLM 自动路由
     route: str  # kb | web | direct
     route_reason: str
     evidences: list[dict]  # RetrievedChunk 序列化: chunk_id/doc_id/text/heading_path/page_start/score

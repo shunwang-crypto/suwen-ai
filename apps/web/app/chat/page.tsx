@@ -63,7 +63,10 @@ interface ChatMsg {
   /** 45s 无事件软超时（客户端合成 stall 事件）：仍在等待上游 */
   stalled?: boolean;
   attachments?: ChatAttachmentOut[];
+  chatMode?: ChatMode;
 }
+
+type ChatMode = "fast" | "think" | "web" | "kb";
 
 /** done.usage.mode 中文化（P2-18）：内部枚举不直接暴露给用户 */
 const MODE_LABELS: Record<string, string> = {
@@ -123,6 +126,12 @@ function historyToMessages(history: MessageOut[]): ChatMsg[] {
     attachments: Array.isArray(m.meta?.attachments)
       ? (m.meta.attachments as ChatAttachmentOut[])
       : [],
+    chatMode:
+      m.meta?.chat_mode === "think" ||
+      m.meta?.chat_mode === "web" ||
+      m.meta?.chat_mode === "kb"
+        ? m.meta.chat_mode
+        : "fast",
   }));
 }
 
@@ -148,17 +157,19 @@ function ChatView() {
     const kb = searchParams.get("kb");
     return kb ? [kb] : [];
   });
+  const [chatMode, setChatMode] = useState<ChatMode>(() =>
+    searchParams.get("kb") ? "kb" : "fast",
+  );
   const [composerPanel, setComposerPanel] = useState<
-    "menu" | "scope" | "kb-upload" | null
+    "menu" | "mode" | "scope" | null
   >(null);
   const [attachments, setAttachments] = useState<ChatAttachmentOut[]>([]);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
-  const [kbUploadTarget, setKbUploadTarget] = useState<string | null>(null);
-  const [uploadingToKb, setUploadingToKb] = useState(false);
   const [attachmentCapabilities, setAttachmentCapabilities] =
     useState<ChatAttachmentCapabilities | null>(null);
   const chatAttachmentInputRef = useRef<HTMLInputElement>(null);
-  const kbUploadInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [composerMultiline, setComposerMultiline] = useState(false);
 
   // 消息与流式状态
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -287,6 +298,17 @@ function ChatView() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // 默认保持一行；文字换行后才按内容自然增高，最多约六行后内部滚动。
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "24px";
+    const nextHeight = Math.min(el.scrollHeight, 144);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > 144 ? "auto" : "hidden";
+    setComposerMultiline(nextHeight > 28);
+  }, [input]);
 
   const selectSession = useCallback(async (id: string) => {
     discardPendingAttachments();
@@ -538,45 +560,21 @@ function ChatView() {
     setBanner(failures.length > 0 ? failures.join("；") : null);
   };
 
-  const uploadFilesToKb = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    const target = kbUploadTarget;
-    if (!target || files.length === 0 || uploadingToKb) return;
-    setUploadingToKb(true);
-    setComposerPanel(null);
-    const failures: string[] = [];
-    let succeeded = 0;
-    for (const file of files) {
-      try {
-        const form = new FormData();
-        form.append("file", file);
-        await apiFetch(`/api/kb/${target}/documents`, {
-          method: "POST",
-          body: form,
-        });
-        succeeded += 1;
-      } catch (err) {
-        failures.push(
-          `${file.name}：${err instanceof ApiError ? err.message : "上传失败"}`,
-        );
-      }
-    }
-    setUploadingToKb(false);
-    if (failures.length > 0) {
-      setBanner(failures.join("；"));
-    } else {
-      const kbName = kbs.find((kb) => kb.id === target)?.name ?? "知识库";
-      setBanner(`${succeeded} 个文件已上传到「${kbName}」，正在解析和建立索引`);
-    }
-  };
-
   const send = useCallback(
     async (raw?: string) => {
       const sentAttachments = attachments;
       const typed = (raw ?? input).trim();
       const text = typed || (sentAttachments.length > 0 ? "请分析这些附件" : "");
       if (!text || streaming) return;
+      if (chatMode === "kb" && kbIds.length === 0) {
+        setComposerPanel("scope");
+        setBanner("请先选择至少一个知识库");
+        return;
+      }
+      if (chatMode === "web" && sentAttachments.length > 0) {
+        setBanner("网页搜索暂不能与附件同时使用，请切换到极速或深度思考模式");
+        return;
+      }
       setInput("");
       setAttachments([]);
       setComposerPanel(null);
@@ -589,6 +587,7 @@ function ChatView() {
         timeline: [],
         citations: [],
         attachments: sentAttachments,
+        chatMode,
       };
       const asstId = genId();
       const asstMsg: ChatMsg = {
@@ -601,6 +600,7 @@ function ChatView() {
         attempt: 0,
         kbId: kbIds[0] || undefined,
         kbName: kbs.find((kb) => kb.id === kbIds[0])?.name,
+        chatMode,
       };
       setMessages((prev) => [...prev, userMsg, asstMsg]);
       setStreaming(true);
@@ -615,7 +615,8 @@ function ChatView() {
         const body = {
           message: text,
           session_id: activeSessionId ?? undefined,
-          kb_ids: kbIds.length > 0 ? kbIds : undefined,
+          mode: chatMode,
+          kb_ids: chatMode === "kb" && kbIds.length > 0 ? kbIds : undefined,
           attachment_ids:
             sentAttachments.length > 0
               ? sentAttachments.map((item) => item.id)
@@ -773,6 +774,7 @@ function ChatView() {
       attachments,
       streaming,
       activeSessionId,
+      chatMode,
       kbIds,
       kbs,
       patchMsg,
@@ -868,12 +870,23 @@ function ChatView() {
       : kbIds.length === 1
         ? (kbs.find((kb) => kb.id === kbIds[0])?.name ?? "1 个知识库")
         : `已选 ${kbIds.length} 个库`;
+  const selectedModeLabel =
+    chatMode === "fast"
+      ? "极速"
+      : chatMode === "think"
+        ? "深度思考"
+        : chatMode === "web"
+          ? "网页搜索"
+          : kbIds.length > 0
+            ? `知识库 · ${selectedKbLabel}`
+            : "知识库";
 
   // 引用卡点击 → 打开原文抽屉。多库联合检索时优先用引用自带的来源库 kb_id，
   // 回退到该消息发送时绑定的首库
   const citedKbId = citedMsg?.kbId;
   const openContext = useCallback(
     (citation: CitationData) => {
+      if (citation.source_type === "web") return;
       const kbForCitation = citation.kb_id || citedKbId;
       if (!kbForCitation) return;
       setContextTarget({ kbId: kbForCitation, citation });
@@ -1064,17 +1077,6 @@ function ChatView() {
                 ) : (
                   <div key={m.id} className="fx-msg-in flex justify-start">
                     <div className="w-full">
-                      <div className="mb-3 flex items-center gap-2.5">
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-brand-600 text-[13px] font-medium text-white">
-                          AI
-                        </span>
-                        <span className="text-[13px] font-medium text-slate-900">
-                          苏问助教
-                        </span>
-                        <span className="truncate text-xs text-slate-400">
-                          {m.kbName ? `基于「${m.kbName}」知识库` : "通用模式"}
-                        </span>
-                      </div>
                       {m.done?.refused && (
                         <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50/60 px-3 py-2 text-xs text-amber-700">
                           {/* 温和插画感小图标：放大镜找不到内容的守护小盾 */}
@@ -1292,7 +1294,13 @@ function ChatView() {
 
         {/* 输入区 */}
         <div className="shrink-0 bg-canvas px-4 pb-6 pt-3">
-          <div className="relative mx-auto flex min-h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-[12px] border border-line bg-white p-3 shadow-subtle">
+          <div
+            className={`relative mx-auto flex w-full max-w-[720px] flex-col border border-line bg-white px-2 py-2 shadow-subtle transition-[border-radius] ${
+              attachments.length > 0 || composerMultiline
+                ? "rounded-[24px]"
+                : "rounded-full"
+            }`}
+          >
             <input
               ref={chatAttachmentInputRef}
               type="file"
@@ -1310,17 +1318,9 @@ function ChatView() {
               className="hidden"
               onChange={(event) => void uploadChatAttachments(event)}
             />
-            <input
-              ref={kbUploadInputRef}
-              type="file"
-              multiple
-              accept=".pdf,.docx,.pptx,.md,.txt"
-              className="hidden"
-              onChange={(event) => void uploadFilesToKb(event)}
-            />
 
             {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5 px-2 pb-2 pt-1">
                 {attachments.map((attachment) => (
                   <span
                     key={attachment.id}
@@ -1344,212 +1344,57 @@ function ChatView() {
                 ))}
               </div>
             )}
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleComposerKey}
-              rows={1}
-              maxLength={8000}
-              placeholder={
-                streaming ? "正在生成回答…" : "输入问题，Enter 发送，Shift+Enter 换行"
-              }
-              disabled={streaming}
-              className="min-h-9 w-full resize-none border-0 bg-transparent p-0 text-sm leading-[22px] text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
-            />
 
-            <div className="flex h-8 items-center gap-2">
+            <div className="flex min-h-10 items-end gap-1.5">
               <div className="relative">
                 <button
                   type="button"
                   onClick={() =>
                     setComposerPanel((value) => (value ? null : "menu"))
                   }
-                  disabled={streaming || uploadingAttachment || uploadingToKb}
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-xl font-light text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-40"
+                  disabled={streaming || uploadingAttachment}
+                  className="flex h-10 w-10 items-center justify-center rounded-full text-2xl font-light text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-40"
                   aria-label="添加内容"
-                  aria-expanded={composerPanel !== null}
+                  aria-expanded={composerPanel === "menu"}
                 >
-                  {uploadingAttachment || uploadingToKb ? (
+                  {uploadingAttachment ? (
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
                   ) : (
                     "+"
                   )}
                 </button>
-
-                {composerPanel && (
-                  <>
-                    <button
-                      type="button"
-                      className="fixed inset-0 z-20 cursor-default"
-                      aria-label="关闭添加菜单"
-                      onClick={() => setComposerPanel(null)}
-                    />
-                    <div className="absolute bottom-10 left-0 z-30 max-h-[360px] w-[310px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-overlay border border-line bg-white p-2 shadow-floating">
-                      {composerPanel === "menu" && (
-                        <div className="space-y-0.5">
-                          <button
-                            type="button"
-                            onClick={() => chatAttachmentInputRef.current?.click()}
-                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
-                          >
-                            <span className="mt-0.5 text-lg" aria-hidden>＋</span>
-                            <span>
-                              <span className="block text-[13px] font-medium text-ink">添加到当前对话</span>
-                              <span className="block text-[11px] text-ink-muted">图片、PDF、Office 或文本文件</span>
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setComposerPanel("scope")}
-                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
-                          >
-                            <span className="mt-0.5 text-sm" aria-hidden>◎</span>
-                            <span>
-                              <span className="block text-[13px] font-medium text-ink">选择知识库范围</span>
-                              <span className="block text-[11px] text-ink-muted">当前：{selectedKbLabel}</span>
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setComposerPanel("kb-upload")}
-                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
-                          >
-                            <span className="mt-0.5 text-sm" aria-hidden>↑</span>
-                            <span>
-                              <span className="block text-[13px] font-medium text-ink">上传到知识库</span>
-                              <span className="block text-[11px] text-ink-muted">长期保存并建立检索索引</span>
-                            </span>
-                          </button>
-                        </div>
-                      )}
-
-                      {composerPanel === "scope" && (
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => setComposerPanel("menu")}
-                            className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
-                          >
-                            ← 选择知识库范围
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setKbIds([])}
-                            className={`w-full rounded-[8px] px-2.5 py-2 text-left text-[13px] ${
-                              kbIds.length === 0
-                                ? "bg-surface-muted font-medium text-ink"
-                                : "text-ink-secondary hover:bg-surface-muted"
-                            }`}
-                          >
-                            不使用知识库
-                          </button>
-                          {(["user", "org"] as const).map((ownerType) => {
-                            const group = kbs.filter((kb) => kb.owner_type === ownerType);
-                            if (group.length === 0) return null;
-                            return (
-                              <div key={ownerType} className="mt-2">
-                                <p className="px-2.5 py-1 text-[10px] text-ink-muted">
-                                  {ownerType === "user" ? "个人知识库" : "机构知识库"}
-                                </p>
-                                {group.map((kb) => (
-                                  <label
-                                    key={kb.id}
-                                    className="flex cursor-pointer items-center gap-2 rounded-[8px] px-2.5 py-2 text-[13px] text-ink-secondary hover:bg-surface-muted"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={kbIds.includes(kb.id)}
-                                      onChange={(event) =>
-                                        setKbIds((prev) =>
-                                          event.target.checked
-                                            ? [...prev, kb.id]
-                                            : prev.filter((id) => id !== kb.id),
-                                        )
-                                      }
-                                      className="h-3.5 w-3.5 accent-slate-900"
-                                    />
-                                    <span className="min-w-0 flex-1 truncate">{kb.name}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            );
-                          })}
-                          <button
-                            type="button"
-                            onClick={() => setComposerPanel(null)}
-                            className="mt-2 h-8 w-full rounded-[8px] bg-ink text-xs font-medium text-white"
-                          >
-                            完成
-                          </button>
-                        </div>
-                      )}
-
-                      {composerPanel === "kb-upload" && (
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => setComposerPanel("menu")}
-                            className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
-                          >
-                            ← 上传到知识库
-                          </button>
-                          {kbs.filter((kb) => kb.writable).length === 0 ? (
-                            <p className="px-3 py-5 text-center text-xs leading-5 text-ink-muted">
-                              还没有可上传的知识库，请先在知识库页面创建。
-                            </p>
-                          ) : (
-                            kbs
-                              .filter((kb) => kb.writable)
-                              .map((kb) => (
-                                <button
-                                  key={kb.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setKbUploadTarget(kb.id);
-                                    queueMicrotask(() => kbUploadInputRef.current?.click());
-                                  }}
-                                  className="flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left text-[13px] text-ink-secondary hover:bg-surface-muted"
-                                >
-                                  <span className="truncate">{kb.name}</span>
-                                  <span className="ml-2 shrink-0 text-[10px] text-ink-muted">选择文件</span>
-                                </button>
-                              ))
-                          )}
-                          <p className="px-3 pt-2 text-[10px] leading-4 text-ink-muted">
-                            支持 PDF、DOCX、PPTX、Markdown 和 TXT，单文件最大 50MB。
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
               </div>
 
-              {kbIds.length > 0 && (
-                <div className="flex h-8 max-w-52 items-center rounded-control bg-surface-muted pl-2.5 pr-1 text-[12px] text-ink-secondary">
-                  <button
-                    type="button"
-                    onClick={() => setComposerPanel("scope")}
-                    className="min-w-0 flex-1 truncate text-left hover:text-ink"
-                    title={selectedKbLabel}
-                  >
-                    {selectedKbLabel}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="清除知识库范围"
-                    onClick={() => setKbIds([])}
-                    className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center text-ink-muted hover:text-ink"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleComposerKey}
+                rows={1}
+                maxLength={8000}
+                placeholder={streaming ? "正在生成回答…" : "给苏问发消息"}
+                disabled={streaming}
+                className="my-2 min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
+              />
 
-              <span className="flex-1" />
-              <span className="hidden text-xs text-slate-400 sm:block">
-                Enter 发送
-              </span>
+              <div className="relative mb-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setComposerPanel((value) => (value === "mode" ? null : "mode"))
+                  }
+                  disabled={streaming}
+                  className="flex h-9 max-w-[190px] items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-40"
+                  aria-label="选择回答模式"
+                  aria-expanded={composerPanel === "mode" || composerPanel === "scope"}
+                  title={selectedModeLabel}
+                >
+                  <span className="truncate">{selectedModeLabel}</span>
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 shrink-0" aria-hidden>
+                    <path d="m5 6 3 3 3-3" />
+                  </svg>
+                </button>
+              </div>
 
               {streaming ? (
                 <button
@@ -1557,7 +1402,7 @@ function ChatView() {
                   onClick={stop}
                   title="停止生成"
                   aria-label="停止生成"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-slate-300 text-slate-600 transition-colors hover:bg-slate-100"
+                  className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 text-slate-600 transition-colors hover:bg-slate-100"
                 >
                   <span className="h-2.5 w-2.5 rounded-sm bg-slate-500" />
                 </button>
@@ -1568,7 +1413,7 @@ function ChatView() {
                   disabled={!input.trim() && attachments.length === 0}
                   title="发送"
                   aria-label="发送"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-brand-600 text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <svg
                     viewBox="0 0 16 16"
@@ -1585,6 +1430,161 @@ function ChatView() {
                 </button>
               )}
             </div>
+
+            {composerPanel && (
+              <>
+                <button
+                  type="button"
+                  className="fixed inset-0 z-20 cursor-default"
+                  aria-label="关闭输入菜单"
+                  onClick={() => setComposerPanel(null)}
+                />
+
+                {composerPanel === "menu" && (
+                  <div className="absolute bottom-[58px] left-0 z-30 w-[280px] rounded-2xl border border-line bg-white p-2 shadow-floating">
+                    <button
+                      type="button"
+                      onClick={() => chatAttachmentInputRef.current?.click()}
+                      className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted"
+                    >
+                      <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg border border-line text-lg" aria-hidden>＋</span>
+                      <span>
+                        <span className="block text-[13px] font-medium text-ink">添加图片和文件</span>
+                        <span className="block text-[11px] leading-5 text-ink-muted">仅用于当前对话，最多 4 个、合计 20MB</span>
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {composerPanel === "mode" && (
+                  <div className="absolute bottom-[58px] right-0 z-30 w-[300px] rounded-2xl border border-line bg-white p-2 shadow-floating">
+                    <p className="px-3 pb-1.5 pt-1 text-[11px] font-medium text-ink-muted">回答模式</p>
+                    {([
+                      ["fast", "极速", "快速直接回答"],
+                      ["think", "深度思考", "用于复杂推理与综合分析"],
+                      ["web", "网页搜索", "搜索实时信息并标注来源"],
+                    ] as const).map(([mode, title, description]) => {
+                      const disabled =
+                        (mode === "think" && !attachmentCapabilities?.thinking_enabled) ||
+                        (mode === "web" &&
+                          (!attachmentCapabilities?.web_search_enabled || attachments.length > 0));
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => {
+                            setChatMode(mode);
+                            setComposerPanel(null);
+                            setBanner(null);
+                          }}
+                          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-muted text-xs text-ink-secondary" aria-hidden>
+                            {mode === "fast" ? "↗" : mode === "think" ? "◇" : "◎"}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px] font-medium text-ink">{title}</span>
+                            <span className="block text-[11px] leading-5 text-ink-muted">
+                              {mode === "web" && attachments.length > 0
+                                ? "移除附件后可使用"
+                                : disabled
+                                  ? "当前部署未配置"
+                                  : description}
+                            </span>
+                          </span>
+                          {chatMode === mode && <span className="text-sm text-brand-700">✓</span>}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setComposerPanel("scope")}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted"
+                    >
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-muted text-xs text-ink-secondary" aria-hidden>▤</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-medium text-ink">知识库</span>
+                        <span className="block truncate text-[11px] leading-5 text-ink-muted">
+                          {kbIds.length > 0 ? selectedKbLabel : "基于指定资料回答"}
+                        </span>
+                      </span>
+                      {chatMode === "kb" ? <span className="text-sm text-brand-700">✓</span> : <span className="text-ink-muted">›</span>}
+                    </button>
+                  </div>
+                )}
+
+                {composerPanel === "scope" && (
+                  <div className="absolute bottom-[58px] right-0 z-30 max-h-[380px] w-[310px] overflow-y-auto rounded-2xl border border-line bg-white p-2 shadow-floating">
+                    <button
+                      type="button"
+                      onClick={() => setComposerPanel("mode")}
+                      className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
+                    >
+                      ← 选择知识库
+                    </button>
+                    {kbs.length === 0 ? (
+                      <p className="px-3 py-5 text-center text-xs leading-5 text-ink-muted">还没有可用的知识库，请先在知识库页面创建并上传资料。</p>
+                    ) : (
+                      (["user", "org"] as const).map((ownerType) => {
+                        const group = kbs.filter((kb) => kb.owner_type === ownerType);
+                        if (group.length === 0) return null;
+                        return (
+                          <div key={ownerType} className="mt-1">
+                            <p className="px-2.5 py-1 text-[10px] text-ink-muted">{ownerType === "user" ? "个人知识库" : "机构知识库"}</p>
+                            {group.map((kb) => (
+                              <label key={kb.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-secondary hover:bg-surface-muted">
+                                <input
+                                  type="checkbox"
+                                  checked={kbIds.includes(kb.id)}
+                                  onChange={(event) => {
+                                    setKbIds((prev) =>
+                                      event.target.checked
+                                        ? [...prev, kb.id]
+                                        : prev.filter((id) => id !== kb.id),
+                                    );
+                                    if (event.target.checked) setChatMode("kb");
+                                  }}
+                                  className="h-3.5 w-3.5 accent-slate-900"
+                                />
+                                <span className="min-w-0 flex-1 truncate">{kb.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        );
+                      })
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      {kbIds.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKbIds([]);
+                            setChatMode("fast");
+                            setComposerPanel(null);
+                          }}
+                          className="h-9 flex-1 rounded-lg border border-line text-xs text-ink-secondary hover:bg-surface-muted"
+                        >
+                          清除范围
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={kbIds.length === 0}
+                        onClick={() => {
+                          setChatMode("kb");
+                          setComposerPanel(null);
+                          setBanner(null);
+                        }}
+                        className="h-9 flex-1 rounded-lg bg-ink text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        使用所选资料
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </section>

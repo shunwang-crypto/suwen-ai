@@ -18,7 +18,7 @@
 ### 对话（用户，120次/分限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/chat | {message, session_id?} → SSE 流（见下）；无 session_id 自动建会话 |
+| POST | /api/chat | {message, session_id?, mode, kb_ids?, attachment_ids?} → SSE 流（见下）；无 session_id 自动建会话 |
 | GET | /api/chat/sessions | 会话列表（按更新时间倒序，≤100） |
 | GET | /api/chat/sessions/{id}/messages | 历史消息（他人会话 → 404，不泄漏存在性） |
 | GET | /api/chat/sessions/{id}/run | 查询该会话的生成状态 → {status: running\|idle, run_id?} |
@@ -50,6 +50,11 @@
 首个 SSE 帧被代理短暂缓冲时立即识别任务。SSE 订阅断开（切换会话、切换页面或刷新）
 不会取消生成；任务会在 API 进程内继续。只有调用 `POST /api/chat/runs/{run_id}/stop`
 才会主动取消。返回原会话时，客户端先查询 `/run`，任务结束后重新读取历史消息。
+
+`mode` 为 `fast | think | web | kb`：`think` 固定走 strong 模型且只返回最终答案；
+`web` 强制进入网页搜索路径，不依赖问题关键词；`kb` 要求至少一个 `kb_id/kb_ids`。
+旧客户端未发送 `mode` 且携带知识库 ID 时仍按 `kb` 处理。助手消息的 `meta.chat_mode`
+记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。
 
 ### 知识库（M2，用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |

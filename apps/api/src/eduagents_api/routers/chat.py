@@ -25,6 +25,7 @@ from eduagents_core.graphs.qa_graph import PROFILE_SECTION_TEMPLATE
 from eduagents_core.logging import get_logger
 from eduagents_core.observability import observe_stages
 from eduagents_core.retrieval.sanitize import sanitize_retrieved_text
+from eduagents_core.tools.web_search import WebSearchUnavailable
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select, text
 from sse_starlette.sse import EventSourceResponse
@@ -311,11 +312,28 @@ async def chat(
     runtime = getattr(request.app.state, "graphs", None)
     request_id = getattr(request.state, "request_id", "")
     # Wave3 联合检索: kb_ids 为准; 旧单值 kb_id 向后兼容 (等价 kb_ids=[kb_id])
-    kb_ids: list[uuid.UUID] = list(
+    requested_kb_ids: list[uuid.UUID] = list(
         dict.fromkeys(body.kb_ids or ([body.kb_id] if body.kb_id is not None else []))
     )
+    # 未携带 mode 的旧客户端继续沿用“有 kb_id 即知识库问答”的历史契约；
+    # 新客户端显式选择其他模式时不允许残留的 kb_ids 偷偷改变回答路径。
+    mode_explicit = "mode" in body.model_fields_set
+    chat_mode = "kb" if requested_kb_ids and not mode_explicit else body.mode
+    kb_ids = requested_kb_ids if chat_mode == "kb" else []
     attachment_ids = list(dict.fromkeys(body.attachment_ids or []))
-    if kb_ids and runtime is None and not attachment_ids:
+    if chat_mode == "kb" and not kb_ids:
+        raise HTTPException(status_code=400, detail="KB_MODE_REQUIRES_SCOPE")
+    if chat_mode == "think" and not (settings.strong_api_key and settings.strong_model):
+        raise HTTPException(status_code=503, detail="THINKING_MODEL_UNAVAILABLE")
+    if chat_mode == "web" and (runtime is None or not settings.tavily_api_key):
+        raise HTTPException(status_code=503, detail="WEB_SEARCH_UNAVAILABLE")
+    if chat_mode == "web" and attachment_ids:
+        raise HTTPException(status_code=400, detail="WEB_MODE_ATTACHMENTS_UNSUPPORTED")
+    if (
+        chat_mode == "kb"
+        and (runtime is None or getattr(request.app.state, "retrieval", None) is None)
+        and not attachment_ids
+    ):
         raise HTTPException(status_code=503, detail="RETRIEVAL_UNAVAILABLE")
     if len(attachment_ids) > settings.max_chat_attachments_per_message:
         raise HTTPException(status_code=400, detail="TOO_MANY_CHAT_ATTACHMENTS")
@@ -390,9 +408,15 @@ async def chat(
             session_id=session_id,
             role="user",
             content=body.message,
-            meta_json={"attachments": [_attachment_summary(row) for row in current_attachments]}
-            if current_attachments
-            else {},
+            meta_json={
+                "chat_mode": chat_mode,
+                "kb_ids": [str(item) for item in kb_ids],
+                **(
+                    {"attachments": [_attachment_summary(row) for row in current_attachments]}
+                    if current_attachments
+                    else {}
+                ),
+            },
         )
         session.add(user_message)
         await session.flush()
@@ -496,6 +520,8 @@ async def chat(
                         "model": final.model if final else "",
                         "degraded": final.degraded if final else False,
                         "citations": citations,
+                        "chat_mode": chat_mode,
+                        "kb_ids": [str(item) for item in kb_ids],
                         **(extra_meta or {}),
                     },
                 )
@@ -506,16 +532,18 @@ async def chat(
         answer_parts: list[str] = []  # 已下发给客户端的 token 累积 (断流落库依据)
         final: ChatResult | None = None
         persisted = False  # P0-6: 本轮助手消息是否已落库
-        route_label = "kb" if kb_ids else "chat"
+        route_label = chat_mode
 
         try:
-            # ---- 知识库路径: qa 子图 (Agentic RAG 自省环 §5.3, M3 起唯一实现) ----
-            if kb_ids and not has_attachments and not has_images:
+            # ---- 知识库 / 强制联网路径: qa 子图 (Agentic RAG 自省环) ----
+            if chat_mode in {"kb", "web"} and not has_attachments and not has_images:
                 # ---- 两级语义缓存 (包B, §7): 仅单库+首轮 (缓存键不含会话历史,
                 # 多轮上下文相关答案禁止缓存) ----
                 cache = getattr(request.app.state, "answer_cache", None)
                 cache_embedder = getattr(request.app.state, "embedder", None)
-                cacheable = _cache_admissible(kb_ids, history, cache, cache_embedder, profile)
+                cacheable = chat_mode == "kb" and _cache_admissible(
+                    kb_ids, history, cache, cache_embedder, profile
+                )
                 # P1-11: 缓存作用域 = 该 kb 的 owner (个人库 owner=本人语义不变;
                 # 机构库 owner=org id, 成员间即共享命中)。cacheable 已限单库,
                 # owner_ids 恰一个元素。
@@ -540,6 +568,7 @@ async def chat(
                             hit.citations,
                             extra_meta={
                                 "route": "kb",
+                                "chat_mode": "kb",
                                 "cache": hit.source,
                                 "followups": hit.followups,
                             },
@@ -609,9 +638,10 @@ async def chat(
                     "user_id": str(ctx.user_id),
                     "request_id": request_id,
                     # kb_id 保留为首库 (路由判定/旧路径兼容); 检索层用 kb_ids+owner_ids
-                    "kb_id": str(kb_ids[0]),
+                    "kb_id": str(kb_ids[0]) if kb_ids else "",
                     "kb_ids": [str(k) for k in kb_ids],
                     "owner_ids": owner_ids,
+                    "requested_route": chat_mode,
                     # 画像摘要进 generate 的 system prompt; 薄弱点名单进 trace
                     "profile_summary": profile.summary,
                     "profile_weak_points": profile.weak_points,
@@ -689,6 +719,23 @@ async def chat(
                                     }
                                     citations.append(citation)
                                     yield {"event": "citation", "data": _sse(citation)}
+                            web_results = delta.get("web_results") or []
+                            if web_results:
+                                citations = []
+                                for i, item in enumerate(web_results, 1):
+                                    citation = {
+                                        "idx": i,
+                                        "chunk_id": f"web-{i}",
+                                        "doc_id": "",
+                                        "doc_name": item.get("title") or "网页来源",
+                                        "heading_path": "网页搜索",
+                                        "page": None,
+                                        "highlight": (item.get("content") or "")[:160],
+                                        "source_type": "web",
+                                        "url": item.get("url") or "",
+                                    }
+                                    citations.append(citation)
+                                    yield {"event": "citation", "data": _sse(citation)}
                         elif ev["kind"] == "end":
                             state = ev["state"]
                         # 其余 kind (custom 等) 向前兼容: 忽略
@@ -713,6 +760,17 @@ async def chat(
                             {
                                 "code": "BUDGET_EXCEEDED",
                                 "message": "今日 AI 用量已达上限，明天再来或联系管理员",
+                            }
+                        ),
+                    }
+                    return
+                except WebSearchUnavailable:
+                    yield {
+                        "event": "error",
+                        "data": _sse(
+                            {
+                                "code": "WEB_SEARCH_FAILED",
+                                "message": "网页搜索暂时不可用，请稍后重试",
                             }
                         ),
                     }
@@ -756,7 +814,10 @@ async def chat(
                     }
                     answer_parts = [safe]
                     await _persist_assistant(
-                        safe, None, [], extra_meta={"route": "kb", "blocked": True}
+                        safe,
+                        None,
+                        [],
+                        extra_meta={"route": chat_mode, "chat_mode": chat_mode, "blocked": True},
                     )
                     persisted = True
                     yield {
@@ -766,7 +827,7 @@ async def chat(
                                 "session_id": str(session_id),
                                 "citations": 0,
                                 "refused": False,
-                                "route": "kb",
+                                "route": chat_mode,
                                 "usage": {},
                             }
                         ),
@@ -796,6 +857,7 @@ async def chat(
                     citations,
                     extra_meta={
                         "route": state.get("route", ""),
+                        "chat_mode": chat_mode,
                         "refused": state.get("refused", False),
                         "followups": state.get("followups") or [],
                     },
@@ -869,7 +931,7 @@ async def chat(
             # Attachments and a selected KB can coexist. The normal QA graph is
             # text-only, so retrieve evidence here and feed it to the multimodal
             # generation call while preserving citation events.
-            if kb_ids:
+            if chat_mode == "kb" and kb_ids:
                 retrieval = getattr(request.app.state, "retrieval", None)
                 if retrieval is None:
                     yield {
@@ -938,10 +1000,12 @@ async def chat(
             ]
             gw_req = GwRequest(
                 messages=tuple(messages),
-                tier=Tier.standard,
-                model_override=settings.vision_model if has_images else None,
-                allow_tier_fallback=not has_images,
-                feature="chat",
+                tier=Tier.strong if chat_mode == "think" else Tier.standard,
+                model_override=(
+                    settings.vision_model if has_images and chat_mode == "fast" else None
+                ),
+                allow_tier_fallback=not has_images and chat_mode != "think",
+                feature="chat_think" if chat_mode == "think" else "chat",
                 tenant_id=str(ctx.tenant_id),
                 user_id=str(ctx.user_id),
                 request_id=request_id,
@@ -1010,7 +1074,12 @@ async def chat(
                     "data": _sse({"text": safe, "attempt": 1}),
                 }
                 answer_parts = [safe]
-                await _persist_assistant(safe, final, citations, extra_meta={"blocked": True})
+                await _persist_assistant(
+                    safe,
+                    final,
+                    citations,
+                    extra_meta={"chat_mode": chat_mode, "blocked": True},
+                )
                 persisted = True
                 yield {
                     "event": "done",
@@ -1024,7 +1093,9 @@ async def chat(
                 }
                 return
             answer = "".join(answer_parts)
-            await _persist_assistant(answer, final, citations)
+            await _persist_assistant(
+                answer, final, citations, extra_meta={"chat_mode": chat_mode}
+            )
             persisted = True
             yield {
                 "event": "done",
@@ -1055,7 +1126,11 @@ async def chat(
                             partial,
                             final,
                             citations,
-                            extra_meta={"route": route_label, "truncated": True},
+                            extra_meta={
+                                "route": route_label,
+                                "chat_mode": chat_mode,
+                                "truncated": True,
+                            },
                         )
                     )
 

@@ -52,7 +52,7 @@ _WEB_KEYWORDS = ("最新", "今年", "新闻", "搜索", "近期", "联网")
 # direct 路径普通助教 prompt。文案对齐 apps/api routers/chat.py 的 _SYSTEM_PROMPT;
 # core 不得反向依赖 apps, 故此处内联同款文案。
 DIRECT_SYSTEM_PROMPT = (
-    "你是 EduAgents 平台的 AI 助教，面向自学者与学生。"
+    "你是苏问 AI 课堂的 AI 助教，面向自学者与学生。"
     "回答准确、结构清晰、循序渐进；数学符号一律使用 LaTeX（行内 $..$，块级 $$..$$）。"
     "不确定的内容明确说明不确定，不要编造。"
 )
@@ -63,6 +63,8 @@ NO_EVIDENCE_ANSWER = (
     "建议：换一种问法、确认文档已完成解析（状态为 ready），"
     "或在不绑定知识库的通用模式下提问。"
 )
+
+WEB_NO_RESULTS_ANSWER = "网页搜索暂未返回可用结果。请换一种问法或稍后重试。"
 
 UNSUPPORTED_DISCLAIMER = "⚠️ 以下回答部分内容未能在知识库中找到直接依据"
 
@@ -200,6 +202,33 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         query = state.get("query", "")
         has_kb = bool(state.get("kb_id")) and deps.retrieval is not None
         web_ok = deps.web_search is not None
+        requested = state.get("requested_route", "")
+        if requested == "web" and web_ok:
+            return {
+                "route": "web",
+                "route_reason": "用户显式选择网页搜索",
+                "trace": [
+                    {
+                        "type": "router",
+                        "route": "web",
+                        "reason": "用户显式选择网页搜索",
+                        "rule_hit": True,
+                    }
+                ],
+            }
+        if requested == "kb" and has_kb:
+            return {
+                "route": "kb",
+                "route_reason": "用户显式选择知识库",
+                "trace": [
+                    {
+                        "type": "router",
+                        "route": "kb",
+                        "reason": "用户显式选择知识库",
+                        "rule_hit": True,
+                    }
+                ],
+            }
         ruled = _rule_route(query, has_kb, web_ok)
         if ruled is not None:
             route, reason = ruled
@@ -389,7 +418,10 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         }
 
     async def web_fallback(state: _QaGraphState) -> dict:
-        raw = await deps.web_search(state.get("query", ""))
+        if state.get("requested_route") == "web":
+            raw = await deps.web_search(state.get("query", ""), required=True)
+        else:
+            raw = await deps.web_search(state.get("query", ""))
         from_cache = False
         if isinstance(raw, tuple):  # TavilySearch.search 形状: (results, from_cache)
             raw_results, from_cache = raw
@@ -598,6 +630,12 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         }
 
     async def refuse(state: _QaGraphState) -> dict:
+        if state.get("route") == "web":
+            return {
+                "answer": WEB_NO_RESULTS_ANSWER,
+                "refused": True,
+                "trace": [{"type": "refuse", "reason": "web_no_results"}],
+            }
         return {
             "answer": NO_EVIDENCE_ANSWER,
             "refused": True,

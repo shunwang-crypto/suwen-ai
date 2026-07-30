@@ -12,7 +12,7 @@ from datetime import date
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.qa_graph import NO_EVIDENCE_ANSWER, build_qa_graph
+from eduagents_core.graphs.qa_graph import WEB_NO_RESULTS_ANSWER, build_qa_graph
 from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.moderation import (
     SAFE_MESSAGE_BLOCKED,
@@ -287,7 +287,7 @@ async def test_web_fallback_all_dropped_refuses():
     )
     assert out["web_results"] == []
     assert out["refused"] is True
-    assert out["answer"] == NO_EVIDENCE_ANSWER
+    assert out["answer"] == WEB_NO_RESULTS_ANSWER
     assert {"type": "moderation", "dropped": 1} in out["trace"]
 
 
