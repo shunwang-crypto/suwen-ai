@@ -86,6 +86,12 @@ const SAMPLE_QUESTIONS = [
 
 const LAST_CHAT_SESSION_KEY = "eduagents:last-chat-session";
 const CHAT_SESSION_STATUS_KEY = "eduagents:chat-session-status";
+const CHAT_HISTORY_COLLAPSED_KEY = "suwen:chat-history-collapsed";
+
+function readChatHistoryCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(CHAT_HISTORY_COLLAPSED_KEY) === "1";
+}
 
 type SessionIndicator = "running" | "completed";
 
@@ -196,6 +202,9 @@ function ChatView() {
 
   // 移动端抽屉
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(
+    readChatHistoryCollapsed,
+  );
   const [citationsOpen, setCitationsOpen] = useState(false);
 
   const [banner, setBanner] = useState<string | null>(null);
@@ -204,6 +213,13 @@ function ChatView() {
   /** ?new=1 全局新建入口只消费一次。 */
   const newChatRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      CHAT_HISTORY_COLLAPSED_KEY,
+      historyCollapsed ? "1" : "0",
+    );
+  }, [historyCollapsed]);
 
   const patchMsg = useCallback(
     (id: string, patch: (m: ChatMsg) => ChatMsg) => {
@@ -940,7 +956,7 @@ function ChatView() {
     />
   );
 
-  const sessionList = (
+  const renderSessionList = (onCollapse: () => void) => (
     <SessionList
       sessions={sessions}
       activeId={activeSessionId}
@@ -948,6 +964,7 @@ function ChatView() {
       indicators={sessionIndicators}
       onSelect={(id) => void selectSession(id)}
       onNew={newSession}
+      onCollapse={onCollapse}
       onRename={renameSession}
       onDelete={deleteSession}
     />
@@ -956,9 +973,11 @@ function ChatView() {
   return (
     <div className="flex h-full min-h-0 bg-canvas">
       {/* 左：会话列表（桌面） */}
-      <aside className="hidden w-[218px] shrink-0 border-r border-line bg-surface md:block">
-        {sessionList}
-      </aside>
+      {!historyCollapsed && (
+        <aside className="hidden w-[218px] shrink-0 border-r border-line bg-surface md:block">
+          {renderSessionList(() => setHistoryCollapsed(true))}
+        </aside>
+      )}
 
       {/* 左：会话列表（移动端抽屉） */}
       {sessionsOpen && (
@@ -970,7 +989,7 @@ function ChatView() {
             onClick={() => setSessionsOpen(false)}
           />
           <div className="absolute inset-y-0 left-0 w-72 bg-white shadow-xl">
-            {sessionList}
+            {renderSessionList(() => setSessionsOpen(false))}
           </div>
         </div>
       )}
@@ -979,6 +998,20 @@ function ChatView() {
       <section className="flex min-w-0 flex-1 flex-col bg-canvas">
         {/* 工具栏：知识库选择器 */}
         <div className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-[#fafaf9] px-5">
+          {historyCollapsed && (
+            <button
+              type="button"
+              onClick={() => setHistoryCollapsed(false)}
+              className="hidden h-8 w-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-surface-muted hover:text-ink md:flex"
+              aria-label="展开历史对话"
+              title="展开历史对话"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-[18px] w-[18px]" aria-hidden>
+                <rect x="3" y="4" width="18" height="16" rx="3" />
+                <path d="M9 4v16" />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setSessionsOpen(true)}

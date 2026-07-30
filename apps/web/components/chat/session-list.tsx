@@ -36,6 +36,7 @@ export function SessionList({
   indicators,
   onSelect,
   onNew,
+  onCollapse,
   onRename,
   onDelete,
 }: {
@@ -45,11 +46,14 @@ export function SessionList({
   indicators: Record<string, "running" | "completed">;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onCollapse: () => void;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [pinnedIds, setPinnedIds] = useState<string[]>(readPinnedSessions);
   const [menu, setMenu] = useState<{
     id: string;
@@ -89,7 +93,15 @@ export function SessionList({
   }, [menu]);
 
   const pinnedSet = new Set(pinnedIds);
-  const orderedSessions = [...sessions].sort(
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const visibleSessions = normalizedQuery
+    ? sessions.filter((session) =>
+        (session.title || "未命名会话")
+          .toLocaleLowerCase("zh-CN")
+          .includes(normalizedQuery),
+      )
+    : sessions;
+  const orderedSessions = [...visibleSessions].sort(
     (a, b) => Number(pinnedSet.has(b.id)) - Number(pinnedSet.has(a.id)),
   );
 
@@ -150,15 +162,15 @@ export function SessionList({
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex h-[62px] shrink-0 items-center gap-2 px-4">
-        <h2 className="text-sm font-semibold text-ink">会话</h2>
+      <div className="flex h-14 shrink-0 items-center gap-1 px-3">
+        <h2 className="text-sm font-semibold text-ink">历史对话</h2>
         <span className="flex-1" />
         <button
           type="button"
-          onClick={onNew}
-          title="新建对话"
-          aria-label="新建对话"
-          className="flex h-8 w-8 items-center justify-center rounded-control border border-line text-ink-secondary transition-colors hover:border-line-strong hover:text-ink"
+          onClick={() => setSearchOpen((value) => !value)}
+          title="搜索对话"
+          aria-label="搜索对话"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-surface-muted hover:text-ink"
         >
           <svg
             viewBox="0 0 24 24"
@@ -169,16 +181,66 @@ export function SessionList({
             className="h-4 w-4"
             aria-hidden
           >
-            <path d="M12 5v14M5 12h14" />
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m16 16 4 4" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={onCollapse}
+          title="收起历史对话"
+          aria-label="收起历史对话"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-surface-muted hover:text-ink"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-[18px] w-[18px]" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="3" />
+            <path d="M15 4v16" />
           </svg>
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      {searchOpen && (
+        <div className="px-3 pb-2">
+          <div className="flex h-9 items-center gap-2 rounded-full border border-line bg-white px-3 focus-within:border-line-strong">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden>
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="m16 16 4 4" />
+            </svg>
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索历史对话"
+              className="min-w-0 flex-1 bg-transparent text-xs text-ink outline-none placeholder:text-ink-muted focus-visible:outline-none"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery("")} className="text-xs text-ink-muted hover:text-ink" aria-label="清空搜索">×</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="px-3 pb-3">
+        <button
+          type="button"
+          onClick={onNew}
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-full border border-line bg-white text-[13px] font-medium text-ink shadow-sm transition-colors hover:border-line-strong hover:bg-surface-muted"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[17px] w-[17px]" aria-hidden>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v8M8 12h8" />
+          </svg>
+          开启新对话
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
         {loading ? (
           <p className="px-3 py-2 text-sm text-slate-400">加载中…</p>
         ) : sessions.length === 0 ? (
           <p className="px-3 py-2 text-sm text-slate-400">暂无会话</p>
+        ) : orderedSessions.length === 0 ? (
+          <p className="px-3 py-4 text-center text-xs text-slate-400">没有找到相关对话</p>
         ) : (
           <ul className="space-y-0.5">
             {orderedSessions.map((s, index) => {
@@ -190,12 +252,12 @@ export function SessionList({
               return (
                 <Fragment key={s.id}>
                   {index === 0 && pinned && (
-                    <li className="px-1 pb-0.5 pt-1 text-xs font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-1 text-[10px] font-normal text-slate-400">
                       置顶
                     </li>
                   )}
                   {!pinned && (index === 0 || previousPinned) && (
-                    <li className="px-1 pb-0.5 pt-2 text-xs font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-2 text-[10px] font-normal text-slate-400">
                       最近 7 天
                     </li>
                   )}
@@ -208,14 +270,14 @@ export function SessionList({
                         onBlur={() => void commitRename(s.id)}
                         onKeyDown={(e) => handleKey(e, s.id)}
                         maxLength={255}
-                        className="h-11 w-full rounded-control border border-brand-400 bg-white px-3 text-sm text-slate-900 outline-none ring-2 ring-brand-100"
+                        className="h-9 w-full rounded-lg border border-line-strong bg-white px-2.5 text-xs text-slate-900 outline-none"
                       />
                     ) : (
                       <>
                         <button
                           type="button"
                           onClick={() => onSelect(s.id)}
-                          className={`flex h-12 w-full items-center gap-2 rounded-control py-2 pl-3 pr-2 text-left text-[13px] transition-[background-color,color,padding] group-hover:pr-9 ${
+                          className={`flex h-9 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-[12px] transition-[background-color,color,padding] group-hover:pr-9 ${
                             active
                               ? "bg-surface-muted font-medium text-ink"
                               : "text-ink-secondary hover:bg-surface-muted hover:text-ink"
@@ -291,7 +353,7 @@ export function SessionList({
         )}
       </div>
 
-      <p className="shrink-0 border-t border-slate-200 px-4 py-3 text-xs text-slate-400">
+      <p className="shrink-0 border-t border-slate-200 px-3 py-2 text-[10px] text-slate-400">
         共 {sessions.length} 个对话 · 自动保存
       </p>
 

@@ -11,6 +11,12 @@ import { useAuth } from "@/lib/auth-context";
 
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot", "/reset"];
 const BARE_AUTHED_PATHS = ["/onboarding"];
+const NAV_COLLAPSED_KEY = "suwen:navigation-collapsed";
+
+function readNavigationCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(NAV_COLLAPSED_KEY) === "1";
+}
 
 interface NavItem {
   href: string;
@@ -169,53 +175,56 @@ function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavLink({ item, pathname, onNavigate }: { item: NavItem; pathname: string; onNavigate?: () => void }) {
+function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: NavItem; pathname: string; collapsed?: boolean; onNavigate?: () => void }) {
   const active = isActive(pathname, item.href);
   return (
     <Link
       href={item.href}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
-      className={`group flex h-8 items-center gap-2.5 rounded-[6px] px-2.5 text-[13px] font-medium transition-colors ${
+      title={collapsed ? item.label : undefined}
+      className={`group flex items-center rounded-[8px] text-[13px] font-medium transition-colors ${
+        collapsed ? "mx-auto h-10 w-10 justify-center" : "h-8 gap-2.5 px-2.5"
+      } ${
         active
           ? "bg-[#eeedea] text-ink"
           : "text-ink-secondary hover:bg-[#f4f3f0] hover:text-ink"
       }`}
     >
       <span className={active ? "text-ink" : "text-ink-muted group-hover:text-ink-secondary"}>{item.icon}</span>
-      <span className="truncate">{item.label}</span>
+      <span className={collapsed ? "sr-only" : "truncate"}>{item.label}</span>
     </Link>
   );
 }
 
-function Navigation({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: string; collapsed?: boolean; onNavigate?: () => void }) {
   return (
     <>
-      <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      <nav className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         {NAV_GROUPS.map((group, index) => (
-          <section key={group.label ?? "today"} className={index === 0 ? "pt-2" : "pt-[18px]"}>
-            {group.label && <h2 className="mb-1.5 px-2.5 text-[10px] font-medium tracking-[0.06em] text-[#a1a19d]">{group.label}</h2>}
+          <section key={group.label ?? "today"} className={index === 0 ? "pt-2" : collapsed ? "pt-2" : "pt-[18px]"}>
+            {group.label && !collapsed && <h2 className="mb-1.5 px-2.5 text-[10px] font-medium tracking-[0.06em] text-[#a1a19d]">{group.label}</h2>}
             <div className="space-y-0.5">
-              {group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} onNavigate={onNavigate} />)}
+              {group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
             </div>
           </section>
         ))}
       </nav>
-      <div className="shrink-0 border-t border-line px-3 py-3">
+      <div className={`shrink-0 border-t border-line py-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-0.5">
-          {UTILITY_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} onNavigate={onNavigate} />)}
+          {UTILITY_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
         </div>
       </div>
     </>
   );
 }
 
-function Brand() {
+function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <div className="flex h-14 shrink-0 items-center px-4">
-      <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日">
+    <div className={`flex h-14 shrink-0 items-center ${collapsed ? "justify-center" : "px-4"}`}>
+      <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日" title={collapsed ? "苏问" : undefined}>
         <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
-        <span className="flex flex-col leading-none">
+        <span className={`flex-col leading-none ${collapsed ? "hidden" : "flex"}`}>
           <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
           <span className="mt-1 text-[9px] font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
         </span>
@@ -286,6 +295,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, status, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(readNavigationCollapsed);
   const isPublic = PUBLIC_PATHS.includes(pathname);
 
   useEffect(() => {
@@ -295,6 +305,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
     if (status === "guest") router.replace("/login");
   }, [isPublic, status, router]);
+
+  useEffect(() => {
+    window.localStorage.setItem(NAV_COLLAPSED_KEY, navCollapsed ? "1" : "0");
+  }, [navCollapsed]);
 
   if (isPublic) return <>{children}</>;
 
@@ -341,9 +355,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex h-dvh overflow-hidden bg-canvas">
-        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-line bg-[#f4f3f1] md:flex">
-          <Brand />
-          <Navigation pathname={pathname} />
+        <aside className={`hidden shrink-0 flex-col border-r border-line bg-[#f4f3f1] transition-[width] duration-200 md:flex ${navCollapsed ? "w-16" : "w-[200px]"}`}>
+          <Brand collapsed={navCollapsed} />
+          <Navigation pathname={pathname} collapsed={navCollapsed} />
         </aside>
 
         <AnimatePresence>
@@ -364,6 +378,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 items-center gap-3">
               <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
                 <Icon><path d="M4 6h16M4 12h16M4 18h16" /></Icon>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNavCollapsed((value) => !value)}
+                className="hidden rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#eeedea] md:flex"
+                aria-label={navCollapsed ? "展开功能导航" : "折叠功能导航"}
+                title={navCollapsed ? "展开功能导航" : "折叠功能导航"}
+              >
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden>
+                  <rect x="2.5" y="3" width="15" height="14" rx="2.5" />
+                  <path d="M7 3v14" />
+                </svg>
               </button>
               {pathname === "/today" ? (
                 <div className="min-w-0">
