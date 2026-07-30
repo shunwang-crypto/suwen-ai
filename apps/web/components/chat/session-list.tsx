@@ -10,7 +10,6 @@ import {
   type MouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 
 import type { SessionOut } from "@/lib/types";
 
@@ -174,22 +173,6 @@ export function SessionList({
           </svg>
         </button>
       </div>
-
-      <nav aria-label="学习工作台功能" className="mx-3 mb-2 grid grid-cols-2 rounded-control bg-surface-muted p-1">
-        <Link
-          href="/chat"
-          aria-current="page"
-          className="rounded-[7px] bg-ink px-2 py-1.5 text-center text-xs font-medium text-white"
-        >
-          学习对话
-        </Link>
-        <Link
-          href="/kb"
-          className="rounded-[7px] px-2 py-1.5 text-center text-xs font-medium text-ink-secondary hover:bg-white hover:text-ink"
-        >
-          知识库
-        </Link>
-      </nav>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {loading ? (
