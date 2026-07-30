@@ -25,7 +25,7 @@ from eduagents_core.graphs.qa_graph import PROFILE_SECTION_TEMPLATE
 from eduagents_core.logging import get_logger
 from eduagents_core.observability import observe_stages
 from eduagents_core.retrieval.sanitize import sanitize_retrieved_text
-from eduagents_core.tools.web_search import WebSearchUnavailable
+from eduagents_core.tools.web_search import WebSearchInvalidQuery, WebSearchUnavailable
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select, text
 from sse_starlette.sse import EventSourceResponse
@@ -333,6 +333,8 @@ async def chat(
         runtime is None or not settings.tavily_api_key
     ):
         raise HTTPException(status_code=503, detail="WEB_SEARCH_UNAVAILABLE")
+    if chat_mode in {"web", "research"} and len("".join(body.message.split())) < 2:
+        raise HTTPException(status_code=400, detail="WEB_SEARCH_QUERY_TOO_SHORT")
     if chat_mode in {"web", "research"} and attachment_ids:
         raise HTTPException(status_code=400, detail="WEB_MODE_ATTACHMENTS_UNSUPPORTED")
     if chat_mode in {"web", "research"} and kb_ids:
@@ -773,6 +775,17 @@ async def chat(
                             {
                                 "code": "BUDGET_EXCEEDED",
                                 "message": "今日 AI 用量已达上限，明天再来或联系管理员",
+                            }
+                        ),
+                    }
+                    return
+                except WebSearchInvalidQuery:
+                    yield {
+                        "event": "error",
+                        "data": _sse(
+                            {
+                                "code": "WEB_SEARCH_INVALID_QUERY",
+                                "message": "搜索内容过短或不够明确，请补充后再试",
                             }
                         ),
                     }

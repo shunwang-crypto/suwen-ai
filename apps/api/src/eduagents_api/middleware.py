@@ -165,6 +165,8 @@ def install_error_handlers(app: FastAPI) -> None:
             # P2-15: 补齐信封映射, 前端不再显示英文裸码
             "KB_FORBIDDEN": "没有权限访问该知识库",
             "RETRIEVAL_UNAVAILABLE": "检索服务暂时不可用，请稍后重试",
+            "WEB_SEARCH_QUERY_TOO_SHORT": "搜索内容过短，请补充完整问题后再试",
+            "WEB_SEARCH_UNAVAILABLE": "网页搜索暂时不可用，请稍后重试",
             "ORG_READONLY": "机构知识库为只读，仅管理员可修改",
             # 当前对话附件（知识库上传仍沿用既有文件错误码）
             "CHAT_ATTACHMENT_TOO_LARGE": "附件超过当前对话允许的大小",

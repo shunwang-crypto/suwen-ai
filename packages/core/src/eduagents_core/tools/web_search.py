@@ -17,6 +17,10 @@ class WebSearchUnavailable(RuntimeError):
     """显式联网请求无法访问搜索服务，且没有可用缓存。"""
 
 
+class WebSearchInvalidQuery(ValueError):
+    """搜索服务拒绝过短或无有效语义的查询。"""
+
+
 class TavilySearch:
     """联网搜索 (Tavily) + 内存 TTL 缓存兜底。
 
@@ -64,6 +68,12 @@ class TavilySearch:
             log.warning("tavily_failed", error=str(exc))
             if cached and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
                 return cached[1], True
+            if (
+                raise_on_failure
+                and isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code == 400
+            ):
+                raise WebSearchInvalidQuery("Tavily rejected the query") from exc
             if raise_on_failure:
                 raise WebSearchUnavailable("Tavily search failed") from exc
             return [], False
