@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
@@ -514,9 +515,7 @@ function ChatView() {
     }
   }, []);
 
-  const uploadChatAttachments = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
+  const uploadChatAttachmentFiles = async (files: File[]) => {
     if (files.length === 0 || uploadingAttachment) return;
     const maxCount = attachmentCapabilities?.max_files_per_message ?? 4;
     const available = maxCount - attachments.length;
@@ -561,6 +560,37 @@ function ChatView() {
     }
     setUploadingAttachment(false);
     setBanner(failures.length > 0 ? failures.join("；") : null);
+  };
+
+  const uploadChatAttachments = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    void uploadChatAttachmentFiles(files);
+  };
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const suffixByMime: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+    };
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+      .map((file, index) => {
+        const suffix = suffixByMime[file.type];
+        if (!suffix || file.name.includes(".")) return file;
+        return new File(
+          [file],
+          `粘贴图片-${Date.now()}-${index + 1}.${suffix}`,
+          { type: file.type, lastModified: file.lastModified },
+        );
+      });
+    if (files.length === 0) return;
+    // textarea 无法直接承载位图；图片交给附件区。若剪贴板同时有文字，仍让浏览器正常粘贴文字。
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+    void uploadChatAttachmentFiles(files);
   };
 
   const send = useCallback(
@@ -1388,6 +1418,7 @@ function ChatView() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleComposerKey}
+                onPaste={handleComposerPaste}
                 rows={1}
                 maxLength={8000}
                 placeholder={streaming ? "正在生成回答…" : "给苏问发消息"}
@@ -1468,7 +1499,8 @@ function ChatView() {
                       <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg border border-line text-lg" aria-hidden>＋</span>
                       <span>
                         <span className="block text-[13px] font-medium text-ink">添加图片和文件</span>
-                        <span className="block text-[11px] leading-5 text-ink-muted">仅用于当前对话，最多 4 个、合计 20MB</span>
+                        <span className="block text-[11px] leading-5 text-ink-muted">选择文件，或在输入框直接粘贴截图</span>
+                        <span className="block text-[10px] leading-4 text-ink-muted">最多 4 个，合计 20MB</span>
                       </span>
                     </button>
                     <button
