@@ -32,6 +32,7 @@ from .base import (
     Tier,
     UsageEvent,
     UsageSink,
+    message_text,
 )
 from .circuit import CircuitBreaker
 from .faults import FaultInjector, get_fault_injector
@@ -58,9 +59,7 @@ _TIER_RANK: dict[Tier, int] = {Tier.cheap: 0, Tier.standard: 1, Tier.strong: 2}
 
 def _warn_if_upcost(requested: Tier, used: Tier) -> None:
     if _TIER_RANK[used] > _TIER_RANK[requested]:
-        log.warning(
-            "degraded_upcost", requested=requested.value, used=used.value
-        )
+        log.warning("degraded_upcost", requested=requested.value, used=used.value)
 
 
 class OpenAIGateway:
@@ -128,9 +127,7 @@ class OpenAIGateway:
         await self._emit_usage(req, result)
         return result
 
-    async def stream_chat(
-        self, req: ChatRequest
-    ) -> AsyncIterator[StreamDelta | ChatResult]:
+    async def stream_chat(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
         mode = self._s.gateway_mode
         if mode in ("stub", "replay"):
             started = perf_counter()
@@ -199,9 +196,7 @@ class OpenAIGateway:
             return req, None
         reserved_tier = req.tier.value
         try:
-            verdict = await self._guard.precheck(
-                req.tenant_id, req.user_id, tier=reserved_tier
-            )
+            verdict = await self._guard.precheck(req.tenant_id, req.user_id, tier=reserved_tier)
         except BudgetExceeded:
             raise
         except Exception:  # noqa: BLE001 — 预算预检故障不阻断业务, 只记日志
@@ -210,18 +205,17 @@ class OpenAIGateway:
         if verdict == "cheap":
             cap = self._s.budget_cheap_max_tokens
             max_tokens = min(req.max_tokens, cap) if req.max_tokens else cap
-            if req.tier != Tier.cheap or req.max_tokens != max_tokens:
+            target_tier = req.tier if req.model_override else Tier.cheap
+            if req.tier != target_tier or req.max_tokens != max_tokens:
                 log.warning(
                     "budget_soft_limit_downgrade",
                     user_id=req.user_id,
                     requested_tier=req.tier.value,
                 )
-                req = replace(req, tier=Tier.cheap, max_tokens=max_tokens)
+                req = replace(req, tier=target_tier, max_tokens=max_tokens)
         return req, reserved_tier
 
-    async def _refund_reservation(
-        self, req: ChatRequest, reserved_tier: str | None
-    ) -> None:
+    async def _refund_reservation(self, req: ChatRequest, reserved_tier: str | None) -> None:
         """调用彻底失败时返还 precheck 的预扣额 (settle 收到零成本事件即整额返还)。"""
         if self._guard is None or reserved_tier is None:
             return
@@ -248,10 +242,8 @@ class OpenAIGateway:
         return Cassette.key(
             {
                 "tier": req.tier.value,
-                "model": self._s.tier(req.tier.value).model,
-                "messages": [
-                    {"role": m.role, "content": m.content} for m in req.messages
-                ],
+                "model": req.model_override or self._s.tier(req.tier.value).model,
+                "messages": [{"role": m.role, "content": m.content} for m in req.messages],
                 "json_mode": req.json_mode,
                 "temperature": req.temperature,
                 "max_tokens": req.max_tokens,
@@ -260,14 +252,13 @@ class OpenAIGateway:
 
     def _cost(self, tier_cfg: TierConfig, p_tok: int, c_tok: int) -> float:
         return round(
-            p_tok / 1e6 * tier_cfg.input_price_per_m
-            + c_tok / 1e6 * tier_cfg.output_price_per_m,
+            p_tok / 1e6 * tier_cfg.input_price_per_m + c_tok / 1e6 * tier_cfg.output_price_per_m,
             6,
         )
 
     def _stub_result(self, req: ChatRequest, started: float) -> ChatResult:
         text = stub_text(req)
-        p_tok = sum(estimate_tokens(m.content) for m in req.messages)
+        p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
         c_tok = estimate_tokens(text)
         return ChatResult(
             text=text,
@@ -314,10 +305,8 @@ class OpenAIGateway:
 
     def _completion_kwargs(self, req: ChatRequest, cfg: TierConfig) -> dict:
         kwargs: dict = {
-            "model": cfg.model,
-            "messages": [
-                {"role": m.role, "content": m.content} for m in req.messages
-            ],
+            "model": req.model_override or cfg.model,
+            "messages": [{"role": m.role, "content": m.content} for m in req.messages],
             "temperature": req.temperature,
         }
         if req.max_tokens:
@@ -349,7 +338,7 @@ class OpenAIGateway:
         c_tok = usage.completion_tokens if usage else 0
         return ChatResult(
             text=resp.choices[0].message.content or "",
-            model=resp.model or cfg.model,
+            model=resp.model or req.model_override or cfg.model,
             tier=tier.value,
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
@@ -361,7 +350,8 @@ class OpenAIGateway:
 
     async def _live_chat(self, req: ChatRequest, started: float) -> ChatResult:
         last_error: Exception | None = None
-        for tier in _DEGRADE[req.tier]:
+        tiers = _DEGRADE[req.tier] if req.allow_tier_fallback else (req.tier,)
+        for tier in tiers:
             breaker = self._breakers[tier]
             if not breaker.allow():
                 log.warning("breaker_open_skip", tier=tier.value)
@@ -370,9 +360,7 @@ class OpenAIGateway:
                 result = await self._call_tier(req, tier)
                 breaker.record(True)
                 if result.degraded:
-                    log.warning(
-                        "tier_degraded", requested=req.tier.value, used=tier.value
-                    )
+                    log.warning("tier_degraded", requested=req.tier.value, used=tier.value)
                     _warn_if_upcost(req.tier, tier)
                 return result
             except Exception as exc:  # noqa: BLE001 — 每个 provider 失败都要继续降级链
@@ -391,9 +379,7 @@ class OpenAIGateway:
             result = self._stub_result(req, started)
             result.degraded = True
             return result
-        raise GatewayError(
-            "ALL_PROVIDERS_FAILED", f"全部模型通道失败: {last_error}"
-        )
+        raise GatewayError("ALL_PROVIDERS_FAILED", f"全部模型通道失败: {last_error}")
 
     async def _live_stream(
         self, req: ChatRequest, reserved_tier: str | None = None
@@ -406,7 +392,8 @@ class OpenAIGateway:
         streaming_tier: Tier | None = None
         parts: list[str] = []
         try:
-            for tier in _DEGRADE[req.tier]:
+            tiers = _DEGRADE[req.tier] if req.allow_tier_fallback else (req.tier,)
+            for tier in tiers:
                 breaker = self._breakers[tier]
                 if not breaker.allow():
                     continue
@@ -436,11 +423,11 @@ class OpenAIGateway:
                         _warn_if_upcost(req.tier, tier)
                     text = "".join(parts)
                     if not p_tok:
-                        p_tok = sum(estimate_tokens(m.content) for m in req.messages)
+                        p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
                         c_tok = estimate_tokens(text)
                     result = ChatResult(
                         text=text,
-                        model=cfg.model,
+                        model=req.model_override or cfg.model,
                         tier=tier.value,
                         prompt_tokens=p_tok,
                         completion_tokens=c_tok,
@@ -509,11 +496,11 @@ class OpenAIGateway:
         """客户端断流的部分消耗结算 (P0-6): token 用估算 (上游 usage 帧未到达),
         degraded=True 标记这是部分/非常规结果; 走 _emit_usage 统一进预算与 usage_log。"""
         cfg = self._s.tier(tier.value)
-        p_tok = sum(estimate_tokens(m.content) for m in req.messages)
+        p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
         c_tok = estimate_tokens(text)
         partial = ChatResult(
             text=text,
-            model=cfg.model,
+            model=req.model_override or cfg.model,
             tier=tier.value,
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
@@ -553,9 +540,7 @@ class OpenAIGateway:
         # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
         # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。
         # 结算失败只记日志, 不打断已完成的响应。
-        if self._guard is not None and (
-            result.mode == "live" or reserved_tier is not None
-        ):
+        if self._guard is not None and (result.mode == "live" or reserved_tier is not None):
             try:
                 await self._guard.settle(event, reserved_tier=reserved_tier)
             except Exception:  # noqa: BLE001

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 
 class Tier(StrEnum):
@@ -37,7 +37,20 @@ class BudgetExceeded(GatewayError):
 @dataclass(frozen=True)
 class ChatMessage:
     role: Literal["system", "user", "assistant"]
-    content: str
+    # OpenAI-compatible multimodal messages use a list of text/image_url parts.
+    # Existing callers remain plain strings; only chat attachments opt into parts.
+    content: str | list[dict[str, Any]]
+
+
+def message_text(content: str | list[dict[str, Any]]) -> str:
+    """Return only textual parts for logging, token estimates and dev stubs."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        str(part.get("text", ""))
+        for part in content
+        if part.get("type") == "text" and part.get("text")
+    )
 
 
 @dataclass(frozen=True)
@@ -51,6 +64,12 @@ class ChatRequest:
     tenant_id: str = ""
     user_id: str = ""
     request_id: str = ""
+    # Vision requests use the same configured OpenAI-compatible endpoint/key but
+    # explicitly select the configured VL model. None keeps the tier model.
+    model_override: str | None = None
+    # A text-model fallback cannot consume image parts, so multimodal requests
+    # must stay on the requested provider tier.
+    allow_tier_fallback: bool = True
 
 
 @dataclass
@@ -105,9 +124,7 @@ class BudgetGuard(Protocol):
         self, tenant_id: str, user_id: str, tier: str = "standard"
     ) -> str | None: ...
 
-    async def settle(
-        self, event: UsageEvent, reserved_tier: str | None = None
-    ) -> None: ...
+    async def settle(self, event: UsageEvent, reserved_tier: str | None = None) -> None: ...
 
 
 class ModelGateway(Protocol):
@@ -116,8 +133,6 @@ class ModelGateway(Protocol):
 
     async def chat(self, req: ChatRequest) -> ChatResult: ...
 
-    def stream_chat(
-        self, req: ChatRequest
-    ) -> AsyncIterator[StreamDelta | ChatResult]:
+    def stream_chat(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
         """Yields StreamDelta items, then exactly one final ChatResult."""
         ...

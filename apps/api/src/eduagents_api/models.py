@@ -408,6 +408,41 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class ChatAttachment(Base):
+    """User-owned file attached to a chat message.
+
+    Original bytes live in object storage under the user's tenant prefix. Parsed
+    document text is retained here so later turns can retrieve relevant excerpts
+    without rebuilding a permanent knowledge base.
+    """
+
+    __tablename__ = "chat_attachments"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(768), nullable=False)
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
 class UsageLog(Base):
     __tablename__ = "usage_log"
     id: Mapped[uuid.UUID] = _uuid_pk()

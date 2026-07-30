@@ -27,6 +27,19 @@ log = get_logger("observability")
 _client: Any = None
 _client_failed = False
 
+
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(part.get("text", ""))
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+    )
+
+
 # 阶段 trace 字段脱敏白名单: 字符串值仅这些键可原样上报 (均为枚举/常量值,
 # 不承载用户内容); 其余字符串一律指纹化 (rewrite 的 from/to、router 的 reason
 # 等可能回显用户原文)。
@@ -40,9 +53,7 @@ _PROFILE_KEYS = frozenset({"weak_points", "mastery", "profile_summary"})
 def langfuse_enabled(settings: Settings) -> bool:
     """三个 env 齐全才启用 (缺任一即视为未配置, 全链路零开销)。"""
     return bool(
-        settings.langfuse_public_key
-        and settings.langfuse_secret_key
-        and settings.langfuse_host
+        settings.langfuse_public_key and settings.langfuse_secret_key and settings.langfuse_host
     )
 
 
@@ -112,9 +123,21 @@ def observe_generation(settings: Settings, req: ChatRequest, result: ChatResult)
     try:
         from langfuse import propagate_attributes
 
-        prompt_text = "\n".join(m.content for m in req.messages)
+        # Never place base64 image payloads in traces. Even when content logging is
+        # explicitly enabled, record only the textual parts plus an image marker.
+        prompt_text = "\n".join(_message_text(m.content) for m in req.messages)
         if settings.langfuse_log_content:
-            input_: Any = [{"role": m.role, "content": m.content} for m in req.messages]
+            input_: Any = []
+            for message in req.messages:
+                item: dict[str, Any] = {
+                    "role": message.role,
+                    "content": _message_text(message.content),
+                }
+                if isinstance(message.content, list) and any(
+                    part.get("type") == "image_url" for part in message.content
+                ):
+                    item["has_images"] = True
+                input_.append(item)
             output: Any = result.text
         else:
             input_ = _fingerprint(prompt_text)

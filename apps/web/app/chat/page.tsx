@@ -10,6 +10,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
@@ -19,11 +20,13 @@ import { ContextDrawer } from "@/components/chat/context-drawer";
 import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
 import type { TimelineItem } from "@/components/chat/timeline";
-import { ApiError, apiJson } from "@/lib/api";
+import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
   ChatRunStatusOut,
+  ChatAttachmentCapabilities,
+  ChatAttachmentOut,
   CitationData,
   DoneData,
   ErrorEventData,
@@ -59,6 +62,7 @@ interface ChatMsg {
   truncated?: boolean;
   /** 45s 无事件软超时（客户端合成 stall 事件）：仍在等待上游 */
   stalled?: boolean;
+  attachments?: ChatAttachmentOut[];
 }
 
 /** done.usage.mode 中文化（P2-18）：内部枚举不直接暴露给用户 */
@@ -116,6 +120,9 @@ function historyToMessages(history: MessageOut[]): ChatMsg[] {
       ? (m.meta.followups as string[])
       : [],
     truncated: Boolean(m.meta?.truncated),
+    attachments: Array.isArray(m.meta?.attachments)
+      ? (m.meta.attachments as ChatAttachmentOut[])
+      : [],
   }));
 }
 
@@ -141,7 +148,17 @@ function ChatView() {
     const kb = searchParams.get("kb");
     return kb ? [kb] : [];
   });
-  const [kbPickerOpen, setKbPickerOpen] = useState(false);
+  const [composerPanel, setComposerPanel] = useState<
+    "menu" | "scope" | "kb-upload" | null
+  >(null);
+  const [attachments, setAttachments] = useState<ChatAttachmentOut[]>([]);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [kbUploadTarget, setKbUploadTarget] = useState<string | null>(null);
+  const [uploadingToKb, setUploadingToKb] = useState(false);
+  const [attachmentCapabilities, setAttachmentCapabilities] =
+    useState<ChatAttachmentCapabilities | null>(null);
+  const chatAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const kbUploadInputRef = useRef<HTMLInputElement>(null);
 
   // 消息与流式状态
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -185,6 +202,19 @@ function ChatView() {
     [],
   );
 
+  const discardPendingAttachments = useCallback(() => {
+    if (attachments.length === 0) return;
+    const pending = attachments;
+    setAttachments([]);
+    void Promise.allSettled(
+      pending.map((attachment) =>
+        apiJson<void>(`/api/chat/attachments/${attachment.id}`, {
+          method: "DELETE",
+        }),
+      ),
+    );
+  }, [attachments]);
+
   const detachCurrentStream = useCallback(() => {
     const controller = abortRef.current;
     if (!controller) return;
@@ -226,13 +256,16 @@ function ChatView() {
     }
   }, []);
 
-  // 首屏并行拉取会话列表与知识库列表
+  // 首屏并行拉取会话、知识库与附件能力
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [sessionsRes, kbsRes] = await Promise.allSettled([
+      const [sessionsRes, kbsRes, attachmentRes] = await Promise.allSettled([
         apiJson<SessionOut[]>("/api/chat/sessions"),
         apiJson<KbOut[]>("/api/kb"),
+        apiJson<ChatAttachmentCapabilities>(
+          "/api/chat/attachments/capabilities",
+        ),
       ]);
       if (!alive) return;
       if (sessionsRes.status === "fulfilled") setSessions(sessionsRes.value);
@@ -240,6 +273,9 @@ function ChatView() {
       setSessionsLoading(false);
       if (kbsRes.status === "fulfilled") setKbs(kbsRes.value);
       else setBanner("知识库列表加载失败");
+      if (attachmentRes.status === "fulfilled") {
+        setAttachmentCapabilities(attachmentRes.value);
+      }
     })();
     return () => {
       alive = false;
@@ -253,6 +289,7 @@ function ChatView() {
   }, [messages]);
 
   const selectSession = useCallback(async (id: string) => {
+    discardPendingAttachments();
     detachCurrentStream();
     const epoch = ++viewEpochRef.current;
     setActiveSessionId(id);
@@ -318,7 +355,7 @@ function ChatView() {
       setStreaming(false);
       setBanner(err instanceof ApiError ? err.message : "历史消息加载失败");
     }
-  }, [detachCurrentStream, loadSessions]);
+  }, [detachCurrentStream, discardPendingAttachments, loadSessions]);
 
   // 从其他功能页返回 /chat 时恢复上次查看的会话；带 ?q= 的推荐问题仍开启新对话。
   useEffect(() => {
@@ -381,6 +418,7 @@ function ChatView() {
   }, [activeSessionId, sessionIndicators, sessions]);
 
   const newSession = useCallback(() => {
+    discardPendingAttachments();
     detachCurrentStream();
     viewEpochRef.current += 1;
     setActiveSessionId(null);
@@ -391,7 +429,7 @@ function ChatView() {
     setCitationMsgId(null);
     setSessionsOpen(false);
     window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
-  }, [detachCurrentStream]);
+  }, [detachCurrentStream, discardPendingAttachments]);
 
   // 全局导航的“新建对话”使用 ?new=1 明确请求空白会话，避免被上次会话恢复逻辑覆盖。
   useEffect(() => {
@@ -445,11 +483,103 @@ function ChatView() {
     [activeRunId, activeSessionId, loadSessions],
   );
 
+  const removeAttachment = useCallback(async (attachment: ChatAttachmentOut) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== attachment.id));
+    try {
+      await apiJson<void>(`/api/chat/attachments/${attachment.id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      setBanner(err instanceof ApiError ? err.message : "移除附件失败");
+    }
+  }, []);
+
+  const uploadChatAttachments = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0 || uploadingAttachment) return;
+    const maxCount = attachmentCapabilities?.max_files_per_message ?? 4;
+    const available = maxCount - attachments.length;
+    if (available <= 0 || files.length > available) {
+      setBanner(`每条消息最多添加 ${maxCount} 个附件`);
+      return;
+    }
+    const maxBytes = (attachmentCapabilities?.max_file_mb ?? 20) * 1024 * 1024;
+    if (files.some((file) => file.size > maxBytes)) {
+      setBanner(`当前对话单个附件不能超过 ${attachmentCapabilities?.max_file_mb ?? 20}MB`);
+      return;
+    }
+    const existingBytes = attachments.reduce((sum, item) => sum + item.size_bytes, 0);
+    if (existingBytes + files.reduce((sum, file) => sum + file.size, 0) > maxBytes) {
+      setBanner(`本次消息的附件总大小不能超过 ${attachmentCapabilities?.max_file_mb ?? 20}MB`);
+      return;
+    }
+    setUploadingAttachment(true);
+    setComposerPanel(null);
+    const uploaded: ChatAttachmentOut[] = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const response = await apiFetch("/api/chat/attachments", {
+          method: "POST",
+          body: form,
+        });
+        uploaded.push((await response.json()) as ChatAttachmentOut);
+      } catch (err) {
+        failures.push(
+          `${file.name}：${err instanceof ApiError ? err.message : "上传失败"}`,
+        );
+      }
+    }
+    setAttachments((prev) => [...prev, ...uploaded]);
+    setUploadingAttachment(false);
+    setBanner(failures.length > 0 ? failures.join("；") : null);
+  };
+
+  const uploadFilesToKb = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    const target = kbUploadTarget;
+    if (!target || files.length === 0 || uploadingToKb) return;
+    setUploadingToKb(true);
+    setComposerPanel(null);
+    const failures: string[] = [];
+    let succeeded = 0;
+    for (const file of files) {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        await apiFetch(`/api/kb/${target}/documents`, {
+          method: "POST",
+          body: form,
+        });
+        succeeded += 1;
+      } catch (err) {
+        failures.push(
+          `${file.name}：${err instanceof ApiError ? err.message : "上传失败"}`,
+        );
+      }
+    }
+    setUploadingToKb(false);
+    if (failures.length > 0) {
+      setBanner(failures.join("；"));
+    } else {
+      const kbName = kbs.find((kb) => kb.id === target)?.name ?? "知识库";
+      setBanner(`${succeeded} 个文件已上传到「${kbName}」，正在解析和建立索引`);
+    }
+  };
+
   const send = useCallback(
     async (raw?: string) => {
-      const text = (raw ?? input).trim();
+      const sentAttachments = attachments;
+      const typed = (raw ?? input).trim();
+      const text = typed || (sentAttachments.length > 0 ? "请分析这些附件" : "");
       if (!text || streaming) return;
       setInput("");
+      setAttachments([]);
+      setComposerPanel(null);
       setBanner(null);
 
       const userMsg: ChatMsg = {
@@ -458,6 +588,7 @@ function ChatView() {
         content: text,
         timeline: [],
         citations: [],
+        attachments: sentAttachments,
       };
       const asstId = genId();
       const asstMsg: ChatMsg = {
@@ -478,12 +609,17 @@ function ChatView() {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      let accepted = false;
 
       try {
         const body = {
           message: text,
           session_id: activeSessionId ?? undefined,
           kb_ids: kbIds.length > 0 ? kbIds : undefined,
+          attachment_ids:
+            sentAttachments.length > 0
+              ? sentAttachments.map((item) => item.id)
+              : undefined,
         };
         for await (const msg of streamSse("/api/chat", body, {
           signal: controller.signal,
@@ -492,6 +628,7 @@ function ChatView() {
           switch (msg.event) {
             case "session": {
               const d = msg.data as SessionEventData;
+              accepted = true;
               setActiveSessionId(d.session_id);
               setActiveRunId(d.run_id);
               setSessionIndicators((prev) => ({
@@ -619,6 +756,9 @@ function ChatView() {
                 : "网络异常，请稍后重试";
           patchMsg(asstId, (m) => ({ ...m, errorText: msg }));
         }
+        if (!accepted && sentAttachments.length > 0) {
+          setAttachments((prev) => [...sentAttachments, ...prev]);
+        }
       } finally {
         if (viewEpochRef.current === runEpoch) {
           patchMsg(asstId, (m) => ({ ...m, streaming: false }));
@@ -628,7 +768,16 @@ function ChatView() {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [input, streaming, activeSessionId, kbIds, kbs, patchMsg, loadSessions],
+    [
+      input,
+      attachments,
+      streaming,
+      activeSessionId,
+      kbIds,
+      kbs,
+      patchMsg,
+      loadSessions,
+    ],
   );
 
   const stop = useCallback(() => {
@@ -814,88 +963,6 @@ function ChatView() {
 
           <span className="flex-1" />
 
-          <div className="relative flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setKbPickerOpen((v) => !v)}
-              className="flex max-w-56 items-center gap-1.5 rounded-control bg-surface-muted px-2.5 py-1.5 text-xs text-ink-secondary outline-none transition-colors hover:text-ink focus:ring-2 focus:ring-brand-100"
-            >
-              <span className="truncate">
-                {selectedKbLabel}
-              </span>
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${kbPickerOpen ? "rotate-180" : ""}`}
-                aria-hidden
-              >
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            </button>
-            {kbPickerOpen && (
-              <>
-                <button
-                  type="button"
-                  aria-label="关闭知识库选择"
-                  className="fixed inset-0 z-10 cursor-default"
-                  onClick={() => setKbPickerOpen(false)}
-                />
-                <div className="absolute right-0 top-full z-20 mt-1.5 max-h-80 w-72 overflow-y-auto rounded-overlay border border-slate-200 bg-white p-2 shadow-floating">
-                  <button
-                    type="button"
-                    onClick={() => setKbIds([])}
-                    className={`w-full rounded-lg px-2.5 py-1.5 text-left text-sm ${
-                      kbIds.length === 0
-                        ? "bg-indigo-50 font-medium text-indigo-700"
-                        : "text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    不绑定（通用模式）
-                  </button>
-                  {(["user", "org"] as const).map((ownerType) => {
-                    const group = kbs.filter((k) => k.owner_type === ownerType);
-                    if (group.length === 0) return null;
-                    return (
-                      <div key={ownerType} className="mt-1.5">
-                        <p className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          {ownerType === "user" ? "个人库" : "机构库"}
-                        </p>
-                        {group.map((kb) => (
-                          <label
-                            key={kb.id}
-                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={kbIds.includes(kb.id)}
-                              onChange={(e) =>
-                                setKbIds((prev) =>
-                                  e.target.checked
-                                    ? [...prev, kb.id]
-                                    : prev.filter((id) => id !== kb.id),
-                                )
-                              }
-                              className="h-3.5 w-3.5 accent-indigo-600"
-                            />
-                            <span className="min-w-0 flex-1 truncate">{kb.name}</span>
-                            {kb.owner_type === "org" && (
-                              <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                                {kb.org_name ?? "机构"}
-                              </span>
-                            )}
-                          </label>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
           {panelCitations.length > 0 && (
             <button
               type="button"
@@ -973,6 +1040,22 @@ function ChatView() {
                 m.role === "user" ? (
                   <div key={m.id} className="fx-msg-in flex justify-end">
                     <div className="max-w-[85%] rounded-control bg-brand-50 px-3.5 py-2.5 text-sm leading-[22px] text-slate-900">
+                      {m.attachments && m.attachments.length > 0 && (
+                        <div className="mb-2 flex flex-wrap justify-end gap-1.5">
+                          {m.attachments.map((attachment) => (
+                            <span
+                              key={attachment.id}
+                              className="inline-flex max-w-56 items-center gap-1.5 rounded-[7px] border border-brand-100 bg-white/80 px-2 py-1 text-[11px] text-ink-secondary"
+                              title={attachment.filename}
+                            >
+                              <span aria-hidden>
+                                {attachment.kind === "image" ? "图片" : "文件"}
+                              </span>
+                              <span className="truncate">{attachment.filename}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <span className="whitespace-pre-wrap break-words">
                         {m.content}
                       </span>
@@ -1209,7 +1292,58 @@ function ChatView() {
 
         {/* 输入区 */}
         <div className="shrink-0 bg-canvas px-4 pb-6 pt-3">
-          <div className="mx-auto flex h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-[12px] border border-line bg-white p-3 shadow-subtle">
+          <div className="relative mx-auto flex min-h-[104px] w-full max-w-[720px] flex-col gap-2 rounded-[12px] border border-line bg-white p-3 shadow-subtle">
+            <input
+              ref={chatAttachmentInputRef}
+              type="file"
+              multiple
+              accept={[
+                ...(attachmentCapabilities?.document_suffixes ?? [
+                  ".pdf",
+                  ".docx",
+                  ".pptx",
+                  ".md",
+                  ".txt",
+                ]),
+                ...(attachmentCapabilities?.image_suffixes ?? []),
+              ].join(",")}
+              className="hidden"
+              onChange={(event) => void uploadChatAttachments(event)}
+            />
+            <input
+              ref={kbUploadInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.pptx,.md,.txt"
+              className="hidden"
+              onChange={(event) => void uploadFilesToKb(event)}
+            />
+
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {attachments.map((attachment) => (
+                  <span
+                    key={attachment.id}
+                    className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-[11px] text-ink-secondary"
+                  >
+                    <span aria-hidden>
+                      {attachment.kind === "image" ? "图片" : "文件"}
+                    </span>
+                    <span className="truncate" title={attachment.filename}>
+                      {attachment.filename}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void removeAttachment(attachment)}
+                      className="shrink-0 text-ink-muted hover:text-ink"
+                      aria-label={`移除 ${attachment.filename}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1220,29 +1354,197 @@ function ChatView() {
                 streaming ? "正在生成回答…" : "输入问题，Enter 发送，Shift+Enter 换行"
               }
               disabled={streaming}
-              className="h-9 w-full resize-none border-0 bg-transparent p-0 text-sm leading-[22px] text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
+              className="min-h-9 w-full resize-none border-0 bg-transparent p-0 text-sm leading-[22px] text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
             />
 
             <div className="flex h-8 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setKbPickerOpen(true)}
-                className="flex h-8 max-w-56 items-center gap-1.5 rounded-control border border-slate-200 bg-slate-100 px-2.5 text-[13px] font-medium text-slate-600 transition-colors hover:bg-slate-200"
-              >
-                <span className="truncate">知识库 · {selectedKbLabel}</span>
-                <svg
-                  viewBox="0 0 12 12"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3 shrink-0 text-slate-400"
-                  aria-hidden
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setComposerPanel((value) => (value ? null : "menu"))
+                  }
+                  disabled={streaming || uploadingAttachment || uploadingToKb}
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-xl font-light text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-40"
+                  aria-label="添加内容"
+                  aria-expanded={composerPanel !== null}
                 >
-                  <path d="m3.5 4.5 2.5 2.5 2.5-2.5" />
-                </svg>
-              </button>
+                  {uploadingAttachment || uploadingToKb ? (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                  ) : (
+                    "+"
+                  )}
+                </button>
+
+                {composerPanel && (
+                  <>
+                    <button
+                      type="button"
+                      className="fixed inset-0 z-20 cursor-default"
+                      aria-label="关闭添加菜单"
+                      onClick={() => setComposerPanel(null)}
+                    />
+                    <div className="absolute bottom-10 left-0 z-30 max-h-[360px] w-[310px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-overlay border border-line bg-white p-2 shadow-floating">
+                      {composerPanel === "menu" && (
+                        <div className="space-y-0.5">
+                          <button
+                            type="button"
+                            onClick={() => chatAttachmentInputRef.current?.click()}
+                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
+                          >
+                            <span className="mt-0.5 text-lg" aria-hidden>＋</span>
+                            <span>
+                              <span className="block text-[13px] font-medium text-ink">添加到当前对话</span>
+                              <span className="block text-[11px] text-ink-muted">图片、PDF、Office 或文本文件</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setComposerPanel("scope")}
+                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
+                          >
+                            <span className="mt-0.5 text-sm" aria-hidden>◎</span>
+                            <span>
+                              <span className="block text-[13px] font-medium text-ink">选择知识库范围</span>
+                              <span className="block text-[11px] text-ink-muted">当前：{selectedKbLabel}</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setComposerPanel("kb-upload")}
+                            className="flex w-full items-start gap-3 rounded-[9px] px-3 py-2.5 text-left hover:bg-surface-muted"
+                          >
+                            <span className="mt-0.5 text-sm" aria-hidden>↑</span>
+                            <span>
+                              <span className="block text-[13px] font-medium text-ink">上传到知识库</span>
+                              <span className="block text-[11px] text-ink-muted">长期保存并建立检索索引</span>
+                            </span>
+                          </button>
+                        </div>
+                      )}
+
+                      {composerPanel === "scope" && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setComposerPanel("menu")}
+                            className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
+                          >
+                            ← 选择知识库范围
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setKbIds([])}
+                            className={`w-full rounded-[8px] px-2.5 py-2 text-left text-[13px] ${
+                              kbIds.length === 0
+                                ? "bg-surface-muted font-medium text-ink"
+                                : "text-ink-secondary hover:bg-surface-muted"
+                            }`}
+                          >
+                            不使用知识库
+                          </button>
+                          {(["user", "org"] as const).map((ownerType) => {
+                            const group = kbs.filter((kb) => kb.owner_type === ownerType);
+                            if (group.length === 0) return null;
+                            return (
+                              <div key={ownerType} className="mt-2">
+                                <p className="px-2.5 py-1 text-[10px] text-ink-muted">
+                                  {ownerType === "user" ? "个人知识库" : "机构知识库"}
+                                </p>
+                                {group.map((kb) => (
+                                  <label
+                                    key={kb.id}
+                                    className="flex cursor-pointer items-center gap-2 rounded-[8px] px-2.5 py-2 text-[13px] text-ink-secondary hover:bg-surface-muted"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={kbIds.includes(kb.id)}
+                                      onChange={(event) =>
+                                        setKbIds((prev) =>
+                                          event.target.checked
+                                            ? [...prev, kb.id]
+                                            : prev.filter((id) => id !== kb.id),
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 accent-slate-900"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{kb.name}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            onClick={() => setComposerPanel(null)}
+                            className="mt-2 h-8 w-full rounded-[8px] bg-ink text-xs font-medium text-white"
+                          >
+                            完成
+                          </button>
+                        </div>
+                      )}
+
+                      {composerPanel === "kb-upload" && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setComposerPanel("menu")}
+                            className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
+                          >
+                            ← 上传到知识库
+                          </button>
+                          {kbs.filter((kb) => kb.writable).length === 0 ? (
+                            <p className="px-3 py-5 text-center text-xs leading-5 text-ink-muted">
+                              还没有可上传的知识库，请先在知识库页面创建。
+                            </p>
+                          ) : (
+                            kbs
+                              .filter((kb) => kb.writable)
+                              .map((kb) => (
+                                <button
+                                  key={kb.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setKbUploadTarget(kb.id);
+                                    queueMicrotask(() => kbUploadInputRef.current?.click());
+                                  }}
+                                  className="flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left text-[13px] text-ink-secondary hover:bg-surface-muted"
+                                >
+                                  <span className="truncate">{kb.name}</span>
+                                  <span className="ml-2 shrink-0 text-[10px] text-ink-muted">选择文件</span>
+                                </button>
+                              ))
+                          )}
+                          <p className="px-3 pt-2 text-[10px] leading-4 text-ink-muted">
+                            支持 PDF、DOCX、PPTX、Markdown 和 TXT，单文件最大 50MB。
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {kbIds.length > 0 && (
+                <div className="flex h-8 max-w-52 items-center rounded-control bg-surface-muted pl-2.5 pr-1 text-[12px] text-ink-secondary">
+                  <button
+                    type="button"
+                    onClick={() => setComposerPanel("scope")}
+                    className="min-w-0 flex-1 truncate text-left hover:text-ink"
+                    title={selectedKbLabel}
+                  >
+                    {selectedKbLabel}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="清除知识库范围"
+                    onClick={() => setKbIds([])}
+                    className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center text-ink-muted hover:text-ink"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
 
               <span className="flex-1" />
               <span className="hidden text-xs text-slate-400 sm:block">
@@ -1263,7 +1565,7 @@ function ChatView() {
                 <button
                   type="button"
                   onClick={() => void send()}
-                  disabled={!input.trim()}
+                  disabled={!input.trim() && attachments.length === 0}
                   title="发送"
                   aria-label="发送"
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-brand-600 text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"

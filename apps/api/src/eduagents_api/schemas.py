@@ -92,6 +92,16 @@ class ChatRequestIn(BaseModel):
     kb_id: uuid.UUID | None = None  # 向后兼容: 等价 kb_ids=[kb_id]
     # Wave3 联合检索: 多库显式列表 (个人库+机构库), 服务端逐库校验可见性
     kb_ids: list[uuid.UUID] | None = Field(default=None, max_length=8)
+    attachment_ids: list[uuid.UUID] | None = None
+
+
+class ChatAttachmentOut(BaseModel):
+    id: uuid.UUID
+    filename: str
+    mime_type: str
+    kind: str
+    size_bytes: int
+    created_at: datetime
 
 
 class RetrieveDebugIn(BaseModel):

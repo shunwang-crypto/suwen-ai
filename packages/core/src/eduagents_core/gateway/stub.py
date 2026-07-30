@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import xxhash
 
-from .base import ChatRequest
+from .base import ChatRequest, message_text
 
 _STUB_BANNER = "【开发桩响应 · 非真实模型输出】"
 
@@ -11,17 +11,14 @@ def stub_text(req: ChatRequest) -> str:
     """Deterministic fake completion for dev/CI. Marked unmistakably so it can
     never be passed off as a real model answer (§14 anti-fraud rule)."""
     last_user = next(
-        (m.content for m in reversed(req.messages) if m.role == "user"), ""
+        (message_text(m.content) for m in reversed(req.messages) if m.role == "user"), ""
     )
-    digest = xxhash.xxh64_hexdigest(
-        f"{req.tier.value}|{last_user}".encode()
-    )[:8]
+    digest = xxhash.xxh64_hexdigest(f"{req.tier.value}|{last_user}".encode())[:8]
     if req.json_mode:
         # Valid JSON so downstream parsers don't crash in dev pipelines.
         safe = last_user[:80].replace('"', "'").replace("\n", " ")
         return (
-            f'{{"stub": true, "tier": "{req.tier.value}", '
-            f'"digest": "{digest}", "echo": "{safe}"}}'
+            f'{{"stub": true, "tier": "{req.tier.value}", "digest": "{digest}", "echo": "{safe}"}}'
         )
     excerpt = last_user[:60].replace("\n", " ")
     return (

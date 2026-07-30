@@ -5,6 +5,7 @@
 // 主线接线（一行，app/layout.tsx 的 AuthProvider 内）：<FeedbackWidget />
 
 import { useCallback, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -110,6 +111,7 @@ function MyFeedbackList() {
 }
 
 export function FeedbackWidget() {
+  const pathname = usePathname();
   const { status } = useAuth();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"submit" | "mine">("submit");
@@ -156,7 +158,7 @@ export function FeedbackWidget() {
           setError(null);
         }}
         aria-label="提交反馈"
-        className="fixed bottom-4 right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full bg-ink text-sm font-semibold text-white shadow-lg shadow-black/15 transition-colors hover:bg-black sm:bottom-5 sm:right-5 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-4 sm:py-2.5"
+        className={`fixed right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full bg-ink text-sm font-semibold text-white shadow-lg shadow-black/15 transition-colors hover:bg-black sm:bottom-5 sm:right-5 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-4 sm:py-2.5 ${pathname === "/chat" ? "bottom-32" : "bottom-4"}`}
       >
         <svg
           viewBox="0 0 24 24"
@@ -174,7 +176,7 @@ export function FeedbackWidget() {
       </button>
 
       {open && (
-        <div className="fixed bottom-16 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:bottom-20 sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))]">
+        <div className={`fixed right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:bottom-20 sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))] ${pathname === "/chat" ? "bottom-44" : "bottom-16"}`}>
           <div className="mb-3 flex items-center justify-between">
             <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
               {(

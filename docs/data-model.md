@@ -113,5 +113,6 @@
 |---|---|---|
 | chat_sessions | user_id, title | thread_id = user_id:session_id（M3） |
 | chat_messages | session_id, role, content, meta_json | 展示层历史（D4） |
+| chat_attachments | user_id, session_id, message_id, filename, kind, storage_key, extracted_text | 当前对话文件/图片；随消息级联删除，原件存对象存储 |
 | usage_log | request_id, user_id(可空, 注销后 SET NULL 留审计), feature, model, tier, prompt/completion/cached_tokens, cost_cny, latency_ms, mode | 三维归因（F10-A1） |
 | eval_runs | config_json, metrics_json, corpus_version, golden_set_version | 黄金集版本绑定 |

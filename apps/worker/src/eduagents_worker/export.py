@@ -1,7 +1,7 @@
 """用户数据导出 (P1-8, 个保法第 45 条可携带权)。
 
 export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (15 张业务表 JSON,
-含个性化记忆/偏好与 0007 学情报告快照 — 均属可携带权范围) +
+含个性化记忆/偏好、学情报告快照与聊天附件 — 均属可携带权范围) +
 chunk 文本 + 上传文件清单, 打 ZIP 存对象存储 exports/{uid}/{ts}.zip,
 完成后写 Redis export:{uid}=path (24h TTL)。下载经 API 流式转发
 (routers/account.py, LocalStorage 无预签名概念)。
@@ -50,6 +50,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
         Attempt,
+        ChatAttachment,
         ChatMessage,
         ChatSession,
         Chunk,
@@ -78,6 +79,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         "documents": Document,
         "chat_sessions": ChatSession,
         "chat_messages": ChatMessage,
+        "chat_attachments": ChatAttachment,
         "quizzes": Quiz,
         "questions": Question,
         "attempts": Attempt,
@@ -130,6 +132,16 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         }
         for d in dumped["documents"]
     ]
+    uploads.extend(
+        {
+            "attachment_id": attachment["id"],
+            "filename": attachment["filename"],
+            "size_bytes": attachment["size_bytes"],
+            "kind": attachment["kind"],
+            "storage_key": attachment["storage_key"],
+        }
+        for attachment in dumped["chat_attachments"]
+    )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

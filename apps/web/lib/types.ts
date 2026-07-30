@@ -30,6 +30,23 @@ export interface MessageOut {
   meta?: Record<string, unknown>;
 }
 
+export interface ChatAttachmentOut {
+  id: string;
+  filename: string;
+  mime_type: string;
+  kind: "document" | "image";
+  size_bytes: number;
+  created_at: string;
+}
+
+export interface ChatAttachmentCapabilities {
+  max_file_mb: number;
+  max_files_per_message: number;
+  document_suffixes: string[];
+  image_suffixes: string[];
+  vision_enabled: boolean;
+}
+
 export interface KbOut {
   id: string;
   name: string;

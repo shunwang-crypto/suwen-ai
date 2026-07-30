@@ -19,9 +19,7 @@ class TierConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
@@ -121,6 +119,10 @@ class Settings(BaseSettings):
     standard_input_price_per_m: float = 2.0
     standard_output_price_per_m: float = 8.0
 
+    # Multimodal chat attachments use the standard provider credentials and an
+    # explicit VL model on that same OpenAI-compatible endpoint.
+    vision_model: str = ""
+
     strong_api_key: str = ""
     strong_base_url: str = "https://api.deepseek.com"
     strong_model: str = "deepseek-reasoner"
@@ -179,6 +181,9 @@ class Settings(BaseSettings):
 
     # --- upload constraints ---
     max_upload_mb: int = 50
+    max_chat_attachment_mb: int = 20
+    max_chat_attachments_per_message: int = 4
+    max_chat_attachment_text_chars: int = 2_000_000
     max_docs_per_user: int = 200
     max_storage_mb_per_user: int = 1024
     # 摄取 chunk 配额 (P0-2c): 成本按 chunk 走 (enrich 每 chunk 2~3 次 LLM),

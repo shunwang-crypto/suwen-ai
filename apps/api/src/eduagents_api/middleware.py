@@ -84,11 +84,7 @@ class ContentModerationMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         fields = _MODERATED_FIELDS.get(request.url.path.rstrip("/"))
-        if (
-            request.method != "POST"
-            or fields is None
-            or not request.headers.get("authorization")
-        ):
+        if request.method != "POST" or fields is None or not request.headers.get("authorization"):
             return await call_next(request)
         # starlette 的 BaseHTTPMiddleware 用 _CachedRequest 缓存 body, 这里读取
         # 不会把下游 endpoint 的请求体吃掉。
@@ -170,6 +166,20 @@ def install_error_handlers(app: FastAPI) -> None:
             "KB_FORBIDDEN": "没有权限访问该知识库",
             "RETRIEVAL_UNAVAILABLE": "检索服务暂时不可用，请稍后重试",
             "ORG_READONLY": "机构知识库为只读，仅管理员可修改",
+            # 当前对话附件（知识库上传仍沿用既有文件错误码）
+            "CHAT_ATTACHMENT_TOO_LARGE": "附件超过当前对话允许的大小",
+            "CHAT_ATTACHMENTS_TOTAL_TOO_LARGE": "本次添加的附件总大小超过限制",
+            "TOO_MANY_CHAT_ATTACHMENTS": "每条消息最多添加 4 个附件",
+            "TOO_MANY_PENDING_ATTACHMENTS": "待发送附件过多，请先移除不用的文件",
+            "CHAT_ATTACHMENT_NOT_FOUND": "附件不存在、已使用或无权访问",
+            "UNSUPPORTED_CHAT_ATTACHMENT_TYPE": "当前对话不支持这种文件类型",
+            "VISION_MODEL_UNAVAILABLE": "图片理解服务暂未配置",
+            "FILE_SIGNATURE_MISMATCH": "文件内容与扩展名不一致",
+            "EMPTY_FILE": "不能上传空文件",
+            "CHAT_ATTACHMENT_PARSE_TIMEOUT": "文件解析超时，请缩小文件后重试",
+            "CHAT_ATTACHMENT_PARSE_FAILED": "未能解析该文件，请检查文件是否损坏",
+            "CHAT_ATTACHMENT_EMPTY_TEXT": "文件中没有可读取的文字",
+            "CHAT_ATTACHMENT_TEXT_TOO_LARGE": "文件正文超过当前对话容量，请拆分后上传",
             # 0006 预付额度 (routers/billing.py)
             "AMOUNT_NOT_ALLOWED": "充值金额不在可选档位内",
             "ORDER_NOT_PENDING": "订单不是待支付状态，请勿重复支付",
@@ -228,9 +238,9 @@ def install_error_handlers(app: FastAPI) -> None:
             status_code=422,
             content={
                 "code": "VALIDATION_ERROR",
-                "message": "请求参数不合法: " + "; ".join(
-                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-                    for e in exc.errors()[:3]
+                "message": "请求参数不合法: "
+                + "; ".join(
+                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:3]
                 ),
                 "request_id": getattr(request.state, "request_id", ""),
             },
