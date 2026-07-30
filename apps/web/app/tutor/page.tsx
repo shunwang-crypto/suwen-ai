@@ -41,6 +41,7 @@ const STUCK_LABELS: Record<string, string> = {
 };
 
 const HINT_PHRASE = "请给我一点提示";
+const START_PHRASE = "我还没有明确思路，请引导我开始解题";
 const FINISH_PHRASE = "我已经理解了，这道题解决了，谢谢老师！";
 
 interface TutorMessage {
@@ -352,9 +353,10 @@ export default function TutorPage() {
   };
 
   const submit = () => {
-    const text = input;
+    const text = input.trim();
+    if (started && !text) return;
     setInput("");
-    void send(text);
+    void send(text || START_PHRASE);
   };
 
   // 换题：重置 thread_local_id 与全部会话状态
@@ -374,7 +376,7 @@ export default function TutorPage() {
       <section className="relative overflow-hidden rounded-[12px] border border-line bg-white px-5 py-4">
         <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">本次学习对象</span><span className="text-ink-muted">由你的真实题目建立辅导上下文</span></div>
+          <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">题目</span><span className="rounded-full bg-danger-50 px-1.5 py-0.5 font-medium text-danger-600">必填</span><span className="text-ink-muted">根据题目建立本次辅导上下文</span></div>
           {started && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
         {sourceKbId && (
@@ -392,7 +394,7 @@ export default function TutorPage() {
         ) : (
           <div className="mt-3">
             <textarea value={effectiveProblem} onChange={(e) => { setProblemTouched(true); setProblem(e.target.value); }} rows={3} maxLength={4000} placeholder={"粘贴让你卡住的题目，支持 $x^2$ 和 $$\\int_0^1 x\\,dx$$"} className="w-full resize-y rounded-[9px] border border-line-strong bg-[#fafaf9] px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted focus:border-brand-400 focus:ring-2 focus:ring-brand-50" />
-            <p className="mt-2 text-[10px] text-ink-muted">题目不会被写死；开始辅导后锁定，换题会建立新的辅导线程。</p>
+            <p className="mt-2 text-[10px] text-ink-muted">开始辅导后题目将锁定；如需更换题目，会建立新的辅导对话。</p>
           </div>
         )}
       </section>
@@ -403,7 +405,7 @@ export default function TutorPage() {
           {!started && (
             <div className="flex items-start gap-3 py-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]">先把题目放在上方，再告诉我你已经想到哪一步。我会先判断你的卡点，再逐层给提示。</div></div>
+              <div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]">输入题目后，可以直接开始，也可以写下已经想到哪一步。我会判断你的卡点，再逐层给出提示。</div></div>
             </div>
           )}
 
@@ -429,8 +431,9 @@ export default function TutorPage() {
 
           {!ended && (
             <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-[12px] border border-line bg-white p-3 shadow-subtle sm:ml-10">
-              <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!problem.trim() || sending} placeholder={problem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "先说说你的思路，或者卡在哪一步……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
-              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-[10px] text-ink-muted sm:block">Ctrl / ⌘ + Enter 记入</span><span className="flex-1" /><button type="button" disabled={!problem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">要个提示</button><button type="submit" disabled={!problem.trim() || !input.trim() || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-[11px] font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}记入解题过程</button></div>
+              <div className="mb-2 flex items-center gap-1.5 px-1 text-[10px]"><span className="font-semibold text-ink-secondary">你的思路</span>{!started && <span className="text-ink-muted">选填</span>}</div>
+              <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!effectiveProblem.trim() || sending} placeholder={effectiveProblem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "可以先写下思路或卡点，也可以直接开始解题……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
+              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-[10px] text-ink-muted sm:block">Ctrl / ⌘ + Enter {started ? "继续" : "开始"}</span><span className="flex-1" /><button type="button" disabled={!effectiveProblem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要提示</button><button type="submit" disabled={!effectiveProblem.trim() || (started && !input.trim()) || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-[11px] font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}{started ? "继续解题" : "开始解题"}</button></div>
             </form>
           )}
         </main>
@@ -438,9 +441,9 @@ export default function TutorPage() {
         <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
           <div className="flex items-center justify-between"><h2 className="text-[12px] font-semibold text-ink">提示支持</h2><span className="text-[10px] text-ink-muted">卡了再用</span></div>
           <div className="mt-4"><HintLadder level={hintLevel} active={started} /></div>
-          <button type="button" disabled={!problem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
+          <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
           {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-[11px] font-medium text-success-700">我认为已解出，进入理解确认</button>}
-          <p className="mt-3 text-[10px] leading-5 text-ink-muted">提示逐层加深。系统只根据你的输入和真实辅导结果调整层级，不会把演示中的固定失败写进流程。</p>
+          <p className="mt-3 text-[10px] leading-5 text-ink-muted">提示会根据你的回答逐层加深，尽量帮助你自己找到下一步，而不是直接给出答案。</p>
         </aside>
       </div>
     </div>
