@@ -17,11 +17,11 @@ import {
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
+import { MarkdownAnswer } from "@/components/chat/markdown-answer";
 import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
 import type { TimelineItem } from "@/components/chat/timeline";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
-import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
   ChatRunStatusOut,
@@ -1129,9 +1129,8 @@ function ChatView() {
                         >
                           {m.content ? (
                             <>
-                              <MathText
+                              <MarkdownAnswer
                                 text={m.content}
-                                streaming={Boolean(m.streaming)}
                                 onCitationClick={(idx) =>
                                   handleCitationClick(m.id, idx)
                                 }
