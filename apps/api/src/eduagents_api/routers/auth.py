@@ -15,6 +15,7 @@ from ..deps import AuthContext, current_user, get_app_settings
 from ..emailer import create_email_sender
 from ..models import PasswordResetToken, RefreshToken, User
 from ..schemas import (
+    AccountProfileUpdateIn,
     ForgotPasswordIn,
     LoginRequest,
     RegisterRequest,
@@ -54,9 +55,7 @@ async def _mark_service_layer(session) -> None:
     app.billing_service='true' — 必须 set_config(..., is_local=true) 事务级注入
     (同 db.tenant_session 的 GUC 口径: 连接归池即失效, 不跨请求泄漏)。
     """
-    await session.execute(
-        text("SELECT set_config('app.billing_service', 'true', true)")
-    )
+    await session.execute(text("SELECT set_config('app.billing_service', 'true', true)"))
 
 
 def _email_hash(email: str) -> str:
@@ -84,14 +83,10 @@ async def _auth_rate_limit(
         if not await limiter.allow(key, limit):
             allowed = False
     if not allowed:
-        raise HTTPException(
-            status_code=429, detail="RATE_LIMITED", headers={"Retry-After": "30"}
-        )
+        raise HTTPException(status_code=429, detail="RATE_LIMITED", headers={"Retry-After": "30"})
 
 
-def _set_refresh_cookie(
-    response: Response, settings: Settings, raw: str
-) -> None:
+def _set_refresh_cookie(response: Response, settings: Settings, raw: str) -> None:
     response.set_cookie(
         _REFRESH_COOKIE,
         raw,
@@ -103,9 +98,7 @@ def _set_refresh_cookie(
     )
 
 
-async def _issue_refresh(
-    user_id, settings: Settings, rotated_from: str | None = None
-) -> str:
+async def _issue_refresh(user_id, settings: Settings, rotated_from: str | None = None) -> str:
     raw, token_hash = new_refresh_token()
     async with plain_session() as session:
         session.add(
@@ -147,9 +140,7 @@ async def register(
     # (tests/conftest.py 显式关闭, 既有大量注册的集成测试不受影响)。
     # 缺字段与答错统一 400 CAPTCHA_INVALID; verify_captcha 校验即删 (单次)。
     if settings.captcha_required_register and settings.app_env != "test":
-        if not await verify_captcha(
-            request.app.state.redis, body.captcha_id, body.captcha_answer
-        ):
+        if not await verify_captcha(request.app.state.redis, body.captcha_id, body.captcha_answer):
             raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
     async with plain_session() as session:
         existing = await session.scalar(select(User).where(User.email == body.email))
@@ -157,6 +148,7 @@ async def register(
             raise HTTPException(status_code=409, detail="EMAIL_EXISTS")
         user = User(
             email=body.email,
+            display_name=body.display_name,
             password_hash=hash_password(body.password, settings.bcrypt_rounds),
             role="student",
         )
@@ -167,7 +159,11 @@ async def register(
         await get_wallet_service().grant_signup(session, user.id)
         log.info("user_registered", user_id=str(user.id))
         return UserOut(
-            id=user.id, email=user.email, role=user.role, created_at=user.created_at
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            role=user.role,
+            created_at=user.created_at,
         )
 
 
@@ -181,9 +177,7 @@ async def login(
     # P0-1: IP 桶之外叠加账号维度桶 (email 归一化哈希), 反代坍缩/XFF 伪造时
     # 单账号撞库仍被 5 次/分钟卡住; 不同邮箱互不影响。
     email_hash = _email_hash(body.email)
-    await _auth_rate_limit(
-        request, settings, extra_keys=(f"acct:{email_hash}:login",)
-    )
+    await _auth_rate_limit(request, settings, extra_keys=(f"acct:{email_hash}:login",))
     redis = request.app.state.redis
     # 防爆破: 同邮箱连续失败 >=3 次后必须先过图形验证码 (未带 -> CAPTCHA_REQUIRED,
     # 带了但答错/过期 -> CAPTCHA_INVALID)。验证码在密码校验**之前**消耗,
@@ -226,7 +220,8 @@ async def refresh(
 ):
     # refresh 走独立宽桶: 整页刷新即触发静默续期, 与撞库面 (login/register) 风险不同
     await _auth_rate_limit(
-        request, settings,
+        request,
+        settings,
         bucket="auth_refresh",
         per_minute=settings.auth_refresh_rate_limit_per_minute,
     )
@@ -402,11 +397,7 @@ async def reset_password(
         row = await session.scalar(
             select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
         )
-        if (
-            row is None
-            or row.used_at is not None
-            or row.expires_at.replace(tzinfo=UTC) < now
-        ):
+        if row is None or row.used_at is not None or row.expires_at.replace(tzinfo=UTC) < now:
             raise HTTPException(status_code=400, detail="RESET_TOKEN_INVALID")
         user = await session.get(User, row.user_id)
         if user is None:
@@ -416,9 +407,7 @@ async def reset_password(
         # 吊销全部 refresh token (复用 refresh 重放检测的全家撤销写法):
         # 改密后所有已登录会话立即失效, 盗号者手里的 cookie 变废纸
         await session.execute(
-            update(RefreshToken)
-            .where(RefreshToken.user_id == row.user_id)
-            .values(revoked=True)
+            update(RefreshToken).where(RefreshToken.user_id == row.user_id).values(revoked=True)
         )
         user_id = row.user_id
     # 改密成功顺手清掉登录失败计数 (用户凭新密码登录不应再被要求验证码)
@@ -434,5 +423,29 @@ async def me(ctx: AuthContext = Depends(current_user)):
         if user is None:
             raise HTTPException(status_code=401, detail="INVALID_TOKEN")
         return UserOut(
-            id=user.id, email=user.email, role=user.role, created_at=user.created_at
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            role=user.role,
+            created_at=user.created_at,
+        )
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(
+    body: AccountProfileUpdateIn,
+    ctx: AuthContext = Depends(current_user),
+):
+    async with plain_session() as session:
+        user = await session.get(User, ctx.user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="INVALID_TOKEN")
+        user.display_name = body.display_name
+        await session.flush()
+        return UserOut(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            role=user.role,
+            created_at=user.created_at,
         )

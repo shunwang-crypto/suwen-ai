@@ -14,14 +14,25 @@ def _validate_bcrypt_password_bytes(v: str) -> str:
     return v
 
 
+def _normalize_display_name(v: str | None) -> str | None:
+    if v is None:
+        return None
+    normalized = " ".join(v.split())
+    if not normalized:
+        raise ValueError("姓名或昵称不能为空")
+    return normalized
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
     # 图形验证码 (captcha_required_register 开启时必填; 测试通道见 config.py 注释)
     captcha_id: str | None = Field(default=None, max_length=64)
     captcha_answer: str | None = Field(default=None, max_length=8)
 
     _password_bytes = field_validator("password")(_validate_bcrypt_password_bytes)
+    _display_name = field_validator("display_name")(_normalize_display_name)
 
 
 class LoginRequest(BaseModel):
@@ -64,8 +75,15 @@ class TokenResponse(BaseModel):
 class UserOut(BaseModel):
     id: uuid.UUID
     email: str
+    display_name: str | None = None
     role: str
     created_at: datetime
+
+
+class AccountProfileUpdateIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+    _display_name = field_validator("display_name")(_normalize_display_name)
 
 
 class ChatRequestIn(BaseModel):

@@ -1,13 +1,11 @@
-// 品牌视觉：Logo 内联 SVG（对话气泡 + 上升学习曲线 + 琥珀星点）。
-// 全部内联绘制，零外部图片/字体依赖，断网可演示。
-// 说明：多实例共用同名 gradient id 是安全的——defs 内容完全相同，渲染一致。
+// 苏问品牌标：近黑方形中的「苏」，与应用内全局外壳一致。
 
 import type { ReactNode } from "react";
 
 /**
- * 品牌标：对话气泡（indigo→violet 渐变）内嵌上升学习曲线，端点缀琥珀四角星。
+ * 品牌标：近黑方形中的「苏」。
  * - `size`：mark 边长（px）
- * - `withWordmark`：追加 "EduAgents" 字标（颜色继承 currentColor，深色底传 text-white）
+ * - `withWordmark`：追加「苏问 AI课堂」字标
  */
 export function BrandMark({
   size = 28,
@@ -19,57 +17,22 @@ export function BrandMark({
   className?: string;
 }) {
   const mark = (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 48 48"
-      fill="none"
+    <span
       aria-hidden
-      className="shrink-0"
+      className="flex shrink-0 items-center justify-center bg-[#1e1e1c] font-semibold text-white shadow-subtle ring-1 ring-white/15"
+      style={{ width: size, height: size, borderRadius: Math.max(7, Math.round(size * 0.27)), fontSize: Math.round(size * 0.5) }}
     >
-      <defs>
-        <linearGradient
-          id="ea-mark-g"
-          x1="6"
-          y1="4"
-          x2="42"
-          y2="44"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop stopColor="#6366f1" />
-          <stop offset="1" stopColor="#8b5cf6" />
-        </linearGradient>
-      </defs>
-      {/* 对话气泡 */}
-      <path
-        d="M24 4C12.95 4 4 12.06 4 22c0 5.58 2.82 10.57 7.24 13.87L9.5 43.5l8.6-3.02c1.87.47 3.85.72 5.9.72 11.05 0 20-8.06 20-18S35.05 4 24 4Z"
-        fill="url(#ea-mark-g)"
-      />
-      {/* 上升学习曲线 */}
-      <path
-        d="M13 28.5l6.2-6.2 5 3.4 7.3-8.2"
-        stroke="#fff"
-        strokeWidth="3.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* 琥珀星点：抵达的成就 */}
-      <path
-        d="M35.5 10l1.5 3.4 3.4 1.5-3.4 1.5-1.5 3.4-1.5-3.4-3.4-1.5 3.4-1.5Z"
-        fill="#fbbf24"
-      />
-    </svg>
+      苏
+    </span>
   );
 
   return (
     <span className={`inline-flex items-center gap-2 ${className}`.trim()}>
       {mark}
       {withWordmark && (
-        <span
-          className="font-semibold tracking-tight text-current"
-          style={{ fontSize: Math.round(size * 0.62) }}
-        >
-          EduAgents
+        <span className="flex flex-col leading-none text-current">
+          <span className="font-semibold tracking-tight" style={{ fontSize: Math.round(size * 0.5) }}>苏问</span>
+          <span className="mt-1 font-medium tracking-[0.08em] opacity-60" style={{ fontSize: Math.round(size * 0.28) }}>AI 课堂</span>
         </span>
       )}
     </span>
@@ -190,7 +153,7 @@ export function AuthHero() {
           <h2 className="text-2xl font-semibold leading-snug tracking-tight xl:text-3xl">
             让每个学生，都拥有
             <br />
-            自己的 <span className="text-accent-300">AI 助教团队</span>
+            自己的 <span className="text-accent-300">AI 苏格拉底</span>
           </h2>
           <ul className="mt-6 space-y-3 text-sm text-indigo-100/90">
             {HERO_FEATURES.map((f) => (
@@ -204,7 +167,7 @@ export function AuthHero() {
       </div>
 
       <p className="relative z-10 text-xs text-indigo-200/60">
-        EduAgents · 多智能体驱动的个性化学习平台
+        苏问 AI课堂 · 不急着给答案，先陪你想明白
       </p>
     </aside>
   );

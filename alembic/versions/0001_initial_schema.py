@@ -9,6 +9,7 @@ Create Date: 2026-07-26
 RLS: 租户表 ENABLE+FORCE, 策略基于事务级 GUC app.tenant_id
 (应用层通过 set_config('app.tenant_id', :tid, true) 注入, 见 apps/api db.py)。
 """
+
 from collections.abc import Sequence
 
 from eduagents_api.models import TENANT_TABLES, Base
@@ -49,13 +50,12 @@ _TABLES_AT_0001: tuple[str, ...] = (
 
 def upgrade() -> None:
     bind = op.get_bind()
-    Base.metadata.create_all(
-        bind=bind, tables=[Base.metadata.tables[n] for n in _TABLES_AT_0001]
-    )
+    Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables[n] for n in _TABLES_AT_0001])
     # 0001 之后新增的列在此显式回退为"当时不存在", 保证从零重放时 0002 的
     # add_column 不会撞 "already exists" (create_all 用的是当前 ORM 定义)。
     op.execute("ALTER TABLE knowledge_bases DROP COLUMN IF EXISTS owner_type")
     op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS uploaded_by")
+    op.execute("ALTER TABLE users DROP COLUMN IF EXISTS display_name")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
     # 开发默认密码 'edu', 生产部署后必须 ALTER ROLE edu_app PASSWORD ...
@@ -69,9 +69,7 @@ def upgrade() -> None:
         """
     )
     op.execute("GRANT USAGE ON SCHEMA public TO edu_app")
-    op.execute(
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO edu_app"
-    )
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO edu_app")
     op.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO edu_app")
     op.execute(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public "

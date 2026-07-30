@@ -41,6 +41,7 @@ interface AuthContextValue {
   register: (
     email: string,
     password: string,
+    displayName: string,
     captcha?: CaptchaAnswer,
   ) => Promise<void>;
   logout: () => Promise<void>;
@@ -104,10 +105,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const register = useCallback(
-    async (email: string, password: string, captcha?: CaptchaAnswer) => {
+    async (
+      email: string,
+      password: string,
+      displayName: string,
+      captcha?: CaptchaAnswer,
+    ) => {
       await apiJson<UserOut>("/api/auth/register", {
         method: "POST",
-        body: { email, password, ...(captcha ?? {}) },
+        body: { email, password, display_name: displayName, ...(captcha ?? {}) },
       });
       // 注册成功后自动登录
       await login(email, password);

@@ -37,9 +37,7 @@ def _tenant_col() -> Mapped[uuid.UUID]:
 
 
 def _created_at() -> Mapped[datetime]:
-    return mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    return mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 # user_id 外键 (0003, P0-4 注销可执行): attempts/chat_sessions/error_items/mastery_log/
@@ -109,9 +107,7 @@ class OrgMember(Base):
         ForeignKey("orgs.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, index=True
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, index=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")
     joined_at: Mapped[datetime] = _created_at()
 
@@ -120,6 +116,7 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="student")
     org_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -417,9 +414,7 @@ class UsageLog(Base):
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # 0003: FK(users.id) ON DELETE SET NULL — 注销后成本行留档但断开用户关联 (可空)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), index=True, nullable=True
-    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
     feature: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     tier: Mapped[str] = mapped_column(String(16), nullable=False)

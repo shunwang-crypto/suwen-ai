@@ -92,7 +92,7 @@ function InlineNotice({ children, tone = "success" }: { children: ReactNode; ton
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, refreshMe } = useAuth();
   const search = useSyncExternalStore(emptySubscribe, () => window.location.search, () => "");
   const requestedSection = new URLSearchParams(search).get("section");
   const querySection = SECTIONS.some((item) => item.id === requestedSection)
@@ -113,6 +113,8 @@ export default function SettingsPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [insights, setInsights] = useState<InsightItem[] | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState(() => user?.display_name ?? "");
+  const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -204,14 +206,39 @@ export default function SettingsPage() {
     }
   };
 
+  const saveProfile = async () => {
+    const normalized = displayName.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      setError("姓名或昵称不能为空");
+      return;
+    }
+    setError(null);
+    setSaved(null);
+    setSavingProfile(true);
+    try {
+      await apiJson("/api/auth/me", {
+        method: "PATCH",
+        body: { display_name: normalized },
+      });
+      await refreshMe();
+      setDisplayName(normalized);
+      setSaved("个人资料已保存");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "保存失败，请稍后重试");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const roleLabel = user?.role === "admin" ? "管理员" : user?.role === "teacher" ? "教师" : "学习者";
-  const initial = (user?.email?.[0] ?? "学").toUpperCase();
+  const accountName = user?.display_name?.trim() || "同学";
+  const initial = accountName[0] ?? "学";
   const dateLabel = (value?: string | null) => value ? new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date(value)) : "—";
 
   return (
     <div className="mx-auto w-full max-w-[1100px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
       <header>
-        <h1 className="text-[28px] font-semibold tracking-[-0.04em] text-ink">个人中心</h1>
+        <h1 className="text-[28px] font-semibold tracking-[-0.04em] text-ink">账户设置</h1>
         <p className="mt-2 text-sm text-ink-secondary">管理账号与个人设置。学习画像和掌握度仍归在“成长”页面。</p>
       </header>
 
@@ -236,8 +263,32 @@ export default function SettingsPage() {
               <div className="flex items-center gap-5 border-b border-line py-8">
                 <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-ink text-xl font-semibold text-white">{initial}</span>
                 <div className="min-w-0">
-                  <p className="truncate text-base font-semibold text-ink">{user?.email?.split("@")[0] || "学习者"}</p>
+                  <p className="truncate text-base font-semibold text-ink">{accountName}</p>
                   <p className="mt-1 truncate text-xs text-ink-secondary">{user?.email}</p>
+                </div>
+              </div>
+              <div className="border-b border-line py-5">
+                <label htmlFor="display-name" className="text-xs text-ink-muted">姓名或昵称</label>
+                <div className="mt-2 flex max-w-md gap-2">
+                  <input
+                    id="display-name"
+                    value={displayName}
+                    maxLength={80}
+                    onChange={(event) => {
+                      setDisplayName(event.target.value);
+                      setSaved(null);
+                    }}
+                    className="min-w-0 flex-1 rounded-control border border-line-strong bg-white px-3 py-2 text-[13px] text-ink outline-none focus:border-ink"
+                    placeholder="例如：林小溪"
+                  />
+                  <button
+                    type="button"
+                    disabled={savingProfile || !displayName.trim()}
+                    onClick={() => void saveProfile()}
+                    className="rounded-control bg-ink px-4 text-xs font-medium text-white hover:bg-black disabled:opacity-40"
+                  >
+                    {savingProfile ? "保存中…" : "保存"}
+                  </button>
                 </div>
               </div>
               <SettingRow label="账号邮箱" value={user?.email ?? "—"} note="当前版本使用邮箱作为唯一登录标识。" />

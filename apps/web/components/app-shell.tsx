@@ -178,11 +178,11 @@ function NavLink({ item, pathname, onNavigate }: { item: NavItem; pathname: stri
       aria-current={active ? "page" : undefined}
       className={`group flex h-8 items-center gap-2.5 rounded-[6px] px-2.5 text-[13px] font-medium transition-colors ${
         active
-          ? "bg-brand-50 text-brand-700"
+          ? "bg-[#eeedea] text-ink"
           : "text-ink-secondary hover:bg-[#f4f3f0] hover:text-ink"
       }`}
     >
-      <span className={active ? "text-brand-700" : "text-ink-muted group-hover:text-ink-secondary"}>{item.icon}</span>
+      <span className={active ? "text-ink" : "text-ink-muted group-hover:text-ink-secondary"}>{item.icon}</span>
       <span className="truncate">{item.label}</span>
     </Link>
   );
@@ -213,9 +213,12 @@ function Navigation({ pathname, onNavigate }: { pathname: string; onNavigate?: (
 function Brand() {
   return (
     <div className="flex h-14 shrink-0 items-center px-4">
-      <Link href="/today" className="flex items-center gap-2.5" aria-label="EduAgents 今日">
-        <span className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] bg-brand-700 text-[11px] font-semibold text-white">E</span>
-        <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">EduAgents</span>
+      <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日">
+        <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
+        <span className="flex flex-col leading-none">
+          <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
+          <span className="mt-1 text-[9px] font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
+        </span>
       </Link>
     </div>
   );
@@ -230,20 +233,21 @@ function ChevronIcon({ open }: { open: boolean }) {
 }
 
 function AccountMenu({
+  displayName,
   email,
   isAdmin,
   isTeacher,
   onClose,
   onLogout,
 }: {
+  displayName: string;
   email: string;
   isAdmin: boolean;
   isTeacher: boolean;
   onClose: () => void;
   onLogout: () => void;
 }) {
-  const name = email.split("@")[0] || "学习者";
-  const role = isAdmin ? "管理员" : isTeacher ? "教师" : "学习者";
+  const role = isAdmin ? "管理员" : isTeacher ? "教师" : "学生";
   const menuClass = "flex h-9 items-center rounded-[7px] px-3 text-[13px] text-ink-secondary transition-colors hover:bg-[#f5f4f1] hover:text-ink";
 
   return (
@@ -255,14 +259,12 @@ function AccountMenu({
       className="absolute right-0 top-[calc(100%+8px)] z-50 w-[248px] origin-top-right rounded-[12px] border border-line bg-white p-1.5 shadow-floating"
     >
       <div className="px-3 pb-3 pt-2.5">
-        <p className="truncate text-[13px] font-semibold text-ink">{name}</p>
+        <p className="truncate text-[13px] font-semibold text-ink">{displayName}</p>
         <p className="mt-0.5 truncate text-[11px] text-ink-muted">{email}</p>
         <span className="mt-2 inline-flex rounded-full bg-[#f3f2ef] px-2 py-0.5 text-[10px] font-medium text-ink-secondary">{role}</span>
       </div>
       <div className="border-t border-line pt-1.5">
         <Link href="/settings?section=profile" onClick={onClose} className={menuClass}>账户设置</Link>
-        <Link href="/settings?section=preferences" onClick={onClose} className={menuClass}>学习偏好</Link>
-        <Link href="/settings?section=privacy" onClick={onClose} className={menuClass}>隐私与数据</Link>
       </div>
       {(isTeacher || isAdmin) && (
         <div className="mt-1 border-t border-line pt-1.5">
@@ -313,17 +315,22 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isAdmin = user?.role === "admin";
   const isTeacher = user?.role === "teacher" || isAdmin;
   const isChatRoute = isActive(pathname, "/chat");
-  const title = Object.entries(TITLE_MAP).find(([path]) => isActive(pathname, path))?.[1] ?? "EduAgents";
-  const initial = (user?.email?.[0] ?? "学").toUpperCase();
-  const displayName = user?.email?.split("@")[0] || "同学";
+  const title = Object.entries(TITLE_MAP).find(([path]) => isActive(pathname, path))?.[1] ?? "苏问";
+  const displayName = user?.display_name?.trim() || "同学";
+  const initial = displayName[0] ?? "学";
   const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hour12: false }).format(new Date()));
   const greeting = hour < 6 ? "夜深了" : hour < 12 ? "上午好" : hour < 18 ? "下午好" : "晚上好";
-  const todayLabel = new Intl.DateTimeFormat("zh-CN", {
+  const dateLabel = new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
+    year: "numeric",
     month: "long",
     day: "numeric",
-    weekday: "short",
   }).format(new Date());
+  const weekdayLabel = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    weekday: "long",
+  }).format(new Date());
+  const todayLabel = `${weekdayLabel} · ${dateLabel}`;
 
   const handleLogout = async () => {
     setMenuOpen(false);
@@ -334,7 +341,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex h-dvh overflow-hidden bg-canvas">
-        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-line bg-[#fafaf9] md:flex">
+        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-line bg-[#f4f3f1] md:flex">
           <Brand />
           <Navigation pathname={pathname} />
         </aside>
@@ -343,7 +350,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {drawerOpen && (
             <motion.div className="fixed inset-0 z-40 md:hidden" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
               <button type="button" aria-label="关闭导航" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setDrawerOpen(false)} />
-              <motion.aside className="absolute inset-y-0 left-0 flex w-[260px] flex-col border-r border-line bg-[#fafaf9] shadow-floating" initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
+              <motion.aside className="absolute inset-y-0 left-0 flex w-[260px] flex-col border-r border-line bg-[#f4f3f1] shadow-floating" initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
                 <Brand />
                 <Navigation pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
               </motion.aside>
@@ -352,7 +359,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </AnimatePresence>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="relative z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-[#fafaf9] px-4 sm:px-5">
+          <header className="relative z-30 h-14 shrink-0 border-b border-line bg-[#f7f6f4]">
+            <div className="mx-auto flex h-full w-full max-w-[1480px] items-center justify-between px-4 sm:px-8 lg:px-12">
             <div className="flex min-w-0 items-center gap-3">
               <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
                 <Icon><path d="M4 6h16M4 12h16M4 18h16" /></Icon>
@@ -367,13 +375,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
             </div>
 
-            <div className="flex items-center gap-2">
-              {pathname === "/today" && (
-                <Link href="/chat?new=1" className="hidden h-8 items-center gap-1.5 rounded-[7px] border border-line-strong bg-white px-3 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700 sm:flex">
-                  <Icon><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-9.5A7.5 7.5 0 0 1 10.5 4h2A7.5 7.5 0 0 1 20 11.5Z" /></Icon>
-                  问 AI 助手
-                </Link>
-              )}
             <div className="relative">
               {menuOpen && <button type="button" aria-label="关闭账户菜单" className="fixed inset-0 z-40 cursor-default" onClick={() => setMenuOpen(false)} />}
               <button
@@ -381,14 +382,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onClick={() => setMenuOpen((value) => !value)}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                className="relative z-50 flex h-9 items-center gap-2 rounded-[8px] px-1.5 text-ink-secondary transition-colors hover:bg-[#f1f0ed]"
+                className={`relative z-50 flex h-9 items-center gap-2 rounded-[8px] px-1.5 text-ink transition-colors hover:bg-[#eeedea] ${menuOpen ? "bg-[#eeedea]" : ""}`}
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-700 text-[11px] font-semibold text-white">{initial}</span>
-                <span className="hidden max-w-40 truncate text-[12px] sm:block">{user?.email}</span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2f2f2c] text-[11px] font-semibold text-white">{initial}</span>
+                <span className="hidden max-w-40 truncate text-[12px] font-medium sm:block">{displayName}</span>
                 <ChevronIcon open={menuOpen} />
               </button>
               <AnimatePresence>
-                {menuOpen && <AccountMenu email={user?.email ?? ""} isAdmin={isAdmin} isTeacher={isTeacher} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />}
+                {menuOpen && <AccountMenu displayName={displayName} email={user?.email ?? ""} isAdmin={isAdmin} isTeacher={isTeacher} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />}
               </AnimatePresence>
             </div>
             </div>

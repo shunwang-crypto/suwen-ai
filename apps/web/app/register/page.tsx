@@ -18,6 +18,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function RegisterPage() {
   const router = useRouter();
   const { register } = useAuth();
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -31,6 +32,10 @@ export default function RegisterPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (!displayName.trim()) {
+      setError("请输入姓名或昵称");
+      return;
+    }
     if (!EMAIL_RE.test(email)) {
       setError("请输入有效的邮箱地址");
       return;
@@ -57,6 +62,7 @@ export default function RegisterPage() {
       await register(
         email,
         password,
+        displayName.trim(),
         captcha.captchaId
           ? {
               captcha_id: captcha.captchaId,
@@ -93,7 +99,7 @@ export default function RegisterPage() {
           <div className="mb-8 flex flex-col items-center gap-2">
             <BrandMark size={48} />
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-              注册 EduAgents
+              注册苏问
             </h1>
             <p className="text-sm text-slate-500">
               创建账号，开始你的个性化学习
@@ -113,6 +119,22 @@ export default function RegisterPage() {
                 {error}
               </div>
             )}
+
+            <label className="mb-4 block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                姓名或昵称
+              </span>
+              <input
+                type="text"
+                autoComplete="name"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                maxLength={80}
+                placeholder="例如：林小溪"
+                className={inputCls}
+                required
+              />
+            </label>
 
             <label className="mb-4 block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">

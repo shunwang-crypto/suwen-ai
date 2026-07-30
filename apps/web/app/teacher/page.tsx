@@ -146,12 +146,12 @@ function buildPrintHtml(data: TeacherExportPrint): string {
   )}</p>
   <div class="instructions">${escapeHtml(paper.instructions)}</div>
   ${questionsHtml || '<p class="sub">（本卷暂无题目）</p>'}
-  <div class="footer">EduAgents 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
+  <div class="footer">苏问 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
 
   <div class="answers">
     <h1>${escapeHtml(data.answer_key?.title ?? "参考答案与解析")}</h1>
     ${answersHtml || '<p class="sub">（本卷暂无答案）</p>'}
-    <div class="footer">EduAgents 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
+    <div class="footer">苏问 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
   </div>
 </body>
 </html>`;

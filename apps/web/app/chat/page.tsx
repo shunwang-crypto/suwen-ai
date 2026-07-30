@@ -986,7 +986,7 @@ function ChatView() {
                           AI
                         </span>
                         <span className="text-[13px] font-medium text-slate-900">
-                          EduAgents 助教
+                          苏问助教
                         </span>
                         <span className="truncate text-xs text-slate-400">
                           {m.kbName ? `基于「${m.kbName}」知识库` : "通用模式"}

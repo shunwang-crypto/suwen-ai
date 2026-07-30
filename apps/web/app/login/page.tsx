@@ -82,7 +82,7 @@ export default function LoginPage() {
           <div className="mb-8 flex flex-col items-center gap-2">
             <BrandMark size={48} />
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-              登录 EduAgents
+              登录苏问
             </h1>
             <p className="text-sm text-slate-500">
               多智能体驱动的个性化学习平台

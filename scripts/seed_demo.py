@@ -2,6 +2,7 @@
 幂等: 重复执行会校正账号角色与密码, 复用已有知识库, 文档按内容哈希去重。
 用法: make seed  (输出 tenant_id / kb_id, 供评估 CLI 与演示登录使用)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +43,7 @@ async def main() -> None:
                 email=DEMO_EMAIL,
             )
             session.add(demo_user)
+        demo_user.display_name = "林小溪"
         demo_user.role = "student"
         demo_user.password_hash = hash_password(DEMO_PASSWORD, settings.bcrypt_rounds)
 
@@ -49,6 +51,7 @@ async def main() -> None:
         if admin_user is None:
             admin_user = User(email=ADMIN_EMAIL)
             session.add(admin_user)
+        admin_user.display_name = "苏问管理员"
         admin_user.role = "admin"
         admin_user.password_hash = hash_password(ADMIN_PASSWORD, settings.bcrypt_rounds)
 
@@ -60,21 +63,15 @@ async def main() -> None:
         user_id = str(demo_user.id)
 
     async with tenant_session(user_id) as session:
-        kb = await session.scalar(
-            select(KnowledgeBase).where(KnowledgeBase.name == "高等数学讲义")
-        )
+        kb = await session.scalar(select(KnowledgeBase).where(KnowledgeBase.name == "高等数学讲义"))
         if kb is None:
-            kb = KnowledgeBase(
-                tenant_id=demo_user.id, name="高等数学讲义", subject="math"
-            )
+            kb = KnowledgeBase(tenant_id=demo_user.id, name="高等数学讲义", subject="math")
             session.add(kb)
             await session.flush()
         kb_id = str(kb.id)
         content_hash = xxhash.xxh64_hexdigest(data)
         doc = await session.scalar(
-            select(Document).where(
-                Document.kb_id == kb.id, Document.content_hash == content_hash
-            )
+            select(Document).where(Document.kb_id == kb.id, Document.content_hash == content_hash)
         )
         if doc is None:
             doc = Document(
@@ -140,34 +137,48 @@ async def seed_history(user, kb_id: str) -> None:
             await session.flush()
             kcs[name] = str(kc.id)
         quiz = Quiz(
-            tenant_id=user.id, user_id=user.id, kb_id=uuid.UUID(kb_id),
-            title=quiz_title, status="ready",
+            tenant_id=user.id,
+            user_id=user.id,
+            kb_id=uuid.UUID(kb_id),
+            title=quiz_title,
+            status="ready",
         )
         session.add(quiz)
         await session.flush()
         quiz_id = quiz.id
         questions = [
             Question(
-                tenant_id=user.id, quiz_id=quiz_id, type="single",
+                tenant_id=user.id,
+                quiz_id=quiz_id,
+                type="single",
                 stem="泰勒公式在 $x_0=0$ 处的特例称为?",
                 options_json=["麦克劳林公式", "洛必达法则", "拉格朗日中值定理", "柯西公式"],
                 answer="A",
                 explanation="选 B 通常混淆了求极限工具与展开工具。",
-                kc_ids=[kcs["泰勒公式"], kcs["麦克劳林公式"]], difficulty="easy",
+                kc_ids=[kcs["泰勒公式"], kcs["麦克劳林公式"]],
+                difficulty="easy",
             ),
             Question(
-                tenant_id=user.id, quiz_id=quiz_id, type="blank",
+                tenant_id=user.id,
+                quiz_id=quiz_id,
+                type="blank",
                 stem="拉格朗日余项 $R_n(x)$ 依赖 $f$ 的 $n+1$ 阶____。",
-                options_json=[], answer="导数|导函数",
+                options_json=[],
+                answer="导数|导函数",
                 explanation="余项公式含 $f^{(n+1)}(\\xi)$。",
-                kc_ids=[kcs["拉格朗日余项"]], difficulty="mid",
+                kc_ids=[kcs["拉格朗日余项"]],
+                difficulty="mid",
             ),
             Question(
-                tenant_id=user.id, quiz_id=quiz_id, type="single",
+                tenant_id=user.id,
+                quiz_id=quiz_id,
+                type="single",
                 stem="$e^x$ 的麦克劳林展开的收敛域是?",
                 options_json=["全体实数", "$(-1,1)$", "$(-1,1]$", "$[0,+\\infty)$"],
-                answer="A", explanation="指数函数展开处处收敛。",
-                kc_ids=[kcs["麦克劳林公式"]], difficulty="mid",
+                answer="A",
+                explanation="指数函数展开处处收敛。",
+                kc_ids=[kcs["麦克劳林公式"]],
+                difficulty="mid",
             ),
         ]
         for q in questions:
@@ -178,7 +189,9 @@ async def seed_history(user, kb_id: str) -> None:
     ctx = AuthContext(user_id=user.id, tenant_id=user.id, role="student", jti="seed")
     # 2 对 1 错: 错题入本 + BKT 更新 + mastery_log 全走产品链路 (客观题不需要网关)
     result = await record_attempts(
-        ctx, None, quiz_id,
+        ctx,
+        None,
+        quiz_id,
         [
             {"question_id": q_ids[0], "response": "A"},
             {"question_id": q_ids[1], "response": "微分"},

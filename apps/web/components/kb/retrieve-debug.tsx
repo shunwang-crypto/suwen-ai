@@ -207,7 +207,7 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
         <button
           type="submit"
           disabled={!query.trim() || loading}
-          className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex shrink-0 items-center gap-1.5 rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
           检索

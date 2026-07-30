@@ -1,18 +1,18 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f4f1;
-  --foreground: #171717;
+  --background: #f7f6f4;
+  --foreground: #1b1b19;
 
-  /* EduAgents v3：中性工作台底色，品牌色只承担状态与操作。 */
-  --ea-canvas: #f5f4f1;
+  /* 苏问：近黑承担主操作，蓝色只用于链接、焦点、进度与数据。 */
+  --ea-canvas: #f7f6f4;
   --ea-surface: #ffffff;
   --ea-surface-muted: #f3f2ef;
   --ea-line: #e9e8e5;
   --ea-line-strong: #d6d4cf;
-  --ea-ink: #171717;
-  --ea-ink-secondary: #525252;
-  --ea-ink-muted: #8a8a86;
+  --ea-ink: #1b1b19;
+  --ea-ink-secondary: #57564e;
+  --ea-ink-muted: #97968e;
 
   /* 动效时长 tokens（组件内联 CSS 使用） */
   --dur-fast: 150ms;
@@ -34,27 +34,51 @@
    只加不改：旧类名（indigo- / slate- / rounded- 等）语义全部保留。
    ============================================================ */
 @theme {
-  --color-canvas: #f5f4f1;
+  --color-canvas: #f7f6f4;
   --color-surface: #ffffff;
   --color-surface-muted: #f3f2ef;
   --color-line: #e9e8e5;
   --color-line-strong: #d6d4cf;
-  --color-ink: #171717;
-  --color-ink-secondary: #525252;
-  --color-ink-muted: #8a8a86;
+  --color-ink: #1b1b19;
+  --color-ink-secondary: #57564e;
+  --color-ink-muted: #97968e;
 
-  /* 品牌色阶：靛蓝家族（brand-600 与既有 indigo-600 同值，旧页面无感） */
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4338ca;
-  --color-brand-700: #4338ca;
-  --color-brand-800: #3730a3;
-  --color-brand-900: #312e81;
-  --color-brand-950: #1e1b4b;
+  /* 主操作为近黑；旧 brand-* 组件因此自动同步到新版外壳。 */
+  --color-brand-50: #eeedea;
+  --color-brand-100: #e7e6e2;
+  --color-brand-200: #d2d1cc;
+  --color-brand-300: #b0afa9;
+  --color-brand-400: #77766f;
+  --color-brand-500: #4b4a45;
+  --color-brand-600: #1e1e1c;
+  --color-brand-700: #1e1e1c;
+  --color-brand-800: #171715;
+  --color-brand-900: #11110f;
+  --color-brand-950: #090908;
+
+  /* 将旧 indigo-* 统一为苏问的克制蓝色，不再出现紫靛渐变。 */
+  --color-indigo-50: #eef3fe;
+  --color-indigo-100: #dbe7fd;
+  --color-indigo-200: #bfd3fb;
+  --color-indigo-300: #93b4f7;
+  --color-indigo-400: #6090f1;
+  --color-indigo-500: #3b72e8;
+  --color-indigo-600: #2563eb;
+  --color-indigo-700: #1d4ed8;
+  --color-indigo-800: #1e40af;
+  --color-indigo-900: #1e3a8a;
+  --color-indigo-950: #172554;
+  --color-violet-50: #eef3fe;
+  --color-violet-100: #dbe7fd;
+  --color-violet-200: #bfd3fb;
+  --color-violet-300: #93b4f7;
+  --color-violet-400: #6090f1;
+  --color-violet-500: #3b72e8;
+  --color-violet-600: #2563eb;
+  --color-violet-700: #1d4ed8;
+  --color-violet-800: #1e40af;
+  --color-violet-900: #1e3a8a;
+  --color-violet-950: #172554;
 
   /* 温暖强调色：琥珀（成就 / 庆祝 / 星标） */
   --color-accent-50: #fffbeb;
@@ -170,14 +194,14 @@
 
 /* ============ 渐变 / 质感工具类 ============ */
 
-/* 品牌渐变：indigo → violet */
+/* 兼容旧页面的品牌背景：改为克制的近黑渐变。 */
 @utility bg-brand-gradient {
-  background-image: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  background-image: linear-gradient(135deg, #37362f 0%, #1e1e1c 100%);
 }
 
 /* 品牌渐变文字 */
 @utility text-brand-gradient {
-  background-image: linear-gradient(120deg, #4f46e5, #8b5cf6);
+  background-image: linear-gradient(120deg, #37362f, #1e1e1c);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -185,12 +209,7 @@
 
 /* 渐变按钮：hover 渐变位移 + 按下微沉 */
 @utility btn-brand {
-  background-image: linear-gradient(
-    120deg,
-    #4f46e5 0%,
-    #7c3aed 50%,
-    #4f46e5 100%
-  );
+  background-image: linear-gradient(120deg, #1e1e1c 0%, #37362f 50%, #1e1e1c 100%);
   background-size: 200% 100%;
   background-position: 0% 0%;
   transition:
@@ -207,16 +226,16 @@
 
 /* mesh 光晕背景（浅色页面顶部）：多个超大柔和 radial-gradient 叠加 */
 @utility bg-aurora {
-  background-color: #f8fafc;
+  background-color: #f7f6f4;
   background-image:
     radial-gradient(
       40rem 24rem at 12% -8%,
-      rgb(99 102 241 / 0.14),
+      rgb(37 99 235 / 0.08),
       transparent 60%
     ),
     radial-gradient(
       32rem 22rem at 88% -4%,
-      rgb(139 92 246 / 0.12),
+      rgb(87 86 78 / 0.06),
       transparent 60%
     ),
     radial-gradient(
@@ -228,16 +247,16 @@
 
 /* mesh 光晕背景（深色 hero 变体：登录/注册左栏） */
 @utility bg-aurora-deep {
-  background-color: #1e1b4b;
+  background-color: #1e1e1c;
   background-image:
     radial-gradient(
       42rem 30rem at 18% 12%,
-      rgb(99 102 241 / 0.55),
+      rgb(37 99 235 / 0.22),
       transparent 62%
     ),
     radial-gradient(
       36rem 28rem at 85% 28%,
-      rgb(139 92 246 / 0.42),
+      rgb(87 86 78 / 0.42),
       transparent 60%
     ),
     radial-gradient(
@@ -250,7 +269,7 @@
       rgb(251 191 36 / 0.12),
       transparent 60%
     ),
-    linear-gradient(160deg, #1e1b4b 0%, #312e81 55%, #1e1b4b 100%);
+    linear-gradient(160deg, #2f2f2c 0%, #1e1e1c 55%, #11110f 100%);
 }
 
 /* 毛玻璃 */
@@ -299,13 +318,13 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid #4338ca;
+  outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
 
 ::selection {
-  background-color: #c7d2fe;
-  color: #1e1b4b;
+  background-color: #dbe7fd;
+  color: #172554;
 }
 
 /* 无障碍：偏好减少动效时全局降级（fx- 区块另有专门降级，双保险） */
@@ -491,7 +510,7 @@ select:focus-visible {
   width: 5px;
   height: 5px;
   border-radius: 9999px;
-  background: #818cf8;
+  background: #6090f1;
   animation: fx-dot-bounce 1.2s ease-in-out infinite;
 }
 .fx-typing > span:nth-child(2) {
@@ -509,10 +528,10 @@ select:focus-visible {
   margin-left: 2px;
   vertical-align: -0.15em;
   border-radius: 1px;
-  background: linear-gradient(180deg, #818cf8, #6366f1);
+  background: linear-gradient(180deg, #6090f1, #2563eb);
   box-shadow:
-    0 0 6px rgba(99, 102, 241, 0.65),
-    0 0 14px rgba(99, 102, 241, 0.3);
+    0 0 6px rgba(37, 99, 235, 0.55),
+    0 0 14px rgba(37, 99, 235, 0.25);
   animation: fx-caret-blink 0.9s ease-in-out infinite;
 }
 

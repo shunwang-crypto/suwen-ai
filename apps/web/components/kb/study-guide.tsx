@@ -144,7 +144,7 @@ export function StudyGuidePanel({
               type="button"
               onClick={() => void rebuild()}
               disabled={generating}
-              className="mt-1 flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-1 flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
             >
               {generating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
               生成学习指南

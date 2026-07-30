@@ -9,10 +9,10 @@ import { FeedbackWidget } from "@/components/feedback-widget";
 
 export const metadata: Metadata = {
   title: {
-    default: "EduAgents · 智能学习助教",
-    template: "%s · EduAgents",
+    default: "苏问 AI课堂 · 个性化学习平台",
+    template: "%s · 苏问",
   },
-  description: "多智能体驱动的个性化学习平台：知识库问答、练习、计划与复习",
+  description: "你的 AI 苏格拉底：知识库问答、分级辅导、练习、计划与复习",
 };
 
 export default function RootLayout({

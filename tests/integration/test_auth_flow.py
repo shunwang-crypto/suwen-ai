@@ -1,4 +1,5 @@
 """U-A2/U-A3 相关: 注册-登录-刷新轮换-重放拒绝-登出黑名单 全链路."""
+
 import uuid
 
 import httpx
@@ -17,29 +18,25 @@ async def test_full_auth_lifecycle(client):
 
     # 注册
     r = await client.post(
-        "/api/auth/register", json={"email": email, "password": "pass-12345"}
+        "/api/auth/register",
+        json={"email": email, "password": "pass-12345", "display_name": "测试同学"},
     )
     assert r.status_code == 201, r.text
     assert r.json()["email"] == email
+    assert r.json()["display_name"] == "测试同学"
 
     # 重复注册 -> 409 统一错误信封
-    r = await client.post(
-        "/api/auth/register", json={"email": email, "password": "pass-12345"}
-    )
+    r = await client.post("/api/auth/register", json={"email": email, "password": "pass-12345"})
     assert r.status_code == 409
     body = r.json()
     assert body["code"] == "EMAIL_EXISTS" and body["request_id"]
 
     # 错误密码 -> 401
-    r = await client.post(
-        "/api/auth/login", json={"email": email, "password": "wrong-pass"}
-    )
+    r = await client.post("/api/auth/login", json={"email": email, "password": "wrong-pass"})
     assert r.status_code == 401
 
     # 登录: access token + httpOnly refresh cookie
-    r = await client.post(
-        "/api/auth/login", json={"email": email, "password": "pass-12345"}
-    )
+    r = await client.post("/api/auth/login", json={"email": email, "password": "pass-12345"})
     assert r.status_code == 200, r.text
     access1 = r.json()["access_token"]
     refresh1 = client.cookies.get("edu_refresh")
@@ -48,10 +45,18 @@ async def test_full_auth_lifecycle(client):
     assert "HttpOnly" in set_cookie
 
     # /me
-    r = await client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {access1}"}
-    )
+    r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {access1}"})
     assert r.status_code == 200 and r.json()["email"] == email
+    assert r.json()["display_name"] == "测试同学"
+
+    # 姓名是独立账户资料，不再从邮箱前缀推断
+    r = await client.patch(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {access1}"},
+        json={"display_name": "新的姓名"},
+    )
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "新的姓名"
 
     # 刷新 -> 轮换出新 cookie
     r = await client.post("/api/auth/refresh")
@@ -73,13 +78,9 @@ async def test_full_auth_lifecycle(client):
     assert r.status_code == 401
 
     # 登出 -> access token 进黑名单
-    r = await client.post(
-        "/api/auth/logout", headers={"Authorization": f"Bearer {access2}"}
-    )
+    r = await client.post("/api/auth/logout", headers={"Authorization": f"Bearer {access2}"})
     assert r.status_code == 204
-    r = await client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {access2}"}
-    )
+    r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {access2}"})
     assert r.status_code == 401
     assert r.json()["code"] == "TOKEN_REVOKED"
 

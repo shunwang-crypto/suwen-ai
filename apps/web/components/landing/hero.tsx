@@ -63,7 +63,7 @@ function ProductMock() {
           <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
           <span className="ml-2 truncate text-xs text-slate-400">
-            EduAgents · 引用溯源问答
+            苏问 · 引用溯源问答
           </span>
         </div>
         <div className="space-y-3 p-4">
