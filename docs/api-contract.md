@@ -51,9 +51,10 @@
 不会取消生成；任务会在 API 进程内继续。只有调用 `POST /api/chat/runs/{run_id}/stop`
 才会主动取消。返回原会话时，客户端先查询 `/run`，任务结束后重新读取历史消息。
 
-`mode` 为 `fast | think | web | kb`：`think` 固定走 strong 模型且只返回最终答案；
-`web` 强制进入网页搜索路径，不依赖问题关键词；`kb` 要求至少一个 `kb_id/kb_ids`。
-旧客户端未发送 `mode` 且携带知识库 ID 时仍按 `kb` 处理。助手消息的 `meta.chat_mode`
+`mode` 为 `fast | think | web | research`：`think` 固定走 strong 模型且只返回最终答案；
+`web` 强制进入网页搜索路径，`research` 同时启用 strong 思考模型与网页检索。
+`kb_ids` 是独立资料范围，可与 `fast/think` 组合；`web/research` 使用网页范围。
+旧客户端的 `kb` 模式及“未发送 mode 但携带知识库 ID”仍兼容。助手消息的 `meta.chat_mode`
 记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。
 
 ### 知识库（M2，用户级鉴权 + 限流）

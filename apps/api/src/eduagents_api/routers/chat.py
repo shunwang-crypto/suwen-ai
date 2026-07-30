@@ -316,21 +316,29 @@ async def chat(
         dict.fromkeys(body.kb_ids or ([body.kb_id] if body.kb_id is not None else []))
     )
     # 未携带 mode 的旧客户端继续沿用“有 kb_id 即知识库问答”的历史契约；
-    # 新客户端显式选择其他模式时不允许残留的 kb_ids 偷偷改变回答路径。
+    # 新客户端把 kb_ids 作为独立资料范围，可与 fast/think 组合。
     mode_explicit = "mode" in body.model_fields_set
-    chat_mode = "kb" if requested_kb_ids and not mode_explicit else body.mode
-    kb_ids = requested_kb_ids if chat_mode == "kb" else []
+    # kb 是旧客户端模式名；新契约把“资料范围”和“回答强度”拆开。
+    legacy_kb_mode = body.mode == "kb" or (requested_kb_ids and not mode_explicit)
+    chat_mode = "fast" if legacy_kb_mode else body.mode
+    kb_ids = requested_kb_ids
     attachment_ids = list(dict.fromkeys(body.attachment_ids or []))
-    if chat_mode == "kb" and not kb_ids:
+    if body.mode == "kb" and not kb_ids:
         raise HTTPException(status_code=400, detail="KB_MODE_REQUIRES_SCOPE")
-    if chat_mode == "think" and not (settings.strong_api_key and settings.strong_model):
+    if chat_mode in {"think", "research"} and not (
+        settings.strong_api_key and settings.strong_model
+    ):
         raise HTTPException(status_code=503, detail="THINKING_MODEL_UNAVAILABLE")
-    if chat_mode == "web" and (runtime is None or not settings.tavily_api_key):
+    if chat_mode in {"web", "research"} and (
+        runtime is None or not settings.tavily_api_key
+    ):
         raise HTTPException(status_code=503, detail="WEB_SEARCH_UNAVAILABLE")
-    if chat_mode == "web" and attachment_ids:
+    if chat_mode in {"web", "research"} and attachment_ids:
         raise HTTPException(status_code=400, detail="WEB_MODE_ATTACHMENTS_UNSUPPORTED")
+    if chat_mode in {"web", "research"} and kb_ids:
+        raise HTTPException(status_code=400, detail="WEB_MODE_KB_UNSUPPORTED")
     if (
-        chat_mode == "kb"
+        kb_ids
         and (runtime is None or getattr(request.app.state, "retrieval", None) is None)
         and not attachment_ids
     ):
@@ -536,12 +544,12 @@ async def chat(
 
         try:
             # ---- 知识库 / 强制联网路径: qa 子图 (Agentic RAG 自省环) ----
-            if chat_mode in {"kb", "web"} and not has_attachments and not has_images:
+            if (kb_ids or chat_mode in {"web", "research"}) and not has_attachments and not has_images:
                 # ---- 两级语义缓存 (包B, §7): 仅单库+首轮 (缓存键不含会话历史,
                 # 多轮上下文相关答案禁止缓存) ----
                 cache = getattr(request.app.state, "answer_cache", None)
                 cache_embedder = getattr(request.app.state, "embedder", None)
-                cacheable = chat_mode == "kb" and _cache_admissible(
+                cacheable = bool(kb_ids) and chat_mode == "fast" and _cache_admissible(
                     kb_ids, history, cache, cache_embedder, profile
                 )
                 # P1-11: 缓存作用域 = 该 kb 的 owner (个人库 owner=本人语义不变;
@@ -568,7 +576,7 @@ async def chat(
                             hit.citations,
                             extra_meta={
                                 "route": "kb",
-                                "chat_mode": "kb",
+                                "chat_mode": chat_mode,
                                 "cache": hit.source,
                                 "followups": hit.followups,
                             },
@@ -641,7 +649,12 @@ async def chat(
                     "kb_id": str(kb_ids[0]) if kb_ids else "",
                     "kb_ids": [str(k) for k in kb_ids],
                     "owner_ids": owner_ids,
-                    "requested_route": chat_mode,
+                    "requested_route": (
+                        "web" if chat_mode in {"web", "research"} else "kb"
+                    ),
+                    "answer_tier": (
+                        "strong" if chat_mode in {"think", "research"} else "standard"
+                    ),
                     # 画像摘要进 generate 的 system prompt; 薄弱点名单进 trace
                     "profile_summary": profile.summary,
                     "profile_weak_points": profile.weak_points,
@@ -931,7 +944,7 @@ async def chat(
             # Attachments and a selected KB can coexist. The normal QA graph is
             # text-only, so retrieve evidence here and feed it to the multimodal
             # generation call while preserving citation events.
-            if chat_mode == "kb" and kb_ids:
+            if kb_ids:
                 retrieval = getattr(request.app.state, "retrieval", None)
                 if retrieval is None:
                     yield {
@@ -1000,12 +1013,18 @@ async def chat(
             ]
             gw_req = GwRequest(
                 messages=tuple(messages),
-                tier=Tier.strong if chat_mode == "think" else Tier.standard,
+                tier=(
+                    Tier.strong if chat_mode in {"think", "research"} else Tier.standard
+                ),
                 model_override=(
                     settings.vision_model if has_images and chat_mode == "fast" else None
                 ),
-                allow_tier_fallback=not has_images and chat_mode != "think",
-                feature="chat_think" if chat_mode == "think" else "chat",
+                allow_tier_fallback=(
+                    not has_images and chat_mode not in {"think", "research"}
+                ),
+                feature=(
+                    "chat_think" if chat_mode in {"think", "research"} else "chat"
+                ),
                 tenant_id=str(ctx.tenant_id),
                 user_id=str(ctx.user_id),
                 request_id=request_id,

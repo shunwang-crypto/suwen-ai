@@ -506,7 +506,8 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 *history,
                 ChatMessage(role="user", content=query),
             ),
-            tier=Tier.standard,
+            tier=Tier.strong if state.get("answer_tier") == "strong" else Tier.standard,
+            allow_tier_fallback=state.get("answer_tier") != "strong",
             # P1-15: 主回答上限 1500 token — 最坏路径 (9~10 次调用) 不再可能
             # 单次问答打满 8000 token 输出穿透成本模型
             max_tokens=1500,

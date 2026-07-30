@@ -322,6 +322,10 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+textarea.chat-composer-input:focus-visible {
+  outline: none;
+}
+
 ::selection {
   background-color: #dbe7fd;
   color: #172554;

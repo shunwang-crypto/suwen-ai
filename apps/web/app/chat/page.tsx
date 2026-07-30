@@ -66,7 +66,7 @@ interface ChatMsg {
   chatMode?: ChatMode;
 }
 
-type ChatMode = "fast" | "think" | "web" | "kb";
+type ChatMode = "fast" | "think" | "web" | "research";
 
 /** done.usage.mode 中文化（P2-18）：内部枚举不直接暴露给用户 */
 const MODE_LABELS: Record<string, string> = {
@@ -129,7 +129,7 @@ function historyToMessages(history: MessageOut[]): ChatMsg[] {
     chatMode:
       m.meta?.chat_mode === "think" ||
       m.meta?.chat_mode === "web" ||
-      m.meta?.chat_mode === "kb"
+      m.meta?.chat_mode === "research"
         ? m.meta.chat_mode
         : "fast",
   }));
@@ -157,9 +157,7 @@ function ChatView() {
     const kb = searchParams.get("kb");
     return kb ? [kb] : [];
   });
-  const [chatMode, setChatMode] = useState<ChatMode>(() =>
-    searchParams.get("kb") ? "kb" : "fast",
-  );
+  const [chatMode, setChatMode] = useState<ChatMode>("fast");
   const [composerPanel, setComposerPanel] = useState<
     "menu" | "mode" | "scope" | null
   >(null);
@@ -556,6 +554,11 @@ function ChatView() {
       }
     }
     setAttachments((prev) => [...prev, ...uploaded]);
+    if (uploaded.length > 0) {
+      setChatMode((mode) =>
+        mode === "web" ? "fast" : mode === "research" ? "think" : mode,
+      );
+    }
     setUploadingAttachment(false);
     setBanner(failures.length > 0 ? failures.join("；") : null);
   };
@@ -566,13 +569,11 @@ function ChatView() {
       const typed = (raw ?? input).trim();
       const text = typed || (sentAttachments.length > 0 ? "请分析这些附件" : "");
       if (!text || streaming) return;
-      if (chatMode === "kb" && kbIds.length === 0) {
-        setComposerPanel("scope");
-        setBanner("请先选择至少一个知识库");
-        return;
-      }
-      if (chatMode === "web" && sentAttachments.length > 0) {
-        setBanner("网页搜索暂不能与附件同时使用，请切换到极速或深度思考模式");
+      if (
+        (chatMode === "web" || chatMode === "research") &&
+        sentAttachments.length > 0
+      ) {
+        setBanner("联网模式暂不能与附件同时使用，请移除附件或切换回答方式");
         return;
       }
       setInput("");
@@ -616,7 +617,7 @@ function ChatView() {
           message: text,
           session_id: activeSessionId ?? undefined,
           mode: chatMode,
-          kb_ids: chatMode === "kb" && kbIds.length > 0 ? kbIds : undefined,
+          kb_ids: kbIds.length > 0 ? kbIds : undefined,
           attachment_ids:
             sentAttachments.length > 0
               ? sentAttachments.map((item) => item.id)
@@ -877,9 +878,7 @@ function ChatView() {
         ? "深度思考"
         : chatMode === "web"
           ? "网页搜索"
-          : kbIds.length > 0
-            ? `知识库 · ${selectedKbLabel}`
-            : "知识库";
+          : "深度搜索";
 
   // 引用卡点击 → 打开原文抽屉。多库联合检索时优先用引用自带的来源库 kb_id，
   // 回退到该消息发送时绑定的首库
@@ -1295,8 +1294,8 @@ function ChatView() {
         {/* 输入区 */}
         <div className="shrink-0 bg-canvas px-4 pb-6 pt-3">
           <div
-            className={`relative mx-auto flex w-full max-w-[720px] flex-col border border-line bg-white px-2 py-2 shadow-subtle transition-[border-radius] ${
-              attachments.length > 0 || composerMultiline
+            className={`relative mx-auto flex w-full max-w-[720px] flex-col border border-line bg-white px-2 py-2 shadow-subtle transition-[border-color,border-radius] focus-within:border-line-strong ${
+              attachments.length > 0 || kbIds.length > 0 || composerMultiline
                 ? "rounded-[24px]"
                 : "rounded-full"
             }`}
@@ -1319,8 +1318,28 @@ function ChatView() {
               onChange={(event) => void uploadChatAttachments(event)}
             />
 
-            {attachments.length > 0 && (
+            {(attachments.length > 0 || kbIds.length > 0) && (
               <div className="flex flex-wrap gap-1.5 px-2 pb-2 pt-1">
+                {kbIds.length > 0 && (
+                  <span className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-[11px] text-ink-secondary">
+                    <button
+                      type="button"
+                      onClick={() => setComposerPanel("scope")}
+                      className="max-w-52 truncate hover:text-ink"
+                      title={selectedKbLabel}
+                    >
+                      知识库 · {selectedKbLabel}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKbIds([])}
+                      className="text-ink-muted hover:text-ink"
+                      aria-label="清除知识库范围"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
                 {attachments.map((attachment) => (
                   <span
                     key={attachment.id}
@@ -1374,7 +1393,7 @@ function ChatView() {
                 maxLength={8000}
                 placeholder={streaming ? "正在生成回答…" : "给苏问发消息"}
                 disabled={streaming}
-                className="my-2 min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:text-slate-400"
+                className="chat-composer-input my-2 min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus-visible:outline-none disabled:text-slate-400"
               />
 
               <div className="relative mb-0.5 shrink-0">
@@ -1453,21 +1472,37 @@ function ChatView() {
                         <span className="block text-[11px] leading-5 text-ink-muted">仅用于当前对话，最多 4 个、合计 20MB</span>
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setComposerPanel("scope")}
+                      className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted"
+                    >
+                      <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg border border-line text-xs" aria-hidden>▤</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-medium text-ink">选择知识库</span>
+                        <span className="block truncate text-[11px] leading-5 text-ink-muted">
+                          {kbIds.length > 0 ? `当前：${selectedKbLabel}` : "基于指定资料回答"}
+                        </span>
+                      </span>
+                    </button>
                   </div>
                 )}
 
                 {composerPanel === "mode" && (
                   <div className="absolute bottom-[58px] right-0 z-30 w-[300px] rounded-2xl border border-line bg-white p-2 shadow-floating">
-                    <p className="px-3 pb-1.5 pt-1 text-[11px] font-medium text-ink-muted">回答模式</p>
+                    <p className="px-3 pb-1.5 pt-1 text-[11px] font-medium text-ink-muted">回答方式</p>
                     {([
                       ["fast", "极速", "快速直接回答"],
                       ["think", "深度思考", "用于复杂推理与综合分析"],
                       ["web", "网页搜索", "搜索实时信息并标注来源"],
+                      ["research", "深度搜索", "深度思考并联网检索"],
                     ] as const).map(([mode, title, description]) => {
                       const disabled =
-                        (mode === "think" && !attachmentCapabilities?.thinking_enabled) ||
-                        (mode === "web" &&
-                          (!attachmentCapabilities?.web_search_enabled || attachments.length > 0));
+                        ((mode === "think" || mode === "research") &&
+                          !attachmentCapabilities?.thinking_enabled) ||
+                        ((mode === "web" || mode === "research") &&
+                          (!attachmentCapabilities?.web_search_enabled ||
+                            attachments.length > 0));
                       return (
                         <button
                           key={mode}
@@ -1475,18 +1510,26 @@ function ChatView() {
                           disabled={disabled}
                           onClick={() => {
                             setChatMode(mode);
+                            if (mode === "web" || mode === "research") setKbIds([]);
                             setComposerPanel(null);
                             setBanner(null);
                           }}
                           className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-muted text-xs text-ink-secondary" aria-hidden>
-                            {mode === "fast" ? "↗" : mode === "think" ? "◇" : "◎"}
+                            {mode === "fast"
+                              ? "↗"
+                              : mode === "think"
+                                ? "◇"
+                                : mode === "web"
+                                  ? "◎"
+                                  : "✦"}
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] font-medium text-ink">{title}</span>
                             <span className="block text-[11px] leading-5 text-ink-muted">
-                              {mode === "web" && attachments.length > 0
+                              {(mode === "web" || mode === "research") &&
+                              attachments.length > 0
                                 ? "移除附件后可使用"
                                 : disabled
                                   ? "当前部署未配置"
@@ -1497,28 +1540,14 @@ function ChatView() {
                         </button>
                       );
                     })}
-                    <button
-                      type="button"
-                      onClick={() => setComposerPanel("scope")}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-muted"
-                    >
-                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-muted text-xs text-ink-secondary" aria-hidden>▤</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[13px] font-medium text-ink">知识库</span>
-                        <span className="block truncate text-[11px] leading-5 text-ink-muted">
-                          {kbIds.length > 0 ? selectedKbLabel : "基于指定资料回答"}
-                        </span>
-                      </span>
-                      {chatMode === "kb" ? <span className="text-sm text-brand-700">✓</span> : <span className="text-ink-muted">›</span>}
-                    </button>
                   </div>
                 )}
 
                 {composerPanel === "scope" && (
-                  <div className="absolute bottom-[58px] right-0 z-30 max-h-[380px] w-[310px] overflow-y-auto rounded-2xl border border-line bg-white p-2 shadow-floating">
+                  <div className="absolute bottom-[58px] left-0 z-30 max-h-[380px] w-[310px] overflow-y-auto rounded-2xl border border-line bg-white p-2 shadow-floating">
                     <button
                       type="button"
-                      onClick={() => setComposerPanel("mode")}
+                      onClick={() => setComposerPanel("menu")}
                       className="mb-1 px-2 py-1 text-xs text-ink-muted hover:text-ink"
                     >
                       ← 选择知识库
@@ -1543,7 +1572,10 @@ function ChatView() {
                                         ? [...prev, kb.id]
                                         : prev.filter((id) => id !== kb.id),
                                     );
-                                    if (event.target.checked) setChatMode("kb");
+                                    if (event.target.checked) {
+                                      if (chatMode === "web") setChatMode("fast");
+                                      if (chatMode === "research") setChatMode("think");
+                                    }
                                   }}
                                   className="h-3.5 w-3.5 accent-slate-900"
                                 />
@@ -1560,7 +1592,6 @@ function ChatView() {
                           type="button"
                           onClick={() => {
                             setKbIds([]);
-                            setChatMode("fast");
                             setComposerPanel(null);
                           }}
                           className="h-9 flex-1 rounded-lg border border-line text-xs text-ink-secondary hover:bg-surface-muted"
@@ -1572,7 +1603,8 @@ function ChatView() {
                         type="button"
                         disabled={kbIds.length === 0}
                         onClick={() => {
-                          setChatMode("kb");
+                          if (chatMode === "web") setChatMode("fast");
+                          if (chatMode === "research") setChatMode("think");
                           setComposerPanel(null);
                           setBanner(null);
                         }}
