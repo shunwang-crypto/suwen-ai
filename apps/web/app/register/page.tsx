@@ -10,6 +10,7 @@ import {
   EMPTY_CAPTCHA,
   type CaptchaState,
 } from "@/components/ui/captcha";
+import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -142,6 +143,7 @@ export default function RegisterPage() {
               </span>
               <input
                 type="email"
+                name="email"
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -151,12 +153,13 @@ export default function RegisterPage() {
               />
             </label>
 
-            <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+            <div className="mb-4">
+              <label htmlFor="register-password" className="mb-1.5 block text-sm font-medium text-slate-700">
                 密码
-              </span>
-              <input
-                type="password"
+              </label>
+              <PasswordInput
+                id="register-password"
+                name="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -164,14 +167,15 @@ export default function RegisterPage() {
                 className={inputCls}
                 required
               />
-            </label>
+            </div>
 
-            <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+            <div className="mb-4">
+              <label htmlFor="register-password-confirm" className="mb-1.5 block text-sm font-medium text-slate-700">
                 确认密码
-              </span>
-              <input
-                type="password"
+              </label>
+              <PasswordInput
+                id="register-password-confirm"
+                name="password-confirmation"
                 autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
@@ -179,7 +183,7 @@ export default function RegisterPage() {
                 className={inputCls}
                 required
               />
-            </label>
+            </div>
 
             <CaptchaField
               key={captchaEpoch}

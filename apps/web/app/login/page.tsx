@@ -10,15 +10,25 @@ import {
   EMPTY_CAPTCHA,
   type CaptchaState,
 } from "@/components/ui/captcha";
+import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const REMEMBERED_EMAIL_KEY = "suwen:remembered-login-email";
+
+function readRememberedEmail(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(REMEMBERED_EMAIL_KEY) ?? "";
+}
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(readRememberedEmail);
+  const [rememberEmail, setRememberEmail] = useState(
+    () => readRememberedEmail().length > 0,
+  );
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -54,6 +64,11 @@ export default function LoginPage() {
             }
           : undefined,
       );
+      if (rememberEmail) {
+        window.localStorage.setItem(REMEMBERED_EMAIL_KEY, email.trim());
+      } else {
+        window.localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+      }
       router.replace("/today");
     } catch (err) {
       if (err instanceof ApiError && err.code === "CAPTCHA_REQUIRED") {
@@ -109,7 +124,8 @@ export default function LoginPage() {
               </span>
               <input
                 type="email"
-                autoComplete="email"
+                name="email"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
@@ -118,12 +134,13 @@ export default function LoginPage() {
               />
             </label>
 
-            <label className="mb-2 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+            <div className="mb-2">
+              <label htmlFor="login-password" className="mb-1.5 block text-sm font-medium text-slate-700">
                 密码
-              </span>
-              <input
-                type="password"
+              </label>
+              <PasswordInput
+                id="login-password"
+                name="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -131,16 +148,31 @@ export default function LoginPage() {
                 className={inputCls}
                 required
               />
-            </label>
+            </div>
 
-            <p className="mb-4 text-right">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={rememberEmail}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setRememberEmail(checked);
+                    if (!checked) {
+                      window.localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+                    }
+                  }}
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                />
+                记住账号
+              </label>
               <Link
                 href="/forgot"
                 className="text-xs font-medium text-slate-400 transition-colors hover:text-brand-600"
               >
                 忘记密码？
               </Link>
-            </p>
+            </div>
 
             {needCaptcha && (
               <CaptchaField

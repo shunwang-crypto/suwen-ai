@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
 
 import { AuthHero, BrandMark } from "@/components/ui/brand";
+import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError, apiJson } from "@/lib/api";
 
 function ResetForm() {
@@ -140,12 +141,13 @@ function ResetForm() {
         </div>
       )}
 
-      <label className="mb-4 block">
-        <span className="mb-1.5 block text-sm font-medium text-slate-700">
+      <div className="mb-4">
+        <label htmlFor="reset-password" className="mb-1.5 block text-sm font-medium text-slate-700">
           新密码
-        </span>
-        <input
-          type="password"
+        </label>
+        <PasswordInput
+          id="reset-password"
+          name="password"
           autoComplete="new-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
@@ -153,14 +155,15 @@ function ResetForm() {
           className={inputCls}
           required
         />
-      </label>
+      </div>
 
-      <label className="mb-6 block">
-        <span className="mb-1.5 block text-sm font-medium text-slate-700">
+      <div className="mb-6">
+        <label htmlFor="reset-password-confirm" className="mb-1.5 block text-sm font-medium text-slate-700">
           确认新密码
-        </span>
-        <input
-          type="password"
+        </label>
+        <PasswordInput
+          id="reset-password-confirm"
+          name="password-confirmation"
           autoComplete="new-password"
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
@@ -168,7 +171,7 @@ function ResetForm() {
           className={inputCls}
           required
         />
-      </label>
+      </div>
 
       <button
         type="submit"
