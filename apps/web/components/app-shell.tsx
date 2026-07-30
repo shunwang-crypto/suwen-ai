@@ -219,16 +219,39 @@ function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: str
   );
 }
 
-function Brand({ collapsed = false }: { collapsed?: boolean }) {
+function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
   return (
-    <div className={`flex h-14 shrink-0 items-center ${collapsed ? "justify-center" : "px-4"}`}>
-      <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日" title={collapsed ? "苏问" : undefined}>
-        <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
-        <span className={`flex-col leading-none ${collapsed ? "hidden" : "flex"}`}>
-          <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
-          <span className="mt-1 text-[9px] font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
-        </span>
-      </Link>
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[19px] w-[19px]" aria-hidden>
+      <rect x="2.5" y="3" width="15" height="14" rx="2.5" />
+      <path d="M7 3v14" />
+      {collapsed ? <path d="m11 7.5 2.5 2.5-2.5 2.5" /> : <path d="m13.5 7.5-2.5 2.5 2.5 2.5" />}
+    </svg>
+  );
+}
+
+function Brand({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
+  return (
+    <div className={`flex h-14 shrink-0 items-center ${collapsed ? "justify-center" : "justify-between px-3"}`}>
+      {!collapsed && (
+        <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日">
+          <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
+          <span className="flex flex-col leading-none">
+            <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
+            <span className="mt-1 text-[9px] font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
+          </span>
+        </Link>
+      )}
+      {onToggle && (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] text-ink-secondary transition-colors hover:bg-[#e9e8e5] hover:text-ink"
+          aria-label={collapsed ? "展开功能导航" : "折叠功能导航"}
+          title={collapsed ? "展开功能导航" : "折叠功能导航"}
+        >
+          <SidebarToggleIcon collapsed={collapsed} />
+        </button>
+      )}
     </div>
   );
 }
@@ -356,7 +379,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <MotionConfig reducedMotion="user">
       <div className="flex h-dvh overflow-hidden bg-canvas">
         <aside className={`hidden shrink-0 flex-col border-r border-line bg-[#f4f3f1] transition-[width] duration-200 md:flex ${navCollapsed ? "w-16" : "w-[200px]"}`}>
-          <Brand collapsed={navCollapsed} />
+          <Brand collapsed={navCollapsed} onToggle={() => setNavCollapsed((value) => !value)} />
           <Navigation pathname={pathname} collapsed={navCollapsed} />
         </aside>
 
@@ -378,18 +401,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 items-center gap-3">
               <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
                 <Icon><path d="M4 6h16M4 12h16M4 18h16" /></Icon>
-              </button>
-              <button
-                type="button"
-                onClick={() => setNavCollapsed((value) => !value)}
-                className="hidden rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#eeedea] md:flex"
-                aria-label={navCollapsed ? "展开功能导航" : "折叠功能导航"}
-                title={navCollapsed ? "展开功能导航" : "折叠功能导航"}
-              >
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden>
-                  <rect x="2.5" y="3" width="15" height="14" rx="2.5" />
-                  <path d="M7 3v14" />
-                </svg>
               </button>
               {pathname === "/today" ? (
                 <div className="min-w-0">
