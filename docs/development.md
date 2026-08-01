@@ -39,6 +39,11 @@ make seed
 
 `make seed` 仅用于本地演示，幂等创建学生与管理员账号并摄取示例语料。生产环境禁止运行。
 
+注册流程在生产必须先通过图形验证码再发送邮箱验证码；验证码发送和密码找回都复用
+`EmailSender`。本地/测试默认可通过 `EMAIL_VERIFICATION_REQUIRED=0` 复用旧认证夹具，专项
+邮箱注册测试使用 fake sender，不连接 Resend。真实 Resend 冒烟只能由运维显式执行并指定
+测试收件箱，Key 只存在服务器 Secrets 或未提交的 `.env`。
+
 ## 启动开发服务
 
 分别在三个终端运行：

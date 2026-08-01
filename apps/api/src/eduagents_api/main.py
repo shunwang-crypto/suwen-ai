@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
 from .db import dispose_engine, get_engine
+from .emailer import assert_public_registration_email_config
 from .middleware import (
     ContentModerationMiddleware,
     RequestContextMiddleware,
@@ -57,6 +58,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     # 修正#2: prod 弱/默认 JWT secret 启动即炸, 不给"忘了改"留活路
     assert_production_secrets(settings)
+    # 公开注册必须能真正投递邮箱验证码；否则启动失败，不得静默切换到开发替身。
+    assert_public_registration_email_config(settings)
     configure_logging(settings.log_level)
     app.state.settings = settings
     get_engine()

@@ -143,6 +143,12 @@ def install_error_handlers(app: FastAPI) -> None:
             "RATE_LIMITED": "请求过于频繁，请稍后再试",
             "BUDGET_EXCEEDED": "今日 AI 用量已达上限，明天再来或联系管理员",
             "EMAIL_EXISTS": "该邮箱已注册",
+            "REGISTRATION_CLOSED": "当前暂未开放公开注册",
+            "EMAIL_CODE_REQUIRED": "请先获取并填写邮箱验证码",
+            "EMAIL_CODE_INVALID": "邮箱验证码错误、已过期或已使用",
+            "EMAIL_CODE_RATE_LIMITED": "验证码发送过于频繁，请稍后再试",
+            "EMAIL_SEND_FAILED": "邮件发送失败，请稍后重试",
+            "SMTP_NOT_CONFIGURED": "邮件服务暂不可用，请稍后再试",
             "BAD_CREDENTIALS": "邮箱或密码错误",
             "REFRESH_INVALID": "会话已失效，请重新登录",
             # 图形验证码 + 密码找回 (routers/auth.py)

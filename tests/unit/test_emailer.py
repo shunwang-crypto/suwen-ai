@@ -9,6 +9,7 @@ from eduagents_api.emailer import (
     DEBUG_RESET_TTL_SECONDS,
     DevEmailSender,
     SMTPEmailSender,
+    assert_public_registration_email_config,
     create_email_sender,
     smtp_configured,
 )
@@ -72,3 +73,68 @@ async def test_dev_sender_body_without_link_writes_nothing(redis):
     sender = DevEmailSender(Settings(_env_file=None, app_env="dev"), redis)
     await sender.send("u@test.cn", "无链接邮件", "正文里没有 URL")
     assert await redis.keys(f"{DEBUG_RESET_KEY_PREFIX}*") == []
+
+
+def test_smtp_reply_to_is_written(monkeypatch):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def login(self, user, password):
+            captured["login"] = (user, password)
+
+        def send_message(self, message):
+            captured["message"] = message
+
+    monkeypatch.setattr("eduagents_api.emailer.smtplib.SMTP_SSL", FakeSMTP)
+    settings = Settings(
+        _env_file=None,
+        **_SMTP_KW,
+        smtp_reply_to="support@example.com",
+    )
+    SMTPEmailSender(settings)._send_sync("to@example.com", "Subject", "body")
+    assert captured["message"]["Reply-To"] == "support@example.com"
+    assert captured["login"] == ("bot@example.com", "secret")
+
+
+def test_prod_public_registration_rejects_missing_smtp():
+    settings = Settings(
+        _env_file=None,
+        app_env="prod",
+        jwt_secret="x" * 40,
+        public_registration=True,
+        web_origin="https://app.example.com",
+    )
+    with pytest.raises(RuntimeError, match="SMTP"):
+        assert_public_registration_email_config(settings)
+
+
+def test_prod_public_registration_requires_resend_and_https():
+    settings = Settings(
+        _env_file=None,
+        app_env="prod",
+        jwt_secret="x" * 40,
+        public_registration=True,
+        smtp_host="smtp.resend.com",
+        smtp_user="resend",
+        smtp_password="not-a-real-key",
+        smtp_from="EduAgents <noreply@mail.adfgt.xyz>",
+        smtp_reply_to="support@example.com",
+        web_origin="http://localhost:3000",
+    )
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        assert_public_registration_email_config(settings)
+
+
+def test_prod_factory_never_returns_dev_sender(redis):
+    settings = Settings(_env_file=None, app_env="prod")
+    with pytest.raises(RuntimeError, match="SMTP_NOT_CONFIGURED"):
+        create_email_sender(settings, redis)

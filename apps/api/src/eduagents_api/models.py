@@ -116,6 +116,9 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    # 0013: 新注册用户在邮箱验证码消费成功的同一事务中写入；历史用户由迁移
+    # 按兼容策略回填为 created_at，避免现有账号被突然锁在登录外。
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="student")

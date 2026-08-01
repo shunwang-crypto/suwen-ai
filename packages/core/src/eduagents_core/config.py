@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_seconds: int = 14 * 24 * 3600
     bcrypt_rounds: int = 12
+    public_registration: bool = True
+    # 生产公开注册始终强制邮箱验证；测试可显式关闭以复用旧夹具。
+    email_verification_required: bool = True
+    email_code_ttl_seconds: int = 600
+    email_code_resend_cooldown_seconds: int = 60
+    email_code_max_attempts: int = 5
+    email_code_per_minute: int = 5
+    email_code_daily_limit: int = 20
+    email_code_ip_daily_limit: int = 100
 
     # --- 图形验证码 (自托管 Pillow 生成, 零外部依赖) ---
     # 注册是否强制验证码: 默认开; 集成测试通道 = APP_ENV=test 或环境变量
@@ -64,6 +73,7 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    smtp_reply_to: str = ""
 
     # --- rate limits (token bucket, per minute capacity) ---
     auth_rate_limit_per_minute: int = 5

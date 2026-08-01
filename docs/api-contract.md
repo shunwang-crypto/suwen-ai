@@ -14,14 +14,32 @@
 
 ## 基础端点
 
-### 认证（公开，独立限流 5次/分/IP）
+### 认证（公开，独立限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/auth/register | {email, password≥8} → 201 UserOut；重复 409 EMAIL_EXISTS |
+| GET | /api/auth/captcha | 获取一次性图形验证码；用于防机器人 |
+| POST | /api/auth/register/email-code | `{email, captcha_id, captcha_answer}`；通过图形验证码后发送 6 位邮箱验证码，202；邮箱 60 秒冷却、分钟/日限额 |
+| POST | /api/auth/register | 生产公开注册必须带 `{email, email_code, password≥8, display_name?}` → 201 UserOut；新用户固定 `student` 且 `email_verified_at` 非空，重复 409 EMAIL_EXISTS |
 | POST | /api/auth/login | → {access_token, expires_at} + httpOnly refresh cookie（path=/api/auth） |
 | POST | /api/auth/refresh | cookie 轮换；旧 token 重放 → 401 并撤销该用户全部 refresh token |
 | POST | /api/auth/logout | (用户) access jti 进 Redis 黑名单 + 撤销 refresh + 清 cookie → 204 |
 | GET | /api/auth/me | (用户) → UserOut |
+
+图形验证码只用于防机器人，邮箱验证码只用于证明邮箱所有权；两者不是同一功能。普通登录不
+要求邮箱验证码，仍保留连续失败 3 次后要求图形验证码。公开注册不能创建 `teacher` 或
+`admin`，这两类账号必须通过受控流程创建。邮箱按 `strip().lower()` 规范化，验证码只保存
+HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注册关闭时返回
+`403 REGISTRATION_CLOSED`。
+
+邮件发送失败返回 `503 EMAIL_SEND_FAILED`（配置缺失为 `SMTP_NOT_CONFIGURED`），不会创建用户；
+已注册邮箱的验证码接口仍返回统一 `202` 且不发送邮件，避免账号枚举。邮件正文仅含品牌、
+验证码、有效期和忽略提示，不含密码或系统敏感信息。
+
+认证错误码还包括 `EMAIL_CODE_REQUIRED`、`EMAIL_CODE_INVALID`、`EMAIL_CODE_RATE_LIMITED`、
+`CAPTCHA_REQUIRED`、`CAPTCHA_INVALID`、`EMAIL_EXISTS` 和 `REGISTRATION_CLOSED`；错误统一使用
+`{code, message, request_id}`。生产使用 Resend SMTP：`smtp.resend.com:465`、用户 `resend`、
+服务器 Secrets 中的 API Key 作为 `SMTP_PASSWORD`，发件人必须是已验证的
+`@mail.adfgt.xyz` 地址，并建议配置 `SMTP_REPLY_TO`。
 
 ### 对话（用户，120次/分限流）
 | 方法 | 路径 | 说明 |

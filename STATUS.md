@@ -15,7 +15,7 @@
 
 | 模块 | 状态 | 当前范围 | 主要验证 |
 |---|---|---|---|
-| 认证与账户 | 已实现 | 注册、登录、刷新轮换、退出、找回密码、封禁、导出、注销 | auth/account 集成测试 |
+| 认证与账户 | 已实现 | 邮箱所有权注册、登录、刷新轮换、退出、找回密码、封禁、导出、注销 | auth/email/password-reset 集成测试 |
 | 个人与机构知识库 | 已实现 | 文件/URL 导入、摄取、分块、混合检索、引用、学习指南；机构成员只读、机构管理员写 | RAG、机构库、越权测试 |
 | AI 对话 | 已实现 | 知识库/网络/直接路由、SSE、引用、会话历史、附件、停止运行 | QA、SSE、附件测试 |
 | 分级辅导 | 已实现 | 四级提示、卡点分类、会话小结进入画像 | tutor 单元与集成测试 |
@@ -93,6 +93,7 @@ MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0012.py -q
 - [ ] 数据库应用角色与 migration 角色使用独立强密码并验证 RLS 不可绕过。
 - [ ] MinIO、Redis、PostgreSQL、Qdrant 使用持久卷、访问控制和备份策略。
 - [ ] TLS、Secure Cookie、可信域名、SMTP、模型预算和上传配额完成生产审计。
+- [ ] Resend Verified 域名、SPF/DKIM/DMARC、SMTP 投递和指定测试邮箱冒烟完成；真实 Key 不得进入 Git。
 - [ ] 管理员故障注入和时间旅行端点在生产有额外开关或网络访问控制。
 
 ### 运行保障

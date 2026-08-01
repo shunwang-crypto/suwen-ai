@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from .email_utils import normalize_email
+
 
 def _validate_bcrypt_password_bytes(v: str) -> str:
     """P2-16: bcrypt 上限 72 字节, 超限在 schema 层 422 (中文提示),
@@ -26,6 +28,7 @@ def _normalize_display_name(v: str | None) -> str | None:
 
 class RegisterRequest(BaseModel):
     email: EmailStr
+    email_code: str | None = Field(default=None, min_length=6, max_length=6, pattern=r"^\d{6}$")
     password: str = Field(min_length=8, max_length=128)
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     # 图形验证码 (captcha_required_register 开启时必填; 测试通道见 config.py 注释)
@@ -34,6 +37,7 @@ class RegisterRequest(BaseModel):
 
     _password_bytes = field_validator("password")(_validate_bcrypt_password_bytes)
     _display_name = field_validator("display_name")(_normalize_display_name)
+    _email = field_validator("email", mode="before")(normalize_email)
 
 
 class LoginRequest(BaseModel):
@@ -43,6 +47,16 @@ class LoginRequest(BaseModel):
     captcha_id: str | None = Field(default=None, max_length=64)
     captcha_answer: str | None = Field(default=None, max_length=8)
 
+    _email = field_validator("email", mode="before")(normalize_email)
+
+
+class RegisterEmailCodeRequest(BaseModel):
+    email: EmailStr
+    captcha_id: str = Field(min_length=1, max_length=64)
+    captcha_answer: str = Field(min_length=1, max_length=8)
+
+    _email = field_validator("email", mode="before")(normalize_email)
+
 
 class ForgotPasswordIn(BaseModel):
     """密码找回申请: 恒定 204 (防枚举), 验证码必填 (防批量骚扰发信)。"""
@@ -50,6 +64,8 @@ class ForgotPasswordIn(BaseModel):
     email: EmailStr
     captcha_id: str = Field(min_length=1, max_length=64)
     captcha_answer: str = Field(min_length=1, max_length=8)
+
+    _email = field_validator("email", mode="before")(normalize_email)
 
 
 class ResetPasswordIn(BaseModel):
@@ -79,6 +95,7 @@ class UserOut(BaseModel):
     display_name: str | None = None
     role: str
     created_at: datetime
+    email_verified_at: datetime | None = None
 
 
 class AccountProfileUpdateIn(BaseModel):

@@ -17,6 +17,9 @@ os.environ.setdefault("CAPTCHA_RATE_LIMIT_PER_MINUTE", "100000")
 # 注册验证码测试通道: 既有集成测试大量直接注册, 全局显式关闭;
 # 验证码专项测试用 monkeypatch.setenv("CAPTCHA_REQUIRED_REGISTER", "1") 单独打开
 os.environ.setdefault("CAPTCHA_REQUIRED_REGISTER", "0")
+# Existing integration helpers intentionally exercise the pre-verification
+# auth flows. Dedicated email-registration tests enable this explicitly.
+os.environ.setdefault("EMAIL_VERIFICATION_REQUIRED", "0")
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ.setdefault("GATEWAY_MODE", "stub")
 os.environ.setdefault("EMBEDDING_MODE", "stub")

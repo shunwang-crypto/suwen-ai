@@ -27,7 +27,7 @@ export default function ForgotPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!EMAIL_RE.test(email)) {
+    if (!EMAIL_RE.test(email.trim())) {
       setError("请输入有效的邮箱地址");
       return;
     }
@@ -44,7 +44,7 @@ export default function ForgotPage() {
       await apiJson<undefined>("/api/auth/forgot", {
         method: "POST",
         body: {
-          email,
+          email: email.trim().toLowerCase(),
           captcha_id: captcha.captchaId,
           captcha_answer: captcha.answer.trim(),
         },

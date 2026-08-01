@@ -58,7 +58,9 @@ cp .env.example .env
 | `MIGRATION_DATABASE_URL` | 只供一次性 migration job，应用进程不可持有 |
 | Redis/Qdrant/MinIO | 使用生产地址、认证、TLS/网络隔离和独立凭据 |
 | `WEB_ORIGIN` | 精确生产 HTTPS 域名 |
-| SMTP | 配置真实发件服务并验证找回密码 |
+| PUBLIC_REGISTRATION | 生产公开注册开启时必须配合邮箱所有权验证；关闭时接口明确返回 `REGISTRATION_CLOSED` |
+| SMTP_HOST/PORT/USER/PASSWORD/FROM | Resend SMTP：`smtp.resend.com:465`、用户 `resend`、API Key 作为密码；发件人使用已验证 `mail.adfgt.xyz` 域名 |
+| SMTP_REPLY_TO | 服务器端真实联系邮箱；邮件使用 `Reply-To`，不要写进 Git |
 | 配额和预算 | 根据套餐、供应商限额和压测结果设定 |
 | `WEB_IMPORT_ALLOW_PRIVATE_HOSTS` | 生产必须为 false |
 | `LANGFUSE_LOG_CONTENT` | 默认关闭正文记录，确需开启先完成隐私审查 |
@@ -99,6 +101,11 @@ curl -fsS http://127.0.0.1:8080/api/health
 
 `ready` 依赖 PostgreSQL、Redis、Qdrant 和 Worker 心跳。只有所有预期服务 healthy、只有预期
 Worker 数量且异步队列无积压，才算参考栈启动完成。
+
+公网注册的图形验证码是机器人防护，邮箱验证码是邮箱所有权证明；普通登录不要求邮箱验证码。
+生产 `APP_ENV=prod` 且公开注册开启时，API 会在启动阶段拒绝缺少完整 Resend SMTP、正式
+HTTPS `WEB_ORIGIN` 或非 `mail.adfgt.xyz` 发件人的配置。Resend 域名应保持 Verified，并配置
+SPF、DKIM、DMARC。真实 API Key 只放服务器 Secrets 或本地 `.env`，`.env` 不提交 Git。
 
 生产环境不得运行 `make seed`。本地 demo 账号不是生产账号。
 

@@ -40,7 +40,7 @@ export default function LoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!EMAIL_RE.test(email)) {
+    if (!EMAIL_RE.test(email.trim())) {
       setError("请输入有效的邮箱地址");
       return;
     }
@@ -55,7 +55,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(
-        email,
+        email.trim().toLowerCase(),
         password,
         needCaptcha && captcha.captchaId
           ? {
@@ -65,7 +65,7 @@ export default function LoginPage() {
           : undefined,
       );
       if (rememberEmail) {
-        window.localStorage.setItem(REMEMBERED_EMAIL_KEY, email.trim());
+        window.localStorage.setItem(REMEMBERED_EMAIL_KEY, email.trim().toLowerCase());
       } else {
         window.localStorage.removeItem(REMEMBERED_EMAIL_KEY);
       }

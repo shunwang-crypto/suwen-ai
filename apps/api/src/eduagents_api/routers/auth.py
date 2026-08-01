@@ -7,17 +7,32 @@ import jwt as pyjwt
 from eduagents_core.config import Settings
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from ..captcha import create_captcha, verify_captcha
 from ..db import plain_session
 from ..deps import AuthContext, current_user, get_app_settings
+from ..email_utils import normalize_email
+from ..email_verification import (
+    EMAIL_CODE_DAILY_EMAIL_PREFIX,
+    EMAIL_CODE_DAILY_IP_PREFIX,
+    code_key,
+    consume_email_code,
+    cooldown_key,
+    daily_key,
+    email_hash,
+    generate_email_code,
+    ip_hash,
+    store_email_code,
+)
 from ..emailer import create_email_sender
 from ..models import PasswordResetToken, RefreshToken, User
 from ..schemas import (
     AccountProfileUpdateIn,
     ForgotPasswordIn,
     LoginRequest,
+    RegisterEmailCodeRequest,
     RegisterRequest,
     ResetPasswordIn,
     TokenResponse,
@@ -60,7 +75,20 @@ async def _mark_service_layer(session) -> None:
 
 def _email_hash(email: str) -> str:
     """归一化 email 的 sha256 (日志/限流键用, 不落明文)。"""
-    return hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    return hashlib.sha256(normalize_email(email).encode()).hexdigest()
+
+
+def _registration_requires_email_verification(settings: Settings) -> bool:
+    # A production misconfiguration must never turn ownership verification off.
+    return settings.app_env == "prod" or settings.email_verification_required
+
+
+async def _increment_daily_counter(redis, key: str, limit: int) -> bool:
+    count = int(await redis.incr(key))
+    if count == 1:
+        # Keep one extra day so a clock boundary cannot leave an unbounded key.
+        await redis.expire(key, 172800)
+    return count <= limit
 
 
 async def _auth_rate_limit(
@@ -129,42 +157,155 @@ async def get_captcha(
     return {"captcha_id": captcha_id, "image": image}
 
 
+@router.post("/register/email-code", status_code=202)
+async def send_register_email_code(
+    body: RegisterEmailCodeRequest,
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+):
+    """Send a single-use ownership code after consuming a graphic captcha.
+
+    The endpoint has one response for both existing and non-existing
+    addresses. Existing accounts consume the same abuse-control buckets but
+    receive no message, preventing this endpoint from becoming an account
+    enumeration oracle.
+    """
+
+    if not settings.public_registration:
+        raise HTTPException(status_code=403, detail="REGISTRATION_CLOSED")
+    redis = request.app.state.redis
+    if not await verify_captcha(redis, body.captcha_id, body.captcha_answer):
+        raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
+
+    email = normalize_email(str(body.email))
+    address_hash = email_hash(email)
+    remote_ip = request.client.host if request.client else "unknown"
+    remote_ip_hash = ip_hash(remote_ip)
+    limiter = request.app.state.rate_limiter
+    if not await limiter.allow(
+        f"email-code:email:{address_hash}", settings.email_code_per_minute
+    ) or not await limiter.allow(
+        f"email-code:ip:{remote_ip_hash}", settings.email_code_per_minute
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="EMAIL_CODE_RATE_LIMITED",
+            headers={"Retry-After": str(settings.email_code_resend_cooldown_seconds)},
+        )
+
+    email_daily = daily_key(EMAIL_CODE_DAILY_EMAIL_PREFIX, address_hash)
+    ip_daily = daily_key(EMAIL_CODE_DAILY_IP_PREFIX, remote_ip_hash)
+    email_daily_ok = await _increment_daily_counter(
+        redis, email_daily, settings.email_code_daily_limit
+    )
+    ip_daily_ok = await _increment_daily_counter(
+        redis, ip_daily, settings.email_code_ip_daily_limit
+    )
+    if not email_daily_ok or not ip_daily_ok:
+        raise HTTPException(status_code=429, detail="EMAIL_CODE_RATE_LIMITED")
+
+    cooldown = await redis.set(
+        cooldown_key(email),
+        "1",
+        ex=settings.email_code_resend_cooldown_seconds,
+        nx=True,
+    )
+    if not cooldown:
+        raise HTTPException(
+            status_code=429,
+            detail="EMAIL_CODE_RATE_LIMITED",
+            headers={"Retry-After": str(settings.email_code_resend_cooldown_seconds)},
+        )
+
+    async with plain_session() as session:
+        existing = await session.scalar(select(User.id).where(func.lower(User.email) == email))
+    if existing is not None:
+        # Keep the cooldown for existing addresses as well. The same 202
+        # response is returned, but no code is generated or sent.
+        return {"accepted": True}
+
+    code = generate_email_code()
+    await store_email_code(redis, email, code, settings)
+    try:
+        sender = create_email_sender(settings, redis)
+        await sender.send(
+            to=email,
+            subject="EduAgents 注册验证码",
+            body=(
+                "你好，\n\n"
+                "你的 EduAgents 注册验证码是："
+                f"{code}\n\n"
+                f"验证码 {settings.email_code_ttl_seconds // 60} 分钟内有效。\n"
+                "如果不是本人操作请忽略本邮件。\n"
+            ),
+        )
+    except RuntimeError as exc:
+        await redis.delete(code_key(email), cooldown_key(email))
+        if str(exc) == "SMTP_NOT_CONFIGURED":
+            raise HTTPException(status_code=503, detail="SMTP_NOT_CONFIGURED") from None
+        raise HTTPException(status_code=503, detail="EMAIL_SEND_FAILED") from None
+    except Exception:  # noqa: BLE001 — do not expose SMTP details or secrets
+        await redis.delete(code_key(email), cooldown_key(email))
+        log.exception("registration_email_failed", recipient_hash=address_hash[:16])
+        raise HTTPException(status_code=503, detail="EMAIL_SEND_FAILED") from None
+    return {"accepted": True}
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
 async def register(
     body: RegisterRequest,
     request: Request,
     settings: Settings = Depends(get_app_settings),
 ):
+    if not settings.public_registration:
+        raise HTTPException(status_code=403, detail="REGISTRATION_CLOSED")
     await _auth_rate_limit(request, settings)
-    # 注册验证码 (默认强制): 测试通道 = APP_ENV=test 或 CAPTCHA_REQUIRED_REGISTER=0
-    # (tests/conftest.py 显式关闭, 既有大量注册的集成测试不受影响)。
-    # 缺字段与答错统一 400 CAPTCHA_INVALID; verify_captcha 校验即删 (单次)。
-    if settings.captcha_required_register and settings.app_env != "test":
+    normalized_email = normalize_email(str(body.email))
+    requires_email_code = _registration_requires_email_verification(settings)
+    if requires_email_code:
+        if not body.email_code:
+            raise HTTPException(status_code=400, detail="EMAIL_CODE_REQUIRED")
+        if not await consume_email_code(
+            request.app.state.redis, normalized_email, body.email_code, settings
+        ):
+            raise HTTPException(status_code=400, detail="EMAIL_CODE_INVALID")
+    # Legacy/local mode keeps the existing captcha-only path. Production can
+    # never use it as a substitute for proving mailbox ownership.
+    elif settings.captcha_required_register and settings.app_env != "test":
         if not await verify_captcha(request.app.state.redis, body.captcha_id, body.captcha_answer):
             raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
-    async with plain_session() as session:
-        existing = await session.scalar(select(User).where(User.email == body.email))
-        if existing:
-            raise HTTPException(status_code=409, detail="EMAIL_EXISTS")
-        user = User(
-            email=body.email,
-            display_name=body.display_name,
-            password_hash=hash_password(body.password, settings.bcrypt_rounds),
-            role="student",
-        )
-        session.add(user)
-        await session.flush()
-        # 0006 预付额度: 注册赠送与建号同事务 (原子, 一起提交/一起回滚);
-        # 幂等由 wallet_ledger 唯一部分索引 (user_id) WHERE kind='signup_grant' 兜底
-        await get_wallet_service().grant_signup(session, user.id)
-        log.info("user_registered", user_id=str(user.id))
-        return UserOut(
-            id=user.id,
-            email=user.email,
-            display_name=user.display_name,
-            role=user.role,
-            created_at=user.created_at,
-        )
+    try:
+        async with plain_session() as session:
+            existing = await session.scalar(
+                select(User).where(func.lower(User.email) == normalized_email)
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail="EMAIL_EXISTS")
+            user = User(
+                email=normalized_email,
+                email_verified_at=datetime.now(UTC) if requires_email_code else None,
+                display_name=body.display_name,
+                password_hash=hash_password(body.password, settings.bcrypt_rounds),
+                role="student",
+            )
+            session.add(user)
+            await session.flush()
+            # 0006 预付额度: 注册赠送与建号及验证时间同事务提交。
+            await get_wallet_service().grant_signup(session, user.id)
+            log.info("user_registered", user_id=str(user.id))
+            result = UserOut(
+                id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                role=user.role,
+                created_at=user.created_at,
+                email_verified_at=user.email_verified_at,
+            )
+    except IntegrityError:
+        # The lower-case unique index is the concurrency authority. Do not
+        # leak a raw database error if two verified requests race.
+        raise HTTPException(status_code=409, detail="EMAIL_EXISTS") from None
+    return result
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -190,7 +331,7 @@ async def login(
         if not await verify_captcha(redis, body.captcha_id, body.captcha_answer):
             raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
     async with plain_session() as session:
-        user = await session.scalar(select(User).where(User.email == body.email))
+        user = await session.scalar(select(User).where(User.email == normalize_email(str(body.email))))
         if user is None or not verify_password(body.password, user.password_hash):
             # 失败计数 +1, 滑动 15min 过期 (INCR 后无条件 EXPIRE)
             await redis.incr(fail_key)
@@ -338,7 +479,7 @@ async def forgot_password(
     reset_link = None
     async with plain_session() as session:
         await _mark_service_layer(session)  # RLS: password_reset_tokens 仅服务层可写
-        user = await session.scalar(select(User).where(User.email == body.email))
+        user = await session.scalar(select(User).where(User.email == normalize_email(str(body.email))))
         if user is not None:
             raw, token_hash = new_password_reset_token()
             # 旧未用 token 作废 (删除): 任一时刻每用户至多一个有效重置链接
@@ -360,8 +501,8 @@ async def forgot_password(
     if reset_link is not None:
         # 事务提交后再发信 (SMTP 秒级耗时不占 DB 事务); 发信失败不改变 204 口径
         # (防枚举优先), 但日志如实记录失败, 不伪造"已发送"。
-        sender = create_email_sender(settings, redis)
         try:
+            sender = create_email_sender(settings, redis)
             await sender.send(
                 to=body.email,
                 subject="EduAgents 密码重置",
@@ -428,6 +569,7 @@ async def me(ctx: AuthContext = Depends(current_user)):
             display_name=user.display_name,
             role=user.role,
             created_at=user.created_at,
+            email_verified_at=user.email_verified_at,
         )
 
 
@@ -448,4 +590,5 @@ async def update_me(
             display_name=user.display_name,
             role=user.role,
             created_at=user.created_at,
+            email_verified_at=user.email_verified_at,
         )

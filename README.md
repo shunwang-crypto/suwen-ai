@@ -138,6 +138,15 @@ python -m compileall -q packages apps tests alembic
 
 生产环境必须使用 `APP_ENV=prod`，并按部署手册配置真实密钥、对象存储、备份和 TLS。
 
+### 公网注册与 Resend SMTP
+
+公网注册先通过图形验证码（防机器人），再通过邮箱验证码（证明邮箱所有权）；普通登录不要求
+每次输入邮箱验证码。公开注册只创建 `student`，教师和管理员必须通过受控流程创建。生产使用
+已验证域名的 Resend SMTP：主机 `smtp.resend.com`、用户 `resend`、API Key 作为
+`SMTP_PASSWORD`，发件地址使用 `noreply@mail.adfgt.xyz` 或同一 Verified 域名下的地址，
+并配置 `SMTP_REPLY_TO`。真实 Key 只存在服务器 Secrets 或未提交的 `.env`，不要写入代码、
+测试、日志或文档；建议同时配置 SPF、DKIM 和 DMARC。生产公开注册缺少 SMTP 时 API 拒绝启动。
+
 ## 文档导航
 
 - [文档总入口](docs/README.md)

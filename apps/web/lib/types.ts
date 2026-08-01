@@ -6,6 +6,7 @@ export interface UserOut {
   display_name: string | null;
   role: string;
   created_at: string;
+  email_verified_at: string | null;
 }
 
 export interface TokenResponse {
