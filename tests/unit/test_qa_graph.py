@@ -71,11 +71,25 @@ class FakeRetrieval:
 
 
 def make_web_search(results: list[dict], from_cache: bool = False):
-    async def _search(query: str, *, required: bool = False):
+    async def _search(
+        query: str,
+        *,
+        required: bool = False,
+        search_depth: str = "basic",
+        max_results: int = 5,
+    ):
         _search.calls.append(query)
+        _search.options.append(
+            {
+                "required": required,
+                "search_depth": search_depth,
+                "max_results": max_results,
+            }
+        )
         return (list(results), from_cache)
 
     _search.calls = []
+    _search.options = []
     return _search
 
 
@@ -237,6 +251,9 @@ async def test_explicit_web_mode_forces_search_without_keyword():
     )
     gw = FakeGateway(
         {
+            "qa_web_query_plan": [
+                json.dumps({"queries": ["目标主题 官方介绍", "目标主题 最新进展"]})
+            ],
             "qa_generate": ["以下依据网络搜索结果：检索内容 [1]"],
             "qa_followups": followups_script(),
         }
@@ -245,10 +262,78 @@ async def test_explicit_web_mode_forces_search_without_keyword():
     state["requested_route"] = "web"
     out = await run(make_deps(gw, web_search=web), state)
     assert out["route"] == "web"
-    assert web.calls == ["介绍一下这个主题"]
+    assert web.calls == ["目标主题 官方介绍", "目标主题 最新进展"]
+    assert len(out["web_results"]) == 1  # 两次返回相同 URL，合并时去重
+    assert all(option["required"] is True for option in web.options)
     router_ev = [e for e in out["trace"] if e["type"] == "router"][0]
     assert router_ev["reason"] == "用户显式选择网页搜索"
     assert gw.calls("qa_router") == []
+
+
+async def test_explicit_web_query_plan_resolves_followup_from_history():
+    web = make_web_search(
+        [{"title": "发布记录", "url": "https://example.com/release", "content": "发布时间"}]
+    )
+    gw = FakeGateway(
+        {
+            "qa_web_query_plan": [
+                json.dumps({"queries": ["DeepSeek V4 正式发布时间"]})
+            ],
+            "qa_generate": ["发布时间尚未由官方确认 [1]。"],
+            "qa_followups": followups_script(),
+        }
+    )
+    state = init_state("它什么时候正式发布？")
+    state.update(
+        {
+            "requested_route": "web",
+            "messages": [
+                {"role": "user", "content": "介绍一下 DeepSeek V4"},
+                {"role": "assistant", "content": "这是新一代模型。"},
+            ],
+        }
+    )
+    out = await run(make_deps(gw, web_search=web), state)
+    assert web.calls == ["DeepSeek V4 正式发布时间"]
+    planner_prompt = gw.calls("qa_web_query_plan")[0].messages[0].content
+    assert "介绍一下 DeepSeek V4" in planner_prompt
+    assert out["route"] == "web"
+
+
+async def test_research_mode_runs_second_search_round_and_merges_sources():
+    async def web_search(
+        query: str,
+        *,
+        required: bool = False,
+        search_depth: str = "basic",
+        max_results: int = 5,
+    ):
+        web_search.calls.append((query, required, search_depth, max_results))
+        if query == "第一轮查询":
+            return ([{"title": "首轮", "url": "https://a.example", "content": "首轮证据"}], False)
+        return ([{"title": "补充", "url": "https://b.example", "content": "补充证据"}], False)
+
+    web_search.calls = []
+    gw = FakeGateway(
+        {
+            "qa_web_query_plan": [json.dumps({"queries": ["第一轮查询"]})],
+            "qa_web_followup_plan": [json.dumps({"queries": ["第二轮补充查询"]})],
+            "qa_generate": ["综合两轮来源得出结论 [1][2]。"],
+            "qa_followups": followups_script(),
+        }
+    )
+    state = init_state("深入分析这个主题")
+    state.update({"requested_route": "web", "answer_tier": "strong"})
+    out = await run(make_deps(gw, web_search=web_search), state)
+    assert [call[0] for call in web_search.calls] == ["第一轮查询", "第二轮补充查询"]
+    assert all(call[2] == "advanced" for call in web_search.calls)
+    assert [item["url"] for item in out["web_results"]] == [
+        "https://a.example",
+        "https://b.example",
+    ]
+    rounds = [event for event in out["trace"] if event["type"] == "web_search"]
+    assert [event["round"] for event in rounds] == [1, 2]
+    assert rounds[-1]["total"] == 2
 
 
 async def test_router_llm_fallback_on_ambiguous_query():

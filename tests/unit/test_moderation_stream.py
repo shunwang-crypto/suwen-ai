@@ -239,7 +239,13 @@ class FakeGateway:
 
 
 def _web_deps(gateway: FakeGateway, results: list[dict]) -> GraphDeps:
-    async def _search(query: str):
+    async def _search(
+        query: str,
+        *,
+        required: bool = False,
+        search_depth: str = "basic",
+        max_results: int = 5,
+    ):
         return list(results)
 
     return GraphDeps(

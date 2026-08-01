@@ -14,9 +14,11 @@ router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → re
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
@@ -42,6 +44,10 @@ _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_RETRY = 2  # 查询改写重检硬上限 (§5.3)
 _EVIDENCE_SNIPPET_CHARS = 600  # grade/verify 摘要单条截断长度
 _MAX_PLAN_QUERIES = 3  # 原查询 + 至多 2 个改写
+_MAX_WEB_QUERIES = 3
+_MAX_WEB_RESULTS = 10
+_WEB_HISTORY_MESSAGES = 6
+_WEB_HISTORY_CHARS = 500
 _MAX_FOLLOWUPS = 3  # 追问 chips 数量上限
 _FOLLOWUP_ANSWER_CHARS = 1500  # 追问 prompt 中回答的截断长度 (控 cheap 档上下文)
 _TOKEN_FALLBACK_CHUNK = 24  # 仅实现 chat 的网关 (如测试 Fake) 整段取回后的分块写出粒度
@@ -91,6 +97,7 @@ class _QaGraphState(QaState, total=False):
     """构图私有扩展通道: 多查询计划与 verify 重生成控制, 不进 QaState 公共契约。"""
 
     queries: list[str]  # query_plan 产出的检索查询列表 (rewrite 后重置为单条)
+    web_queries: list[str]  # 结合对话上下文消解后的独立网页搜索词
     regen_count: int  # verify 不支持触发的重生成次数 (上限 1 次)
     verify_action: str  # verify_support 的路由信号: regen | end
 
@@ -143,6 +150,50 @@ def _format_web_results(web_results: list[dict]) -> str:
             f"{content}\n</source>"
         )
     return "\n\n".join(parts)
+
+
+def _web_history(messages: list[dict], query: str) -> str:
+    """仅保留最近对话供搜索词消歧，限制长度避免规划调用膨胀。"""
+    lines: list[str] = []
+    for message in messages[-_WEB_HISTORY_MESSAGES:]:
+        role = message.get("role")
+        content = str(message.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content or content == query:
+            continue
+        label = "用户" if role == "user" else "助教"
+        lines.append(f"{label}: {content[:_WEB_HISTORY_CHARS]}")
+    return "\n".join(lines) or "（无历史对话）"
+
+
+def _normalize_web_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url.strip())
+        return urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                parsed.path.rstrip("/"),
+                parsed.query,
+                "",
+            )
+        )
+    except ValueError:
+        return url.strip()
+
+
+def _dedupe_web_results(results: list[dict], limit: int = _MAX_WEB_RESULTS) -> list[dict]:
+    unique: list[dict] = []
+    seen: set[str] = set()
+    for item in results:
+        url = str(item.get("url", ""))
+        key = _normalize_web_url(url) or f"{item.get('title', '')}\n{item.get('content', '')}"
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+        if len(unique) >= limit:
+            break
+    return unique
 
 
 def _evidence_digest(evidences: list[dict]) -> str:
@@ -275,6 +326,42 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         return {
             "queries": queries,
             "trace": [{"type": "query_plan", "queries": queries, "degraded": degraded}],
+        }
+
+    async def web_query_plan(state: _QaGraphState) -> dict:
+        """显式联网时结合最近对话消解指代，产出可独立搜索的查询。"""
+        query = state.get("query", "")
+        if state.get("requested_route") != "web":
+            return {
+                "web_queries": [query],
+                "trace": [
+                    {
+                        "type": "web_query_plan",
+                        "queries": [query],
+                        "degraded": False,
+                    }
+                ],
+            }
+        prompt = (
+            _load_prompt("qa_web_query_plan.md")
+            .replace("{{HISTORY}}", _web_history(state.get("messages") or [], query))
+            .replace("{{QUERY}}", query)
+        )
+        data = await _chat_json(state, feature="qa_web_query_plan", prompt=prompt)
+        queries: list[str] = []
+        if data is not None and isinstance(data.get("queries"), list):
+            for item in data["queries"]:
+                if isinstance(item, str) and item.strip() and item.strip() not in queries:
+                    queries.append(item.strip())
+        degraded = not queries
+        if degraded:
+            queries = [query]
+        queries = queries[:_MAX_WEB_QUERIES]
+        return {
+            "web_queries": queries,
+            "trace": [
+                {"type": "web_query_plan", "queries": queries, "degraded": degraded}
+            ],
         }
 
     async def retrieve(state: _QaGraphState) -> dict:
@@ -417,16 +504,41 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    async def web_fallback(state: _QaGraphState) -> dict:
-        if state.get("requested_route") == "web":
-            raw = await deps.web_search(state.get("query", ""), required=True)
-        else:
-            raw = await deps.web_search(state.get("query", ""))
+    async def _search_web_queries(
+        queries: list[str], *, required: bool, search_depth: str, max_results: int
+    ) -> tuple[list[dict], bool]:
+        calls = [
+            deps.web_search(
+                query,
+                required=required,
+                search_depth=search_depth,
+                max_results=max_results,
+            )
+            for query in queries
+        ]
+        outcomes = await asyncio.gather(*calls, return_exceptions=True)
+        combined: list[dict] = []
         from_cache = False
-        if isinstance(raw, tuple):  # TavilySearch.search 形状: (results, from_cache)
-            raw_results, from_cache = raw
-        else:  # GraphDeps 文档形状: list | None
-            raw_results = raw or []
+        errors: list[BaseException] = []
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                errors.append(outcome)
+                continue
+            if isinstance(outcome, tuple):
+                items, cached = outcome
+                from_cache = from_cache or bool(cached)
+            else:
+                items = outcome or []
+            combined.extend(item for item in items if isinstance(item, dict))
+        if not combined and required and errors:
+            invalid = next(
+                (error for error in errors if error.__class__.__name__ == "WebSearchInvalidQuery"),
+                None,
+            )
+            raise invalid or errors[0]
+        return _dedupe_web_results(combined), from_cache
+
+    def _moderate_web_results(state: _QaGraphState, raw_results: list[dict]) -> tuple[list[dict], int]:
         # 外部内容过审 (P0-5): web 结果与模型输出同标准 (check_output), 命中整条丢弃 —
         # sanitize 只防指令注入, 不防违法/成人内容被"洗"成带引用的可信答案。
         moderator = get_moderator()
@@ -454,13 +566,86 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 )
                 continue
             results.append(item)
+        return results, dropped
+
+    async def web_fallback(state: _QaGraphState) -> dict:
+        explicit = state.get("requested_route") == "web"
+        queries = state.get("web_queries") or [state.get("query", "")]
+        raw_results, from_cache = await _search_web_queries(
+            queries,
+            required=explicit,
+            search_depth="advanced" if state.get("answer_tier") == "strong" else "basic",
+            max_results=5,
+        )
+        results, dropped = _moderate_web_results(state, raw_results)
         trace_events: list[dict] = [
-            {"type": "web_search", "returned": len(results), "from_cache": from_cache}
+            {
+                "type": "web_search",
+                "round": 1,
+                "queries": queries,
+                "returned": len(results),
+                "total": len(results),
+                "from_cache": from_cache,
+            }
         ]
         if dropped:
             trace_events.append({"type": "moderation", "dropped": dropped})
         # 全部被丢弃时 web_results 为空, after_web_fallback 按原空结果路径走拒答
         return {"web_results": results, "trace": trace_events}
+
+    async def web_expand(state: _QaGraphState) -> dict:
+        """深度搜索第二轮：基于首轮摘要识别信息缺口并补充检索。"""
+        current = state.get("web_results") or []
+        prompt = (
+            _load_prompt("qa_web_followup_plan.md")
+            .replace("{{QUERY}}", state.get("query", ""))
+            .replace("{{SEARCHED_QUERIES}}", "\n".join(state.get("web_queries") or []))
+            .replace("{{WEB_RESULTS}}", _format_web_results(current)[:6000])
+        )
+        data = await _chat_json(state, feature="qa_web_followup_plan", prompt=prompt)
+        previous = set(state.get("web_queries") or [])
+        queries: list[str] = []
+        if data is not None and isinstance(data.get("queries"), list):
+            for item in data["queries"]:
+                if (
+                    isinstance(item, str)
+                    and item.strip()
+                    and item.strip() not in previous
+                    and item.strip() not in queries
+                ):
+                    queries.append(item.strip())
+        queries = queries[:2]
+        if not queries:
+            return {
+                "trace": [
+                    {
+                        "type": "web_search",
+                        "round": 2,
+                        "queries": [],
+                        "returned": 0,
+                        "total": len(current),
+                        "skipped": True,
+                    }
+                ]
+            }
+        extra_raw, from_cache = await _search_web_queries(
+            queries, required=False, search_depth="advanced", max_results=5
+        )
+        extra, dropped = _moderate_web_results(state, extra_raw)
+        combined = _dedupe_web_results([*current, *extra], limit=14)
+        trace: list[dict] = [
+            {
+                "type": "web_search",
+                "round": 2,
+                "queries": queries,
+                "returned": max(0, len(combined) - len(current)),
+                "total": len(combined),
+                "from_cache": from_cache,
+            }
+        ]
+        if dropped:
+            trace.append({"type": "moderation", "dropped": dropped, "round": 2})
+        return {"web_results": combined, "trace": trace}
 
     def _gen_path(state: _QaGraphState) -> str:
         """生成路径判定: web_results 优先 (kb 路径 grade 失败后 web 兜底也走此分支)。"""
@@ -662,7 +847,11 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         return "web_fallback" if deps.web_search is not None else "refuse"
 
     def after_web_fallback(state: _QaGraphState) -> str:
-        return "generate" if state.get("web_results") else "refuse"
+        if not state.get("web_results"):
+            return "refuse"
+        if state.get("requested_route") == "web" and state.get("answer_tier") == "strong":
+            return "web_expand"
+        return "generate"
 
     def after_generate(state: _QaGraphState) -> str:
         # kb 路径先过支撑校验; 其余路径直接进追问建议末节点
@@ -676,10 +865,12 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
     graph = StateGraph(_QaGraphState)
     graph.add_node("router", router)
     graph.add_node("query_plan", query_plan)
+    graph.add_node("web_query_plan", web_query_plan)
     graph.add_node("retrieve", retrieve)
     graph.add_node("grade", grade)
     graph.add_node("rewrite", rewrite)
     graph.add_node("web_fallback", web_fallback)
+    graph.add_node("web_expand", web_expand)
     graph.add_node("generate", generate)
     graph.add_node("verify_support", verify_support)
     graph.add_node("followups", followups)
@@ -689,8 +880,9 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
     graph.add_conditional_edges(
         "router",
         after_router,
-        {"kb": "query_plan", "web": "web_fallback", "direct": "generate"},
+        {"kb": "query_plan", "web": "web_query_plan", "direct": "generate"},
     )
+    graph.add_edge("web_query_plan", "web_fallback")
     graph.add_edge("query_plan", "retrieve")
     graph.add_conditional_edges(
         "retrieve", after_retrieve, {"generate": "generate", "grade": "grade"}
@@ -707,8 +899,11 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
     )
     graph.add_edge("rewrite", "retrieve")
     graph.add_conditional_edges(
-        "web_fallback", after_web_fallback, {"generate": "generate", "refuse": "refuse"}
+        "web_fallback",
+        after_web_fallback,
+        {"generate": "generate", "web_expand": "web_expand", "refuse": "refuse"},
     )
+    graph.add_edge("web_expand", "generate")
     graph.add_conditional_edges(
         "generate", after_generate, {"verify": "verify_support", "followups": "followups"}
     )

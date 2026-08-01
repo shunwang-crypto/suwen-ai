@@ -47,6 +47,8 @@ const TRACE_LABELS: Record<string, string> = {
   sanitizer: "注入过滤",
   confidence: "置信度",
   profile: "学情画像",
+  web_query_plan: "整理搜索问题",
+  web_search: "网页搜索",
 };
 
 /** 已知 trace 事件的一句话描述；未知类型回退到 reason 字段。 */
@@ -86,6 +88,8 @@ const STAGE_ICON_PATHS: Record<string, string> = {
   rewrite: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z",
   // 学情画像：用户
   profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0",
+  web_query_plan: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
+  web_search: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
 };
 
 function stageIcon(kind: string, className: string) {

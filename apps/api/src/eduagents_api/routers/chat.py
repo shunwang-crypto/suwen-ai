@@ -539,6 +539,7 @@ async def chat(
 
     async def event_stream():
         citations: list[dict] = []
+        seen_web_citations: set[str] = set()
         answer_parts: list[str] = []  # 已下发给客户端的 token 累积 (断流落库依据)
         final: ChatResult | None = None
         persisted = False  # P0-6: 本轮助手消息是否已落库
@@ -738,6 +739,10 @@ async def chat(
                             if web_results:
                                 citations = []
                                 for i, item in enumerate(web_results, 1):
+                                    web_key = (
+                                        item.get("url")
+                                        or f"{item.get('title', '')}\n{item.get('content', '')}"
+                                    )
                                     citation = {
                                         "idx": i,
                                         "chunk_id": f"web-{i}",
@@ -750,7 +755,9 @@ async def chat(
                                         "url": item.get("url") or "",
                                     }
                                     citations.append(citation)
-                                    yield {"event": "citation", "data": _sse(citation)}
+                                    if web_key not in seen_web_citations:
+                                        seen_web_citations.add(web_key)
+                                        yield {"event": "citation", "data": _sse(citation)}
                         elif ev["kind"] == "end":
                             state = ev["state"]
                         # 其余 kind (custom 等) 向前兼容: 忽略

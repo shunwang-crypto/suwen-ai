@@ -146,6 +146,92 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sourceHost(url?: string): string {
+  if (!url) return "网页来源";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "网页来源";
+  }
+}
+
+function WebSearchStatus({
+  mode,
+  streaming,
+  timeline,
+  citations,
+}: {
+  mode: ChatMode;
+  streaming: boolean;
+  timeline: TimelineItem[];
+  citations: CitationData[];
+}) {
+  if (mode !== "web" && mode !== "research") return null;
+  const searchEvents = timeline.filter(
+    (item) => item.kind === "trace" && item.data.type === "web_search",
+  );
+  const completedRounds = searchEvents.filter(
+    (item) => item.kind === "trace" && !item.data.skipped,
+  ).length;
+  const deep = mode === "research";
+  const status =
+    citations.length > 0
+      ? `${streaming ? "正在整理" : "已参考"} ${citations.length} 个网页来源${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`
+      : deep
+        ? "正在进行深度搜索…"
+        : "正在搜索网页…";
+
+  if (citations.length === 0) {
+    return (
+      <div className="mb-3 flex items-center gap-2 text-[12px] text-ink-muted">
+        {streaming ? (
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line-strong border-t-ink-secondary" aria-hidden />
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-4 w-4" aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16 16 4 4" />
+          </svg>
+        )}
+        {streaming ? status : "未找到可用网页来源"}
+      </div>
+    );
+  }
+
+  return (
+    <details className="group mb-3 text-[12px] text-ink-secondary">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[8px] py-1.5 hover:text-ink [&::-webkit-details-marker]:hidden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+        </svg>
+        <span>{status}</span>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden>
+          <path d="m5 7.5 5 5 5-5" />
+        </svg>
+      </summary>
+      <ul className="mt-1 grid gap-1.5 border-l border-line pl-3 sm:grid-cols-2">
+        {citations.map((citation) => (
+          <li key={`${citation.idx}-${citation.url}`} className="min-w-0">
+            <a
+              href={citation.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block rounded-[7px] px-2 py-1.5 hover:bg-surface-muted"
+            >
+              <span className="block truncate text-[11px] font-medium text-ink-secondary">
+                {citation.idx}. {citation.doc_name || "网页来源"}
+              </span>
+              <span className="block truncate text-[10px] text-ink-muted">
+                {sourceHost(citation.url)}
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 /**
  * 对话页主体。使用 useSearchParams（读 ?kb=&q=），生产构建要求包在 Suspense 里，
  * 因此默认导出是下面的 ChatPage 壳（Next 16 文档 use-search-params#prerendering）。
@@ -1139,6 +1225,14 @@ function ChatView() {
                 ) : (
                   <div key={m.id} className="fx-msg-in flex justify-start">
                     <div className="w-full">
+                      {m.chatMode && (
+                        <WebSearchStatus
+                          mode={m.chatMode}
+                          streaming={Boolean(m.streaming)}
+                          timeline={m.timeline}
+                          citations={m.citations.filter((citation) => citation.source_type === "web")}
+                        />
+                      )}
                       {m.done?.refused && (
                         <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50/60 px-3 py-2 text-xs text-amber-700">
                           {/* 温和插画感小图标：放大镜找不到内容的守护小盾 */}
@@ -1214,7 +1308,9 @@ function ChatView() {
                                 <span />
                                 <span />
                               </span>
-                              正在思考…
+                              {m.chatMode === "web" || m.chatMode === "research"
+                                ? "正在整理搜索结果…"
+                                : "正在思考…"}
                             </span>
                           )}
                         </div>

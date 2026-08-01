@@ -18,7 +18,8 @@ def append_messages(left: list[dict], right: list[dict]) -> list[dict]:
 class GraphDeps:
     """子图外部依赖注入 (构图时闭包捕获, 不进 state — state 必须可序列化进 checkpointer)。
 
-    web_search: async (query) -> list[{title, url, content}] | None (不可用时 None, 见 §9 Tavily 兜底)
+    web_search: async (query, required, search_depth, max_results)
+        -> list[{title, url, content}] | (list, from_cache) | None
     retrieval:  RetrievalService | None (未配置知识库栈时 None)
     """
 
@@ -40,7 +41,7 @@ class QaState(TypedDict, total=False):
     kb_ids: list[str]  # Wave3 联合检索: 多库列表 (个人+机构), 检索层 MatchAny
     owner_ids: list[str]  # 上述库的 owner_id 集 (Qdrant tenant 纵深过滤)
     requested_route: str  # 用户显式选择: web | kb；空串时仍由规则/LLM 自动路由
-    answer_tier: str  # standard | strong；只控制最终回答模型，不改变资料路由
+    answer_tier: str  # standard | strong；strong 的网页路径会启用深度检索
     route: str  # kb | web | direct
     route_reason: str
     evidences: list[dict]  # RetrievedChunk 序列化: chunk_id/doc_id/text/heading_path/page_start/score

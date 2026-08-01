@@ -106,8 +106,19 @@ async def lifespan(app: FastAPI):
 
         tavily = TavilySearch(settings)
 
-        async def _web_search(query: str, *, required: bool = False):
-            results, from_cache = await tavily.search(query, raise_on_failure=required)
+        async def _web_search(
+            query: str,
+            *,
+            required: bool = False,
+            search_depth: str = "basic",
+            max_results: int = 5,
+        ):
+            results, from_cache = await tavily.search(
+                query,
+                max_results=max_results,
+                raise_on_failure=required,
+                search_depth=search_depth,
+            )
             return (results, from_cache) if results else None
 
         deps = GraphDeps(

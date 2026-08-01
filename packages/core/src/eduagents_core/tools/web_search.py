@@ -30,18 +30,25 @@ class TavilySearch:
 
     def __init__(self, settings: Settings):
         self._api_key = settings.tavily_api_key
-        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._cache: dict[tuple[str, str, int], tuple[float, list[dict[str, Any]]]] = {}
 
     @property
     def available(self) -> bool:
         return bool(self._api_key)
 
     async def search(
-        self, query: str, max_results: int = 5, *, raise_on_failure: bool = False
+        self,
+        query: str,
+        max_results: int = 5,
+        *,
+        raise_on_failure: bool = False,
+        search_depth: str = "basic",
     ) -> tuple[list[dict[str, Any]], bool]:
         if not self._api_key:
             return [], False
-        cached = self._cache.get(query)
+        depth = search_depth if search_depth in {"basic", "advanced"} else "basic"
+        cache_key = (query, depth, max_results)
+        cached = self._cache.get(cache_key)
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
@@ -50,7 +57,7 @@ class TavilySearch:
                         "api_key": self._api_key,
                         "query": query,
                         "max_results": max_results,
-                        "search_depth": "basic",
+                        "search_depth": depth,
                     },
                 )
                 resp.raise_for_status()
@@ -62,7 +69,7 @@ class TavilySearch:
                     }
                     for r in resp.json().get("results", [])
                 ]
-            self._cache[query] = (time.monotonic(), results)
+            self._cache[cache_key] = (time.monotonic(), results)
             return results, False
         except Exception as exc:  # noqa: BLE001 — 网络失败走缓存兜底
             log.warning("tavily_failed", error=str(exc))
