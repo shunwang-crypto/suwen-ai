@@ -95,11 +95,6 @@ const NAV_GROUPS: NavGroup[] = [
         label: "知识库",
         icon: <FigmaNavIcon name="knowledge" />,
       },
-      {
-        href: "/resources",
-        label: "学习资料",
-        icon: <FigmaNavIcon name="knowledge" />,
-      },
     ],
   },
   {
@@ -119,6 +114,11 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/errors",
         label: "错题本",
         icon: <FigmaNavIcon name="errors" />,
+      },
+      {
+        href: "/resources",
+        label: "题目资料",
+        icon: <FigmaNavIcon name="knowledge" />,
       },
     ],
   },
@@ -162,7 +162,7 @@ const TITLE_MAP: Record<string, string> = {
   "/chat": "AI 对话",
   "/tutor": "分级辅导",
   "/kb": "知识库",
-  "/resources": "学习资料",
+  "/resources": "题目资料",
   "/quiz": "智能练习",
   "/reviews": "今日复习",
   "/errors": "错题本",

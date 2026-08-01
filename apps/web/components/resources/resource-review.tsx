@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type {
+  KbOut,
   LearningResourceOut,
   ResourceConfirmOut,
   ResourceQuestionOut,
@@ -39,6 +41,14 @@ type QuestionDraft = {
   kc_names: string[];
   difficulty: string;
   extraction_confidence: string;
+};
+
+type ConfirmRequest = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void;
 };
 
 function draftFromQuestion(question: ResourceQuestionOut): QuestionDraft {
@@ -156,6 +166,10 @@ export function ResourceReview({
   const [showManual, setShowManual] = useState(false);
   const [manualStem, setManualStem] = useState("");
   const [manualType, setManualType] = useState("short");
+  const [knowledgeBases, setKnowledgeBases] = useState<KbOut[]>([]);
+  const [linkedKbId, setLinkedKbId] = useState(resource.linked_kb_id ?? "");
+  const [kbBusy, setKbBusy] = useState(false);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
 
   const current = questions.find((question) => question.id === currentId) ?? null;
   const semanticLocked = current?.content_editable === false;
@@ -164,20 +178,50 @@ export function ResourceReview({
   const verifiedCount = questions.filter((question) => question.verification_status === "verified").length;
   const selectedCount = useMemo(() => selectedErrors.size, [selectedErrors]);
 
+  useEffect(() => {
+    let active = true;
+    void apiJson<KbOut[]>("/api/kb")
+      .then((items) => {
+        if (active) setKnowledgeBases(items);
+      })
+      .catch(() => {
+        // Knowledge-point linking is optional and should not block reviewing.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const updateDraft = <K extends keyof QuestionDraft>(key: K, value: QuestionDraft[K]) => {
     setDraft((previous) => previous ? { ...previous, [key]: value } : previous);
     setDirty(true);
   };
 
-  const selectQuestion = (id: string) => {
-    if (id === currentId) return;
-    if (dirty && !window.confirm("当前题目还有未保存修改，确定切换吗？")) return;
+  const switchQuestion = (id: string) => {
     const question = questions.find((item) => item.id === id);
     if (!question) return;
     setCurrentId(id);
     setDraft(draftFromQuestion(question));
     setDirty(false);
     setMessage(null);
+  };
+
+  const selectQuestion = (id: string) => {
+    if (id === currentId) return;
+    if (dirty) {
+      setConfirmRequest({
+        title: "放弃未保存修改？",
+        description: "当前题目还有未保存的校对内容，切换后这些修改会丢失。",
+        confirmLabel: "放弃并切换",
+        destructive: true,
+        onConfirm: () => {
+          setConfirmRequest(null);
+          switchQuestion(id);
+        },
+      });
+      return;
+    }
+    switchQuestion(id);
   };
 
   const saveQuestion = async (question = current): Promise<ResourceQuestionOut | null> => {
@@ -242,7 +286,6 @@ export function ResourceReview({
 
   const rejectQuestion = async () => {
     if (!current || current.verification_status !== "pending") return;
-    if (!window.confirm("拒绝后这道题不会进入错题本或测评，确定继续吗？")) return;
     setBusy("reject");
     setMessage(null);
     try {
@@ -261,6 +304,44 @@ export function ResourceReview({
       setMessage(friendlyError(reason, "拒绝题目失败"));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const requestRejectQuestion = () => {
+    if (!current || current.verification_status !== "pending") return;
+    setConfirmRequest({
+      title: "拒绝这道识别题？",
+      description: "拒绝后这道题不会进入错题本或真实作答记录。",
+      confirmLabel: "拒绝题目",
+      destructive: true,
+      onConfirm: () => {
+        setConfirmRequest(null);
+        void rejectQuestion();
+      },
+    });
+  };
+
+  const updateLinkedKb = async (value: string) => {
+    setLinkedKbId(value);
+    setKbBusy(true);
+    setMessage(null);
+    try {
+      const updated = await apiJson<LearningResourceOut>(`/api/resources/${resource.id}`, {
+        method: "PATCH",
+        body: { linked_kb_id: value || null },
+      });
+      onResourceChanged({
+        ...resource,
+        ...updated,
+        question_count: resource.question_count,
+        pending_question_count: resource.pending_question_count,
+      });
+      setMessage(value ? "已更新关联知识库。" : "已取消关联知识库。 ");
+    } catch (reason) {
+      setLinkedKbId(resource.linked_kb_id ?? "");
+      setMessage(friendlyError(reason, "更新知识库关联失败"));
+    } finally {
+      setKbBusy(false);
     }
   };
 
@@ -306,17 +387,19 @@ export function ResourceReview({
     <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-5 sm:px-8 lg:px-12 lg:py-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <button type="button" onClick={onBack} className="text-[11px] text-ink-muted hover:text-ink">← 返回学习资料</button>
+          <button type="button" onClick={onBack} className="text-[11px] text-ink-muted hover:text-ink">← 返回题目资料</button>
           <h1 className="mt-2 truncate text-[22px] font-semibold tracking-[-0.03em] text-ink">{resource.title}</h1>
           <p className="mt-1 text-[11px] text-ink-secondary">{resource.subject || "通用"} · {verifiedCount} 道已核验 · {pendingCount} 道待校对 · {resource.source_filename ?? "手动创建"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onStartAssessment} disabled={verifiedCount === 0} className="rounded-[8px] border border-line-strong bg-white px-3.5 py-2 text-[11px] font-medium text-ink-secondary hover:border-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">真实作答记录</button>
+          <select value={linkedKbId} onChange={(event) => void updateLinkedKb(event.target.value)} disabled={kbBusy} aria-label="关联知识库" className="h-8 max-w-[220px] rounded-[7px] border border-line-strong bg-white px-2 text-[10px] text-ink-secondary disabled:opacity-50"><option value="">不关联知识库</option>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select>
+          <button type="button" onClick={onStartAssessment} disabled={verifiedCount === 0} className="rounded-[8px] border border-line-strong bg-white px-3.5 py-2 text-[11px] font-medium text-ink-secondary hover:border-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">作答与错题记录</button>
           <button type="button" onClick={() => void confirmErrors()} disabled={busy !== null || questions.length === 0} className="rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white disabled:opacity-40">{busy === "confirm" ? "正在保存…" : selectedCount > 0 ? `确认并加入 ${selectedCount} 道错题` : "保存校对进度"}</button>
         </div>
       </header>
 
       {message && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-[11px] text-ink-secondary">{message}</div>}
+      {!linkedKbId && <div className="rounded-[9px] border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[11px] leading-5 text-warning-700">未关联知识库时，错题仍可进入 FSRS；知识点掌握度和章节画像可能无法完整归类。</div>}
 
       <div className="flex w-fit rounded-[8px] border border-line bg-white p-1 lg:hidden">
         <button type="button" onClick={() => setMobilePane("source")} className={`rounded-[6px] px-3 py-1.5 text-[11px] font-medium ${mobilePane === "source" ? "bg-ink text-white" : "text-ink-secondary"}`}>原件预览</button>
@@ -351,7 +434,7 @@ export function ResourceReview({
                     <div><div className="flex flex-wrap items-center gap-2"><span className="text-[12px] font-semibold text-ink">第 {current.question_no || current.ordinal + 1} 题</span><QuestionStatus status={current.verification_status} /><span className="text-[10px] text-ink-muted">{typeLabel(current.type)}</span></div><p className="mt-1 text-[10px] text-ink-muted">识别置信度：{draft.extraction_confidence || "未提供"}</p></div>
                     <div className="flex flex-wrap gap-2">
                       <button type="button" onClick={() => void saveQuestion()} disabled={busy !== null || !dirty} className="rounded-[7px] border border-line-strong px-3 py-1.5 text-[10px] font-medium text-ink-secondary disabled:opacity-40">{busy === "save" ? "保存中…" : "保存修改"}</button>
-                      {current.verification_status === "pending" && <><button type="button" onClick={() => void rejectQuestion()} disabled={busy !== null} className="rounded-[7px] border border-danger-200 px-3 py-1.5 text-[10px] text-danger-700 disabled:opacity-40">拒绝</button><button type="button" onClick={() => void verifyQuestion()} disabled={busy !== null || !draft.stem.trim() || !draft.answer.trim()} className="rounded-[7px] bg-ink px-3 py-1.5 text-[10px] font-medium text-white disabled:opacity-40">{busy === "verify" ? "核验中…" : "核验题目"}</button></>}
+                      {current.verification_status === "pending" && <><button type="button" onClick={requestRejectQuestion} disabled={busy !== null} className="rounded-[7px] border border-danger-200 px-3 py-1.5 text-[10px] text-danger-700 disabled:opacity-40">拒绝</button><button type="button" onClick={() => void verifyQuestion()} disabled={busy !== null || !draft.stem.trim() || !draft.answer.trim()} className="rounded-[7px] bg-ink px-3 py-1.5 text-[10px] font-medium text-white disabled:opacity-40">{busy === "verify" ? "核验中…" : "核验题目"}</button></>}
                     </div>
                   </div>
 
@@ -374,6 +457,15 @@ export function ResourceReview({
           </div>
         </section>
       </div>
+      <ConfirmDialog
+        open={confirmRequest !== null}
+        title={confirmRequest?.title ?? "请确认"}
+        description={confirmRequest?.description ?? ""}
+        confirmLabel={confirmRequest?.confirmLabel}
+        destructive={confirmRequest?.destructive}
+        onCancel={() => setConfirmRequest(null)}
+        onConfirm={() => confirmRequest?.onConfirm()}
+      />
     </div>
   );
 }

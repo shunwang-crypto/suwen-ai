@@ -20,7 +20,7 @@ function isPdf(resource: LearningResourceOut): boolean {
 }
 
 function filenameFor(resource: LearningResourceOut): string {
-  return resource.source_filename?.trim() || "学习资料原文件";
+  return resource.source_filename?.trim() || "题目资料原文件";
 }
 
 export function SourcePreview({ resource }: { resource: LearningResourceOut }) {

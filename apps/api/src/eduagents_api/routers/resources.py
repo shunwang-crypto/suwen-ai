@@ -373,7 +373,7 @@ async def create_resource(
     resource_type = str(values.get("resource_type") or "other")
     if resource_type not in RESOURCE_TYPES:
         raise HTTPException(status_code=422, detail="INVALID_RESOURCE_TYPE")
-    title = str(values.get("title") or (uploaded[0] if uploaded else "未命名学习资料"))[:255]
+    title = str(values.get("title") or (uploaded[0] if uploaded else "未命名题目资料"))[:255]
     subject = str(values.get("subject") or "general")[:64]
     linked_kb_id = values.get("linked_kb_id") or None
     if linked_kb_id:
@@ -682,6 +682,8 @@ async def extract_resource(
         row = await _owned_resource(session, resource_id, ctx, lock=True)
         if row.status == "archived":
             raise HTTPException(status_code=409, detail="RESOURCE_ARCHIVED")
+        if row.resource_type in {"textbook", "lecture", "notes"} or row.retrieval_policy == "reference":
+            raise HTTPException(status_code=409, detail="REFERENCE_RESOURCE_NOT_EXTRACTABLE")
         if not row.storage_key:
             raise HTTPException(status_code=422, detail="RESOURCE_SOURCE_REQUIRED")
         if row.status in {"extracting", "reviewing", "ready"}:

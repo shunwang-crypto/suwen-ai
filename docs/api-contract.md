@@ -140,7 +140,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | GET | /api/errors/{error_item_id}/source | 已保存错题读取来源的等价入口，继续校验错题所有权 |
 | DELETE | /api/errors/imports/{id} | 仅可删除未确认草稿；数据库先进入内部 `deleting` 状态，原件删除成功后才删除数据库行 |
 
-`GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
+`GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；题目资料错题还返回 `resource_id/resource_question_id`，前端可回到题目资料查看原题。`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
 
 导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`ERROR_ITEM_NOT_EDITABLE`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`STORAGE_QUOTA_EXCEEDED`、`SOURCE_NOT_FOUND`。
 
@@ -159,7 +159,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 记录使用 `AssessmentAttempt → AssessmentAnswer → ResourceQuestion`。所有端点只返回本人
 租户的数据；资源、题目和测评记录的越权访问统一返回 404。
 
-### 学习资料
+### 题目资料
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -169,7 +169,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | PATCH | `/api/resources/{id}` | 修改标题、科目、年级、学期、资源类型、关联 KB；不自动摄取 RAG |
 | DELETE | `/api/resources/{id}` | 删除草稿资源；对象删除失败返回 `503 RESOURCE_DELETE_FAILED`，数据库行保留待重试 |
 | GET | `/api/resources/{id}/source` | 本人原始文件；图片/PDF inline，Word/PPT attachment，固定 `nosniff` 和安全文件名 |
-| POST | `/api/resources/{id}/extract` | 入队异步识别，状态 `uploaded/failed → extracting → reviewing/failed`；`extracting/reviewing/ready` 重试幂等且不重复入队 |
+| POST | `/api/resources/{id}/extract` | 入队异步识别，状态 `uploaded/failed → extracting → reviewing/failed`；`extracting/reviewing/ready` 重试幂等且不重复入队；`textbook/lecture/notes` 或 `retrieval_policy=reference` 返回 `409 REFERENCE_RESOURCE_NOT_EXTRACTABLE` |
 | GET | `/api/resources/{id}/questions` | 题目校对列表；存在未提交 attempt 时不返回参考答案 |
 | POST | `/api/resources/{id}/questions/manual` | 手动新增一题，初始 `verification_status=pending` |
 | POST | `/api/resources/{id}/confirm` | 按 `resource_question_ids` 选择性确认并将选中错题加入错题本；不创建 Attempt/Quiz |
@@ -177,7 +177,9 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | POST | `/api/resource-questions/{id}/verify` | 幂等确认 `pending → verified`；不允许倒退 |
 | DELETE | `/api/resource-questions/{id}` | 删除尚未关联错题/测评的误识别题 |
 
-`LearningResource` 返回 `owner_id/created_by/source_filename/mime_type/size_bytes/sha256/`
+`LearningResource.resource_type` 为 `exam_paper | mock_paper | workbook | worksheet | homework |
+`other | single_question`；历史 `textbook | lecture | notes` 仅作为参考资料保留，不出现在新建
+题目资料选项中。`LearningResource` 返回 `owner_id/created_by/source_filename/mime_type/size_bytes/sha256/`
 `page_count/status/retrieval_policy/linked_kb_id/source_url/question_count/`
 `pending_question_count`；`retrieval_policy=questions_only|none` 的题目资料不会自动创建
 `Document/Chunk` 或进入普通 RAG。`ResourceQuestion.verification_status` 为
@@ -202,7 +204,7 @@ ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题
 `RESOURCE_HAS_ERROR_ITEMS`、`RESOURCE_HAS_ASSESSMENTS`、`RESOURCE_HAS_ATTEMPTS`、
 `EXTRACTION_QUEUE_FAILED`。
 
-### 真实考试/练习
+### 真实作答与错题记录
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -210,18 +212,25 @@ ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题
 | GET | `/api/assessment-attempts` | 本人 attempt 列表 |
 | GET | `/api/assessment-attempts/{id}` | 作答和评分；提交前不泄漏参考答案 |
 | PATCH | `/api/assessment-attempts/{id}` | 仅 draft 可修改元数据 |
+| DELETE | `/api/assessment-attempts/{id}` | 仅删除本人 `draft`；答案级联删除；`submitted/graded` 返回 `409 ASSESSMENT_NOT_DRAFT`，越权或重复删除返回 404 |
 | PUT/PATCH | `/api/assessment-attempts/{id}/answers` | 保存学生真实作答 |
-| POST | `/api/assessment-attempts/{id}/submit` | `draft → submitted`，未核验评分不进入学习画像 |
+| POST | `/api/assessment-attempts/{id}/submit` | `draft → submitted`；至少有一条实际作答或显式 `unanswered=true`，否则 `409 ASSESSMENT_ANSWER_REQUIRED` |
 | POST | `/api/assessment-attempts/{id}/grade-or-verify` | 写入评分；`verify=true` 才写 mastery/error；错误通过 `AssessmentAnswer → ErrorItem` 幂等关联，不创建 Attempt |
 
-attempt 类型为 `formal_exam | mock_exam | homework | practice | imported_record`，状态
+关联资源时 attempt 类型由 `resource_type` 自动映射：`exam_paper → formal_exam`、
+`mock_paper → mock_exam`、`homework → homework`、`workbook/worksheet/other → practice`；
+无资源记录才使用请求中的 `practice/imported_record`。attempt 类型为
+`formal_exam | mock_exam | homework | practice | imported_record`，状态
 只能从 `draft → submitted → graded` 单调前进；作答评分状态为 `pending | graded | verified`。
-`draft` 才能保存作答，`submitted` 后 response 锁定；`verify=false` 只能写入 graded，不能
+`draft` 才能保存作答，空字符串不会创建 `AssessmentAnswer`；显式未作答用
+`unanswered=true` 持久化为响应文本 `未作答`。`submitted` 后 response 锁定；`verify=false` 只能写入 graded，不能
 单独把 answer 标成 verified；`verify=true` 必须为所有已保存答案提供正确性，才会将整次
 attempt 置为 graded。相同请求重试幂等，已 graded 的语义字段改变返回 409。
 未核验作答/主观评分不进入掌握度、FSRS、画像、报告、推荐。已核验测评答案会纳入
-报告真实作答次数和正确率。相关错误码：`ASSESSMENT_NOT_EDITABLE`、
+报告真实作答次数和正确率。缺省主观题满分使用 `ResourceQuestion.points`，否则为 `1.0`；
+正确得满分，错误得 `0`。相关错误码：`ASSESSMENT_NOT_EDITABLE`、
 `ASSESSMENT_NOT_SUBMITTED`、`ASSESSMENT_ALREADY_GRADED`、`ASSESSMENT_ANSWER_LOCKED`、
+`ASSESSMENT_NOT_DRAFT`、`ASSESSMENT_ANSWER_REQUIRED`、`ASSESSMENT_ANSWER_NOT_FOUND`、
 `ATTEMPT_VERIFICATION_REQUIRED`、`ANSWER_CORRECTNESS_REQUIRED`、`INVALID_ATTEMPT_TYPE`、
 `INVALID_GRADING_STATUS`、`DUPLICATE_ANSWER`、`RESOURCE_QUESTION_NOT_FOUND`、
 `RESOURCE_QUESTION_NOT_VERIFIED`。

@@ -618,6 +618,8 @@ export interface ErrorItemOut {
   error_count: number;
   my_answer: string;
   source_import_id: string | null;
+  resource_id: string | null;
+  resource_question_id: string | null;
   /** 尚未产生 FSRS/掌握度证据时可修改判分语义字段。 */
   content_editable: boolean;
   is_variant: boolean;
@@ -1174,14 +1176,13 @@ export type LearningResourceType =
   | "textbook"
   | "lecture"
   | "notes"
-  | "exam"
-  | "mock_exam"
+  | "exam_paper"
+  | "mock_paper"
   | "workbook"
+  | "worksheet"
   | "homework"
-  | "question_set"
   | "single_question"
-  | "other"
-  | string;
+  | "other";
 
 export type LearningResourceStatus =
   | "uploaded"
@@ -1189,13 +1190,14 @@ export type LearningResourceStatus =
   | "reviewing"
   | "ready"
   | "failed"
-  | "archived"
-  | string;
+  | "archived";
+
+export type LearningResourceRetrievalPolicy = "none" | "reference" | "questions_only";
 
 export interface LearningResourceOut {
   id: string;
   tenant_id: string;
-  owner_type: string;
+  owner_type: "personal" | "org";
   owner_id: string;
   resource_type: LearningResourceType;
   title: string;
@@ -1212,7 +1214,7 @@ export interface LearningResourceOut {
   page_count: number | null;
   metadata: Record<string, unknown>;
   status: LearningResourceStatus;
-  retrieval_policy: "none" | "reference" | "questions_only" | string;
+  retrieval_policy: LearningResourceRetrievalPolicy;
   linked_kb_id: string | null;
   created_by: string;
   created_at: string;
@@ -1262,8 +1264,7 @@ export type AssessmentAttemptType =
   | "mock_exam"
   | "homework"
   | "practice"
-  | "imported_record"
-  | string;
+  | "imported_record";
 
 export type AssessmentAttemptStatus = "draft" | "submitted" | "graded";
 
@@ -1299,7 +1300,7 @@ export interface AssessmentAnswerOut {
   score: number | null;
   max_score: number | null;
   is_correct: boolean | null;
-  grading_status: "pending" | "graded" | "verified" | string;
+  grading_status: "pending" | "graded" | "verified";
   teacher_comment: string | null;
   created_at: string;
   updated_at: string;

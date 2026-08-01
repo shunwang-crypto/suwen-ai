@@ -42,6 +42,7 @@ from ..models import (
     MasteryLog,
     MasteryRecord,
     Question,
+    ResourceQuestion,
 )
 
 log = get_logger("reviews")
@@ -519,12 +520,25 @@ async def list_errors(
         ).all()
 
         question_ids = [r.question_id for r in rows]
+        resource_question_ids = [r.resource_question_id for r in rows if r.resource_question_id is not None]
         questions: dict[str, Question] = {}
+        resource_ids: dict[str, str] = {}
         if question_ids:
             questions = {
                 str(q.id): q
                 for q in (
                     await session.scalars(select(Question).where(Question.id.in_(question_ids)))
+                ).all()
+            }
+        if resource_question_ids:
+            resource_ids = {
+                str(resource_question_id): str(resource_id)
+                for resource_question_id, resource_id in (
+                    await session.execute(
+                        select(ResourceQuestion.id, ResourceQuestion.resource_id).where(
+                            ResourceQuestion.id.in_(resource_question_ids)
+                        )
+                    )
                 ).all()
             }
         # 我的作答 + 错误次数: 一次性拉本页题目的全部作答, 内存聚合 (避免 N+1)
@@ -594,6 +608,12 @@ async def list_errors(
                     "source_import_id": (
                         str(row.source_import_id) if row.source_import_id else None
                     ),
+                    "resource_id": resource_ids.get(str(row.resource_question_id))
+                    if row.resource_question_id
+                    else None,
+                    "resource_question_id": str(row.resource_question_id)
+                    if row.resource_question_id
+                    else None,
                     "content_editable": not bool((row.fsrs_card_json or {}).get("last_review"))
                     and row.id not in evidence_ids,
                     "is_variant": row.variant_of is not None,

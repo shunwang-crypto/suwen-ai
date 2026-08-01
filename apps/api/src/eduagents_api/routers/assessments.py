@@ -31,9 +31,17 @@ _ATTEMPT_TYPES = {"formal_exam", "mock_exam", "homework", "practice", "imported_
 _ATTEMPT_STATUSES = {"draft", "submitted", "graded"}
 
 
+def _attempt_type_for_resource(resource_type: str) -> str:
+    return {
+        "exam_paper": "formal_exam",
+        "mock_paper": "mock_exam",
+        "homework": "homework",
+    }.get(resource_type, "practice")
+
+
 class AssessmentCreateIn(BaseModel):
     resource_id: uuid.UUID | None = None
-    attempt_type: str = "practice"
+    attempt_type: str | None = None
     title: str = Field(default="", max_length=255)
     taken_at: datetime | None = None
     duration_minutes: int | None = Field(default=None, ge=0)
@@ -50,6 +58,7 @@ class AssessmentPatchIn(BaseModel):
 class AnswerIn(BaseModel):
     resource_question_id: uuid.UUID
     response: str = Field(default="", max_length=12000)
+    unanswered: bool = False
     score: float | None = Field(default=None, ge=0)
     max_score: float | None = Field(default=None, ge=0)
     is_correct: bool | None = None
@@ -164,9 +173,10 @@ async def create_assessment(
     body: AssessmentCreateIn,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    if body.attempt_type not in _ATTEMPT_TYPES:
+    if body.attempt_type is not None and body.attempt_type not in _ATTEMPT_TYPES:
         raise HTTPException(status_code=422, detail="INVALID_ATTEMPT_TYPE")
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        attempt_type = body.attempt_type or "practice"
         if body.resource_id is not None:
             resource = await session.scalar(
                 select(LearningResource).where(
@@ -177,11 +187,15 @@ async def create_assessment(
             )
             if resource is None:
                 raise HTTPException(status_code=404, detail="NOT_FOUND")
+            # The resource is the source of truth.  A stale client value such as
+            # ``practice`` must not turn a real paper into an undifferentiated
+            # practice record.
+            attempt_type = _attempt_type_for_resource(resource.resource_type)
         row = AssessmentAttempt(
             tenant_id=ctx.tenant_id,
             resource_id=body.resource_id,
             student_id=ctx.user_id,
-            attempt_type=body.attempt_type,
+            attempt_type=attempt_type,
             title=body.title,
             taken_at=body.taken_at,
             duration_minutes=body.duration_minutes,
@@ -218,6 +232,15 @@ async def get_assessment(attempt_id: uuid.UUID, ctx: AuthContext = Depends(api_r
             for answer, _rq, question in await _answer_rows(session, attempt.id)
         ]
         return {**_attempt_dict(attempt), "answers": answers, "answers_revealed": reveal}
+
+
+@router.delete("/{attempt_id}", status_code=204)
+async def delete_assessment(attempt_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        attempt = await _owned_attempt(session, attempt_id, ctx, lock=True)
+        if attempt.status != "draft":
+            raise HTTPException(status_code=409, detail="ASSESSMENT_NOT_DRAFT")
+        await session.delete(attempt)
 
 
 @router.patch("/{attempt_id}")
@@ -258,6 +281,11 @@ async def put_assessment_answers(
                     AssessmentAnswer.resource_question_id == rq.id,
                 )
             )
+            response = "未作答" if item.unanswered else item.response.strip()
+            if not response:
+                if answer is not None:
+                    await session.delete(answer)
+                continue
             if answer is None:
                 answer = AssessmentAnswer(
                     tenant_id=ctx.tenant_id,
@@ -265,13 +293,20 @@ async def put_assessment_answers(
                     resource_question_id=rq.id,
                 )
                 session.add(answer)
-            answer.response = item.response
+            answer.response = response
             if item.max_score is not None:
                 answer.max_score = item.max_score
             if item.teacher_comment is not None:
                 answer.teacher_comment = item.teacher_comment
         await session.flush()
-        return {"attempt_id": str(attempt.id), "status": attempt.status, "answer_count": len(body.answers)}
+        answer_count = len(
+            (
+                await session.scalars(
+                    select(AssessmentAnswer.id).where(AssessmentAnswer.attempt_id == attempt.id)
+                )
+            ).all()
+        )
+        return {"attempt_id": str(attempt.id), "status": attempt.status, "answer_count": answer_count}
 
 
 @router.post("/{attempt_id}/submit")
@@ -282,6 +317,10 @@ async def submit_assessment(attempt_id: uuid.UUID, ctx: AuthContext = Depends(ap
             return {"attempt_id": str(attempt.id), "status": attempt.status}
         if attempt.status == "submitted":
             return {"attempt_id": str(attempt.id), "status": attempt.status}
+        if await session.scalar(
+            select(AssessmentAnswer.id).where(AssessmentAnswer.attempt_id == attempt.id).limit(1)
+        ) is None:
+            raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_REQUIRED")
         attempt.status = "submitted"
         return {"attempt_id": str(attempt.id), "status": attempt.status}
 
@@ -341,19 +380,11 @@ async def grade_or_verify_assessment(
             if item.grading_status not in {None, "pending", "graded", "verified"}:
                 raise HTTPException(status_code=422, detail="INVALID_GRADING_STATUS")
             if answer is None:
-                # 提交后只能评分已经保存的学生作答；空白题可以在评分时补建
-                # 一条空答，不能借评分接口伪造一份新的作答记录。
-                if attempt.status != "draft" and item.response:
-                    raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
-                answer = AssessmentAnswer(
-                    tenant_id=ctx.tenant_id,
-                    attempt_id=attempt.id,
-                    resource_question_id=rq.id,
-                    response=item.response,
-                )
-                session.add(answer)
-                await session.flush()
-            elif attempt.status != "draft" and answer.response != item.response:
+                # 提交后的评分只能处理实际保存过的作答；不能借评分接口
+                # 为“未录入”的题目补造答案记录。
+                raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_NOT_FOUND")
+            response = "未作答" if item.unanswered else item.response.strip()
+            if not response or answer.response != response:
                 # submitted 后 response 已经是学生提交的事实；graded/verified
                 # 也不能借重试修改它。
                 raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
@@ -370,7 +401,7 @@ async def grade_or_verify_assessment(
                 # verified 只能通过同一请求重试保持幂等；若 attempt 状态因
                 # 历史脏数据仍非 graded，拒绝静默修复证据链。
                 raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
-            answer.response = item.response
+            answer.response = response
             if question.type in {"single", "multi", "blank"} and item.is_correct is None:
                 answer.is_correct = grade_objective(
                     {"type": question.type, "answer": question.answer}, answer.response
@@ -386,8 +417,10 @@ async def grade_or_verify_assessment(
                     answer.max_score = item.max_score
                 if item.score is not None and item.is_correct is None:
                     answer.is_correct = item.score >= 0.6
-                if answer.is_correct is not None and answer.max_score is not None and answer.score is None:
-                    answer.score = answer.max_score if answer.is_correct else 0.0
+            if answer.max_score is None:
+                answer.max_score = rq.points or 1.0
+            if answer.is_correct is not None and answer.score is None:
+                answer.score = answer.max_score if answer.is_correct else 0.0
             if body.verify:
                 answer.grading_status = "verified"
                 if answer.is_correct is None:
