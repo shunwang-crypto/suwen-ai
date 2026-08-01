@@ -1288,7 +1288,7 @@ function ChatView() {
                                 <span />
                                 <span />
                               </span>
-                              思考中…
+                              正在思考…
                             </span>
                           )}
                         </div>
