@@ -9,6 +9,7 @@ const WORKSPACES: Record<Workspace, { label: string; href: string }[]> = {
   learn: [
     { label: "学习对话", href: "/chat" },
     { label: "知识库", href: "/kb" },
+    { label: "学习资料", href: "/resources" },
   ],
   practice: [
     { label: "智能练习", href: "/quiz" },
