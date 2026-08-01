@@ -130,7 +130,13 @@ def _resource_dict(row: LearningResource, *, question_count: int = 0, pending_co
     }
 
 
-def _question_dict(question: Question, row: ResourceQuestion, *, reveal_answer: bool = True) -> dict:
+def _question_dict(
+    question: Question,
+    row: ResourceQuestion,
+    *,
+    reveal_answer: bool = True,
+    content_editable: bool = True,
+) -> dict:
     meta = question.source_meta_json or {}
     return {
         "id": str(row.id),
@@ -161,6 +167,7 @@ def _question_dict(question: Question, row: ResourceQuestion, *, reveal_answer: 
         "kc_names": meta.get("kc_names", []),
         "difficulty": question.difficulty,
         "is_error_selected": meta.get("error_selected", False),
+        "content_editable": content_editable,
     }
 
 
@@ -230,6 +237,60 @@ async def _read_request_payload(request: Request) -> tuple[dict, object | None]:
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="INVALID_RESOURCE_BODY")
     return value, None
+
+
+async def _resource_question_editability(session, resource_id: uuid.UUID) -> dict[uuid.UUID, bool]:
+    """Return the semantic-edit lock for each question in a resource.
+
+    The review UI uses this as a display hint; the PATCH endpoint still performs
+    the authoritative check.  A mastery log for either an imported ErrorItem or
+    a real AssessmentAnswer, and an FSRS review on an ErrorItem, both lock the
+    fields that change grading semantics.
+    """
+    question_ids = [
+        question_id
+        for (question_id,) in (
+            await session.execute(
+                select(ResourceQuestion.id).where(ResourceQuestion.resource_id == resource_id)
+            )
+        ).all()
+    ]
+    if not question_ids:
+        return {}
+    error_rows = (
+        await session.execute(
+            select(ErrorItem.resource_question_id, ErrorItem.id, ErrorItem.fsrs_card_json).where(
+                ErrorItem.resource_question_id.in_(question_ids)
+            )
+        )
+    ).all()
+    answer_rows = (
+        await session.execute(
+            select(AssessmentAnswer.resource_question_id, AssessmentAnswer.id).where(
+                AssessmentAnswer.resource_question_id.in_(question_ids)
+            )
+        )
+    ).all()
+    evidence_ids = [error_id for _rq_id, error_id, _card in error_rows]
+    evidence_ids.extend(answer_id for _rq_id, answer_id in answer_rows)
+    mastered_evidence = set()
+    if evidence_ids:
+        mastered_evidence = set(
+            (
+                await session.scalars(
+                    select(MasteryLog.evidence_id).where(MasteryLog.evidence_id.in_(evidence_ids))
+                )
+            ).all()
+        )
+    locked: set[uuid.UUID] = {
+        rq_id
+        for rq_id, error_id, card in error_rows
+        if bool((card or {}).get("last_review")) or error_id in mastered_evidence
+    }
+    locked.update(
+        rq_id for rq_id, answer_id in answer_rows if answer_id in mastered_evidence
+    )
+    return {question_id: question_id not in locked for question_id in question_ids}
 
 
 async def _file_data(file, settings) -> tuple[str, str, bytes] | None:
@@ -661,7 +722,16 @@ async def list_resource_questions(resource_id: uuid.UUID, ctx: AuthContext = Dep
                 AssessmentAttempt.status == "draft",
             ).limit(1)
         )
-        return [_question_dict(question, rq, reveal_answer=locked is None) for rq, question in rows]
+        editability = await _resource_question_editability(session, resource.id)
+        return [
+            _question_dict(
+                question,
+                rq,
+                reveal_answer=locked is None,
+                content_editable=editability.get(rq.id, True),
+            )
+            for rq, question in rows
+        ]
 
 
 @router.post("/{resource_id}/questions/manual", status_code=201)
@@ -755,6 +825,7 @@ async def confirm_resource_questions(
         review_now = await timectl.now(request.app.state.redis)
         if body.add_to_error_book:
             for rq, question in selected:
+                meta = dict(question.source_meta_json or {})
                 existing = await session.scalar(
                     select(ErrorItem).where(
                         ErrorItem.user_id == ctx.user_id,
@@ -762,9 +833,9 @@ async def confirm_resource_questions(
                     )
                 )
                 if existing is not None:
+                    question.source_meta_json = {**meta, "error_selected": True}
                     created.append(str(existing.id))
                     continue
-                meta = question.source_meta_json or {}
                 session.add(
                     ErrorItem(
                         tenant_id=ctx.tenant_id,
@@ -788,6 +859,7 @@ async def confirm_resource_questions(
                 )
                 if latest is not None:
                     created.append(str(latest.id))
+                question.source_meta_json = {**meta, "error_selected": True}
         pending = await session.scalar(
             select(func.count()).select_from(ResourceQuestion).where(
                 ResourceQuestion.resource_id == resource.id,
@@ -908,7 +980,8 @@ async def _edit_resource_question(
         if rq.verification_status == "rejected":
             resource.status = "reviewing"
         await session.flush()
-        return _question_dict(question, rq)
+        editability = await _resource_question_editability(session, resource.id)
+        return _question_dict(question, rq, content_editable=editability.get(rq.id, True))
 
 
 @questions_router.patch("/{resource_question_id}")

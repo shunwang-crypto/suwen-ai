@@ -451,6 +451,7 @@ async def confirm_error_import(
                 "kb_id": str(body.kb_id) if body.kb_id else None,
                 "detected_student_answer": body.my_answer.strip(),
                 "detected_reference_answer": body.answer.strip(),
+                "error_selected": True,
             },
         )
         session.add(question)

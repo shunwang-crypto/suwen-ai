@@ -184,7 +184,10 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 `pending | verified | rejected`；题目识别字段包含
 `question_no/page_no/type/stem/options/detected_student_answer/`
 `detected_reference_answer/explanation/points/kc_names/difficulty/confidence`，并返回
-`is_error_selected`。`pending` 题不会进入复习、FSRS、掌握度、画像、报告或推荐；confirm
+`is_error_selected` 和 `content_editable`。`is_error_selected` 只有在客户端明确选择题目
+加入错题本时才持久化为 true；完成题目校对本身不会默认选择全部题目。`content_editable`
+在题目尚未产生 FSRS 复习或掌握度证据时为 true；产生证据后为 false，服务端同时拒绝会
+改变判分语义的编辑。`pending` 题不会进入复习、FSRS、掌握度、画像、报告或推荐；confirm
 请求中的空 `resource_question_ids/error_question_ids` 表示不选择任何错题。
 
 `Question.quiz_id` 对资源题为空；资源题只能在本人租户内读取。题目产生 FSRS review、
