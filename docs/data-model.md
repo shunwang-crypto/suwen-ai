@@ -1,118 +1,185 @@
-# 数据模型（M0 契约 · 冻结后只增不改）
+# 数据模型与生命周期
 
-权威定义在 `apps/api/src/eduagents_api/models.py`（SQLAlchemy 2.0 ORM），
-本文档描述语义与约束。首个迁移 `alembic/versions/0001_initial_schema.py`。
+> 状态：Active
+> 目标读者：后端开发、数据迁移、安全审查和测试人员
+> 最终定义：`apps/api/src/eduagents_api/models.py` 与 `alembic/versions/`。
 
-## 租户语义（全项目唯一定义 · Wave3 起泛化, D14）
-`tenant_id = owner_id`。个人数据 owner_id = user_id（个人即租户）；机构库
-（`knowledge_bases.owner_type='org'`）owner_id = `orgs.id`，其下游 documents/chunks
-与 Qdrant payload 沿用同一 owner_id。物理列名保留 `tenant_id` 不改（存量零回填、
-向量零迁移，见 decisions.md D14）。`organizations` 表与 `users.org_id` 为 M0 遗留
-占位（无读写路径）；Wave3 实际机构模型是 `orgs` + `org_members`。
-所有租户表带 `tenant_id UUID NOT NULL` + 索引。
+本文描述稳定业务语义，不逐字段复制 ORM。任何 schema 变化都必须新增 migration、迁移测试
+并同步本文；已经提交的 migration 不得修改。
 
-## RLS（行级安全）
-- 租户表清单：`models.TENANT_TABLES`（16 张）。
-- 每张 `ENABLE ROW LEVEL SECURITY` + `FORCE`（owner 也受约束）。
-- 策略：`tenant_id = current_setting('app.tenant_id', true)::uuid`；
-  GUC 未设置时 current_setting 返回 NULL → 默认拒绝一切行。
-- 注入方式：应用层每个事务内 `SELECT set_config('app.tenant_id', :tid, true)`
-  （见 `db.tenant_session`）；**必须事务级**，防 asyncpg 连接池复用泄漏（U-A1）。
-- Wave3 三 GUC（0002，D14）：`app.tenant_id` + `app.org_ids`（成员机构逗号表）+
-  `app.is_admin`。`knowledge_bases/documents/chunks` 策略拆分为
-  `tenant_read`（owner 匹配 **OR** owner ∈ org_ids，成员只读挂载）与
-  `tenant_write`（仅 owner 匹配）；org 库写事务由 service 校验 org admin 后以
-  `tenant_session(org_id)` 开启（worker 摄取同构）。
-- `orgs`/`org_members` 自身 RLS：成员可读本机构行与同组名单；INSERT 仅限
-  `created_by/user_id = app.tenant_id`；凭邀请码 join 的跨行查询走事务级
-  `app.is_admin`（D7 惯例）；无 UPDATE/DELETE 策略（默认拒绝）。
-- 例外：`usage_log` 的读策略放行 `app.is_admin='true'`（运营面板，D7）。
-- 0003 补 `org_members` 的 UPDATE/DELETE 策略（P1-4）：DELETE 放行
-  `user_id = app.tenant_id`（成员退出删自己行）**或** `app.is_admin`（org admin
-  踢人；service 层先校验 admin 身份再以事务级 is_admin 开事务——同表自引用
-  子查询会触发 RLS 递归，故沿用 D7 惯例）；UPDATE 仅 `app.is_admin`（预留改
-  角色）。`orgs` 补 UPDATE 策略（邀请码轮换）：`created_by = app.tenant_id OR
-  app.is_admin`。
-- 非 RLS 表：users、refresh_tokens、organizations、eval_runs、pending_cleanup
-  （认证层/全局层/内部运维层）。
+## 所有权与租户语义
 
-## 用户数据生命周期（0003，P0-3/P0-4/P1-5）
-- **user_id 外键**：`attempts / chat_sessions / error_items / mastery_log /
-  mastery_records / plans / quizzes / org_members` 8 张表 `FK(users.id) ON DELETE
-  CASCADE`——注销 = `DELETE FROM users` 一行，学情/会话/成员关系级联清空
-  （chat_messages/questions/plan_adjustments 经既有二级外键继续级联）。
-  **usage_log 是唯一例外：`ON DELETE SET NULL`（user_id 可空）**。理由：成本
-  对账/审计数据必须留档（日志留存义务 + 与上游供应商账单核对），CASCADE 会把
-  已发生的成本抹掉；SET NULL 在注销事务内自动去标识化（users 行删除后 email 等
-  身份信息不存在，残留 tenant_id UUID 无法回指自然人），同时保留行级 token/费用。
-  ORM 侧不声明这些 FK（models.py 注释）：0001 从零重放用 create_all(当前元数据)，
-  若进 ORM 会在 0001 提前建出约束与 0003 相撞。
-- **注销路径**（`DELETE /api/account`，重输密码）：单事务 = 删个人
-  knowledge_bases（级联 documents/chunks/knowledge_components/kc_edges）+ 删
-  users 行（级联上表）+ 写 `pending_cleanup(kind=tenant)`；worker 消费后清
-  Qdrant 两 collection / 对象存储前缀 / Redis 前缀（profile_summary/budget/
-  reflect/orgs/export）/ checkpoint 三表（`thread_id LIKE '%:{uid}:%'`）。
-- **缓存失效**（P0-3）：删文档/重建索引在删除事务内 `kb_version = kb_version+1`
-  （答案缓存 L1 键与 L2 filter 同时落空）；删库额外调 `AnswerCache.delete_by_kb`
-  清 L2 点位。
-- **导出**（P1-8）：`POST /api/account/export` → worker 打包 12 张表 JSON +
-  chunk 文本 + 上传清单 → `exports/{uid}/{ts}.zip`，`GET /api/account/export/
-  download` 经 API 流式转发。
+个人数据通常以用户 ID 作为 `tenant_id`。机构共享知识库采用泛化 owner 语义：
 
-## 表清单
+- `knowledge_bases.owner_type=user`：`tenant_id` 是用户 ID。
+- `knowledge_bases.owner_type=org`：`tenant_id` 是 `orgs.id`。
 
-### 认证与账户
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| users | email(uniq), password_hash(bcrypt≥12), role(student/teacher/admin), org_id(预留), status(active/disabled, 0003 P1-3), birth_year+guardian_consent(0003, 未成年线), plan(free/…)+daily_budget_cny_override(0003, P2-14 套餐骨架) | status≠active → 403 ACCOUNT_DISABLED（deps 60s 缓存） |
-| refresh_tokens | token_hash(uniq,sha256), expires_at, revoked, rotated_from | 轮换单次有效；重放→撤销全家 |
-| organizations | name | M0 遗留占位（勿用） |
-| pending_cleanup | kind(doc/kb/tenant), payload jsonb, attempts, done | 删除 outbox（0003 P1-5）：与删除事务同提交，worker 每分钟消费；无 RLS（内部运维表） |
+`documents`、`chunks` 和向量 payload 继承知识库 owner。历史 `organizations` 和
+`users.org_id` 是早期占位；当前机构模型使用 `orgs + org_members`。
 
-### 机构（Wave3 企业后台共享知识库，0002）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| orgs | name, invite_code(uniq, 8位免混淆码), created_by, storage_quota_mb(默认512) | id 即机构库 owner_id |
-| org_members | (org_id, user_id) PK, role(admin/member), joined_at | 入会即挂载机构库（无 mount 表）；成员只读，仅 admin 可写 |
+题目资料当前是个人资源：
 
-### 知识库（F2，M2 启用）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| knowledge_bases | owner_type(user/org), name, subject, kb_version, config_json | kb_version 进语义缓存键; owner_type='org' 时 tenant_id=orgs.id |
-| documents | kb_id, filename, content_hash, size_bytes, status, parse_backend, error_msg, version, uploaded_by | 状态机: pending→parsing→chunking→embedding→ready→enriching→enriched / failed; uploaded_by=最小审计 |
-| chunks | doc_id, parent_id(父子分块), text, context_prefix, page_start/end, heading_path, kc_ids[], content_hash, embedding_status | 子块命中、父块喂 LLM |
+- `learning_resources.owner_type=personal`；
+- `owner_id/created_by` 指向用户；
+- schema 保留 `organization` 枚举用于未来演进，但机构题目资料共享尚未实现。
 
-### 知识点体系（§5.8，M2）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| knowledge_components | kb_id, canonical_name, aliases[], description | 受控词表；kc_id 是全系统外键 |
-| kc_edges | from_kc, to_kc, type=prerequisite | 先修 DAG，环检测在应用层 |
+知识库和题目资料的 `owner_type` 枚举不同，不能混用。
 
-### 学习者状态引擎 VLSE（F8/§5.6，M4）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| mastery_records | user_id+kc_id(uniq), p_mastery, confidence, fsrs_card_json, last_seen | BKT 状态 |
-| mastery_log | old_p, new_p, evidence_type, evidence_id, weight | 每次变化可审计（F8-A3） |
+## PostgreSQL RLS
 
-### 测评与错题（F5/F6，M3/M4）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| quizzes | user_id, kb_id, blueprint_json, status | Blueprint 先确认后生成 |
-| questions | quiz_id, type, stem, options_json, answer, explanation, kc_ids[], source_chunk_id, difficulty | 考点出处可溯源（F5-A2） |
-| attempts | question_id, response, is_correct, llm_score, scored_reason | 主观题 0.5 权重进 BKT |
-| error_items | question_id, kc_ids[], cause(五分类), state(new→reviewing→mastered→archived), variant_of, fsrs_card_json | |
+受租户保护的表启用并强制 RLS。应用事务通过 `tenant_session` 设置：
 
-### 规划（F3，M3）
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| plans | goal, budget_hours, structure_json, version | 结构含阶段→周→日 |
-| plan_adjustments | plan_id, reason, diff_json | 每次调整附理由（F3-A3） |
+- `app.tenant_id`：当前个人/owner；
+- `app.org_ids`：当前用户所属机构；
+- `app.is_admin`：受控跨租户运营或机构管理路径。
 
-### 会话与观测
-| 表 | 关键字段 | 说明 |
-|---|---|---|
-| chat_sessions | user_id, title | thread_id = user_id:session_id（M3） |
-| chat_messages | session_id, role, content, meta_json | 展示层历史（D4） |
-| chat_attachments | user_id, session_id, message_id, filename, kind, storage_key, extracted_text | 当前对话文件/图片；随消息级联删除，原件存对象存储 |
-| usage_log | request_id, user_id(可空, 注销后 SET NULL 留审计), feature, model, tier, prompt/completion/cached_tokens, cost_cny, latency_ms, mode | 三维归因（F10-A1） |
-| eval_runs | config_json, metrics_json, corpus_version, golden_set_version | 黄金集版本绑定 |
+GUC 未设置时策略默认拒绝。应用连接使用 `edu_app`（`NOSUPERUSER NOBYPASSRLS`）；migration
+使用独立高权限连接。服务层仍需显式校验所有权，RLS 是纵深防御而不是替代。
+
+机构库读取允许 owner 或机构成员；写入需要机构管理员，服务层校验后使用正确 owner 事务。
+`usage_log` 的管理员聚合是受限例外。
+
+## 核心关系
+
+~~~mermaid
+erDiagram
+    USER ||--o{ KNOWLEDGE_BASE : owns
+    ORG ||--o{ ORG_MEMBER : has
+    ORG ||--o{ KNOWLEDGE_BASE : owns
+    KNOWLEDGE_BASE ||--o{ DOCUMENT : contains
+    DOCUMENT ||--o{ CHUNK : splits
+    KNOWLEDGE_BASE ||--o{ KNOWLEDGE_COMPONENT : defines
+
+    USER ||--o{ LEARNING_RESOURCE : owns
+    LEARNING_RESOURCE ||--o{ RESOURCE_QUESTION : contains
+    RESOURCE_QUESTION }o--|| QUESTION : structures
+    LEARNING_RESOURCE ||--o{ ASSESSMENT_ATTEMPT : sources
+    ASSESSMENT_ATTEMPT ||--o{ ASSESSMENT_ANSWER : contains
+    RESOURCE_QUESTION ||--o{ ASSESSMENT_ANSWER : answers
+    ASSESSMENT_ANSWER ||--o| ERROR_ITEM : may_create
+    RESOURCE_QUESTION ||--o{ ERROR_ITEM : may_select
+
+    USER ||--o{ MASTERY_RECORD : has
+    USER ||--o{ MASTERY_LOG : audits
+    USER ||--o{ QUIZ : owns
+    QUIZ ||--o{ QUESTION : contains
+    QUESTION ||--o{ ATTEMPT : receives
+    QUESTION ||--o{ ERROR_ITEM : produces
+~~~
+
+## 账户与组织
+
+| 实体 | 语义 |
+|---|---|
+| `User` | 邮箱、密码哈希、平台角色、状态、未成年相关字段和套餐；学生/教师/管理员角色在此 |
+| `RefreshToken` | 哈希存储、轮换和撤销链；重放会撤销相关 token |
+| `PasswordResetToken` | 找回密码的一次性、限时凭据 |
+| `Org` | 机构、邀请码、创建者和存储配额 |
+| `OrgMember` | 用户与机构关系，角色为机构 `admin/member` |
+
+平台管理员和机构管理员是不同权限域。
+
+## 知识库与检索
+
+| 实体 | 语义 |
+|---|---|
+| `KnowledgeBase` | 个人/机构 owner、名称、科目、版本、学习指南配置 |
+| `Document` | 上传文件或网页来源、状态、哈希、大小、解析后端和上传者 |
+| `Chunk` | 父子分块、页码、标题路径、文本、上下文前缀、知识点和嵌入状态 |
+| `KnowledgeComponent` | 知识库受控知识点词表和别名 |
+| `KcEdge` | 知识点先修 DAG；应用层拒绝成环 |
+
+文档状态由上传进入解析、分块、嵌入、增强或失败。Qdrant 只存可重建的向量投影，关系库是
+文档元数据和状态的权威来源。
+
+## 普通测验与学习状态
+
+| 实体 | 语义 |
+|---|---|
+| `Quiz` | AI 练习蓝图、所属用户/知识库和生成状态 |
+| `Question` | 题干、题型、答案、解析、难度、知识点；可属于 Quiz，也可由 ResourceQuestion 引用 |
+| `Attempt` | 普通测验中针对单题的真实响应和判分结果 |
+| `ErrorItem` | 错题来源、错因、状态、核验状态、FSRS card、资源/作答关联 |
+| `MasteryRecord` | 用户与知识点的当前 BKT 状态和置信度 |
+| `MasteryLog` | 每次掌握度变化的旧值、新值、证据类型、证据 ID 和权重 |
+
+`Question.quiz_id` 可空。资源题不创建隐藏 Quiz，也不能进入普通测验或教师组卷列表。
+
+## 题目资料与真实作答
+
+### LearningResource
+
+保存题目来源的所有权、类型、标题、科目、年级、学期、原文件名、MIME、大小、对象 key、
+哈希、页数、状态、检索策略和可选 `linked_kb_id`。
+
+新建题目资料类型为 `exam_paper`、`mock_paper`、`workbook`、`worksheet`、`homework`、
+`single_question` 或 `other`。`textbook/lecture/notes` 仅兼容历史参考资料，不进入题目识别。
+
+### ResourceQuestion
+
+连接资源与 `Question`，保存 ordinal、题号、章节、页码、原图区域、分值、识别置信度和
+`pending/verified/rejected`。核验状态和学习证据会约束后续编辑。
+
+### AssessmentAttempt 与 AssessmentAnswer
+
+`AssessmentAttempt` 保存一次考试/作业/练习的学生、类型、日期、时长、总分和状态。状态只
+能 `draft -> submitted -> graded`。`AssessmentAnswer` 保存资源题响应、分数、正确性、评分
+状态和评语。
+
+最终核验前不会产生掌握度或错题证据。核验后的错误答案通过
+`AssessmentAnswer -> ErrorItem` 一对零或一关联保证幂等。
+
+### ErrorImport
+
+兼容错题录入草稿、原文件和识别任务。新导入题最终挂在 `LearningResource/ResourceQuestion`
+上；旧隐藏 Quiz 由 0012 迁移转换，不再作为当前实现模式。
+
+## 计划、会话、画像和运营
+
+| 实体 | 语义 |
+|---|---|
+| `Plan / PlanAdjustment` | 学习计划结构和每次调整审计 |
+| `ChatSession / ChatMessage` | 可查询的会话展示历史 |
+| `ChatAttachment` | 当前对话附件、提取文本和对象引用 |
+| `LearnerInsight` | AI 提炼、用户可见可删的长期洞察 |
+| `UserPreference` | 用户学习偏好和个性化开关 |
+| `LearningReportSnapshot` | 报告快照与刷新状态 |
+| `UsageLog` | 模型/功能/用户维度 token、成本、延迟和模式 |
+| `EvalRun` | 评估配置、语料/黄金集版本和指标 |
+| `WalletAccount / WalletLedger / PaymentOrder` | 钱包、不可变流水和支付订单骨架 |
+
+## 文件与外部状态
+
+对象存储保存知识库原件、题目资料、错题来源、聊天附件和导出包。数据库只保存对象 key 和
+元数据。下载必须经过授权 API，不向客户端暴露任意对象 key。
+
+`PendingCleanup` 是删除 outbox：数据库删除和清理任务同事务提交，Worker 重试删除 Qdrant、
+对象存储、Redis 和 checkpoint 外部状态。对象删除失败不得先删除数据库事实并伪装成功。
+
+## 用户导出与注销
+
+### 导出
+
+`POST /api/account/export` 创建异步 ZIP。导出包含结构化数据、文档/上传 manifest，以及当前
+可读取的题目资料和错题来源文件。外部对象缺失时记录 `available=false` 和错误原因，不阻断
+其他数据导出。
+
+### 注销
+
+`DELETE /api/account` 重新验证密码后：
+
+1. 删除个人知识库和用户行；
+2. 通过外键级联删除个人学习、会话、题目资料、作答、错题、画像等关系数据；
+3. `usage_log.user_id` 置空以保留去标识化成本审计；
+4. 写入 tenant cleanup，由 Worker 清理向量、对象、缓存和 checkpoint。
+
+删除语义的具体外键以 migration 为准；新增用户数据表必须同时进入导出、注销和隔离测试。
+
+## 不可变与锁定规则
+
+- 已提交 migration 不修改，只增加新 revision。
+- pending 题和未核验作答不写学习状态。
+- 提交后的学生响应不可覆盖；graded 为终态，仅相同语义重试幂等。
+- 产生 FSRS、错题、作答或掌握度证据后，不允许静默改变题型、答案或知识点。
+- 更换资源关联知识库只在无证据时允许，并事务性更新所有题目 `kc_ids`。
+- 账务流水和掌握度日志属于审计数据，不通过普通更新接口改写。

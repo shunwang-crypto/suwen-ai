@@ -1,6 +1,8 @@
 # 决策与偏差记录
 
-> §0 执行协议要求：任何超出实现提示词的技术决定、或与提示词冲突的现实约束，必须记录于此，禁止静默偏离。
+> 状态：Active
+> 本文记录长期有效的架构决定。`accepted` 表示当前仍生效，`superseded` 表示已被后续
+> 实现取代，`historical` 只解释当时背景。代码与测试是当前事实，旧决定不得覆盖新实现。
 
 ## D1 · 开发环境用 conda + 国内源（2026-07-26）
 用户指示。conda env `eduagents`（Python 3.12，miniforge），pip 走 TUNA 源。
@@ -24,12 +26,12 @@
 LangGraph checkpointer 的可查询消息存储。M3 引入 checkpointer 后二者并存：
 chat_messages 做展示与历史 API，checkpointer 做图执行状态。
 
-## D5 · 本地开发用 conda 版 PostgreSQL/Redis 代替容器（2026-07-26）
+## D5 · 本地开发用 conda 版 PostgreSQL/Redis 代替容器（historical，2026-07-26）
 现实约束：本机 Docker daemon 的 DNS 被污染（docker.io 解析到 Facebook IPv6 段），
 且无免密 sudo，无法当场改 `/etc/docker/daemon.json`。
 处置：开发与集成测试用 conda-forge 的 postgresql/redis-server 本地实例
 （`make dev-infra`）；docker-compose 仍是唯一部署路径，修复 daemon 后即可 `make up`。
-待办（需用户执行，见 README「Docker 修复」）：写入 daemon.json 的 dns + registry-mirrors。
+后续 compose 路径已验证并保留；当前开发仍可使用 `make dev-infra`，生产部署使用 compose。
 
 ## D6 · 密码哈希直接用 bcrypt 库（2026-07-26）
 不用 passlib（已停止维护，与 bcrypt>=4.1 不兼容）。cost 默认 12（.env 可配），
@@ -39,8 +41,8 @@ chat_messages 做展示与历史 API，checkpointer 做图执行状态。
 F10 运营面板需要管理员跨租户聚合。仅 usage_log 一张表的 SELECT 策略追加
 `OR current_setting('app.is_admin', true) = 'true'`；写入仍强制租户匹配。
 
-## D8 · Qdrant/MinIO 推迟到 M2 接入（2026-07-26）
-M1 骨架不依赖二者；compose 中已定义服务与健康检查，M2 摄取流水线落地时启用。
+## D8 · Qdrant/MinIO 推迟到 M2 接入（superseded，2026-07-26）
+该阶段性决定已完成：Qdrant 和对象存储均已接入当前摄取、附件、题目资料和数据生命周期。
 
 ## D9 · 应用数据库角色与超级用户分离（2026-07-26）
 初版集成测试暴露：initdb/POSTGRES_USER 创建的 `edu` 是超级用户，**静默绕过 RLS**。
@@ -61,10 +63,9 @@ pymupdf 触发加载系统 libstdc++ 后，qdrant-client 的 sqlite3/icu 需要 
 qdrant_store 的客户端单例缓存共享。Qdrant 容器可用后 .env 置空 QDRANT_LOCAL_PATH
 切服务端模式，该限制消失。
 
-## D12 · stub 嵌入口径的评估数字只做管线验证（2026-07-26）
-当前检索评估 (hit_rate@5=0.867) 是 stub 哈希嵌入 + 真实 BM25 稀疏的口径——证明评估
-管线端到端可跑，**不得**作为质量宣称（§14 禁伪造/§13 诚实呈现）。M2-D3 的正式数字
-必须在 live 嵌入（SiliconFlow BGE-M3，待用户提供 key）下重测并存档。
+## D12 · stub 嵌入口径的评估数字只做管线验证（accepted，2026-07-26）
+stub 哈希嵌入 + 真实 BM25 稀疏只证明管线可跑，**不得**作为质量宣称。后续 live 结果
+保存在 `docs/evidence/`，但 D12 的口径隔离仍长期有效。
 
 ## D15 · 编排形态: 四子图 + API 层路由, 无独立 Supervisor/analyst 图（2026-07-27）
 偏离提示词 §5.4"顶层轻 Supervisor + 五子图"。实际形态: qa/quiz/plan/tutor **四个**
@@ -90,7 +91,7 @@ orgs 凭邀请码查询）。org 库**写**路径不走 org_ids：service 层校
 Qdrant 单次查询 kb_id/tenant_id 双 MatchAny 只作纵深兜底。机构配额用 `orgs.storage_quota_mb`
 + 上传事务内 SUM 预检（与个人路径同构，不引入计数列，避免计数漂移；库量级演示场景 SUM 足够）。
 
-## D16 · 学习指南存 kb.config_json；输出侧审核留待 M5 流式分段（2026-07-27）
+## D16 · 学习指南、URL 导入与内容审核（partly superseded，2026-07-27）
 本条覆盖同一批落地的三件事（URL 网页导入 / 摄取后学习指南 / 内容审核中间件 S-A3）。
 
 **① 学习指南不建表，落 `knowledge_bases.config_json["study_guide"]`。**
@@ -113,14 +114,37 @@ MarkdownParser），`documents.parse_backend='web'` 标记来源，权限/配额
 需要把已校验 IP 钉进自定义 transport 或走出网代理白名单，生产部署建议后者，本期记档不做。
 `WEB_IMPORT_ALLOW_PRIVATE_HOSTS` 仅供集成测试（本地临时 http server）打开，生产必须 False。
 
-**③ 内容审核（S-A3）走中间件，且本期只做输入侧。**
+**③ 内容审核（S-A3）走中间件。**
 审核是横切关注点，做成 `ContentModerationMiddleware` 而非在各 router 里散落调用：
 对 `POST /api/chat` 与 `POST /api/tutor` 的 `message` 字段做 `check_input`，命中直接回
 400 `CONTENT_REJECTED` 信封——chat 是 SSE，**在第一个字节前**拦下比在流里另造一种拒绝
 事件干净得多，前端沿用既有 ApiError 分支。无 `Authorization` 头的请求跳过审核（端点自身
 返回 401），免得匿名者拿这个端点当敏感词探测器。
-**输出侧审核（`check_output`）本期只提供函数，不接入链路**：SSE 逐 token 下发，要审核就得
-按句/按段缓冲后再放行，会实打实增加首字延迟并改动流式契约，成本与本期收益不匹配——
-**留待 M5 做流式分段审核**（缓冲到标点或 N 字符 → 审核 → 放行，命中则截断流并补发
-error 事件）。规则实现（词表 + allowlist 学术豁免 + soft 词上下文长度规则）只为可演示，
-生产接云审核服务时实现 `ContentModerator` 协议整体替换，调用方一行不改。
+原决定只实现输入侧；当前实现已经增加流式分段输出审核和危机提示，因此“留待 M5”部分
+已被取代。规则实现仍是可替换的本地策略，生产接云审核服务时应保持 `ContentModerator`
+协议和流式错误契约。
+
+## D17 · 知识库、题目资料和错题本分离（accepted，2026-08-01）
+
+教材、讲义、笔记等参考内容进入 `KnowledgeBase -> Document -> Chunk`，用于 RAG、引用和
+讲解；试卷、练习册、作业、题单进入 `LearningResource -> ResourceQuestion`，用于拆题、
+校对和真实作答；`ErrorItem` 只表示派生学习记录。题目资料可以关联知识库以解析知识点，
+但题目和学生答案不自动写入普通 RAG。
+
+理由：三者生命周期、权限、检索风险和删除语义不同。把试卷当知识库会污染回答上下文，把
+错题本当资料目录会混淆来源与学习状态。
+
+## D18 · 待核验隔离与真实作答模型（accepted，2026-08-01）
+
+AI 识别题和不确定答案必须先由用户校对。`pending` 题、待核验错题和未最终核验作答不得
+写 FSRS、掌握度、画像、报告或推荐。资源题不创建隐藏 Quiz；一次真实考试或练习使用
+`AssessmentAttempt -> AssessmentAnswer`，最终核验后才生成掌握度和错题证据。
+
+更换资源关联知识库会改变知识点语义，因此仅在没有 `ErrorItem`、`AssessmentAnswer`、
+`Attempt` 或 `MasteryLog` 证据时允许，并在同一事务重映射全部 `kc_ids`。
+
+## D19 · 文档按职责分层并自动检查（accepted，2026-08-01）
+
+根 README 是项目入口，`docs/README.md` 是文档索引，STATUS 只记录发布状态；架构、开发、
+API、数据、安全和部署分别维护自己的事实。研究、答辩、证据和历史提示词不定义当前实现。
+功能变化必须在同一提交更新对应 Active 文档，并通过 `make docs-check`。

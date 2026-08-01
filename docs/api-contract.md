@@ -1,10 +1,18 @@
-# API 契约（M0 初版 · M1 冻结后只增不改）
+# API 业务契约
+
+> 状态：Active
+> 目标读者：前后端开发、测试与集成方
+> 维护边界：本文记录稳定业务语义、状态机、权限和错误码；运行时字段与参数的完整定义以
+> `/api/openapi.json` 和 Pydantic schema 为准。
 
 约定：资源命名 `/api/{resource}`；错误统一信封 `{code, message, request_id}`；
 鉴权三档：公开 / 用户(Bearer) / 管理员。SSE 端点用 fetch+ReadableStream 消费
 （原生 EventSource 无法带 Authorization 头）。
 
-## 已实现（M1）
+新增或改变端点、状态机、错误码、枚举和 PUT/PATCH 语义时，必须在同一提交更新本文与
+集成测试。不可见的个人资源通常返回 404，以避免泄露存在性。
+
+## 基础端点
 
 ### 认证（公开，独立限流 5次/分/IP）
 | 方法 | 路径 | 说明 |
@@ -148,13 +156,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 
 用户数据导出仍在 `uploads_manifest.json` 保留来源元数据；可用的错题原文件同时写入 `uploads/error_imports/{import_id}/{safe_filename}`，缺失对象以 `available=false` 和 `error=SOURCE_NOT_FOUND` 记录，不阻断其他数据导出。
 
-## 规划中（占位，实现前须先在此登记冻结）
-
-- M3: `/api/threads/{thread_id}/resume`（interrupt 恢复协议）、`/api/quiz`、`/api/plans`
-- M4: `/api/profile`（AI 眼中的我）、`/api/reports`、
-  `/api/admin/usage`、`/api/admin/time-travel`
-
-## 结构化学习资料与真实测评（0012）
+## 结构化题目资料与真实测评
 
 题目资料不进入普通 KnowledgeBase/RAG。资源文件由 `LearningResource` 保存，题目由
 `ResourceQuestion` 保存并通过 `Question.quiz_id = null` 与正式题目脱钩；真实考试/作业

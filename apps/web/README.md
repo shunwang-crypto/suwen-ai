@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# EduAgents Web
 
-## Getting Started
+这是 EduAgents 的 Next.js 前端，包含学生学习界面以及教师、管理员专项页面。项目级说明见
+[根 README](../../README.md)，本地开发、测试和环境要求见
+[开发手册](../../docs/development.md)。
 
-First, run the development server:
+## 修改前必读
 
-```bash
+本目录使用的 Next.js 版本可能包含超出模型训练数据的约定。任何开发者或 AI 编程代理都
+必须先完整阅读 [AGENTS.md](AGENTS.md)，再按其要求查阅本地
+`node_modules/next/dist/docs/` 中与目标功能相关的文档。
+
+## 命令
+
+在本目录运行：
+
+~~~bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+npm run lint
+npm run build
+npm run start
+~~~
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `dev`：本地开发服务器。
+- `lint`：ESLint。
+- `build`：TypeScript 与 Next.js production build，是提交前必跑项。
+- `start`：运行已经构建的生产 bundle。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+本地默认访问 `http://127.0.0.1:3000`。API 通过 Next.js 同源代理访问根仓库中运行的
+FastAPI；完整三进程启动方式见[开发手册](../../docs/development.md)。
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 边界
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Web 不保存权威业务状态，所有权限和状态机必须由 API 再校验。
+- 前端隐藏按钮不是授权；教师和管理员端点必须继续使用服务端角色依赖。
+- API 枚举、错误码和 PUT/PATCH 语义变化必须同步
+  [API 契约](../../docs/api-contract.md)与 `apps/web/lib/types.ts`。
+- `apps/web/CLAUDE.md` 和 `AGENTS.md` 是编程代理约束，不是产品文档。

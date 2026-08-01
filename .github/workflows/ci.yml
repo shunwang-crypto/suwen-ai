@@ -40,6 +40,8 @@ jobs:
         run: pip install "$(grep -i '^ruff==' requirements.lock)"
       - name: ruff check
         run: ruff check .
+      - name: active documentation links and index
+        run: python scripts/check_docs.py
 
   unit:
     runs-on: ubuntu-latest

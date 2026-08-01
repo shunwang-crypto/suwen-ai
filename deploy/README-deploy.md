@@ -1,162 +1,218 @@
-# EduAgents 从零部署手册
+# 部署与上线手册
 
-> 适用: 一台全新 Linux 主机 (8C16G 参考), Docker + Docker Compose v2。
-> 开发机无 Docker 时的替代路径 (conda 版基础设施) 见仓库根 README「快速开始」。
-> 本手册每一步都给验证命令; 跑不通就没完成。
+> 状态：Active，但当前 compose 是单机参考拓扑，不是可直接暴露公网的生产成品。
+> 目标读者：部署运维、安全负责人和发布负责人
+> 本地开发请阅读[开发手册](../docs/development.md)。
 
-## 0. 前置
+## 当前部署能力与限制
 
-```bash
-git clone <repo> eduagents && cd eduagents
-docker --version && docker compose version   # 需要 Docker 20+ / Compose v2
-```
+`deploy/docker-compose.yml` 当前包含：
 
-国内网络若拉不动镜像, 先配 daemon (需要 sudo, 与根 README「Docker 修复」一致):
+- PostgreSQL 16
+- Redis 7
+- Qdrant
+- MinIO
+- FastAPI API
+- 一个 ARQ Worker
+- Caddy HTTP API 网关
 
-```bash
-sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
-{
-  "dns": ["223.5.5.5", "119.29.29.29"],
-  "registry-mirrors": ["https://docker.m.daocloud.io", "https://docker.1ms.run"]
-}
-EOF
-sudo systemctl restart docker
-```
+当前 compose **不包含 Next.js Web 服务**，Caddy 只监听 8080 HTTP 且根路径返回占位文本；
+PostgreSQL、MinIO 和应用数据库 URL仍使用开发示例凭据，基础设施端口直接映射到宿主机。
+因此它适合本机/内网验证，不能原样作为公网生产部署。
 
-## 1. 配置 .env (必填清单)
+正式上线前必须准备生产 override、编排平台或托管服务，解决 Web、TLS、密钥、网络边界、
+备份恢复、监控告警和滚动发布。
 
-```bash
+## 参考环境要求
+
+- Linux 主机；单机受控内测建议从 8C16G 起，根据 live 压测调整
+- Docker 20+ 与 Compose v2
+- 可访问模型、嵌入、重排和可选网络搜索供应商
+- 域名、TLS 和受控 SMTP
+- 独立、加密、可恢复的持久存储
+
+~~~bash
+git clone <repo-url> eduagents
+cd eduagents
+docker --version
+docker compose version
+~~~
+
+## 生产配置
+
+从示例生成配置，但不要直接使用默认值：
+
+~~~bash
 cp .env.example .env
-```
+~~~
 
-| 变量 | 必填? | 说明 |
-|---|---|---|
-| `JWT_SECRET` | **必填** | ≥32 位随机串: `openssl rand -hex 32`; 禁止用默认值上生产 |
-| `STANDARD_API_KEY` | **必填** | DeepSeek 平台 key (deepseek-chat, 交互主力) |
-| `STRONG_API_KEY` | **必填** | DeepSeek key (deepseek-reasoner, 仅异步后台链路) |
-| `CHEAP_API_KEY` | **必填** | SiliconFlow key (Qwen2.5-7B, 路由/校验等轻任务) |
-| `EMBEDDING_API_KEY` | **必填** | SiliconFlow key (BGE-M3 + bge-reranker-v2-m3) |
-| `TAVILY_API_KEY` | 建议 | 联网搜索; 缺失时自动降级纯知识库模式 (§9.3) |
-| `GATEWAY_MODE` | **必填** | 生产 `live`; 断网演示 `replay`; `stub` 仅限 dev/test (decisions.md D2) |
-| `APP_ENV` | **必填** | 生产必须 `prod` (dev 档会放行 stub 兜底等开发行为) |
-| `EMBEDDING_MODE` / `RERANK_MODE` | **必填** | 生产 `live` |
-| `QDRANT_LOCAL_PATH` | **必须留空** | 非空走单进程本地模式, 容器部署必须用 Qdrant 服务 (D11) |
-| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | **必填** | 改掉示例值; 与 compose 中 MinIO 环境一致 |
-| `BCRYPT_ROUNDS` | 默认 12 | 不要调低 |
-| `AUTH_RATE_LIMIT_PER_MINUTE` 等限流/预算/上传约束 | 默认即可 | 语义见 `.env.example` 注释 |
+### 必须审计的变量
 
-数据库/Redis/Qdrant/MinIO 的地址在 compose 内已按服务名注入
-(`deploy/docker-compose.yml` api/worker 的 environment 段), .env 中的本机地址仅供
-无容器开发, 无需为容器部署修改。
+| 范围 | 要求 |
+|---|---|
+| `APP_ENV` | 生产必须为 `prod` |
+| `GATEWAY_MODE` | 正式服务使用 `live`；生产不会回退 stub |
+| `JWT_SECRET` | 使用密钥系统生成和注入的高熵随机值 |
+| 模型/嵌入/重排 key | 最小权限、预算限制、可轮换，不进入镜像和日志 |
+| `DATABASE_URL` | 使用非超级、`NOBYPASSRLS` 应用角色 |
+| `MIGRATION_DATABASE_URL` | 只供一次性 migration job，应用进程不可持有 |
+| Redis/Qdrant/MinIO | 使用生产地址、认证、TLS/网络隔离和独立凭据 |
+| `WEB_ORIGIN` | 精确生产 HTTPS 域名 |
+| SMTP | 配置真实发件服务并验证找回密码 |
+| 配额和预算 | 根据套餐、供应商限额和压测结果设定 |
+| `WEB_IMPORT_ALLOW_PRIVATE_HOSTS` | 生产必须为 false |
+| `LANGFUSE_LOG_CONTENT` | 默认关闭正文记录，确需开启先完成隐私审查 |
 
-## 2. 起栈
+当前 compose 会在 `environment` 中覆盖数据库、Redis、Qdrant 和 MinIO 地址，并硬编码开发
+数据库凭据。生产必须通过 override/Secrets 修改这些值，且不要把新密钥提交到仓库。
 
-```bash
-make up          # = docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml ps    # 全部 healthy 才算起来
-curl -s http://127.0.0.1:8000/api/health/ready    # PG/Redis/Qdrant 任一挂返 503
-```
+## 数据库迁移
 
-服务清单: postgres:16 / redis:7 / qdrant / minio / api (FastAPI) / worker (ARQ) /
-caddy (:8080 反代)。
+当前单机 compose 在 API 启动命令中先执行 `alembic upgrade head`。这只适合单副本：
 
-## 3. 迁移与 seed
-
-迁移当前内联在 api 容器启动命令里 (`alembic upgrade head &&
-uvicorn ...`), 单副本下无需手动执行; 手动重放/验证:
-
-```bash
-docker compose -f deploy/docker-compose.yml exec api alembic upgrade head
+~~~bash
+make up
 docker compose -f deploy/docker-compose.yml exec api alembic current
-```
+docker compose -f deploy/docker-compose.yml exec api alembic heads
+~~~
 
-> 注意: 扩多副本前必须把迁移抽成独立一次性服务 (docs/scaling.md「compose→K8s
-> 迁移要点」第 1 条, 生产化审查 P1-14), 否则并发迁移抢 DDL 锁。
+多副本或滚动发布必须把 migration 拆成一次性发布步骤：
 
-演示数据 (demo 账号 + 高数知识库 + 语料摄取, 幂等):
+1. 备份并校验；
+2. 使用 migration 角色执行升级；
+3. 验证只有一个预期 head；
+4. 再启动/滚动 API 和 Worker；
+5. 执行只读健康检查和黄金路径；
+6. 禁止多个 API 副本并发抢 DDL。
 
-```bash
-docker compose -f deploy/docker-compose.yml exec api python scripts/seed_demo.py
-# 输出 demo 账号: demo@eduagents.cn / demo-pass-123 与 tenant/kb id
-```
+已提交 migration 不修改。需要兼容滚动发布时优先采用 expand/migrate/contract 分阶段方案。
 
-## 4. 备份 cron
+## 启动单机参考栈
 
-备份三件套脚本已就位 (`scripts/backup.sh`: pg_dump -Fc + 对象目录 tar + Qdrant
-snapshot API, 保留最近 14 份轮转; 恢复用 `scripts/restore.sh <stamp>`, 有二次确认)。
+~~~bash
+make up
+docker compose -f deploy/docker-compose.yml ps
+curl -fsS http://127.0.0.1:8000/api/health/live
+curl -fsS http://127.0.0.1:8000/api/health/ready
+curl -fsS http://127.0.0.1:8080/api/health
+~~~
 
-宿主机安装 cron (crontab 由你安装, 脚本不代装), 每天 03:30:
+`ready` 依赖 PostgreSQL、Redis、Qdrant 和 Worker 心跳。只有所有预期服务 healthy、只有预期
+Worker 数量且异步队列无积压，才算参考栈启动完成。
 
-```bash
-crontab -e
-# 加入 (compose 部署: PG 走宿主映射端口, 对象存储用 mc mirror 见脚本头注①):
-30 3 * * * /bin/bash /path/to/eduagents/scripts/backup.sh >> $HOME/.local/share/eduagents/backup.log 2>&1
-```
+生产环境不得运行 `make seed`。本地 demo 账号不是生产账号。
 
-验证: 手动跑一次 `make backup`, 确认 `~/.local/share/eduagents/backups/<stamp>/`
-下有 .dump / objects tar / qdrant snapshot 三类产物与 MANIFEST.txt。
+## Web、Caddy 与 TLS
 
-## 5. 密钥轮换步骤
+当前 Caddyfile 只反代 `/api/*`，并通过 `flush_interval -1` 透传 SSE。生产需要：
 
-`.env` 中的 4 个 LLM key 与 JWT_SECRET 属最高敏感级。轮换流程 (建议上线前执行一次,
-之后按季度或人员变动时):
+1. 构建并运行 `apps/web` 的 production bundle；
+2. 将根路径反代到 Web；
+3. 域名监听 80/443，持久化 Caddy 证书数据；
+4. 保留 API SSE 无缓冲配置；
+5. 只信任受控反代网段提供的 Forwarded/X-Forwarded-For；
+6. 验证 refresh cookie 为 Secure，`WEB_ORIGIN` 精确匹配；
+7. 将 PostgreSQL、Redis、Qdrant 和 MinIO 端口移出公网。
 
-1. **DeepSeek**: 登录 platform.deepseek.com → API Keys → 删除旧 key → 新建 key,
-   更新 `.env` 的 `STANDARD_API_KEY` / `STRONG_API_KEY`。
-2. **SiliconFlow**: 登录 cloud.siliconflow.cn → API 密钥 → 重置/新建, 更新
-   `CHEAP_API_KEY` / `EMBEDDING_API_KEY`。
-3. **Tavily**: app.tavily.com → API Keys 同理, 更新 `TAVILY_API_KEY`。
-4. **JWT_SECRET**: `openssl rand -hex 32` 生成新值写入 `.env`。注意: 轮换即全员
-   下线 (存量 access/refresh token 全部失效), 选低峰执行。
-5. 生效: `docker compose -f deploy/docker-compose.yml up -d api worker`
-   (env_file 重读)。验证: `curl -s localhost:8000/api/health` + 发一条真实 chat。
-6. 纪律: 密钥只存 `.env` (已 gitignore), 禁止进代码/镜像/日志; CI 不需要任何
-   真实 key (stub 模式跑全部测试, `.github/workflows/ci.yml`)。
+示意配置：
 
-## 6. Caddy TLS 域名接法
-
-当前 `deploy/Caddyfile` 监听 `:8080` (纯 HTTP, 演示口径)。接真实域名启用自动
-HTTPS (Let's Encrypt) 的改法:
-
-```caddyfile
-# deploy/Caddyfile — 把首行 :8080 换成你的域名即可, Caddy 自动签发/续期证书
+~~~caddyfile
 edu.example.com {
-	encode gzip
+    encode gzip
 
-	handle /api/* {
-		reverse_proxy api:8000 {
-			flush_interval -1     # SSE: 关闭缓冲, 逐事件透传 (必须保留)
-		}
-	}
+    handle /api/* {
+        reverse_proxy api:8000 {
+            flush_interval -1
+        }
+    }
 
-	handle {
-		reverse_proxy web:3000    # 前端容器接入后启用; 当前 Caddyfile 是占位响应
-	}
+    handle {
+        reverse_proxy web:3000
+    }
 }
-```
+~~~
 
-配套改动:
-1. compose 的 caddy 服务补 80/443 端口映射与证书卷:
-   `ports: ["80:80", "443:443"]`, `volumes: [caddy_data:/data]`
-   (80 端口必须可达, ACME HTTP 挑战用; 域名 A 记录先指到本机)。
-2. DNS: `edu.example.com A <服务器公网 IP>`, 生效后 `docker compose ... up -d caddy`。
-3. 验证: `curl -sI https://edu.example.com/api/health` 返回 200 且证书为 LE 签发;
-   SSE 验证 `curl -N https://edu.example.com/api/chat ...` 逐事件到达 (flush_interval
-   -1 缺失时的症状是整段一次性吐出)。
-4. 上 TLS 后把 cookie Secure 与生产开关一并核对 (生产化审查 P2-10:
-   `APP_ENV=prod` 应关闭 `/api/docs` 公开与 admin 演示端点——该项在并行修复清单)。
+当前 API 文档仍固定暴露在 `/api/docs` 和 `/api/openapi.json`。若生产策略不允许公开，应在
+反代层限制，或在后续代码变更中按环境关闭。
 
-## 7. 15 分钟复现核对单 (M5-D4 口径)
+## 管理和开发能力的生产边界
 
-```bash
-cp .env.example .env && $EDITOR .env   # 填 §1 必填项            (~3 min)
-make up                                # 构建 + 起栈全绿          (~5 min, 视网络)
-docker compose -f deploy/docker-compose.yml exec api python scripts/seed_demo.py
-curl -s http://127.0.0.1:8000/api/health/ready                  # ready
-bash scripts/preheat.sh                # 三服务+API+登录+chat 预热状态表
-make demo-m2 demo-m3 demo-m4 demo-m5   # 逐里程碑 PASS/FAIL
-```
+- 时间旅行在未显式配置时会在 prod 关闭，但仍需测试配置。
+- 模拟支付在 prod 返回拒绝。
+- 故障注入端点仍可由平台管理员调用；生产需要网络隔离、额外开关、二次确认和审计告警。
+- API 文档、评估运行和管理员批量操作应限制到内网/VPN 或独立管理域。
+- 不允许管理员通过共享数据库超级用户完成日常运营。
 
-已知阻塞如实声明: 原开发机 Docker daemon DNS 污染导致 `make up` 未在该机验证
-(STATUS M1-D1 ⛔, decisions.md D5); 本手册的 compose 路径在新机器执行时若有出入,
-以 `docker compose ps` 的 healthcheck 结果为准逐服务排查。
+## 备份
+
+`scripts/backup.sh` 生成 PostgreSQL dump、本地对象目录 tar 和 Qdrant collection snapshot，
+并写 SHA-256 manifest。脚本默认包含当前开发机路径，跨机器必须设置：
+
+~~~bash
+ENV_BIN=/usr/bin \
+PGHOST=127.0.0.1 \
+PGUSER=<backup-role> \
+PGDATABASE=eduagents \
+BACKUP_ROOT=/srv/eduagents/backups \
+QDRANT_URL=http://127.0.0.1:6333 \
+bash scripts/backup.sh
+~~~
+
+compose 使用 MinIO 时，脚本不会自动备份 bucket；必须按脚本说明使用 `mc mirror` 或对象存储
+版本化/复制能力，并把对象清单与数据库/Qdrant 快照作为同一恢复点管理。
+
+备份要求：
+
+- 独立 backup 角色和凭据；
+- 备份加密、异地复制、访问审计；
+- 轮转策略与隐私留存一致；
+- 每次备份检查 manifest；
+- 定期恢复演练，而不只检查文件存在。
+
+## 恢复
+
+`scripts/restore.sh` 是覆盖式操作，会清理并恢复 PostgreSQL、对象目录和 Qdrant。只允许在
+隔离环境演练或正式事故流程中使用。
+
+~~~bash
+# 先停止 API 和 Worker，并设置正确环境变量
+bash scripts/restore.sh <stamp-or-backup-directory>
+~~~
+
+恢复后必须：
+
+1. 校验 manifest；
+2. 运行 migration 到当前 head；
+3. 检查应用角色/RLS 权限；
+4. 核对已注销用户和删除事件，避免旧备份让数据复活；
+5. 启动一个 Worker，检查 cleanup/ARQ 积压；
+6. 运行 ready、登录、知识库检索、题目资料、导出等黄金路径；
+7. 记录 RTO/RPO 和演练结果。
+
+## 监控与告警
+
+正式上线至少监控：
+
+- API live/ready、5xx、P95/P99、SSE 首事件和完整时长；
+- PostgreSQL 连接、慢查询、存储、复制/备份；
+- Redis 内存、连接、持久化和 ARQ 队列积压；
+- Worker 心跳、失败重试、pending cleanup、导出/摄取耗时；
+- Qdrant/对象存储可用性、容量和错误；
+- 模型供应商错误、降级、token、成本和全局预算；
+- 注册/登录异常、越权、管理员操作和内容安全事件。
+
+告警必须有负责人、升级路径和处理手册，不能只展示在仪表盘。
+
+## 发布与回滚
+
+推荐先使用独立预发布环境和白名单内测：
+
+1. 固定提交和镜像 digest；
+2. 备份、migration dry run、配置审计；
+3. 执行 lint、测试、生产构建和 live 黄金路径；
+4. 小流量发布，观察 API、队列、成本、内容安全和数据错误；
+5. 扩量前完成至少一次恢复演练；
+6. 回滚应用前确认数据库 migration 是否向后兼容，禁止直接回滚 schema。
+
+详细上线门槛见 [STATUS.md](../STATUS.md)，安全要求见
+[docs/safety.md](../docs/safety.md)。

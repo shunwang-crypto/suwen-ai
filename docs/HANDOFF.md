@@ -1,5 +1,9 @@
 # EduAgents 交接文档（新 session 从这里开始）
 
+> [!WARNING]
+> **历史交接稿。** 本文中的 HEAD、恢复顺序、权威规格和功能状态均是 2026-07-27 的快照，不再作为新会话入口。
+> 新会话应从 [`docs/README.md`](README.md) 开始，发布判断查看 [`STATUS.md`](../STATUS.md)。
+
 > 写于 2026-07-27，个性化波次后更新，HEAD = tag `personalization-p2`。本文档是唯一的跨 session 交接入口：
 > 先读完本文，再按需查阅文末的文件索引。**注意 §7 的"文档滞后"警告，不要直接相信 STATUS.md 的基线段落。**
 

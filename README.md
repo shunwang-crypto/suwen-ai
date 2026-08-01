@@ -1,179 +1,159 @@
-# EduAgents — 教育智能体平台
+# EduAgents — 可验证的个性化学习平台
 
-面向真实用户、按可演进至亿级用户的架构原则设计的教育智能体平台。
-完整规格见 [docs/IMPLEMENTATION_PROMPT.md](docs/IMPLEMENTATION_PROMPT.md)；
-执行状态唯一事实源：[STATUS.md](STATUS.md)；决策与偏差：[docs/decisions.md](docs/decisions.md)。
+EduAgents 面向学生的持续学习闭环，而不是只优化一次问答。平台把可溯源知识库、AI
+辅导、真实作答、错题复习、掌握度与学习画像连接起来，并为教师和运营人员提供受权限
+控制的专项界面。
 
-## 架构（M1 已落地部分加粗）
+当前项目处于上线准备阶段。学生主链路、题目资料、数据隔离和账户生命周期已经实现；
+完整考试模式、班级任务、教师批量阅卷与成绩管理仍属于后续能力。准确状态见
+[STATUS.md](STATUS.md)，详细文档从 [docs/README.md](docs/README.md) 进入。
 
-```
-L1 前端      Next.js + shadcn/ui + KaTeX                    (M4)
-L2 接入      Caddy 2                                        (compose 已配)
-L3 应用      **FastAPI 全 async + JWT 轮换认证 + 租户中间件 + Redis 令牌桶限流 + SSE**
-L4 编排      LangGraph 四子图 (qa/quiz/plan/tutor; 路由在 API 层, 学情诊断在服务层)
-L5 模型网关  **自研 ModelGateway: 三档路由/重试/熔断/降级链/用量计量/录制回放/stub**
-L6 异步      **ARQ Worker 骨架** → 摄取流水线               (M2)
-L7 数据      **PostgreSQL(RLS 多租户) + Redis**; Qdrant/MinIO (M2)
-L8 观测      **structlog JSON + request_id 贯穿**; Langfuse (M3)
-```
+## 核心能力
 
-## 快速启动（推荐：本机开发模式）
+- 知识库：上传或导入教材、讲义和笔记，完成解析、分块、混合检索、引用定位和学习指南。
+- AI 学习：支持可溯源问答、分级辅导、智能练习、学习计划和可解释的下一步建议。
+- 题目资料：导入图片、PDF、Word、PPT、文本中的试卷、练习册、作业或题单，保存原件并
+  进行多题识别和人工校对。
+- 真实作答：以 `AssessmentAttempt` 保存一次考试或练习的真实答案、分数和核验状态。
+- 错题闭环：人工选择或核验错误后进入错题本；只有已核验记录才进入 FSRS、掌握度、
+  画像、报告和推荐。
+- 数据治理：具备租户隔离、文件安全检查、原件权限校验、用户数据导出和账号注销清理。
+- 专项角色界面：教师可查看和导出本人可访问的普通测验；管理员可使用运营、评估、故障
+  注入和反馈界面。日常运营不应直接操作生产数据库。
 
-这是目前测试完整 Web UI 最直接的方式。默认使用 `stub` 模型网关，不需要任何模型
-API Key，也不会产生模型调用费用。当前开发机请统一使用 `127.0.0.1`，不要使用
-`localhost`（本机 IPv6 配置可能把它解析到不可用的 `::1`）。
+### 三类内容不要混用
 
-环境要求：Python 3.12、Node.js 20+、npm，以及 PostgreSQL、Redis、Qdrant。
-仓库当前的 `Makefile` 默认使用
-`/home/shunw/miniforge3/envs/eduagents/bin/python`；在其他机器上可通过
+| 概念 | 保存什么 | 用于什么 | 不是什么 |
+|---|---|---|---|
+| 知识库 | 教材、讲义、笔记等参考内容及检索分块 | RAG、引用、讲解、知识点词表 | 不是错题本或考试记录 |
+| 题目资料 | 试卷、练习册、作业、题单、原文件和结构化题目 | 拆题、校对、真实作答、选择错题 | 不会自动写入普通 RAG |
+| 错题本 | 已确认错误或人工选择的 `ErrorItem` | FSRS 复习、变式练习、画像更新 | 不是上传文件目录 |
+
+~~~mermaid
+flowchart LR
+    KB[知识库] --> QA[检索与讲解]
+    R[题目资料] --> RQ[结构化题目 + 人工核验]
+    RQ --> A[真实作答]
+    RQ --> E[明确选择错题]
+    A -->|核验为错误| E
+    E --> L[FSRS / 掌握度 / 画像 / 报告]
+~~~
+
+待核验题和未最终核验的作答不会进入右侧学习状态。完整边界见
+[系统架构](docs/architecture.md)。
+
+## 角色与当前范围
+
+| 角色 | 当前能力 | 当前边界 |
+|---|---|---|
+| 学生 | 知识库、问答、辅导、练习、题目资料、错题、复习、计划、画像与报告 | 主产品角色 |
+| 教师 | 普通测验列表与导出 | 尚无班级任务、批量阅卷和成绩管理闭环 |
+| 管理员 | 运营指标、评估、故障注入、反馈和账户管理端点 | 通过受控 UI/API 工作，不把数据库直连作为产品能力 |
+
+机构目前用于共享知识库；机构级题目资料共享仍未实现。
+
+## 架构概览
+
+~~~mermaid
+flowchart TB
+    WEB[Next.js Web] --> API[FastAPI API]
+    API --> PG[(PostgreSQL + RLS)]
+    API --> REDIS[(Redis)]
+    API --> Q[(Qdrant)]
+    API --> OBJ[(对象存储)]
+    API --> GW[ModelGateway]
+    API --> WORKER[ARQ Worker]
+    WORKER --> PG
+    WORKER --> Q
+    WORKER --> OBJ
+    GW --> LLM[模型 / 嵌入 / 重排服务]
+~~~
+
+领域核心位于 `packages/core`，API、Web 和异步任务分别位于 `apps/api`、`apps/web`、
+`apps/worker`。详细组件、数据流和信任边界见 [docs/architecture.md](docs/architecture.md)。
+
+## 本地快速启动
+
+要求 Python 3.12、Node.js 20+、npm，以及可用的 PostgreSQL、Redis 和 Qdrant。仓库
+`Makefile` 在当前开发机有默认 Python 路径；其他机器可通过
 `make PY=/path/to/python PIP=/path/to/pip <target>` 覆盖。
 
-### 1. 首次初始化
-
-```bash
-cd /home/shunw/eduagents
-
-# 仅在 .env 不存在时复制；不会覆盖已有配置
+~~~bash
+git clone <repo-url> eduagents
+cd eduagents
 [ -f .env ] || cp .env.example .env
 
-# Python 与前端依赖
 make install
-cd apps/web && npm ci && cd ../..
-
-# 启动本地 PostgreSQL、Redis、Qdrant（幂等，可重复执行）
+(cd apps/web && npm ci)
 make dev-infra
-
-# 建表/升级迁移，并写入可直接登录的演示数据
 make migrate
 make seed
-```
+~~~
 
-`make seed` 会幂等校正两个演示账号的角色和密码：
+分别启动三个进程：
 
-- 学生端（含预置知识库和历史作答）：`demo@eduagents.cn` / `demo-pass-123`
-- 管理端（运营、评估页面）：`admin@eduagents.cn` / `admin-pass-123`
-
-日常学习功能请使用学生账号；管理员账号不重复持有学生语料。若本地曾手动修改
-演示账号角色或密码，重新运行 `make seed` 即可恢复上述基线。
-
-如果仓库已经存在 `.env`、依赖和数据库，日常启动只需再次执行
-`make dev-infra`，无需重复安装；拉取到新迁移后再执行一次 `make migrate`。
-
-### 2. 启动三个进程
-
-分别打开三个终端，且都不要关闭：
-
-终端 A — API（端口 8000）：
-
-```bash
-cd /home/shunw/eduagents
+~~~bash
 make api
-```
-
-终端 B — Worker（上传摄取、反思等异步任务）：
-
-```bash
-cd /home/shunw/eduagents
 make worker
-```
+(cd apps/web && npm run dev)
+~~~
 
-终端 C — Web（端口 3000）：
-
-```bash
-cd /home/shunw/eduagents/apps/web
-npm run dev
-```
-
-启动后访问：
+访问地址：
 
 - Web：<http://127.0.0.1:3000>
 - API 文档：<http://127.0.0.1:8000/api/docs>
-- 健康检查：<http://127.0.0.1:8000/api/health/ready>
+- 就绪检查：<http://127.0.0.1:8000/api/health/ready>
 
-健康检查返回 HTTP 200 即可。三个硬依赖应为 `ok`；未启动 Worker 时状态会显示
-`degraded`，但同步 API 仍可使用。
+`make seed` 创建的账号仅供本地演示环境：
 
-### 3. 运行回归测试
+- 学生：`demo@eduagents.cn` / `demo-pass-123`
+- 管理员：`admin@eduagents.cn` / `admin-pass-123`
 
-```bash
-cd /home/shunw/eduagents
+不要在生产环境运行演示 seed，也不要沿用示例密钥。完整环境、网关模式和排障说明见
+[开发手册](docs/development.md)；容器化生产路径见
+[部署手册](deploy/README-deploy.md)。
 
-make test-unit          # 当前 441 个单元测试
-make test-integration   # 当前 98 个集成测试；需先 make dev-infra
-make lint               # Python Ruff
+## 常用验证
 
-cd apps/web
-npm run lint            # ESLint
-npm run build           # TypeScript + Next.js 生产构建
-```
+~~~bash
+make docs-check
+make lint
+make test-unit
+make test-integration
+python -m compileall -q packages apps tests alembic
+(cd apps/web && npm run lint && npm run build)
+~~~
 
-也可在仓库根目录运行 `make test`，依次执行单元测试和集成测试。
+集成测试需要 PostgreSQL 和 Redis。测试数量会随实现增长，因此文档只维护可复现命令，
+不维护容易过期的固定总数。
 
-### 4. 常见启动问题
+## 模型网关模式
 
-- `Qdrant` 未就绪：先检查 `curl http://127.0.0.1:6333/healthz`。本机服务不存在时，
-  可单独执行 `docker compose -f deploy/docker-compose.yml up -d qdrant`。
-- 端口被占用：执行 `ss -tlnp | rg ':3000|:8000|:5432|:6379|:6333'` 查找占用进程。
-- API 报缺表：重新执行 `make migrate`。
-- Python 报模块不存在：重新执行 `make install`，并确认使用的是 `eduagents` 环境。
-- 页面出现“开发桩”提示：这是默认 `GATEWAY_MODE=stub` 的正常行为；功能流程可测试，
-  但回答不是来自真实模型。
-
-## 模型网关模式（.env `GATEWAY_MODE`）
-
-| 模式 | 行为 | 用途 |
+| 模式 | 行为 | 使用场景 |
 |---|---|---|
-| stub | 确定性开发桩, 带「非真实模型输出」横幅 | 开发/CI, 零成本零网络 |
-| live | 真实调用 (DeepSeek/SiliconFlow), 重试+熔断+三档降级链 | 生产/演示 |
-| record | live + 录制到 cassettes/ | 录制黄金演示路径 |
-| replay | 只回放录制 (可选回退 stub) | 断网演示 / CI 回归 |
+| `stub` | 确定性开发桩，明确标识非真实模型输出 | 本地开发、CI |
+| `live` | 调用真实模型，启用重试、熔断、降级和计量 | 受控演示、生产 |
+| `record` | 在 live 调用基础上录制磁带 | 生成可复现实验或演示输入 |
+| `replay` | 回放已有磁带，可按配置回退 stub | 断网演示、回归 |
 
-当前默认 `stub`（用户指示：开发期不真实调用）。切 `live` 即用 .env 中的 DeepSeek key。
+生产环境必须使用 `APP_ENV=prod`，并按部署手册配置真实密钥、对象存储、备份和 TLS。
 
-## Docker 后端栈（可选）
+## 文档导航
 
-本地模式和 Docker 模式二选一，不要同时启动，否则 5432/6379/6333 端口会冲突。
-当前 `docker-compose.yml` 包含 PostgreSQL、Redis、Qdrant、MinIO、API、Worker 和
-Caddy，**尚未包含 Next.js Web 服务**；要测试页面，仍需在宿主机执行
-`cd apps/web && npm run dev`。
+- [文档总入口](docs/README.md)
+- [当前发布状态](STATUS.md)
+- [系统架构与产品边界](docs/architecture.md)
+- [开发与测试规范](docs/development.md)
+- [API 业务契约](docs/api-contract.md)
+- [数据模型](docs/data-model.md)
+- [架构决策记录](docs/decisions.md)
+- [安全与合规](docs/safety.md)
+- [生产部署](deploy/README-deploy.md)
 
-```bash
-cd /home/shunw/eduagents
-make up
-docker compose -f deploy/docker-compose.yml ps
-curl http://127.0.0.1:8000/api/health/ready
+文档与代码冲突时，以当前代码、迁移和自动化测试为最终事实，并在同一变更中修正文档。
+文档维护规则见 [docs/README.md](docs/README.md#维护规则)。
 
-# 停止并保留数据卷
-make down
-```
+## 上线边界
 
-如果当前开发机拉取 Docker 镜像时出现错误 IPv6/DNS，可一次性配置 daemon：
-
-```bash
-sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
-{
-  "dns": ["223.5.5.5", "119.29.29.29"],
-  "registry-mirrors": ["https://docker.m.daocloud.io", "https://docker.1ms.run"]
-}
-EOF
-sudo service docker restart   # 或 systemctl restart docker
-```
-
-## 目录结构
-
-```
-packages/core/    领域核心: config / clock / logging / gateway (Protocol 先行)
-apps/api/         FastAPI: routers(auth,chat,health) / middleware / models / db(RLS)
-apps/worker/      ARQ 后台任务 (M2: 摄取流水线)
-alembic/          迁移 (0001: 全表 + RLS + edu_app 角色)
-deploy/           docker-compose 全套 + Caddyfile + Dockerfile
-scripts/          dev_infra.sh / demo_m0.sh / demo_m1.sh
-tests/            unit + integration（越权/RLS/SSE/认证/完整业务闭环）
-docs/             data-model / api-contract / decisions / evidence/
-prompts/ eval/ loadtest/   (M2+ 填充)
-```
-
-## 与直接问 ChatGPT 的区别（答辩标准答案）
-
-ChatGPT 优化的是**这一轮对话**；EduAgents 优化的是**这一个学生**——
-学情闭环（时间维度的状态积累）+ 私域知识库（可溯源）+ 掌握度驱动的个性化，三点组合。
+上线前应完成生产配置审计、真实备份恢复演练、TLS、监控告警、容量基线和小流量灰度。
+当前产品适合受控内测，不应把尚未完成的教师班级管理或完整考试能力对外宣称为已交付。
