@@ -152,6 +152,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(
         title="EduAgents API",
         version="0.1.0",
@@ -164,7 +165,14 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        # The public deployment is same-origin, but keep CORS exact and
+        # environment-driven for password-reset/admin tooling. Never use a
+        # wildcard with credentials.
+        allow_origins=(
+            [settings.web_origin]
+            if settings.app_env == "prod"
+            else ["http://localhost:3000", "http://127.0.0.1:3000", settings.web_origin]
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

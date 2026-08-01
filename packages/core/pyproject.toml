@@ -17,6 +17,7 @@ dependencies = [
     "python-pptx>=0.6.23",
     "jieba>=0.42",
     "qdrant-client>=1.9",
+    "minio>=7.2",
     "aiofiles>=23.2",
     "trafilatura>=2.0",
 ]

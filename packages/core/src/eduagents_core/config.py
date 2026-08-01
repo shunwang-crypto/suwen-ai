@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     gateway_stream_delay_ms: int = 0
     gateway_max_retries: int = 3
     gateway_timeout_seconds: float = 60.0
+    # Production keeps the admin fault-injection surface off unless an
+    # operator explicitly enables it on a private management network.
+    enable_fault_injection: bool = True
 
     # circuit breaker
     breaker_window_seconds: float = 60.0

@@ -108,6 +108,8 @@ async def create_order(
 ):
     if body.amount_cny not in ORDER_AMOUNTS_CNY:
         raise HTTPException(status_code=422, detail="AMOUNT_NOT_ALLOWED")
+    if settings.app_env == "prod" or settings.payment_provider != "mock":
+        raise HTTPException(status_code=403, detail="PAYMENT_DISABLED")
     provider = create_payment_provider(settings, get_wallet_service())
     async with service_session() as session:
         order = await provider.create_order(

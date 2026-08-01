@@ -136,6 +136,8 @@ def _faults_payload(request: Request) -> dict:
 
 @router.get("/faults")
 async def get_faults(request: Request, ctx: AuthContext = Depends(require_admin)):
+    if not get_settings().enable_fault_injection:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
     return _faults_payload(request)
 
 
@@ -143,6 +145,8 @@ async def get_faults(request: Request, ctx: AuthContext = Depends(require_admin)
 async def set_faults(
     body: FaultsIn, request: Request, ctx: AuthContext = Depends(require_admin)
 ):
+    if not get_settings().enable_fault_injection:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
     injector = get_fault_injector()
     injector.update(
         provider_down=body.provider_down,
