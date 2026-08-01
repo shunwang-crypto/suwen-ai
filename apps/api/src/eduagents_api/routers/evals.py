@@ -1,7 +1,7 @@
 """F9 评估看板 API (仅管理员)。
 
-eval_runs 表从 M0 起就存在但从未被写入 —— 评测结果只躺在 docs/evidence 里, 平台内
-看不见。本路由把它接通: 导入既有产物 → 列表/详情/对比 → 页面上一键重跑。
+eval_runs 表从 M0 起就存在但从未被写入 —— 评测结果由明确环境的临时产物导入。本路由
+把它接通: 导入新产物 → 列表/详情/对比 → 页面上一键重跑。
 
 RLS 说明: eval_runs **不在** TENANT_TABLES (平台级评测数据, 与租户无关), 因此全部
 走 plain_session; 访问控制完全由 require_admin 承担。
@@ -51,7 +51,7 @@ def _row_brief(row: EvalRun) -> dict[str, Any]:
 
 @router.post("/import")
 async def import_runs(ctx: AuthContext = Depends(require_admin)):
-    """扫描 docs/evidence/{m2,m5} 下的评估产物并入库 (按内容哈希幂等)。"""
+    """扫描临时评估目录中的新产物并入库 (按内容哈希幂等)。"""
     return await import_evidence()
 
 

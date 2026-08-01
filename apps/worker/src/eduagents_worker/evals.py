@@ -3,7 +3,7 @@
 **唯一决定 — 用子进程调 eval/run_retrieval_eval.py, 不 import 它的 run_eval。** 理由:
 
 1. 权威性单一。CLI 产出的 markdown 就是答辩引用的那份文件; 走同一条命令意味着看板
-   里的数字与 docs/evidence 下的报告逐字同源, 没有"第二套算法"。
+   里的数字与明确环境生成的评估报告逐字同源, 没有"第二套算法"。
 2. eval/ 不是包 (`run_retrieval_eval.py` 顶层 `from metrics import ...` 依赖脚本目录
    进 sys.path)。直接 import 需要往 worker 进程里塞 sys.path hack, 且会把 BGE-M3 +
    reranker 常驻进 worker 内存, 之后每个文档摄取任务都背着它。

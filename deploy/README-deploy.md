@@ -1,8 +1,18 @@
 # 部署与上线手册
 
-> 状态：Active，但当前 compose 是单机参考拓扑，不是可直接暴露公网的生产成品。
+> 状态：Active。`docker-compose.yml` 保持开发参考栈；公网小规模上线使用
+> [`docker-compose.prod.yml`](docker-compose.prod.yml)。
 > 目标读者：部署运维、安全负责人和发布负责人
 > 本地开发请阅读[开发手册](../docs/development.md)。
+
+## 部署形态
+
+生产路径是单机 Ubuntu VPS + Docker Compose + Caddy：Caddy 是唯一公网入口，Web、API、
+Worker 和四个数据服务都在 Compose 网络内。PostgreSQL、Redis、Qdrant、MinIO 不发布宿主
+端口；Caddy 将同一域名的 `/` 转给 Web，将 `/api/*` 转给 API，并对 SSE 使用
+`flush_interval -1`。证书数据保存到命名卷，由 Caddy 自动申请和续期。
+
+开发参考栈不具备这些公网边界，不能通过映射端口或 `:8080` 入口代替生产部署。
 
 ## 当前部署能力与限制
 
@@ -20,8 +30,9 @@
 PostgreSQL、MinIO 和应用数据库 URL仍使用开发示例凭据，基础设施端口直接映射到宿主机。
 因此它适合本机/内网验证，不能原样作为公网生产部署。
 
-正式上线前必须准备生产 override、编排平台或托管服务，解决 Web、TLS、密钥、网络边界、
-备份恢复、监控告警和滚动发布。
+生产 Compose 已覆盖 Web production build、独立 migration job、健康检查、重启策略、
+日志轮转、持久卷和私有数据网络；仍需在目标 VPS 上补齐防火墙、备份恢复、监控告警、
+模型供应商审计和灰度策略。
 
 ## 参考环境要求
 
@@ -40,11 +51,15 @@ docker compose version
 
 ## 生产配置
 
-从示例生成配置，但不要直接使用默认值：
+生产从模板生成服务器本地配置，不要把真实值写回 Git：
 
 ~~~bash
-cp .env.example .env
+cp .env.production.example .env.production
+openssl rand -hex 32  # 为数据库应用密码、迁移密码、Redis、MinIO、JWT 分别生成
 ~~~
+
+`.env.production` 必须只存在服务器上。`scripts/deploy_prod.sh` 会拒绝 placeholder、
+开发环境、stub/replay fallback、私有 URL 导入、模拟支付、故障注入和正文观测配置。
 
 ### 必须审计的变量
 
@@ -65,8 +80,67 @@ cp .env.example .env
 | `WEB_IMPORT_ALLOW_PRIVATE_HOSTS` | 生产必须为 false |
 | `LANGFUSE_LOG_CONTENT` | 默认关闭正文记录，确需开启先完成隐私审查 |
 
-当前 compose 会在 `environment` 中覆盖数据库、Redis、Qdrant 和 MinIO 地址，并硬编码开发
-数据库凭据。生产必须通过 override/Secrets 修改这些值，且不要把新密钥提交到仓库。
+生产 Compose 使用 `edu_migration`（仅 migration job）和 `edu_app`（`NOSUPERUSER`
+`NOBYPASSRLS`）两个角色。API/Worker 的 `MIGRATION_DATABASE_URL` 和迁移密码会被明确置空；
+迁移不会在 API/Worker 启动命令中执行。
+
+## 发布命令
+
+在目标服务器上固定代码提交后执行：
+
+~~~bash
+scripts/deploy_prod.sh
+~~~
+
+`PRODUCTION_ENV_FILE` is wired into the Compose file so validation can use a template copy
+without changing the production default path. The deploy script sets it to the exact server-local
+file being validated.
+
+脚本只做本机发布编排：校验配置、构建 API/Worker/Web 镜像、启动基础设施、执行一次
+`alembic upgrade head`，再启动并等待 API、Worker、Web、Caddy 健康。它不会运行 `make seed`。
+若 `PUBLIC_REGISTRATION=false`，首个管理员只能在服务器上通过交互式一次性流程创建：
+
+~~~bash
+PURGE_EXPECTED_DB_HOST=postgres \
+python scripts/create_first_admin.py --email admin@your-domain.example \
+  --confirm-instance=eduagents-prod
+~~~
+
+该流程拒绝已有管理员、不会打印密码，随后应立即退出服务器 shell 并保管生成账号的审计记录。
+从服务器之外的网络执行验收：
+
+~~~bash
+scripts/verify_prod.sh https://your-domain.example
+~~~
+
+该验收检查 HTTPS live/ready、Worker 心跳、HTTP→HTTPS、证书以及数据服务端口未公开；
+localhost、RFC1918 私网地址会被脚本拒绝。
+
+## 旧运行时数据清理
+
+[`scripts/purge_runtime_data.py`](../scripts/purge_runtime_data.py) 默认只读，输出数据库、
+Redis DB、Qdrant collection、对象存储和所有业务表数量。它保留 Alembic 与 LangGraph
+schema-migration 元数据，删除运行时 checkpoint 行；不会删除源代码、migration、tests 或
+corpus；历史 cassettes、运行对象和 `docs/evidence` 已在上线前单独清除。
+
+执行前必须确认输出是专用 EduAgents 旧测试实例，而不是含真实用户的实例，并使用精确目标：
+
+~~~bash
+PURGE_EXPECTED_DB_HOST=127.0.0.1 \
+PURGE_EXPECTED_REDIS_HOST=127.0.0.1 \
+PURGE_EXPECTED_QDRANT_URL=http://127.0.0.1:6333 \
+python scripts/purge_runtime_data.py
+
+PURGE_EXPECTED_DB_HOST=127.0.0.1 \
+PURGE_EXPECTED_REDIS_HOST=127.0.0.1 \
+PURGE_EXPECTED_QDRANT_URL=http://127.0.0.1:6333 \
+python scripts/purge_runtime_data.py --execute --confirm-instance=eduagents-local-dev
+~~~
+
+生产实例必须同时设置 `PURGE_INSTANCE_NAME`、期望数据库名/端口、Redis DB、Qdrant URL 和
+对象存储 bucket；`APP_ENV=prod` 还需要显式 `--allow-prod`。任何目标不匹配或外部存储
+失败都会中止并报告边界，不伪造“全部删除”。清理后应再次运行 dry-run，并检查
+`alembic current`/`alembic heads`；不要运行 demo seed。
 
 ## 数据库迁移
 

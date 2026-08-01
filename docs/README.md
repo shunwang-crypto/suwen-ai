@@ -15,7 +15,7 @@
 | 测试与验收 | [当前状态](../STATUS.md) | [开发手册](development.md)、`tests/` |
 | 生产部署 | [部署手册](../deploy/README-deploy.md) | [安全](safety.md)、[扩展性](scaling.md) |
 | 安全审查 | [安全](safety.md) | [数据模型](data-model.md)、[API 契约](api-contract.md) |
-| 比赛答辩 | `docs/defense/` | [VLSE](vlse.md)、`docs/evidence/` |
+| 比赛答辩 | `docs/defense/` | [VLSE](vlse.md)；历史 evidence 已清除，不能作为当前验收凭据 |
 | AI 编程代理 | 本文件 | 仓库级指令及目标目录中的 `AGENTS.md` |
 
 ## 权威来源
@@ -53,7 +53,7 @@
 | `docs/vlse.md`、`scaling.md`、`tradeoffs.md` | Reference | 重大设计变化时复核 |
 | `docs/research/`、`docs/design/` | Reference | 明确“设计不等于实现” |
 | `docs/defense/` | Presentation | 上台前对照 STATUS 和 evidence |
-| `docs/evidence/` | Evidence | 原则上只追加，不改写历史结果 |
+| `docs/evidence/` | Evidence | 仅保留清理说明；新证据须针对明确日期和环境重新生成 |
 | `docs/*PROMPT.md`、`HANDOFF.md`、`PRODUCTION_GAP_REVIEW.md`、`TODO_COMPETITION.md` | Historical | 不作为当前实施依据 |
 
 ## 维护规则
@@ -77,7 +77,7 @@
 4. 命令必须来自当前 Makefile、package scripts 或实际 CLI。
 5. 文档与代码冲突时先确认代码行为，再在同一提交修正文档。
 6. 运行 `make docs-check` 检查 Active 文档索引和相对链接。
-7. 历史实验结果不得被当前数据覆盖；新结果写新 evidence 或明确版本。
+7. 历史实验结果已清除；新结果写入明确日期和环境的 evidence，并注明生成命令。
 
 ## 文档审查清单
 

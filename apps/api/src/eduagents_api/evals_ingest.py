@@ -1,9 +1,9 @@
-"""F9 评估看板的数据入口: 把 docs/evidence 下**已产出的真实评测产物**解析入 eval_runs。
+"""F9 评估看板的数据入口: 解析明确环境中临时生成的评测产物。
 
 为什么是"解析已有产物"而不是"看板自己再算一遍":
-评测的权威版本是 CLI 跑出来的 markdown / results.json (答辩材料引用的就是这些文件)。
+评测的权威版本是明确日期和环境下 CLI 跑出来的 markdown / results.json。
 若看板另算一份, 两个数字就有分歧风险。因此看板只做**一份数据的两种呈现**, 平台内
-展示的每个数字都能在 docs/evidence 下的原始文件里逐字找到。
+历史 evidence 不再保存在仓库；没有新产物时看板应为空，不得显示旧数字。
 
 幂等: 按文件**内容** sha256 去重 (不是路径也不是 mtime) —— 同一份报告换个路径重复
 导入不会产生第二条; 重跑评估内容变了才是新的一条。哈希存 config_json.content_sha256。
@@ -38,7 +38,7 @@ def repo_root() -> Path:
 
 
 # 扫描目录 (相对仓库根)。顺序即导入顺序。
-EVIDENCE_DIRS: tuple[str, ...] = ("docs/evidence/m2", "docs/evidence/m5")
+EVIDENCE_DIRS: tuple[str, ...] = ("/tmp/eduagents-evidence",)
 
 
 # --------------------------------------------------------------------------
@@ -430,11 +430,11 @@ def _is_retrieval_report(path: Path) -> bool:
 
 
 def discover(root: Path | None = None) -> list[tuple[Path, str]]:
-    """扫描 evidence 目录, 返回 [(绝对路径, kind)]。"""
+    """扫描临时 evidence 目录, 返回 [(绝对路径, kind)]。"""
     base = root or repo_root()
     found: list[tuple[Path, str]] = []
     for rel in EVIDENCE_DIRS:
-        directory = base / rel
+        directory = Path(rel) if Path(rel).is_absolute() else base / rel
         if not directory.is_dir():
             continue
         for path in sorted(directory.iterdir()):

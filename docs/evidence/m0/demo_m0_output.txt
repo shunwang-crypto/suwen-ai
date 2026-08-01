@@ -1,7 +1,0 @@
-NOTICE:  database "eduagents_m0check" does not exist, skipping
-== M0-D1 从零迁移验证 ==
-  PASS 21 张表建成 (实际 21)
-  PASS 16 张租户表 RLS ENABLE+FORCE (实际 16)
-  PASS 16 条隔离策略 (实际 16)
-  PASS edu_app 角色存在且非超级用户/不可绕过RLS
-== 结果: 4 PASS / 0 FAIL ==

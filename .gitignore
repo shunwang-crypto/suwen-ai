@@ -13,6 +13,18 @@ __pycache__/
 # node (M4)
 node_modules/
 .next/
+**/.next/
+**/__pycache__/
+*.pyc
+*.log
+coverage/
+htmlcov/
+docs/evidence/*
+!docs/evidence/README.md
+cassettes/
+**/cassettes/
+uploads/
+exports/
 
 # data / artifacts
 *.lock.tmp

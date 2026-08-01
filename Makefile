@@ -52,7 +52,7 @@ seed:          ## 学生/管理员演示账号 + 学生知识库 + 摄取语料 
 
 eval-retrieval:  ## 检索评估 (需先 make seed; TENANT/KB 从 seed 输出取)
 	$(PY) eval/run_retrieval_eval.py --golden eval/golden_set/v1.jsonl \
-		--tenant-id $(TENANT) --kb-id $(KB) --output docs/evidence/m2/retrieval_eval.md
+		--tenant-id $(TENANT) --kb-id $(KB) --output /tmp/eduagents-evidence/retrieval_eval.md
 
 lock:
 	$(PIP) freeze --exclude-editable > requirements.lock
@@ -83,7 +83,7 @@ demo-m2:       ## M2 演示: RAG e2e (上传→两阶段摄取→混合检索→
 	@INTEGRATION=1 $(PY) -m pytest tests/integration/test_rag_e2e.py -q \
 		&& echo "demo-m2: PASS (RAG e2e; M2-D2/D3/D4 链路)" \
 		|| { echo "demo-m2: FAIL"; exit 1; }
-	@echo "-- 检索评估 CLI (干跑说明, 数字存档见 docs/evidence/m2/): --"
+	@echo "-- 检索评估 CLI (结果写入临时目录，不进入仓库): --"
 	@echo "   make seed                                    # 输出 TENANT/KB id"
 	@echo "   make eval-retrieval TENANT=<tenant> KB=<kb>  # 黄金集 hit_rate@5 / MRR / nDCG@10"
 	@echo "   消融开关: eval/run_retrieval_eval.py --no-sparse | --no-rerank (M2-D5)"
@@ -101,7 +101,6 @@ demo-m4:       ## M4 演示: 错题→time-travel→到期复习 + 计划错误�
 demo-m5:       ## M5 演示: 闭环实验快速版 (实验B, 3 seeds, 输出到临时目录, 不覆盖正式证据)
 	@OUT=$$(mktemp -d /tmp/eduagents-demo-m5.XXXXXX) && \
 	$(PY) eval/simulation/run_experiment.py --experiment b --seeds 3 --skip-sensitivity --output $$OUT \
-		&& echo "demo-m5: PASS (快速版; 正式版 10 seeds + 敏感性分析: docs/evidence/m5/report.md)" \
+		&& echo "demo-m5: PASS (快速版；结果位于临时目录，正式生产基线待重建)" \
 		|| { echo "demo-m5: FAIL"; exit 1; }
-	@echo "-- 压测指引: loadtest/README.md (两档口径); 初测存档 docs/evidence/m5/loadtest_stub_initial.md --"
-	@echo "   (初测口径: stub 档 30 并发 / 90s, TTFE p95=87ms, 错误率 0%; 非正式 100 并发档)"
+	@echo "-- 压测指引: loadtest/README.md；结果必须写入临时目录或明确日期的外部 evidence --"

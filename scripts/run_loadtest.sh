@@ -22,9 +22,10 @@ RUN_TIME="${RUN_TIME:-90s}"
 HOST="${HOST:-http://127.0.0.1:8001}"
 
 ACCOUNTS="$REPO/loadtest/accounts.json"
-EVIDENCE="$REPO/docs/evidence/m5"
+EVIDENCE="${EVIDENCE_DIR:-/tmp/eduagents-evidence}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 PREFIX="$EVIDENCE/loadtest_stub_$STAMP"
+mkdir -p "$EVIDENCE"
 
 # stub 档 API 启动命令 (限流阈值故意调到极高: 本轮不测限流器)
 START_CMD=$(cat <<'EOF'

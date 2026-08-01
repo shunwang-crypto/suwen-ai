@@ -114,9 +114,9 @@ P(答对) = c + (1-c) · sigmoid(1.7 · (z - b)),   z = logit(θ) = ln(θ/(1-θ)
 ```bash
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
 python eval/simulation/run_experiment.py --experiment both --seeds 10 \
-    --output docs/evidence/m5/
+    --output /tmp/eduagents-evidence/
 # 快速迭代: --skip-sensitivity
 ```
 
-产出: `docs/evidence/m5/{results.json, report.md, fig1..fig4.png}`。
+产出: `/tmp/eduagents-evidence/{results.json, report.md, fig1..fig4.png}`；这些是临时结果，不进入仓库。
 单测: `tests/unit/test_simulation.py`。

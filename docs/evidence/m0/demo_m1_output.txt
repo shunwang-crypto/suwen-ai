@@ -1,8 +1,0 @@
-== M1 DoD 验证 ==
-  PASS dev-infra: postgres+redis 可用
-  PASS 迁移到 head
-  PASS lint 全过
-  PASS 单元测试 (网关四模式/熔断/时钟/JWT)
-  PASS 集成测试 (M1-D2 SSE / M1-D4 usage归因 / M1-D5 越权+RLS池复用 / U-A3 重放拒绝)
-== 结果: 5 PASS / 0 FAIL ==
-(M1-D1 docker-compose 全绿: 待 Docker daemon DNS 修复后 make up 验证, 见 README)

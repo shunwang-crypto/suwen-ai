@@ -1,6 +1,6 @@
 "use client";
 
-// 评估看板（F9，仅管理员）：把 docs/evidence 下的真实评测产物入库后集中展示。
+// 评估看板（F9，仅管理员）：把明确环境生成的评测产物入库后集中展示。
 // 上：导入 / 重跑（job 轮询）操作条；中：历史跑分表（可勾选 A/B 做 delta 对比）；
 // 下：单次跑分详情——检索报告给 headline 指标卡 + 按 category 分桶柱 + 拒答正确率，
 // 仿真报告给三臂毕业题量柱（含 95%CI 误差线）+ 显著性 / 敏感性 / 实验 A 表。
@@ -1246,7 +1246,7 @@ export default function EvalsPage() {
         <div>
           <h2 className="text-base font-semibold text-slate-900">评估看板</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            展示的都是真实评测产物（docs/evidence 下的报告文件），不做任何数字美化。
+            展示的都是明确环境生成的评测产物，不做任何数字美化；没有新产物时不显示旧数字。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1385,7 +1385,7 @@ export default function EvalsPage() {
         ) : !runs || runs.length === 0 ? (
           <EmptyState
             title="还没有任何评估记录"
-            description="点击「导入评估产物」把 docs/evidence 下的真实评测结果入库。"
+            description="点击「导入评估产物」把临时评估目录中的新结果入库。"
           />
         ) : (
           <div className="overflow-x-auto">

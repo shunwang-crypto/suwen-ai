@@ -3,7 +3,7 @@
 用法 (cwd = 仓库根):
     python eval/run_retrieval_eval.py --golden eval/golden_set/v2.jsonl \
         --kb-id <kb_id> --tenant-id <tenant_id> \
-        --output docs/evidence/m5/retrieval_eval_v2.md [--no-sparse] [--no-rerank]
+        --output /tmp/eduagents-evidence/retrieval_eval_v2.md [--no-sparse] [--no-rerank]
 
 relevance 判定 (M5, 向后兼容 v1):
 1. 若该题带 relevant_chunk_hints (chunk 级标注): chunk.text 含任一 hint 子串即相关,
@@ -287,7 +287,7 @@ def main() -> None:
     parser.add_argument("--kb-id", required=True, help="知识库 id")
     parser.add_argument("--tenant-id", required=True, help="租户 id")
     parser.add_argument(
-        "--output", default="docs/evidence/m2/retrieval_eval.md", help="markdown 报告输出路径"
+        "--output", default="/tmp/eduagents-evidence/retrieval_eval.md", help="markdown 报告输出路径"
     )
     parser.add_argument("--no-sparse", action="store_true", help="关闭 sparse 通道 (消融)")
     parser.add_argument("--no-rerank", action="store_true", help="关闭 rerank 精排 (消融)")

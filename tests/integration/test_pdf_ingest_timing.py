@@ -1,7 +1,6 @@
 """M2-D1 验收: 真实 >=20 页 PDF (corpus/calculus.pdf, pymupdf 真实排版) 走 API
 上传 -> 直调 ingest_document -> status=ready 且总耗时 <60s (perf_counter 计时);
-分块预览 API 返回的 chunk 带真实页码。计时数值存档
-docs/evidence/m2/pdf_ingest_timing.txt (页数/字节/秒数/父块子块数)。
+分块预览 API 返回的 chunk 带真实页码。计时输出写入临时目录，不提交历史 evidence。
 
 口径说明: EMBEDDING_MODE=stub (tests/conftest.py), 计时覆盖 解析+分块+入库+
 向量化(stub)+Qdrant upsert; live 嵌入口径的数字须在拿到 key 后另测 (D12)。"""
@@ -9,6 +8,7 @@ docs/evidence/m2/pdf_ingest_timing.txt (页数/字节/秒数/父块子块数)。
 import importlib.util
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .conftest import REPO_ROOT, requires_services
 from .test_rag_e2e import _register_login
@@ -16,7 +16,7 @@ from .test_rag_e2e import _register_login
 pytestmark = requires_services
 
 PDF_PATH = REPO_ROOT / "corpus" / "calculus.pdf"
-EVIDENCE_PATH = REPO_ROOT / "docs" / "evidence" / "m2" / "pdf_ingest_timing.txt"
+EVIDENCE_PATH = Path("/tmp/eduagents-evidence/pdf_ingest_timing.txt")
 
 
 def _ensure_pdf() -> None:

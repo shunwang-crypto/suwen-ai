@@ -4,7 +4,7 @@
 
     export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
     python eval/simulation/run_experiment.py --experiment both --seeds 10 \
-        --output docs/evidence/m5/
+        --output /tmp/eduagents-evidence/
 
 产出: results.json (原始数据) + report.md (统计检验表) + 4 张图 (纯 matplotlib):
 fig1 收敛曲线 / fig2 毕业生存曲线 / fig3 校准散点 / fig4 三臂毕业题量箱线图。
@@ -628,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M5 合成学生闭环实验")
     parser.add_argument("--experiment", choices=["a", "b", "both"], default="both")
     parser.add_argument("--seeds", type=int, default=10, help="随机种子数 (0..n-1)")
-    parser.add_argument("--output", type=Path, default=Path("docs/evidence/m5"))
+    parser.add_argument("--output", type=Path, default=Path("/tmp/eduagents-evidence"))
     parser.add_argument(
         "--skip-sensitivity", action="store_true", help="跳过敏感性分析 (快速迭代用)"
     )

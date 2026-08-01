@@ -93,11 +93,11 @@ USERS=100 SPAWN_RATE=10 RUN_TIME=180s bash scripts/run_loadtest.sh
 等价的裸 locust 命令:
 
 ```bash
-cd /home/shunw/eduagents && mkdir -p docs/evidence/m5
+cd /home/shunw/eduagents && mkdir -p /tmp/eduagents-evidence
 /home/shunw/miniforge3/envs/eduagents/bin/locust -f loadtest/locustfile.py --headless \
   -u 100 -r 10 -t 180s --host http://127.0.0.1:8001 \
-  --csv docs/evidence/m5/loadtest_stub_$(date +%Y%m%d-%H%M%S) --csv-full-history \
-  --html docs/evidence/m5/loadtest_stub_$(date +%Y%m%d-%H%M%S).html --only-summary
+  --csv /tmp/eduagents-evidence/loadtest_stub_$(date +%Y%m%d-%H%M%S) --csv-full-history \
+  --html /tmp/eduagents-evidence/loadtest_stub_$(date +%Y%m%d-%H%M%S).html --only-summary
 ```
 
 ### 2) live 档
@@ -126,12 +126,12 @@ GATEWAY_MODE=live EMBEDDING_MODE=live RERANK_MODE=live \
 并用 `LOADTEST_ACCOUNTS` 指向 live 档账号池:
 
 ```bash
-cd /home/shunw/eduagents && mkdir -p docs/evidence/m5
+cd /home/shunw/eduagents && mkdir -p /tmp/eduagents-evidence
 LOADTEST_ACCOUNTS=loadtest/accounts_live.json \
 /home/shunw/miniforge3/envs/eduagents/bin/locust -f loadtest/locustfile.py --headless \
   -u 10 -r 2 -t 300s --host http://127.0.0.1:8002 \
-  --csv docs/evidence/m5/loadtest_live_$(date +%Y%m%d-%H%M%S) --csv-full-history \
-  --html docs/evidence/m5/loadtest_live_$(date +%Y%m%d-%H%M%S).html --only-summary
+  --csv /tmp/eduagents-evidence/loadtest_live_$(date +%Y%m%d-%H%M%S) --csv-full-history \
+  --html /tmp/eduagents-evidence/loadtest_live_$(date +%Y%m%d-%H%M%S).html --only-summary
 ```
 
 live 档并发只给 10: 真实网关有供应商侧的 QPS/TPM 配额, 打高了测出来的是"被上游限流",
