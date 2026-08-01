@@ -358,9 +358,10 @@ async def test_reports_learning(api):
         # 模拟真实模型完成路径：更新后的 server timestamp 必须显式 refresh，防止
         # SQLAlchemy 在响应序列化阶段触发 MissingGreenlet。
         from eduagents_api.db import tenant_session
-        from eduagents_api.deps import get_app_settings, get_gateway
+        from eduagents_api.deps import get_app_settings
         from eduagents_api.models import LearningReportSnapshot
         from eduagents_core.gateway import ChatResult
+        from eduagents_worker.reports import refresh_learning_report
 
         async with tenant_session(uid) as session:
             snapshot = await session.scalar(
@@ -386,18 +387,39 @@ async def test_reports_learning(api):
                 )
 
         app = api._transport.app
-        app.dependency_overrides[get_app_settings] = lambda: get_settings().model_copy(
-            update={"gateway_mode": "live"}
-        )
-        app.dependency_overrides[get_gateway] = lambda: FakeGateway()
+        live_settings = get_settings().model_copy(update={"gateway_mode": "live"})
+        app.dependency_overrides[get_app_settings] = lambda: live_settings
         try:
             live_refresh = await api.post("/api/reports/learning/refresh", headers=headers)
         finally:
             app.dependency_overrides.pop(get_app_settings, None)
-            app.dependency_overrides.pop(get_gateway, None)
         assert live_refresh.status_code == 200, live_refresh.text
-        assert live_refresh.json()["report_status"] == "completed"
-        assert live_refresh.json()["narrative"].startswith("现状")
+        assert live_refresh.json()["report_status"] == "generating"
+
+        async with tenant_session(uid) as session:
+            snapshot = await session.scalar(
+                select(LearningReportSnapshot).where(
+                    LearningReportSnapshot.user_id == uuid.UUID(uid),
+                    LearningReportSnapshot.scope_key == "all",
+                )
+            )
+            snapshot_id = str(snapshot.id)
+            signature = snapshot.data_signature
+        assert (
+            await refresh_learning_report(
+                {},
+                uid,
+                uid,
+                snapshot_id,
+                signature,
+                gateway=FakeGateway(),
+                settings=live_settings,
+            )
+            == "completed"
+        )
+        completed = await api.get("/api/reports/learning", headers=headers)
+        assert completed.json()["report_status"] == "completed"
+        assert completed.json()["narrative"].startswith("现状")
     else:
         assert refreshed_body["narrative"]
 

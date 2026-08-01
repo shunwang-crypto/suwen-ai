@@ -120,6 +120,8 @@ export interface TraceEventData {
 
 export interface CitationData {
   idx: number;
+  /** 本条回答正文是否实际引用；未引用来源仍可在搜索结果面板中查看。 */
+  cited?: boolean;
   doc_id: string;
   chunk_id: string;
   page?: number | null;
@@ -209,6 +211,14 @@ export interface StudyGuideOut {
   kb_id: string;
   /** 未生成时为 null（前端据此显示「生成学习指南」按钮） */
   guide: StudyGuide | null;
+  generation: {
+    status: "idle" | "queued" | "running" | "completed" | "failed";
+    job_id?: string;
+    requested_at?: string;
+    started_at?: string;
+    finished_at?: string;
+    message?: string;
+  };
   writable: boolean;
 }
 
@@ -469,6 +479,20 @@ export interface TutorTurnResult {
   /** summarize 节点产出的 JSON 字符串（未结束时为空串） */
   session_summary: string;
   mastery_changes: MasteryChange[];
+}
+
+export interface TutorSessionState {
+  thread_local_id: string;
+  problem: string;
+  messages: Array<{
+    role: "user" | "assistant";
+    content: string;
+    hint_level?: number;
+  }>;
+  hint_level: number;
+  stuck_type: string;
+  session_summary: string;
+  pending: boolean;
 }
 
 /** session_summary 的解析结构（tutor_summarize.md 契约） */

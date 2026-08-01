@@ -11,7 +11,11 @@ import { ApiError, apiJson } from "@/lib/api";
 import type { StudyGuide, StudyGuideOut } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 3000;
-const POLL_MAX_TICKS = 40; // 最长约 2 分钟（standard 档一次生成通常 10-30s）
+const POLL_MAX_TICKS = 200; // 最长约 10 分钟，覆盖排队时间与较长资料
+
+function generationActive(status?: string): boolean {
+  return status === "queued" || status === "running";
+}
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -47,15 +51,18 @@ export function StudyGuidePanel({
   const [generating, setGenerating] = useState(false);
   const [openIdx, setOpenIdx] = useState<number>(0);
   const pollTicksRef = useRef(0);
-  // 重新生成时的基线时间戳：轮询到 generated_at 变化才算完成（否则会被旧指南骗停）
-  const baselineRef = useRef<string | null>(null);
 
   const load = useCallback(
     async (silent = false): Promise<StudyGuide | null> => {
       try {
         const res = await apiJson<StudyGuideOut>(`/api/kb/${kbId}/study-guide`);
         setGuide(res.guide);
-        setError(null);
+        setGenerating(generationActive(res.generation.status));
+        if (res.generation.status === "failed") {
+          setError(res.generation.message || "学习指南生成失败，请重试");
+        } else {
+          setError(null);
+        }
         return res.guide;
       } catch (err) {
         if (!silent) {
@@ -77,7 +84,12 @@ export function StudyGuidePanel({
         const res = await apiJson<StudyGuideOut>(`/api/kb/${kbId}/study-guide`);
         if (!alive) return;
         setGuide(res.guide);
-        setError(null);
+        setGenerating(generationActive(res.generation.status));
+        setError(
+          res.generation.status === "failed"
+            ? res.generation.message || "学习指南生成失败，请重试"
+            : null,
+        );
       } catch (err) {
         if (!alive) return;
         setError(err instanceof ApiError ? err.message : "学习指南加载失败");
@@ -100,9 +112,7 @@ export function StudyGuidePanel({
         setError("生成超时，请稍后重试（后台任务可能仍在运行）");
         return;
       }
-      void load(true).then((g) => {
-        if (g && g.generated_at !== baselineRef.current) setGenerating(false);
-      });
+      void load(true);
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [generating, load]);
@@ -111,12 +121,12 @@ export function StudyGuidePanel({
     setError(null);
     setGenerating(true);
     pollTicksRef.current = 0;
-    baselineRef.current = guide?.generated_at ?? null;
     try {
-      await apiJson<{ status: string }>(`/api/kb/${kbId}/study-guide/rebuild`, {
+      const result = await apiJson<{ status: string }>(`/api/kb/${kbId}/study-guide/rebuild`, {
         method: "POST",
         body: {},
       });
+      setGenerating(generationActive(result.status));
     } catch (err) {
       setGenerating(false);
       setError(err instanceof ApiError ? err.message : "生成学习指南失败");

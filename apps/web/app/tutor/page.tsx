@@ -14,15 +14,18 @@ import {
   Spinner,
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
 import type {
   KbOut,
   MasteryChange,
+  TutorSessionState,
   TutorSessionSummary,
   TutorTurnResult,
 } from "@/lib/types";
 
 const emptySubscribe = () => () => {};
+const TUTOR_SESSION_KEY = "suwen:active-tutor-session";
 
 const HINT_LEVELS = ["引导提问", "方向提示", "关键步骤", "完整解答"];
 
@@ -49,6 +52,53 @@ interface TutorMessage {
   content: string;
   /** assistant 消息记录该轮的提示层级 */
   hintLevel?: number;
+}
+
+interface SavedTutorSession {
+  threadId: string;
+  problem: string;
+  pendingMessage?: string;
+  masteryChanges?: MasteryChange[];
+}
+
+function tutorSessionKey(userId: string): string {
+  return `${TUTOR_SESSION_KEY}:${userId}`;
+}
+
+function readTutorSession(userId: string): SavedTutorSession | null {
+  try {
+    const key = tutorSessionKey(userId);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<SavedTutorSession>;
+    if (!value.threadId || !value.problem) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return value as SavedTutorSession;
+  } catch {
+    window.localStorage.removeItem(tutorSessionKey(userId));
+    return null;
+  }
+}
+
+function writeTutorSession(userId: string, value: SavedTutorSession): void {
+  window.localStorage.setItem(tutorSessionKey(userId), JSON.stringify(value));
+}
+
+function parseTutorSummary(raw: string): TutorSessionSummary | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<TutorSessionSummary>;
+    return {
+      misconceptions: Array.isArray(value.misconceptions) ? value.misconceptions : [],
+      review_suggestions: Array.isArray(value.review_suggestions)
+        ? value.review_suggestions
+        : [],
+    };
+  } catch {
+    return { misconceptions: [], review_suggestions: [] };
+  }
 }
 
 /** 提示层级徽章（第 N 层 · 名称）。 */
@@ -250,6 +300,8 @@ function ReviewCard({
 }
 
 export default function TutorPage() {
+  const { user } = useAuth();
+  const userId = user?.id ?? "anonymous";
   const search = useSyncExternalStore(
     emptySubscribe,
     () => window.location.search,
@@ -291,6 +343,69 @@ export default function TutorPage() {
     };
   }, [sourceKbId]);
 
+  useEffect(() => {
+    const saved = readTutorSession(userId);
+    if (!saved || (prefilledProblem && prefilledProblem !== saved.problem)) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+
+    const restore = async () => {
+      attempts += 1;
+      try {
+        const state = await apiJson<TutorSessionState>(`/api/tutor/${saved.threadId}`);
+        if (!alive) return;
+        setProblem(saved.problem || state.problem);
+        setProblemTouched(true);
+        setThreadId(saved.threadId);
+        setMessages(
+          state.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            hintLevel: message.hint_level,
+          })),
+        );
+        setHintLevel(state.hint_level);
+        setStuckType(state.stuck_type);
+        setSummary(parseTutorSummary(state.session_summary));
+        setMasteryChanges(saved.masteryChanges ?? []);
+        setSending(state.pending);
+        if (state.pending && attempts < 60) {
+          timer = setTimeout(() => void restore(), 1500);
+        } else if (!state.pending) {
+          writeTutorSession(userId, {
+            threadId: saved.threadId,
+            problem: saved.problem,
+            masteryChanges: saved.masteryChanges,
+          });
+        }
+      } catch (err) {
+        if (!alive) return;
+        if (err instanceof ApiError && err.status === 404 && attempts < 60) {
+          setProblem(saved.problem);
+          setProblemTouched(true);
+          setThreadId(saved.threadId);
+          setMessages(
+            saved.pendingMessage
+              ? [{ role: "user", content: saved.pendingMessage }]
+              : [],
+          );
+          setSending(Boolean(saved.pendingMessage));
+          timer = setTimeout(() => void restore(), 1500);
+          return;
+        }
+        setSending(false);
+        setError(err instanceof ApiError ? err.message : "辅导现场恢复失败");
+      }
+    };
+
+    void restore();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [prefilledProblem, userId]);
+
   // 新消息自动滚到底部
   useEffect(() => {
     const el = listRef.current;
@@ -301,6 +416,14 @@ export default function TutorPage() {
     const message = text.trim();
     const prob = effectiveProblem.trim();
     if (!message || !prob || sending || ended) return;
+    const activeThreadId = threadId ?? crypto.randomUUID();
+    if (!threadId) setThreadId(activeThreadId);
+    writeTutorSession(userId, {
+      threadId: activeThreadId,
+      problem: prob,
+      pendingMessage: message,
+      masteryChanges,
+    });
     setSending(true);
     setError(null);
     setMessages((prev) => [...prev, { role: "user", content: message }]);
@@ -309,7 +432,7 @@ export default function TutorPage() {
         body: {
           problem: prob,
           message,
-          thread_local_id: threadId ?? undefined,
+          thread_local_id: activeThreadId,
         },
       });
       setThreadId(res.thread_local_id);
@@ -322,31 +445,23 @@ export default function TutorPage() {
         ]);
       }
       if (res.session_summary) {
-        // summarize 契约: {misconceptions, review_suggestions}; 解析失败按空小结兜底
-        let parsed: TutorSessionSummary = {
-          misconceptions: [],
-          review_suggestions: [],
-        };
-        try {
-          const raw = JSON.parse(res.session_summary) as Partial<TutorSessionSummary>;
-          parsed = {
-            misconceptions: Array.isArray(raw.misconceptions)
-              ? raw.misconceptions
-              : [],
-            review_suggestions: Array.isArray(raw.review_suggestions)
-              ? raw.review_suggestions
-              : [],
-          };
-        } catch {
-          // 保留空小结
-        }
-        setSummary(parsed);
+        setSummary(parseTutorSummary(res.session_summary));
         setMasteryChanges(res.mastery_changes ?? []);
       }
+      writeTutorSession(userId, {
+        threadId: activeThreadId,
+        problem: prob,
+        masteryChanges: res.mastery_changes ?? masteryChanges,
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "辅导请求失败，请重试");
       // 回滚本轮未送达的学生消息，避免与服务端 thread 状态不一致
       setMessages((prev) => prev.slice(0, -1));
+      writeTutorSession(userId, {
+        threadId: activeThreadId,
+        problem: prob,
+        masteryChanges,
+      });
     } finally {
       setSending(false);
     }
@@ -361,6 +476,7 @@ export default function TutorPage() {
 
   // 换题：重置 thread_local_id 与全部会话状态
   const reset = () => {
+    window.localStorage.removeItem(tutorSessionKey(userId));
     setThreadId(null);
     setMessages([]);
     setInput("");

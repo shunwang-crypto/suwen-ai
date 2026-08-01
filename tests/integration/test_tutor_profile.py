@@ -153,6 +153,19 @@ async def test_tutor_summary_writes_mastery_with_tutor_evidence(client):
         )
         assert r.status_code == 200, r.text
         assert r.json()["mastery_changes"] == []
+
+        restored = await client.get(f"/api/tutor/{thread_local_id}", headers=headers)
+        assert restored.status_code == 200, restored.text
+        restored_body = restored.json()
+        assert restored_body["problem"].startswith("用定义求")
+        assert [message["role"] for message in restored_body["messages"]] == [
+            "user",
+            "user",
+            "assistant",
+        ]
+        assert restored_body["messages"][-1]["content"] == "我们再看看这一步?"
+        assert restored_body["pending"] is False
+        assert json.loads(restored_body["session_summary"])["misconceptions"]
     finally:
         runtime._deps.gateway = original
 

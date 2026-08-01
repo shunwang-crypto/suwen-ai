@@ -279,6 +279,49 @@ async def list_adjustments(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_ra
 tutor_router = APIRouter(prefix="/api/tutor", tags=["tutor"])
 
 
+@tutor_router.get("/{thread_local_id}")
+async def get_tutor_session(
+    thread_local_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """从 LangGraph checkpoint 恢复当前用户的一次辅导现场。"""
+    runtime = getattr(request.app.state, "graphs", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
+    thread_id = runtime.thread_id("tutor", str(ctx.user_id), str(thread_local_id))
+    graph = runtime.graph("tutor")
+    state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    values = dict(state.values)
+    if not values:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+
+    reply_levels = iter(
+        int(event.get("hint_level") or 0)
+        for event in values.get("trace") or []
+        if event.get("node") == "respond" and event.get("event") == "replied"
+    )
+    messages = []
+    for message in values.get("messages") or []:
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        item = {"role": role, "content": content}
+        if role == "assistant":
+            item["hint_level"] = next(reply_levels, int(values.get("hint_level") or 0))
+        messages.append(item)
+    return {
+        "thread_local_id": str(thread_local_id),
+        "problem": values.get("problem", ""),
+        "messages": messages,
+        "hint_level": int(values.get("hint_level") or 0),
+        "stuck_type": values.get("stuck_type", ""),
+        "session_summary": values.get("session_summary", ""),
+        "pending": bool(state.next),
+    }
+
+
 @tutor_router.post("")
 async def tutor_turn(
     body: TutorTurn, request: Request, ctx: AuthContext = Depends(api_rate_limited)

@@ -26,6 +26,7 @@ import {
 } from "@/components/common";
 import type { FlowItem } from "@/components/flow-timeline";
 import { ApiError, apiJson } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
@@ -46,6 +47,57 @@ import type {
 } from "@/lib/types";
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
+const PENDING_PLAN_KEY = "suwen:pending-plan-draft";
+
+interface PendingPlanDraft {
+  status: "generating" | "await_confirm" | "resuming";
+  interrupt?: GraphInterruptData;
+  startedAt: number;
+  form: {
+    goal: string;
+    kbId: string;
+    hours: number;
+    totalDays: number;
+  };
+}
+
+function pendingPlanKey(userId: string): string {
+  return `${PENDING_PLAN_KEY}:${userId}`;
+}
+
+function readPendingPlan(userId: string): PendingPlanDraft | null {
+  try {
+    const key = pendingPlanKey(userId);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PendingPlanDraft>;
+    const validStatus = ["generating", "await_confirm", "resuming"].includes(
+      value.status ?? "",
+    );
+    const stale = !value.startedAt || Date.now() - value.startedAt > 30 * 60 * 1000;
+    const invalidInterrupt =
+      value.status !== "generating" &&
+      (!value.interrupt?.thread_id?.startsWith("plan:") ||
+        !value.interrupt.resume_url ||
+        !value.interrupt.plan);
+    if (!validStatus || !value.form?.goal || stale || invalidInterrupt) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return value as PendingPlanDraft;
+  } catch {
+    window.localStorage.removeItem(pendingPlanKey(userId));
+    return null;
+  }
+}
+
+function clearPendingPlan(userId: string): void {
+  window.localStorage.removeItem(pendingPlanKey(userId));
+}
+
+function writePendingPlan(userId: string, value: PendingPlanDraft): void {
+  window.localStorage.setItem(pendingPlanKey(userId), JSON.stringify(value));
+}
 
 const emptySubscribe = () => () => {};
 
@@ -411,6 +463,8 @@ function PlanConfirmCard({
 }
 
 export default function PlansPage() {
+  const { user } = useAuth();
+  const userId = user?.id ?? "anonymous";
   const search = useSyncExternalStore(
     emptySubscribe,
     () => window.location.search,
@@ -484,12 +538,45 @@ export default function PlansPage() {
         setListError("计划列表加载失败");
       }
       setKbs(kbsRes.status === "fulfilled" ? kbsRes.value : []);
+      const pending = readPendingPlan(userId);
+      if (pending) {
+        setGoal(pending.form.goal);
+        setKbId(pending.form.kbId);
+        setHours(pending.form.hours);
+        setTotalDays(pending.form.totalDays);
+        setSelected(null);
+        setShowCreate(true);
+        setInterruptData(pending.interrupt ?? null);
+        setPhase(
+          pending.status === "generating"
+            ? "streaming"
+            : pending.status === "resuming"
+              ? "resuming"
+              : "await_confirm",
+        );
+      }
     })();
     return () => {
       alive = false;
-      abortRef.current?.abort();
     };
-  }, [requestedPlanId]);
+  }, [requestedPlanId, userId]);
+
+  useEffect(() => {
+    if (phase !== "streaming" && phase !== "resuming") return;
+    const timer = setInterval(() => {
+      const pending = readPendingPlan(userId);
+      if (!pending) {
+        setPhase("idle");
+        void loadPlans();
+        return;
+      }
+      if (pending.status === "await_confirm" && pending.interrupt) {
+        setInterruptData(pending.interrupt);
+        setPhase("await_confirm");
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [phase, loadPlans, userId]);
 
   // 选中计划后拉详情 + 调整历史（detailKey 自增可强制重拉；首个 setState 在 await 之后）
   const selectedPlanId = selected?.id ?? "";
@@ -603,12 +690,23 @@ export default function PlansPage() {
               ]);
               break;
             case "interrupt":
-              setInterruptData(msg.data as GraphInterruptData);
+              {
+                const interrupt = msg.data as GraphInterruptData;
+                const pending = readPendingPlan(userId);
+                writePendingPlan(userId, {
+                  status: "await_confirm",
+                  interrupt,
+                  startedAt: pending?.startedAt ?? Date.now(),
+                  form: { goal, kbId, hours, totalDays },
+                });
+                setInterruptData(interrupt);
+              }
               setPhase("await_confirm");
               break;
             case "done": {
               const d = msg.data as GraphDoneData;
               const planId = d.result?.plan_id;
+              clearPendingPlan(userId);
               setPhase("idle");
               setInterruptData(null);
               if (planId) {
@@ -630,7 +728,14 @@ export default function PlansPage() {
             case "error": {
               const d = msg.data as ErrorEventData;
               setFlowError(d.message || d.code);
-              setPhase("idle");
+              const pending = readPendingPlan(userId);
+              if (path.includes("/api/threads/") && pending?.interrupt) {
+                writePendingPlan(userId, { ...pending, status: "await_confirm" });
+                setPhase("await_confirm");
+              } else {
+                clearPendingPlan(userId);
+                setPhase("idle");
+              }
               break;
             }
             default:
@@ -646,19 +751,32 @@ export default function PlansPage() {
               ? err.message
               : "网络异常，请稍后重试",
         );
-        setPhase("idle");
+        const pending = readPendingPlan(userId);
+        if (path.includes("/api/threads/") && pending?.interrupt) {
+          writePendingPlan(userId, { ...pending, status: "await_confirm" });
+          setPhase("await_confirm");
+        } else {
+          clearPendingPlan(userId);
+          setPhase("idle");
+        }
       } finally {
         abortRef.current = null;
         // 流意外结束（无 done/interrupt）时兜底回到空闲态
         setPhase((p) => (p === "await_confirm" ? p : "idle"));
       }
     },
-    [loadPlans],
+    [goal, hours, kbId, loadPlans, totalDays, userId],
   );
 
   const startPlan = (e: FormEvent) => {
     e.preventDefault();
     if (!goal.trim() || phase !== "idle") return;
+    clearPendingPlan(userId);
+    writePendingPlan(userId, {
+      status: "generating",
+      startedAt: Date.now(),
+      form: { goal: goal.trim(), kbId, hours, totalDays },
+    });
     setTimeline([]);
     setInterruptData(null);
     setFlowError(null);
@@ -675,6 +793,13 @@ export default function PlansPage() {
 
   const resume = (approved: boolean, plan?: PlanStructure) => {
     if (!interruptData) return;
+    const pending = readPendingPlan(userId);
+    writePendingPlan(userId, {
+      status: "resuming",
+      interrupt: interruptData,
+      startedAt: pending?.startedAt ?? Date.now(),
+      form: { goal, kbId, hours, totalDays },
+    });
     setPhase("resuming");
     // 编辑版随 approved 一起回传; 服务端 confirm_plan 会重跑硬校验并以其结果为准
     void consume(interruptData.resume_url, {

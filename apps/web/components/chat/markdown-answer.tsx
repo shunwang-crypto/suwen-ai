@@ -59,11 +59,14 @@ export function MarkdownAnswer({
   text,
   onCitationClick,
   activeCitation,
+  citationIndexes = [],
 }: {
   text: string;
   onCitationClick?: (idx: number) => void;
   activeCitation?: number | null;
+  citationIndexes?: number[];
 }) {
+  const availableCitations = new Set(citationIndexes);
   const components: Components = {
     h1: ({ children }) => (
       <h1 className="mb-3 mt-6 text-xl font-semibold leading-8 text-ink first:mt-0">
@@ -129,6 +132,7 @@ export function MarkdownAnswer({
       const citation = href?.match(CITATION_HREF_RE);
       if (citation) {
         const idx = Number(citation[1]);
+        if (!availableCitations.has(idx)) return <>{children}</>;
         const active = activeCitation === idx;
         return (
           <button

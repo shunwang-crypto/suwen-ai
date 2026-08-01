@@ -762,41 +762,59 @@ export default function ReportsPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      let hasVisibleReport = false;
       try {
         setRefreshError(null);
-        const res = await apiJson<ScaledReportResponse>(
+        let current = await apiJson<ScaledReportResponse>(
           `/api/reports/learning${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
         );
         if (!alive) return;
-        setReport(res);
+        setReport(current);
+        hasVisibleReport = true;
         setError(null);
         setLoading(false);
 
-        // 首屏数据/旧快照已经可见后再刷新。模型慢只影响 AI 诊断卡，不阻塞整页。
+        // 已在生成时只恢复轮询，不重复提交同一份模型任务。
         setDiagnosisLoading(true);
-        try {
-          const refreshed = await apiJson<ScaledReportResponse>(
+        if (current.report_status !== "generating") {
+          current = await apiJson<ScaledReportResponse>(
             `/api/reports/learning/refresh${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
             { method: "POST" },
           );
-          if (alive) setReport(refreshed);
-        } catch (refreshErr) {
-          if (alive) {
-            setRefreshError(
-              refreshErr instanceof ApiError
-                ? refreshErr.message
-                : "后台更新失败，当前仍显示最近一次报告",
-            );
-          }
-        } finally {
-          if (alive) setDiagnosisLoading(false);
+          if (!alive) return;
+          setReport(current);
+        }
+
+        let polls = 0;
+        while (alive && current.report_status === "generating" && polls < 200) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          if (!alive) return;
+          current = await apiJson<ScaledReportResponse>(
+            `/api/reports/learning${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ""}`,
+          );
+          polls += 1;
+          if (alive) setReport(current);
+        }
+        if (alive && current.report_status === "generating") {
+          setRefreshError("诊断仍在后台生成，稍后返回本页即可查看");
         }
       } catch (err) {
         if (alive) {
-          setError(err instanceof ApiError ? err.message : "学情报告加载失败");
+          if (hasVisibleReport) {
+            setRefreshError(
+              err instanceof ApiError
+                ? err.message
+                : "后台更新失败，当前仍显示最近一次报告",
+            );
+          } else {
+            setError(err instanceof ApiError ? err.message : "学情报告加载失败");
+          }
         }
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoading(false);
+          setDiagnosisLoading(false);
+        }
       }
     })();
     return () => {

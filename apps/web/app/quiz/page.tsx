@@ -32,6 +32,7 @@ import {
   QuestionMeta,
 } from "@/components/quiz/question-answer";
 import { ApiError, apiJson } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
@@ -51,6 +52,52 @@ import type {
 } from "@/lib/types";
 
 type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
+const PENDING_QUIZ_KEY = "suwen:pending-quiz-draft";
+
+interface PendingQuizDraft {
+  status: "generating" | "await_confirm" | "resuming";
+  interrupt?: GraphInterruptData;
+  topic: string;
+  startedAt: number;
+}
+
+function pendingQuizKey(userId: string): string {
+  return `${PENDING_QUIZ_KEY}:${userId}`;
+}
+
+function readPendingQuiz(userId: string): PendingQuizDraft | null {
+  try {
+    const key = pendingQuizKey(userId);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PendingQuizDraft>;
+    const validStatus = ["generating", "await_confirm", "resuming"].includes(
+      value.status ?? "",
+    );
+    const stale = !value.startedAt || Date.now() - value.startedAt > 30 * 60 * 1000;
+    const invalidInterrupt =
+      value.status !== "generating" &&
+      (!value.interrupt?.thread_id?.startsWith("quiz:") ||
+        !value.interrupt.resume_url ||
+        !value.interrupt.blueprint);
+    if (!validStatus || !value.topic || stale || invalidInterrupt) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return value as PendingQuizDraft;
+  } catch {
+    window.localStorage.removeItem(pendingQuizKey(userId));
+    return null;
+  }
+}
+
+function clearPendingQuiz(userId: string): void {
+  window.localStorage.removeItem(pendingQuizKey(userId));
+}
+
+function writePendingQuiz(userId: string, value: PendingQuizDraft): void {
+  window.localStorage.setItem(pendingQuizKey(userId), JSON.stringify(value));
+}
 
 /** 后端下发的逐 KC 难度分档理由（P1-1 可解释出题：定性区间词，不含掌握度数值）。 */
 interface DifficultyReason {
@@ -97,6 +144,8 @@ function PracticeSteps({ current }: { current: number }) {
 }
 
 export default function QuizPage() {
+  const { user } = useAuth();
+  const userId = user?.id ?? "anonymous";
   // URL 预填（/quiz?topic=..&kb=..，来自对话页「考考我」chip）。
   // SSR 快照为空串、客户端快照读真实 search：无水合不匹配，也无需 Suspense。
   const search = useSyncExternalStore(
@@ -187,15 +236,44 @@ export default function QuizPage() {
           ? weakRes.value
           : { threshold: 0.6, limit: 5, weak_points: [] },
       );
+      const pending = readPendingQuiz(userId);
+      if (pending) {
+        topicRef.current = pending.topic;
+        setInterruptData(pending.interrupt ?? null);
+        setPhase(
+          pending.status === "generating"
+            ? "streaming"
+            : pending.status === "resuming"
+              ? "resuming"
+              : "await_confirm",
+        );
+      }
     })();
     return () => {
       alive = false;
-      abortRef.current?.abort();
     };
     // 只在首屏跑一次: weakKbId 初值恒为空串, 后续切换由 pickWeakKb 自己重拉,
     // 放进依赖会让每次切科目多打一轮首屏三连请求
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userId]);
+
+  useEffect(() => {
+    if (phase !== "streaming" && phase !== "resuming") return;
+    const timer = setInterval(() => {
+      const pending = readPendingQuiz(userId);
+      if (!pending) {
+        setPhase("idle");
+        void loadQuizzes();
+        return;
+      }
+      if (pending.status === "await_confirm" && pending.interrupt) {
+        topicRef.current = pending.topic;
+        setInterruptData(pending.interrupt);
+        setPhase("await_confirm");
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [phase, loadQuizzes, userId]);
 
   /** 切换薄弱点科目作用域：重拉预览，保证「所见即所练」。 */
   const pickWeakKb = useCallback(
@@ -242,7 +320,15 @@ export default function QuizPage() {
               ]);
               break;
             case "interrupt": {
-              setInterruptData(msg.data as GraphInterruptData);
+              const interrupt = msg.data as GraphInterruptData;
+              const pending = readPendingQuiz(userId);
+              writePendingQuiz(userId, {
+                status: "await_confirm",
+                interrupt,
+                topic: topicRef.current,
+                startedAt: pending?.startedAt ?? Date.now(),
+              });
+              setInterruptData(interrupt);
               setPhase("await_confirm");
               break;
             }
@@ -261,6 +347,7 @@ export default function QuizPage() {
               } else {
                 setNotice("已取消出题（蓝图未确认），可重新发起。");
               }
+              clearPendingQuiz(userId);
               setPhase("idle");
               setInterruptData(null);
               void loadQuizzes();
@@ -269,7 +356,14 @@ export default function QuizPage() {
             case "error": {
               const d = msg.data as ErrorEventData;
               setFlowError(d.message || d.code);
-              setPhase("idle");
+              const pending = readPendingQuiz(userId);
+              if (path.includes("/api/threads/") && pending?.interrupt) {
+                writePendingQuiz(userId, { ...pending, status: "await_confirm" });
+                setPhase("await_confirm");
+              } else {
+                clearPendingQuiz(userId);
+                setPhase("idle");
+              }
               break;
             }
             default:
@@ -285,19 +379,32 @@ export default function QuizPage() {
               ? err.message
               : "网络异常，请稍后重试",
         );
-        setPhase("idle");
+        const pending = readPendingQuiz(userId);
+        if (path.includes("/api/threads/") && pending?.interrupt) {
+          writePendingQuiz(userId, { ...pending, status: "await_confirm" });
+          setPhase("await_confirm");
+        } else {
+          clearPendingQuiz(userId);
+          setPhase("idle");
+        }
       } finally {
         abortRef.current = null;
         // 流意外结束（无 done/interrupt）时兜底回到空闲态
         setPhase((p) => (p === "await_confirm" ? p : "idle"));
       }
     },
-    [loadQuizzes],
+    [loadQuizzes, userId],
   );
 
   const startQuiz = useCallback(
     (value: QuizFormValue) => {
+      clearPendingQuiz(userId);
       topicRef.current = value.topic;
+      writePendingQuiz(userId, {
+        status: "generating",
+        topic: value.topic,
+        startedAt: Date.now(),
+      });
       setTimeline([]);
       setInterruptData(null);
       setFlowError(null);
@@ -307,7 +414,7 @@ export default function QuizPage() {
       setPhase("streaming");
       void consume("/api/quiz", value);
     },
-    [consume],
+    [consume, userId],
   );
 
   /** 画像定向出题：kc_names 与难度分布都由后端按掌握度计算（M4-D2 / P1-1），
@@ -315,7 +422,13 @@ export default function QuizPage() {
   const startWeakQuiz = useCallback(() => {
     const points = weak?.weak_points ?? [];
     if (points.length === 0) return;
+    clearPendingQuiz(userId);
     topicRef.current = "薄弱点强化练习";
+    writePendingQuiz(userId, {
+      status: "generating",
+      topic: topicRef.current,
+      startedAt: Date.now(),
+    });
     setTimeline([]);
     setInterruptData(null);
     setFlowError(null);
@@ -329,13 +442,19 @@ export default function QuizPage() {
       // 与预览同一作用域：选了科目就只出该库的题，不跨学科混卷
       ...(weakKbId ? { kb_id: weakKbId } : {}),
     });
-  }, [weak, weakKbId, consume]);
+  }, [weak, weakKbId, consume, userId]);
 
   /** 掌握度验证出题（P2-6 可争辩画像）：主题=该 KC、kc_names=[该KC]、题数默认 3。
    *  难度三档均摊（重估需跨难度采样）；蓝图节点保证题数恰为 verifyCount。 */
   const startVerifyQuiz = useCallback(() => {
     if (!verifyKc) return;
+    clearPendingQuiz(userId);
     topicRef.current = `验证：${verifyKc}`;
+    writePendingQuiz(userId, {
+      status: "generating",
+      topic: topicRef.current,
+      startedAt: Date.now(),
+    });
     setTimeline([]);
     setInterruptData(null);
     setFlowError(null);
@@ -355,17 +474,24 @@ export default function QuizPage() {
         hard: base,
       },
     });
-  }, [verifyKc, verifyCount, consume]);
+  }, [verifyKc, verifyCount, consume, userId]);
 
   const resume = useCallback(
     (approved: boolean, blueprint?: Blueprint) => {
       if (!interruptData) return;
+      const pending = readPendingQuiz(userId);
+      writePendingQuiz(userId, {
+        status: "resuming",
+        interrupt: interruptData,
+        topic: topicRef.current,
+        startedAt: pending?.startedAt ?? Date.now(),
+      });
       setPhase("resuming");
       void consume(interruptData.resume_url, {
         value: approved ? { approved: true, blueprint } : { approved: false },
       });
     },
-    [interruptData, consume],
+    [interruptData, consume, userId],
   );
 
   const openQuiz = useCallback(async (id: string) => {

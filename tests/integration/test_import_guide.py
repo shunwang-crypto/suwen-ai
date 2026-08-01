@@ -126,8 +126,9 @@ class _RecordingRedis:
     def __init__(self):
         self.jobs: list[tuple] = []
 
-    async def enqueue_job(self, name, *args):
+    async def enqueue_job(self, name, *args, **kwargs):
         self.jobs.append((name, *args))
+        return object()
 
 
 class _PageHandler(BaseHTTPRequestHandler):
@@ -290,7 +291,21 @@ async def test_study_guide_generated_and_readable(allow_private_hosts, client, l
 
     # 手动重建端点入队 (stub 网关下 worker 侧会 skip, 这里只验路由与鉴权)
     r = await client.post(f"/api/kb/{kb_id}/study-guide/rebuild", headers=headers)
-    assert r.status_code == 202 and r.json() == {"status": "queued"}
+    assert r.status_code == 202
+    queued = r.json()
+    assert queued["status"] == "queued"
+    assert queued["job_id"].startswith(f"study-guide:{kb_id}:")
+
+    generation = (
+        await client.get(f"/api/kb/{kb_id}/study-guide", headers=headers)
+    ).json()["generation"]
+    assert generation["status"] == "queued"
+    assert generation["job_id"] == queued["job_id"]
+
+    # 排队或执行期间重复点击返回同一任务，不再次入队、也不重复计费。
+    duplicate = await client.post(f"/api/kb/{kb_id}/study-guide/rebuild", headers=headers)
+    assert duplicate.status_code == 202
+    assert duplicate.json() == queued
 
     # stub 网关 (测试默认) 下不产生可入库内容, 既有指南不被覆盖
     assert await build_study_guide({}, tenant_id, kb_id) == "skipped"

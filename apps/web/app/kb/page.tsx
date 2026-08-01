@@ -25,6 +25,7 @@ import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import type { DocumentOut, KbOut } from "@/lib/types";
 
 /** 上传/配额类错误码 → 中文提示（后端信封对未知码回显原码）。 */
@@ -45,6 +46,7 @@ const UPLOAD_ERROR_MESSAGES: Record<string, string> = {
   URL_CONTENT_TOO_LARGE: "网页内容过大，已拒绝",
   URL_EXTRACT_EMPTY: "未能从该网页提取到正文内容",
 };
+const LAST_KB_SELECTION_KEY = "suwen:last-knowledge-base";
 
 function friendlyError(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -54,6 +56,8 @@ function friendlyError(err: unknown, fallback: string): string {
 }
 
 export default function KbPage() {
+  const { user } = useAuth();
+  const lastSelectionKey = `${LAST_KB_SELECTION_KEY}:${user?.id ?? "anonymous"}`;
   // 库列表（kbsReload 自增触发重新加载：effect 内联 IIFE 模式）
   const [kbs, setKbs] = useState<KbOut[] | null>(null);
   const [kbsReload, setKbsReload] = useState(0);
@@ -84,9 +88,14 @@ export default function KbPage() {
         if (!alive) return;
         setKbs(list);
         setKbError(null);
-        setSelectedId((prev) =>
-          prev && list.some((k) => k.id === prev) ? prev : (list[0]?.id ?? null),
-        );
+        const requested = new URLSearchParams(window.location.search).get("kb");
+        const remembered = window.localStorage.getItem(lastSelectionKey);
+        setSelectedId((prev) => {
+          const preferred = [prev, requested, remembered].find(
+            (id): id is string => Boolean(id && list.some((k) => k.id === id)),
+          );
+          return preferred ?? list[0]?.id ?? null;
+        });
       } catch (err) {
         if (!alive) return;
         setKbs((prev) => prev ?? []);
@@ -96,7 +105,16 @@ export default function KbPage() {
     return () => {
       alive = false;
     };
-  }, [kbsReload]);
+  }, [kbsReload, lastSelectionKey]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    window.localStorage.setItem(lastSelectionKey, selectedId);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("kb") === selectedId) return;
+    url.searchParams.set("kb", selectedId);
+    window.history.replaceState(window.history.state, "", url);
+  }, [selectedId, lastSelectionKey]);
 
   const reloadKbs = useCallback(() => setKbsReload((k) => k + 1), []);
 

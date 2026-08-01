@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC, datetime
 
 import xxhash
 from eduagents_core.logging import get_logger
@@ -482,9 +483,18 @@ async def preview_chunks(
 async def get_study_guide(kb_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """读取该库的学习指南; 未生成时 guide=None (前端据此显示"生成学习指南")。"""
     kb = await _resolve_kb(ctx, kb_id)
-    guide = (kb.config_json or {}).get("study_guide")
+    config = kb.config_json or {}
+    guide = config.get("study_guide")
+    generation = config.get("study_guide_generation")
+    if not isinstance(generation, dict):
+        generation = {"status": "completed" if guide else "idle"}
     writable = kb.owner_type == "user" or str(kb.tenant_id) in ctx.admin_org_ids
-    return {"kb_id": str(kb_id), "guide": guide, "writable": writable}
+    return {
+        "kb_id": str(kb_id),
+        "guide": guide,
+        "generation": generation,
+        "writable": writable,
+    }
 
 
 @router.post("/{kb_id}/study-guide/rebuild", status_code=202)
@@ -494,11 +504,52 @@ async def rebuild_study_guide(
     """手动重建 (自动触发在 enrich 完成后, 见 worker/enrichment.py)。"""
     kb = await _resolve_kb(ctx, kb_id)
     _require_kb_write(ctx, kb)
-    await request.app.state.arq.enqueue_job(
-        "build_study_guide", str(kb.tenant_id), str(kb_id)
-    )
-    log.info("study_guide_rebuild_queued", kb_id=str(kb_id))
-    return {"status": "queued"}
+    owner_id = kb.tenant_id
+    job_id = f"study-guide:{kb_id}:{uuid.uuid4().hex}"
+    now = datetime.now(UTC).isoformat()
+    async with tenant_session(owner_id) as session:
+        row = await session.scalar(
+            select(KnowledgeBase).where(KnowledgeBase.id == kb_id).with_for_update()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        config = dict(row.config_json or {})
+        current = config.get("study_guide_generation")
+        if isinstance(current, dict) and current.get("status") in {"queued", "running"}:
+            return {
+                "status": current["status"],
+                "job_id": current.get("job_id"),
+            }
+        config["study_guide_generation"] = {
+            "status": "queued",
+            "job_id": job_id,
+            "requested_at": now,
+        }
+        row.config_json = config
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "build_study_guide", str(owner_id), str(kb_id), _job_id=job_id
+        )
+        if job is None:
+            raise RuntimeError("study guide job was not enqueued")
+    except Exception as exc:
+        async with tenant_session(owner_id) as session:
+            row = await session.get(KnowledgeBase, kb_id)
+            if row is not None:
+                config = dict(row.config_json or {})
+                current = config.get("study_guide_generation")
+                if isinstance(current, dict) and current.get("job_id") == job_id:
+                    config["study_guide_generation"] = {
+                        **current,
+                        "status": "failed",
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "message": "后台任务提交失败，请稍后重试",
+                    }
+                    row.config_json = config
+        log.exception("study_guide_enqueue_failed", kb_id=str(kb_id))
+        raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
+    log.info("study_guide_rebuild_queued", kb_id=str(kb_id), job_id=job_id)
+    return {"status": "queued", "job_id": job_id}
 
 
 def _context_item(c: Chunk) -> ChunkContextItem:

@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..budget import CN_TZ
 from ..db import tenant_session
-from ..deps import AuthContext, api_rate_limited, get_app_settings, get_gateway
+from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..kc_hierarchy import FALLBACK_CHAPTER, chapter_sort_key, resolve_kc_meta
 from ..models import (
     Attempt,
@@ -394,6 +394,7 @@ def _report_payload(agg: dict, actions: list[dict]) -> dict:
         "weak_threshold": _WEAK_THRESHOLD,
         "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
         "consolidate_points": agg["consolidate_points"],
+        "open_errors": agg["open_errors"],
         "actions": actions,
     }
 
@@ -533,9 +534,8 @@ async def refresh_learning_report(
     kb_id: uuid.UUID | None = None,
     ctx: AuthContext = Depends(api_rate_limited),
     settings: Settings = Depends(get_app_settings),
-    gateway=Depends(get_gateway),
 ):
-    """后台刷新确定性快照与诊断；前端只在诊断卡显示进度，不阻塞已有报告。"""
+    """刷新确定性快照并将 AI 诊断入队；页面离开不取消后台生成。"""
     scope_key, scoped_kb_id = _scope(kb_id)
     async with tenant_session(ctx.tenant_id) as session:
         agg = await _build_aggregates(
@@ -551,7 +551,7 @@ async def refresh_learning_report(
             select(LearningReportSnapshot).where(
                 LearningReportSnapshot.user_id == ctx.user_id,
                 LearningReportSnapshot.scope_key == scope_key,
-            )
+            ).with_for_update()
         )
         if (
             snapshot is not None
@@ -560,6 +560,14 @@ async def refresh_learning_report(
             and snapshot.status in {"completed", "unavailable"}
         ):
             return _snapshot_response(snapshot, cached=True)
+        if (
+            snapshot is not None
+            and snapshot.data_signature == signature
+            and snapshot.prompt_version == _REPORT_PROMPT_VERSION
+            and snapshot.status == "generating"
+        ):
+            return _snapshot_response(snapshot, cached=True)
+        unavailable = settings.gateway_mode == "stub"
         if snapshot is None:
             snapshot = LearningReportSnapshot(
                 tenant_id=ctx.tenant_id,
@@ -567,7 +575,8 @@ async def refresh_learning_report(
                 scope_key=scope_key,
                 kb_id=kb_id,
                 payload_json=payload,
-                status="generating",
+                narrative_note=("需 live 网关生成" if unavailable else "正在生成最新 AI 诊断"),
+                status="unavailable" if unavailable else "generating",
                 data_signature=signature,
                 model=settings.standard_model,
                 prompt_version=_REPORT_PROMPT_VERSION,
@@ -576,41 +585,41 @@ async def refresh_learning_report(
         else:
             snapshot.payload_json = payload
             snapshot.data_signature = signature
-            snapshot.status = "generating"
-            snapshot.narrative_note = "正在生成最新 AI 诊断"
+            snapshot.status = "unavailable" if unavailable else "generating"
+            snapshot.narrative_note = (
+                "需 live 网关生成" if unavailable else "正在生成最新 AI 诊断"
+            )
             snapshot.model = settings.standard_model
             snapshot.prompt_version = _REPORT_PROMPT_VERSION
         await session.flush()
         snapshot_id = snapshot.id
-
-    try:
-        narrative, note = await _narrative(
-            gateway, settings, ctx, getattr(request.state, "request_id", ""), agg, actions
-        )
-    except Exception:  # noqa: BLE001 — 快照必须从 generating 收口为 failed
-        log.exception("report_narrative_unhandled", user_id=str(ctx.user_id), scope=scope_key)
-        narrative, note = None, "AI 诊断更新失败，当前报告数据仍可正常查看"
-    status = (
-        "completed"
-        if narrative
-        else ("unavailable" if settings.gateway_mode == "stub" else "failed")
-    )
-    async with tenant_session(ctx.tenant_id) as session:
-        snapshot = await session.get(LearningReportSnapshot, snapshot_id)
-        if snapshot is None:  # 用户在生成期间注销/清理，不能复活快照
-            return {
-                **payload,
-                "narrative": narrative,
-                "narrative_note": note,
-                "report_status": status,
-                "report_updated_at": datetime.now(CN_TZ).isoformat(),
-                "cached": False,
-            }
-        snapshot.narrative = narrative
-        snapshot.narrative_note = note
-        snapshot.status = status
-        await session.flush()
-        # updated_at 由 server/onupdate 生成，flush 后该属性会过期；显式 refresh 避免
-        # 在同步属性访问中触发异步 IO（SQLAlchemy MissingGreenlet）。
         await session.refresh(snapshot)
-        return _snapshot_response(snapshot, cached=False)
+        response = _snapshot_response(snapshot, cached=False)
+
+    if unavailable:
+        return response
+
+    job_id = f"learning-report:{snapshot_id}:{uuid.uuid4().hex}"
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "refresh_learning_report",
+            str(ctx.tenant_id),
+            str(ctx.user_id),
+            str(snapshot_id),
+            signature,
+            getattr(request.state, "request_id", ""),
+            _job_id=job_id,
+        )
+        if job is None:
+            raise RuntimeError("learning report job was not enqueued")
+    except Exception:  # noqa: BLE001 — 确定性报告仍可展示，只将 AI 诊断收口为失败
+        log.exception("report_refresh_enqueue_failed", user_id=str(ctx.user_id), scope=scope_key)
+        async with tenant_session(ctx.tenant_id) as session:
+            snapshot = await session.get(LearningReportSnapshot, snapshot_id)
+            if snapshot is not None and snapshot.data_signature == signature:
+                snapshot.status = "failed"
+                snapshot.narrative_note = "后台更新暂不可用，当前报告数据仍可正常查看"
+                await session.flush()
+                await session.refresh(snapshot)
+                response = _snapshot_response(snapshot, cached=False)
+    return response

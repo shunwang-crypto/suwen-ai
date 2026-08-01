@@ -117,29 +117,96 @@ function genId(): string {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+const INLINE_CITATION_RE = /\[(\d{1,3})\]/g;
+
+/** 按正文首次引用顺序压缩编号，同时保留未引用的检索结果供核查。 */
+function normalizeAnswerCitations(
+  content: string,
+  citations: CitationData[],
+): { content: string; citations: CitationData[] } {
+  const unique: CitationData[] = [];
+  const seenSources = new Set<string>();
+  for (const citation of citations) {
+    const sourceKey =
+      citation.source_type === "web"
+        ? `web:${citation.url || citation.chunk_id}`
+        : `kb:${citation.kb_id || ""}:${citation.chunk_id}`;
+    if (seenSources.has(sourceKey)) continue;
+    seenSources.add(sourceKey);
+    unique.push(citation);
+  }
+
+  const byOriginalIdx = new Map<number, CitationData>();
+  for (const citation of unique) {
+    if (!byOriginalIdx.has(citation.idx)) byOriginalIdx.set(citation.idx, citation);
+  }
+  const citedOriginalIndexes: number[] = [];
+  const citedSet = new Set<number>();
+  for (const match of content.matchAll(INLINE_CITATION_RE)) {
+    const originalIdx = Number(match[1]);
+    if (byOriginalIdx.has(originalIdx) && !citedSet.has(originalIdx)) {
+      citedSet.add(originalIdx);
+      citedOriginalIndexes.push(originalIdx);
+    }
+  }
+
+  const citedSources = citedOriginalIndexes
+    .map((idx) => byOriginalIdx.get(idx))
+    .filter((citation): citation is CitationData => Boolean(citation));
+  const citedSourceSet = new Set(citedSources);
+  const ordered = [
+    ...citedSources,
+    ...unique.filter((citation) => !citedSourceSet.has(citation)),
+  ];
+  const newIndexByOriginal = new Map<number, number>();
+  citedOriginalIndexes.forEach((originalIdx, index) => {
+    newIndexByOriginal.set(originalIdx, index + 1);
+  });
+  const normalizedContent = content.replace(
+    INLINE_CITATION_RE,
+    (full, rawIdx: string) => {
+      const mapped = newIndexByOriginal.get(Number(rawIdx));
+      return mapped ? `[${mapped}]` : full;
+    },
+  );
+
+  return {
+    content: normalizedContent,
+    citations: ordered.map((citation, index) => ({
+      ...citation,
+      idx: index + 1,
+      cited: citedSourceSet.has(citation),
+    })),
+  };
+}
+
 function historyToMessages(history: MessageOut[]): ChatMsg[] {
-  return history.map((m) => ({
-    id: m.id,
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.content,
-    timeline: [],
-    citations: Array.isArray(m.meta?.citations)
+  return history.map((m) => {
+    const rawCitations = Array.isArray(m.meta?.citations)
       ? (m.meta.citations as CitationData[])
-      : [],
-    followups: Array.isArray(m.meta?.followups)
-      ? (m.meta.followups as string[])
-      : [],
-    truncated: Boolean(m.meta?.truncated),
-    attachments: Array.isArray(m.meta?.attachments)
-      ? (m.meta.attachments as ChatAttachmentOut[])
-      : [],
-    chatMode:
-      m.meta?.chat_mode === "think" ||
-      m.meta?.chat_mode === "web" ||
-      m.meta?.chat_mode === "research"
-        ? m.meta.chat_mode
-        : "fast",
-  }));
+      : [];
+    const normalized = normalizeAnswerCitations(m.content, rawCitations);
+    return {
+      id: m.id,
+      role: m.role === "user" ? "user" : "assistant",
+      content: normalized.content,
+      timeline: [],
+      citations: normalized.citations,
+      followups: Array.isArray(m.meta?.followups)
+        ? (m.meta.followups as string[])
+        : [],
+      truncated: Boolean(m.meta?.truncated),
+      attachments: Array.isArray(m.meta?.attachments)
+        ? (m.meta.attachments as ChatAttachmentOut[])
+        : [],
+      chatMode:
+        m.meta?.chat_mode === "think" ||
+        m.meta?.chat_mode === "web" ||
+        m.meta?.chat_mode === "research"
+          ? m.meta.chat_mode
+          : "fast",
+    };
+  });
 }
 
 function wait(ms: number): Promise<void> {
@@ -168,7 +235,12 @@ function WebSearchStatus({
   ).length;
   const deep = mode === "research";
   if (streaming || citations.length === 0) return null;
-  const status = `搜索到 ${citations.length} 个网页${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
+  const searchedTotal = searchEvents.reduce((total, item) => {
+    const value = Number(item.data.total ?? item.data.returned ?? 0);
+    return Number.isFinite(value) ? Math.max(total, value) : total;
+  }, citations.length);
+  const citedCount = citations.filter((citation) => citation.cited).length;
+  const status = `搜索 ${searchedTotal} 个网页${citedCount > 0 ? ` · 引用 ${citedCount} 个` : ""}${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
 
   return (
     <button
@@ -788,7 +860,17 @@ function ChatView() {
             }
             case "done": {
               const d = msg.data as DoneData;
-              patchMsg(asstId, (m) => ({ ...m, done: d, stalled: false }));
+              patchMsg(asstId, (m) => {
+                const normalized = normalizeAnswerCitations(m.content, m.citations);
+                return {
+                  ...m,
+                  content: normalized.content,
+                  citations: normalized.citations,
+                  done: d,
+                  stalled: false,
+                };
+              });
+              setActiveCitation(null);
               if (d.session_id) {
                 setActiveSessionId(d.session_id);
                 // 当前会话的答案已经呈现在眼前，完成时直接记为已读。
@@ -1257,6 +1339,7 @@ function ChatView() {
                             <>
                               <MarkdownAnswer
                                 text={m.content}
+                                citationIndexes={m.citations.map((citation) => citation.idx)}
                                 onCitationClick={(idx) =>
                                   handleCitationClick(m.id, idx)
                                 }

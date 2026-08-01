@@ -38,6 +38,47 @@ _SAMPLE_CHARS = 500
 STUDY_GUIDE_VERSION = 1
 
 
+async def _set_generation_status(
+    tenant_id: str,
+    kb_id: str,
+    status: str,
+    *,
+    job_id: str | None = None,
+    message: str | None = None,
+) -> bool:
+    """回写指南任务状态；job_id 不一致时拒绝旧任务覆盖新任务。"""
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import KnowledgeBase
+
+    async with tenant_session(tenant_id) as session:
+        kb = await session.get(KnowledgeBase, uuid.UUID(kb_id))
+        if kb is None:
+            return False
+        config = dict(kb.config_json or {})
+        current = config.get("study_guide_generation")
+        current = current if isinstance(current, dict) else {}
+        current_job_id = current.get("job_id")
+        if job_id and current_job_id and current_job_id != job_id:
+            return False
+        now = datetime.now(UTC).isoformat()
+        generation = {
+            **current,
+            "status": status,
+            **({"job_id": job_id} if job_id else {}),
+        }
+        if status == "running":
+            generation["started_at"] = now
+            generation.pop("finished_at", None)
+            generation.pop("message", None)
+        elif status in {"completed", "failed"}:
+            generation["finished_at"] = now
+        if message:
+            generation["message"] = message
+        config["study_guide_generation"] = generation
+        kb.config_json = config
+    return True
+
+
 def _parse_json_object(text: str) -> dict[str, Any] | None:
     """尽力解析单个 JSON 对象 (容忍代码块围栏); 失败返回 None 不抛裸异常。"""
     candidates = [text.strip()]
@@ -185,10 +226,24 @@ async def build_study_guide(
 
     from .enrichment import get_worker_gateway
 
+    job_id = str(ctx.get("job_id") or "") or None
+    if not await _set_generation_status(
+        tenant_id, kb_id, "running", job_id=job_id
+    ):
+        log.info("study_guide_stale_job_skipped", kb_id=kb_id, job_id=job_id)
+        return "skipped"
+
     settings = get_settings()
     if gateway is None:
         if settings.gateway_mode == "stub":
             log.info("study_guide_skipped_stub_mode", kb_id=kb_id)
+            await _set_generation_status(
+                tenant_id,
+                kb_id,
+                "failed",
+                job_id=job_id,
+                message="当前环境未启用 AI 生成服务",
+            )
             return "skipped"
         # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造
         gateway = get_worker_gateway(settings)
@@ -206,6 +261,13 @@ async def build_study_guide(
             ).all()
             if not doc_ids:
                 log.info("study_guide_no_documents", kb_id=kb_id)
+                await _set_generation_status(
+                    tenant_id,
+                    kb_id,
+                    "failed",
+                    job_id=job_id,
+                    message="知识库中还没有可用于生成指南的资料",
+                )
                 return "empty"
             rows = (
                 await session.scalars(
@@ -225,6 +287,13 @@ async def build_study_guide(
 
         if not rows:
             log.info("study_guide_no_chunks", kb_id=kb_id)
+            await _set_generation_status(
+                tenant_id,
+                kb_id,
+                "failed",
+                job_id=job_id,
+                message="资料尚未完成解析，请稍后重试",
+            )
             return "empty"
         headings = [h for h in dict.fromkeys(r.heading_path for r in rows) if h][:_MAX_HEADINGS]
         parents = [r for r in rows if r.parent_id is None][:_SAMPLE_PARENTS]
@@ -241,6 +310,13 @@ async def build_study_guide(
         )
         if guide is None:
             log.warning("study_guide_unparseable", kb_id=kb_id)
+            await _set_generation_status(
+                tenant_id,
+                kb_id,
+                "failed",
+                job_id=job_id,
+                message="学习指南生成失败，请重试",
+            )
             return "failed"
 
         guide = {
@@ -255,7 +331,18 @@ async def build_study_guide(
                 return "empty"
             # JSONB 就地改字典 SQLAlchemy 检测不到: 必须整列重写
             config = dict(kb.config_json or {})
+            current = config.get("study_guide_generation")
+            current = current if isinstance(current, dict) else {}
+            if job_id and current.get("job_id") and current.get("job_id") != job_id:
+                log.info("study_guide_stale_result_discarded", kb_id=kb_id, job_id=job_id)
+                return "skipped"
             config["study_guide"] = guide
+            config["study_guide_generation"] = {
+                **current,
+                "status": "completed",
+                **({"job_id": job_id} if job_id else {}),
+                "finished_at": datetime.now(UTC).isoformat(),
+            }
             await session.execute(
                 update(KnowledgeBase)
                 .where(KnowledgeBase.id == uuid.UUID(kb_id))
@@ -271,4 +358,11 @@ async def build_study_guide(
         return "built"
     except Exception:  # noqa: BLE001 — 指南是增强功能, 失败不该影响摄取主链路
         log.exception("study_guide_failed", kb_id=kb_id)
+        await _set_generation_status(
+            tenant_id,
+            kb_id,
+            "failed",
+            job_id=job_id,
+            message="学习指南生成失败，请稍后重试",
+        )
         return "failed"

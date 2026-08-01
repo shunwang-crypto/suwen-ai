@@ -120,6 +120,11 @@ export function CitationsPanel({
               {c.source_type === "web" && (
                 <span className="text-[10px] text-ink-muted">打开网页 ↗</span>
               )}
+              {c.cited && (
+                <span className="rounded-full bg-success-50 px-1.5 py-0.5 text-[10px] font-medium text-success-700">
+                  正文引用
+                </span>
+              )}
               {c.kb_name && (
                 <span
                   className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${

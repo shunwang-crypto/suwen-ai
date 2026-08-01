@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from eduagents_core.config import Settings, get_settings
@@ -89,7 +90,7 @@ async def enrich_document(
     stub 网关下跳过 (D2: stub 不产生可入库内容), 留待 live/record/replay 真实运行。
     """
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import Chunk, Document, KcEdge, KnowledgeComponent
+    from eduagents_api.models import Chunk, Document, KcEdge, KnowledgeBase, KnowledgeComponent
     from eduagents_core.embedding.providers import create_embedder
     from eduagents_core.embedding.sparse import Bm25SparseEncoder
     from eduagents_core.kc import (
@@ -331,6 +332,7 @@ async def enrich_document(
         # 时触发一次, 后续文档不重复烧钱 —— 需要刷新走手动 rebuild 端点。
         redis = ctx.get("redis")
         if redis is not None:
+            guide_job_id: str | None = None
             async with tenant_session(tenant_id) as session:
                 enriched_count = await session.scalar(
                     select(func.count())
@@ -340,9 +342,56 @@ async def enrich_document(
                         Document.status == "enriched",
                     )
                 )
-            if enriched_count == 1:
-                await redis.enqueue_job("build_study_guide", tenant_id, kb_id)
-                log.info("study_guide_enqueued", kb_id=kb_id)
+                if enriched_count == 1:
+                    kb = await session.scalar(
+                        select(KnowledgeBase)
+                        .where(KnowledgeBase.id == uuid.UUID(kb_id))
+                        .with_for_update()
+                    )
+                    if kb is not None:
+                        config = dict(kb.config_json or {})
+                        generation = config.get("study_guide_generation")
+                        active = isinstance(generation, dict) and generation.get("status") in {
+                            "queued",
+                            "running",
+                        }
+                        if not active and not config.get("study_guide"):
+                            guide_job_id = f"study-guide:{kb_id}:{uuid.uuid4().hex}"
+                            config["study_guide_generation"] = {
+                                "status": "queued",
+                                "job_id": guide_job_id,
+                                "requested_at": datetime.now(UTC).isoformat(),
+                            }
+                            kb.config_json = config
+            if guide_job_id:
+                try:
+                    job = await redis.enqueue_job(
+                        "build_study_guide",
+                        tenant_id,
+                        kb_id,
+                        _job_id=guide_job_id,
+                    )
+                    if job is None:
+                        raise RuntimeError("study guide job was not enqueued")
+                    log.info("study_guide_enqueued", kb_id=kb_id, job_id=guide_job_id)
+                except Exception:  # noqa: BLE001 — 自动指南失败不能回退已完成的文档增强
+                    log.exception("study_guide_enqueue_failed", kb_id=kb_id)
+                    async with tenant_session(tenant_id) as session:
+                        kb = await session.get(KnowledgeBase, uuid.UUID(kb_id))
+                        if kb is not None:
+                            config = dict(kb.config_json or {})
+                            generation = config.get("study_guide_generation")
+                            if (
+                                isinstance(generation, dict)
+                                and generation.get("job_id") == guide_job_id
+                            ):
+                                config["study_guide_generation"] = {
+                                    **generation,
+                                    "status": "failed",
+                                    "finished_at": datetime.now(UTC).isoformat(),
+                                    "message": "后台任务提交失败，请手动重试",
+                                }
+                                kb.config_json = config
         return "enriched"
     except Exception as exc:  # noqa: BLE001 — enriching 失败仅降级为 ready, 不回退 Stage1
         log.exception("enrich_failed", doc_id=doc_id)
