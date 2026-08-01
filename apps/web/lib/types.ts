@@ -617,6 +617,9 @@ export interface ErrorItemOut {
   /** 该题在 attempts 里的错误作答次数 */
   error_count: number;
   my_answer: string;
+  source_import_id: string | null;
+  /** 尚未产生 FSRS/掌握度证据时可修改判分语义字段。 */
+  content_editable: boolean;
   is_variant: boolean;
   created_at: string;
   question: ErrorQuestion | null;
@@ -637,7 +640,9 @@ export interface ErrorImportOut {
   id: string;
   source_type: "manual" | "image" | "document";
   filename: string | null;
-  status: "draft" | "confirmed";
+  mime_type: string | null;
+  source_url: string | null;
+  status: "draft" | "confirmed" | "deleting";
   draft: ErrorImportDraft;
   recognition_warning: string | null;
   confirmed_error_item_id: string | null;

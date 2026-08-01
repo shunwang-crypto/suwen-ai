@@ -184,7 +184,13 @@ def install_error_handlers(app: FastAPI) -> None:
             "CHAT_ATTACHMENT_TEXT_TOO_LARGE": "文件正文超过当前对话容量，请拆分后上传",
             "ANSWER_NOT_VERIFIED": "请先核验正确答案，再进入复习或生成变式题",
             "ERROR_ITEM_NOT_EDITABLE": "只有手动录入或上传识别的错题可以修改题目内容",
+            "ERROR_ITEM_LOCKED_AFTER_REVIEW": "该错题已经产生复习证据，不能修改题型、选项、正确答案或知识点",
+            "VERIFICATION_ROLLBACK_FORBIDDEN": "已核验的错题不能退回待核验状态",
             "IMPORT_ALREADY_CONFIRMED": "该导入已经写入错题本",
+            "IMPORT_DELETE_PENDING": "该导入正在清理，请稍后重试",
+            "ERROR_IMPORT_DELETE_FAILED": "原始文件清理失败，记录仍保留，请稍后重试",
+            "TOO_MANY_PENDING_ERROR_IMPORTS": "待核验导入过多，请先确认或取消已有草稿",
+            "SOURCE_NOT_FOUND": "原始来源不存在或无权访问",
             "KB_NOT_FOUND": "选择的知识库不存在或无权访问",
             # 0006 预付额度 (routers/billing.py)
             "AMOUNT_NOT_ALLOWED": "充值金额不在可选档位内",

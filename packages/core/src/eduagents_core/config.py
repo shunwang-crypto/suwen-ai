@@ -184,6 +184,8 @@ class Settings(BaseSettings):
     max_chat_attachment_mb: int = 20
     max_chat_attachments_per_message: int = 4
     max_chat_attachment_text_chars: int = 2_000_000
+    max_error_import_drafts: int = 20
+    error_import_draft_ttl_hours: int = 24
     max_docs_per_user: int = 200
     max_storage_mb_per_user: int = 1024
     # 摄取 chunk 配额 (P0-2c): 成本按 chunk 走 (enrich 每 chunk 2~3 次 LLM),

@@ -8,11 +8,13 @@ from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.bkt import BktParams, bkt_update
+from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from .db import tenant_session
 from .deps import AuthContext
 from .models import (
+    ERROR_IMPORT_QUIZ_KIND,
     Attempt,
     ErrorItem,
     KnowledgeComponent,
@@ -393,6 +395,13 @@ async def record_attempts(
     business_now = now_dt or datetime.now(UTC)
     results = []
     async with tenant_session(ctx.tenant_id) as session:
+        quiz = await session.get(Quiz, quiz_id)
+        if (
+            quiz is None
+            or quiz.user_id != ctx.user_id
+            or (quiz.blueprint_json or {}).get("kind") == ERROR_IMPORT_QUIZ_KIND
+        ):
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
         questions = {
             str(q.id): q
             for q in (

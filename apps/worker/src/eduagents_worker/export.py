@@ -46,6 +46,23 @@ def _dumps(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
+def _safe_zip_filename(value: str | None) -> str:
+    """只保留一个 ZIP 文件名组件，防止旧数据中的目录穿越。"""
+    name = str(value or "source").replace("\\", "/").rsplit("/", 1)[-1]
+    name = name.replace("\x00", "").replace("\r", "").replace("\n", "").strip()
+    if name in {"", ".", ".."}:
+        return "source"
+    return name[:255]
+
+
+def _error_import_zip_path(import_id: str, filename: str | None) -> str:
+    try:
+        safe_import_id = str(uuid.UUID(str(import_id)))
+    except (ValueError, TypeError, AttributeError):
+        safe_import_id = "unknown"
+    return f"uploads/error_imports/{safe_import_id}/{_safe_zip_filename(filename)}"
+
+
 async def export_user_data(ctx: dict, tenant_id: str) -> str:
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
@@ -144,17 +161,31 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         }
         for attachment in dumped["chat_attachments"]
     )
-    uploads.extend(
-        {
+    storage = create_storage(settings)
+    error_import_files: list[tuple[str, bytes]] = []
+    for imported in dumped["error_imports"]:
+        zip_path = _error_import_zip_path(imported["id"], imported.get("filename"))
+        entry = {
             "error_import_id": imported["id"],
             "filename": imported["filename"],
             "size_bytes": imported["size_bytes"],
             "kind": imported["source_type"],
             "storage_key": imported["storage_key"],
+            "zip_path": zip_path,
+            "available": False,
         }
-        for imported in dumped["error_imports"]
-        if imported["storage_key"]
-    )
+        if imported["storage_key"]:
+            try:
+                source_data = await storage.load(imported["storage_key"])
+            except Exception:  # noqa: BLE001 - 一个对象缺失不应中断整份导出
+                entry["error"] = "SOURCE_NOT_FOUND"
+                log.warning("export_source_missing", error_import_id=imported["id"])
+            else:
+                entry["available"] = True
+                error_import_files.append((zip_path, source_data))
+        else:
+            entry["error"] = "SOURCE_NOT_FOUND"
+        uploads.append(entry)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -163,11 +194,13 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
             zf.writestr(f"tables/{name}.json", _dumps(rows))
         zf.writestr("chunks.json", _dumps(chunk_rows))
         zf.writestr("uploads_manifest.json", _dumps(uploads))
+        for zip_path, source_data in error_import_files:
+            zf.writestr(zip_path, source_data)
     data = buf.getvalue()
 
     ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     path = f"exports/{tenant_id}/{ts}.zip"
-    await create_storage(settings).save(path, data)
+    await storage.save(path, data)
 
     redis = ctx.get("redis")
     owns_redis = False

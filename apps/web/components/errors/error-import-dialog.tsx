@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import Image from "next/image";
 
 import { Spinner } from "@/components/common";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
@@ -73,6 +74,13 @@ function fromItem(item: ErrorItemOut): DraftForm {
   };
 }
 
+function sourceImportId(item: ErrorItemOut | null | undefined): string | null {
+  if (!item) return null;
+  if (item.source_import_id) return item.source_import_id;
+  const value = item.question?.source_meta?.import_id;
+  return typeof value === "string" ? value : null;
+}
+
 export function ErrorImportDialog({
   editItem,
   knowledgeBases,
@@ -94,6 +102,27 @@ export function ErrorImportDialog({
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<{ importId: string; url: string } | null>(null);
+  const [sourceErrorImportId, setSourceErrorImportId] = useState<string | null>(null);
+
+  const currentSourceImportId = imported?.id ?? sourceImportId(editItem);
+  const currentSourceFilename =
+    imported?.filename ??
+    (typeof editItem?.question?.source_meta?.filename === "string"
+      ? editItem.question.source_meta.filename
+      : null);
+  const currentSourceType =
+    imported?.source_type ??
+    (editItem?.question?.source_type === "image" || editItem?.question?.source_type === "document"
+      ? editItem.question.source_type
+      : null);
+  const sourceUrl = sourcePreview?.importId === currentSourceImportId ? sourcePreview.url : null;
+  const sourceLoading = Boolean(
+    currentSourceImportId &&
+      sourcePreview?.importId !== currentSourceImportId &&
+      sourceErrorImportId !== currentSourceImportId,
+  );
+  const semanticsLocked = Boolean(editItem && !editItem.content_editable);
 
   useEffect(() => {
     if (editItem) return;
@@ -102,14 +131,43 @@ export function ErrorImportDialog({
       .catch(() => setCapabilities(null));
   }, [editItem]);
 
+  useEffect(() => {
+    if (!currentSourceImportId) return;
+    let alive = true;
+    let objectUrl: string | null = null;
+    void apiFetch(`/api/errors/imports/${currentSourceImportId}/source`)
+      .then(async (response) => {
+        const blob = await response.blob();
+        const nextUrl = URL.createObjectURL(blob);
+        objectUrl = nextUrl;
+        if (alive) setSourcePreview({ importId: currentSourceImportId, url: nextUrl });
+        else URL.revokeObjectURL(nextUrl);
+      })
+      .catch(() => {
+        if (alive) setSourceErrorImportId(currentSourceImportId);
+      });
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [currentSourceImportId]);
+
   const set = <K extends keyof DraftForm>(key: K, value: DraftForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const discardImportedDraft = async () => {
+    if (!imported || imported.status !== "draft") return;
+    await apiJson(`/api/errors/imports/${imported.id}`, { method: "DELETE" });
+    setImported(null);
+    setSourcePreview(null);
   };
 
   const upload = async (file: File) => {
     setUploading(true);
     setError(null);
     try {
+      await discardImportedDraft();
       const data = new FormData();
       data.append("file", file);
       const response = await apiFetch("/api/errors/imports", { method: "POST", body: data });
@@ -128,6 +186,37 @@ export function ErrorImportDialog({
     }
   };
 
+  const closeDialog = async () => {
+    if (saving || uploading) return;
+    try {
+      if (imported?.status === "draft") {
+        setSaving(true);
+        await discardImportedDraft();
+      }
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "草稿清理失败，请重试");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const switchToManual = async () => {
+    try {
+      if (imported?.status === "draft") {
+        setSaving(true);
+        await discardImportedDraft();
+      }
+      setMode("manual");
+      setForm(EMPTY_FORM);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "草稿清理失败，请重试");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.stem.trim()) {
@@ -136,6 +225,10 @@ export function ErrorImportDialog({
     }
     if (form.answer_verified && !form.answer.trim()) {
       setError("请先填写正确答案，再确认答案已经核验");
+      return;
+    }
+    if (editItem?.verification_status === "verified" && !form.answer_verified) {
+      setError("已核验的错题不能退回待核验状态");
       return;
     }
     if ((form.type === "single" || form.type === "multi") && form.options.length < 2) {
@@ -167,6 +260,7 @@ export function ErrorImportDialog({
             body: {},
           });
           importId = created.id;
+          setImported(created);
         }
         await apiJson(`/api/errors/imports/${importId}/confirm`, { body: payload });
       }
@@ -194,7 +288,7 @@ export function ErrorImportDialog({
       <button
         type="button"
         className="absolute inset-0 bg-[#1c1917]/40"
-        onClick={() => !saving && !uploading && onClose()}
+        onClick={() => void closeDialog()}
         aria-label="关闭错题录入"
       />
       <section className="relative flex max-h-[calc(100dvh-32px)] w-full max-w-[720px] flex-col overflow-hidden rounded-[12px] border border-line bg-canvas shadow-floating">
@@ -209,7 +303,7 @@ export function ErrorImportDialog({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void closeDialog()}
             disabled={saving || uploading}
             className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted disabled:opacity-40"
             aria-label="关闭"
@@ -231,11 +325,7 @@ export function ErrorImportDialog({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setMode("manual");
-                    setImported(null);
-                    setForm(EMPTY_FORM);
-                  }}
+                  onClick={() => void switchToManual()}
                   className={`rounded-[6px] px-3 py-1.5 text-[11px] font-medium ${mode === "manual" ? "bg-ink text-white" : "text-ink-secondary"}`}
                 >
                   手动录入
@@ -288,10 +378,61 @@ export function ErrorImportDialog({
             </div>
           )}
 
+          {currentSourceImportId && (
+            <section className="mb-5 rounded-[10px] border border-line bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-semibold text-ink-muted">原始来源（仅本人可读）</p>
+                  <p className="mt-1 text-[11px] font-medium text-ink">{currentSourceFilename ?? "来源文件"}</p>
+                </div>
+                {sourceUrl && (
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    download={currentSourceType === "document" && !/\.pdf$/i.test(currentSourceFilename ?? "")}
+                    className="rounded-[7px] border border-line-strong px-3 py-1.5 text-[10px] font-medium text-ink-secondary"
+                  >
+                    {currentSourceType === "image" || /\.pdf$/i.test(currentSourceFilename ?? "")
+                      ? "打开来源"
+                      : "下载原文件"}
+                  </a>
+                )}
+              </div>
+              {sourceLoading && <p className="mt-3 text-[10px] text-ink-muted">正在加载来源预览…</p>}
+              {!sourceLoading && sourceUrl && currentSourceType === "image" && (
+                <Image
+                  src={sourceUrl}
+                  alt={currentSourceFilename ?? "错题原始图片"}
+                  width={640}
+                  height={360}
+                  unoptimized
+                  className="mt-3 max-h-72 w-full rounded-[8px] border border-line object-contain"
+                />
+              )}
+              {!sourceLoading && sourceUrl && currentSourceType === "document" && /\.pdf$/i.test(currentSourceFilename ?? "") && (
+                <iframe
+                  title="错题原始 PDF"
+                  src={sourceUrl}
+                  className="mt-3 h-72 w-full rounded-[8px] border border-line"
+                />
+              )}
+              {!sourceLoading && !sourceUrl && (
+                <p className="mt-3 text-[10px] text-danger-600">来源文件暂时无法读取。</p>
+              )}
+            </section>
+          )}
+
+          {semanticsLocked && (
+            <p className="mb-4 rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 text-[10px] leading-4 text-warning-700">
+              这道题已经复习过，题型、选项、正确答案和知识点已锁定；题干说明、解析和错因仍可修正。
+            </p>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-3">
             <label>
               <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">题型</span>
-              <select value={form.type} onChange={(event) => set("type", event.target.value as DraftForm["type"])} className={fieldClass}>
+              <select disabled={semanticsLocked} value={form.type} onChange={(event) => set("type", event.target.value as DraftForm["type"])} className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`}>
                 {TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
@@ -318,6 +459,7 @@ export function ErrorImportDialog({
             <label className="mt-4 block">
               <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">选项 <span className="text-danger-600">必填</span></span>
               <textarea
+                disabled={semanticsLocked}
                 value={form.options.join("\n")}
                 onChange={(event) => set("options", event.target.value.split("\n"))}
                 rows={4}
@@ -334,7 +476,7 @@ export function ErrorImportDialog({
             </label>
             <label>
               <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">正确答案 <span className="text-ink-muted">可稍后核验</span></span>
-              <textarea value={form.answer} onChange={(event) => set("answer", event.target.value)} rows={3} maxLength={8000} placeholder="不确定时可以暂时留空" className={`${fieldClass} resize-y`} />
+              <textarea disabled={semanticsLocked} value={form.answer} onChange={(event) => set("answer", event.target.value)} rows={3} maxLength={8000} placeholder="不确定时可以暂时留空" className={`${fieldClass} resize-y disabled:bg-surface-muted disabled:text-ink-muted`} />
             </label>
           </div>
 
@@ -346,14 +488,14 @@ export function ErrorImportDialog({
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label>
               <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">关联资料范围 <span className="text-ink-muted">选填</span></span>
-              <select value={form.kb_id} onChange={(event) => set("kb_id", event.target.value)} className={fieldClass}>
+              <select disabled={semanticsLocked} value={form.kb_id} onChange={(event) => set("kb_id", event.target.value)} className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`}>
                 <option value="">不关联知识库</option>
                 {knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
               </select>
             </label>
             <label>
               <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">知识点 <span className="text-ink-muted">最多 3 个</span></span>
-              <input value={form.kc_names.join("，")} onChange={(event) => set("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：极限，洛必达法则" className={fieldClass} />
+              <input disabled={semanticsLocked} value={form.kc_names.join("，")} onChange={(event) => set("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：极限，洛必达法则" className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`} />
             </label>
           </div>
 
@@ -361,6 +503,7 @@ export function ErrorImportDialog({
             <input
               type="checkbox"
               checked={form.answer_verified}
+              disabled={Boolean(editItem && editItem.verification_status === "verified") || semanticsLocked}
               onChange={(event) => set("answer_verified", event.target.checked)}
               className="mt-0.5 h-4 w-4 accent-ink"
             />
@@ -376,7 +519,7 @@ export function ErrorImportDialog({
         <footer className="flex items-center justify-between gap-3 border-t border-line bg-white px-5 py-4">
           <p className="text-[10px] text-ink-muted">上传文件不会自动加入知识库。</p>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onClose} disabled={saving || uploading} className="h-9 rounded-[8px] border border-line-strong px-4 text-[11px] font-medium text-ink-secondary disabled:opacity-40">取消</button>
+            <button type="button" onClick={() => void closeDialog()} disabled={saving || uploading} className="h-9 rounded-[8px] border border-line-strong px-4 text-[11px] font-medium text-ink-secondary disabled:opacity-40">取消</button>
             <button type="submit" form="error-import-form" disabled={saving || uploading} className="flex h-9 items-center gap-2 rounded-[8px] bg-brand-600 px-4 text-[11px] font-medium text-white disabled:opacity-40">
               {saving && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
               {saving ? "保存中" : form.answer_verified ? "确认并加入复习" : "保存为待核验"}

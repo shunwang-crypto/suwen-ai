@@ -110,6 +110,7 @@ async def get_profile(
                 select(ErrorItem.kc_ids, ErrorItem.fsrs_card_json).where(
                     ErrorItem.user_id == ctx.user_id,
                     ErrorItem.state != "archived",
+                    ErrorItem.verification_status == "verified",
                 )
             )
         ).all()
@@ -147,7 +148,10 @@ async def get_profile(
             for cause, n in (
                 await session.execute(
                     select(ErrorItem.cause, func.count())
-                    .where(ErrorItem.user_id == ctx.user_id)
+                    .where(
+                        ErrorItem.user_id == ctx.user_id,
+                        ErrorItem.verification_status == "verified",
+                    )
                     .group_by(ErrorItem.cause)
                 )
             ).all()
@@ -157,7 +161,10 @@ async def get_profile(
             for state, n in (
                 await session.execute(
                     select(ErrorItem.state, func.count())
-                    .where(ErrorItem.user_id == ctx.user_id)
+                    .where(
+                        ErrorItem.user_id == ctx.user_id,
+                        ErrorItem.verification_status == "verified",
+                    )
                     .group_by(ErrorItem.state)
                 )
             ).all()

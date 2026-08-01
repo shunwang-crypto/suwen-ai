@@ -43,7 +43,8 @@ _MAGIC = {
 
 
 def _safe_filename(value: str | None) -> str:
-    name = Path(value or "attachment").name.strip().replace("\x00", "")
+    name = Path((value or "attachment").replace("\\", "/")).name.strip().replace("\x00", "")
+    name = name.replace("\r", "").replace("\n", "")
     return (name or "attachment")[:255]
 
 

@@ -17,11 +17,11 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from ..db import tenant_session
 from ..deps import AuthContext, require_teacher
-from ..models import Question, Quiz
+from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
 
@@ -47,7 +47,11 @@ async def _load_quiz(ctx: AuthContext, quiz_id: uuid.UUID) -> tuple[Quiz, list[Q
     """取卷 + 题。别人的卷返回 404 (不是 403) —— 不泄漏"这个 id 存在"。"""
     async with tenant_session(ctx.tenant_id) as session:
         quiz = await session.get(Quiz, quiz_id)
-        if quiz is None or quiz.user_id != ctx.user_id:
+        if (
+            quiz is None
+            or quiz.user_id != ctx.user_id
+            or (quiz.blueprint_json or {}).get("kind") == ERROR_IMPORT_QUIZ_KIND
+        ):
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         questions = (
             await session.scalars(
@@ -64,7 +68,15 @@ async def list_teacher_quizzes(ctx: AuthContext = Depends(require_teacher)):
     async with tenant_session(ctx.tenant_id) as session:
         quizzes = (
             await session.scalars(
-                select(Quiz).where(Quiz.user_id == ctx.user_id).order_by(Quiz.created_at.desc())
+                select(Quiz)
+                .where(
+                    Quiz.user_id == ctx.user_id,
+                    or_(
+                        Quiz.blueprint_json["kind"].astext.is_(None),
+                        Quiz.blueprint_json["kind"].astext != ERROR_IMPORT_QUIZ_KIND,
+                    ),
+                )
+                .order_by(Quiz.created_at.desc())
             )
         ).all()
         quiz_ids = [q.id for q in quizzes]

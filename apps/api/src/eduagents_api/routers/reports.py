@@ -26,7 +26,7 @@ from eduagents_core.gateway import GatewayError, Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, REINFORCE_THRESHOLD
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import Date, cast, func, select
+from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..budget import CN_TZ
@@ -34,6 +34,7 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..kc_hierarchy import FALLBACK_CHAPTER, chapter_sort_key, resolve_kc_meta
 from ..models import (
+    ERROR_IMPORT_QUIZ_KIND,
     Attempt,
     ErrorItem,
     KcEdge,
@@ -41,6 +42,8 @@ from ..models import (
     LearningReportSnapshot,
     MasteryLog,
     MasteryRecord,
+    Question,
+    Quiz,
 )
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -52,6 +55,11 @@ _RADAR_TOP_N = 12
 _WEAK_THRESHOLD = REINFORCE_THRESHOLD
 # C4: "待巩固"档 = 红线以上但未达定向出题线 (与 quiz 薄弱点圈选同源)
 _CONSOLIDATE_THRESHOLD = QUIZ_WEAK_THRESHOLD
+
+
+def _ordinary_attempt_filter():
+    kind = Quiz.blueprint_json["kind"].astext
+    return or_(kind.is_(None), kind != ERROR_IMPORT_QUIZ_KIND)
 
 
 async def _build_aggregates(
@@ -167,7 +175,14 @@ async def _build_aggregates(
                     func.count(),
                     func.count().filter(Attempt.is_correct.is_(True)),
                 )
-                .where(Attempt.user_id == ctx.user_id, Attempt.at >= since)
+                .select_from(Attempt)
+                .join(Question, Question.id == Attempt.question_id)
+                .join(Quiz, Quiz.id == Question.quiz_id)
+                .where(
+                    Attempt.user_id == ctx.user_id,
+                    Attempt.at >= since,
+                    _ordinary_attempt_filter(),
+                )
                 .group_by(day_col)
             )
         ).all()
@@ -197,10 +212,15 @@ async def _build_aggregates(
                 func.count(),
                 func.count().filter(Attempt.is_correct.is_(True)),
                 func.count(func.distinct(day_col)),
-            ).where(
+            )
+            .select_from(Attempt)
+            .join(Question, Question.id == Attempt.question_id)
+            .join(Quiz, Quiz.id == Question.quiz_id)
+            .where(
                 Attempt.user_id == ctx.user_id,
                 Attempt.at >= previous_since,
                 Attempt.at < since,
+                _ordinary_attempt_filter(),
             )
         )
     ).one()
@@ -276,7 +296,12 @@ async def _build_aggregates(
     error_counts: Counter[str] = Counter()
     if target_ids:
         error_kc_rows = (
-            await session.scalars(select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id))
+            await session.scalars(
+                select(ErrorItem.kc_ids).where(
+                    ErrorItem.user_id == ctx.user_id,
+                    ErrorItem.verification_status == "verified",
+                )
+            )
         ).all()
         for row_ids in error_kc_rows:
             for row_kc in {str(value) for value in (row_ids or [])} & target_ids:
@@ -314,7 +339,9 @@ async def _build_aggregates(
     open_errors = int(
         await session.scalar(
             select(func.count()).where(
-                ErrorItem.user_id == ctx.user_id, ErrorItem.state.in_(["new", "reviewing"])
+                ErrorItem.user_id == ctx.user_id,
+                ErrorItem.state.in_(["new", "reviewing"]),
+                ErrorItem.verification_status == "verified",
             )
         )
         or 0

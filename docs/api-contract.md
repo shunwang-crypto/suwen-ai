@@ -106,8 +106,8 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 |---|---|---|
 | POST | /api/threads/{thread_id}/resume | {value} interrupt 恢复协议 (M3-D2)；thread_id=`kind:user:local`，跨用户 404 |
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?} → SSE：Blueprint → interrupt(blueprint_confirm) |
-| GET | /api/quiz · /api/quiz/{id} | 卷列表 / 题目详情（kc_ids 已归一化） |
-| POST | /api/quiz/{id}/attempts | {answers} → 判分（客观本地/简答 LLM 附理由）+ 错题自动入本 + BKT 直写 + mastery_log 审计；正确率<0.6 时附 `plan_adjustment`（自动补强，F3-A3） |
+| GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
+| POST | /api/quiz/{id}/attempts | {answers} → 判分（客观本地/简答 LLM 附理由）+ 错题自动入本 + BKT 直写 + mastery_log 审计；正确率<0.6 时附 `plan_adjustment`（自动补强，F3-A3）；导入卷不可作答 |
 | POST | /api/plans | {goal, kb_id?, budget_hours_per_day, total_days} → SSE → interrupt(plan_confirm) |
 | GET | /api/plans | 计划列表 |
 | GET | /api/plans/{id} | 计划详情：每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）与 `done`，附 `progress{total,done,ratio}` |
@@ -120,12 +120,31 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/errors | 错题列表；筛选 `state`(new\|reviewing\|mastered\|archived\|active) / `cause`(五分类) / `kc_id`，分页 `page`/`page_size`；含题干·选项·答案·解析·我的作答·错误次数·下次复习时间 |
-| GET | /api/errors/stats | 聚合：{total, by_cause(五分类补零), by_state, by_kc(top10)} |
+| GET | /api/errors/stats | 仅统计 `verification_status=verified` 的错题：{total, by_cause(五分类补零), by_state, by_kc(top10)}；待核验数量单列 `pending_verification` |
 | POST | /api/errors/{id}/archive | 手动归档：state→archived，退出今日复习队列 |
 | POST | /api/errors/{id}/cause | {cause} 错因修正（五分类之一，越界 422） |
 
 > 错因自动分类：`POST /api/reviews/{id}/answer` 判错时以 cheap 档 json_mode 重标错因并回传 `cause`；
 > 网关 stub 模式不发请求、异常一律回落 `knowledge_gap`（入本初值），绝不冒充分类结果。
+
+### 错题导入与原始来源（用户本人 + 租户隔离）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/errors/imports/capabilities | 上传能力、大小上限、图片/文档后缀和视觉模型是否可用 |
+| POST | /api/errors/imports/manual | 创建空的手动草稿 → 201；未确认草稿按用户限额（默认 20）计数 |
+| POST | /api/errors/imports | multipart `file` 上传图片/PDF/Word/PPT/文本，保存对象存储原件并返回草稿；文件魔数、后缀和大小均校验 |
+| POST | /api/errors/imports/{id}/confirm | `{type, stem, options, my_answer, answer, explanation, kc_names, difficulty, kb_id?, cause, answer_verified}`；创建 `ErrorItem`，不创建 `Attempt`；答案未核验为 `pending` |
+| PATCH | /api/errors/{error_item_id}/content | 修改导入错题内容；只能 `pending → verified`，不能倒退；复习/掌握度证据产生后禁止改题型、选项、正确答案、知识点 |
+| GET | /api/errors/imports/{id}/source | 本人读取原始来源；图片/PDF `inline`，Word/PPT `attachment`，响应带安全的 `Content-Disposition` 和 `nosniff` |
+| GET | /api/errors/{error_item_id}/source | 已保存错题读取来源的等价入口，继续校验错题所有权 |
+| DELETE | /api/errors/imports/{id} | 仅可删除未确认草稿；数据库先进入内部 `deleting` 状态，原件删除成功后才删除数据库行 |
+
+`GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`，导入生成的 `Quiz.blueprint.kind` 固定为 `error_import`，不会出现在普通测验或教师组卷列表。
+
+导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`SOURCE_NOT_FOUND`。
+
+用户数据导出仍在 `uploads_manifest.json` 保留来源元数据；可用的错题原文件同时写入 `uploads/error_imports/{import_id}/{safe_filename}`，缺失对象以 `available=false` 和 `error=SOURCE_NOT_FOUND` 记录，不阻断其他数据导出。
 
 ## 规划中（占位，实现前须先在此登记冻结）
 

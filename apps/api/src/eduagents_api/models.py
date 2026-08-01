@@ -306,6 +306,9 @@ class Quiz(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+ERROR_IMPORT_QUIZ_KIND = "error_import"
+
+
 class Question(Base):
     __tablename__ = "questions"
     id: Mapped[uuid.UUID] = _uuid_pk()
@@ -362,6 +365,8 @@ class ErrorItem(Base):
         String(16), nullable=False, default="verified", server_default="verified"
     )
     source_import_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # 导入时用户在原题上写下的答案；它不是平台作答证据，不进入 Attempt/学情统计。
+    original_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     fsrs_card_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(

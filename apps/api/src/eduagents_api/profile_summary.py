@@ -158,7 +158,10 @@ async def _load_snapshot(
         errors = (
             await session.scalars(
                 select(ErrorItem)
-                .where(ErrorItem.user_id == uid)
+                .where(
+                    ErrorItem.user_id == uid,
+                    ErrorItem.verification_status == "verified",
+                )
                 .order_by(ErrorItem.created_at.desc())
                 .limit(_ERROR_SCAN)
             )
@@ -430,7 +433,9 @@ async def weak_point_kcs(
         recent = (
             await session.scalars(
                 select(ErrorItem).where(
-                    ErrorItem.user_id == uid, ErrorItem.created_at >= since
+                    ErrorItem.user_id == uid,
+                    ErrorItem.verification_status == "verified",
+                    ErrorItem.created_at >= since,
                 )
             )
         ).all()

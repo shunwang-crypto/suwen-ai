@@ -9,6 +9,7 @@ from eduagents_core.observability import flush_langfuse
 
 from .cleanup_outbox import process_pending_cleanup
 from .enrichment import enrich_document
+from .error_import_cleanup import reap_stale_error_imports
 from .evals import run_retrieval_eval_task
 from .export import export_user_data
 from .ingestion import (
@@ -65,6 +66,7 @@ class WorkerSettings:
         reap_stale_ingestion,
         process_pending_cleanup,
         purge_retention,
+        reap_stale_error_imports,
     ]
     cron_jobs = [
         # 语义缓存 L2 无原生 TTL: 每日凌晨清 7 天前点位 (L1 Redis 自带 24h TTL)
@@ -75,6 +77,7 @@ class WorkerSettings:
         cron(reap_stale_ingestion, minute={0, 15, 30, 45}, name="reap_stale_ingestion"),
         # P2-9 留存: usage_log 180d / mastery_log 730d / checkpoint 30d / closed feedback 90d
         cron(purge_retention, hour=4, minute=50, name="purge_retention_daily"),
+        cron(reap_stale_error_imports, minute={0, 20, 40}, name="reap_stale_error_imports"),
     ]
     on_startup = startup
     on_shutdown = shutdown

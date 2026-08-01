@@ -291,12 +291,7 @@ export default function ErrorsPage() {
     if (!stats) return 0;
     if (key === "total") return stats.total;
     if (key === "active")
-      return Math.max(
-        0,
-        (stats.by_state.new ?? 0) +
-          (stats.by_state.reviewing ?? 0) -
-          (stats.pending_verification ?? 0),
-      );
+      return (stats.by_state.new ?? 0) + (stats.by_state.reviewing ?? 0);
     return stats.by_state[key] ?? 0;
   };
 

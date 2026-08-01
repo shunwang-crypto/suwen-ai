@@ -47,7 +47,9 @@ class LocalStorage:
     async def delete_prefix(self, prefix: str) -> None:
         target = self._root / _safe_rel(prefix)
         if target.exists():
-            await asyncio.to_thread(shutil.rmtree, target, ignore_errors=True)
+            # 删除失败必须向上抛出，调用方才能保留数据库中的 deleting 状态并重试，
+            # 避免把对象存储失败误报成已经删除。
+            await asyncio.to_thread(shutil.rmtree, target)
 
 
 def create_storage(settings: Settings) -> ObjectStorage:

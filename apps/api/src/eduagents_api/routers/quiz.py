@@ -6,12 +6,12 @@ from eduagents_core.logging import get_logger
 from eduagents_core.mastery.thresholds import DIFFICULTIES, difficulty_for_mastery
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import Question, Quiz
+from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
 from ..profile_summary import build_profile_context, weak_point_kcs
 from ..services import record_attempts
 from .threads import stream_graph_run
@@ -144,7 +144,15 @@ async def list_quizzes(ctx: AuthContext = Depends(api_rate_limited)):
     async with tenant_session(ctx.tenant_id) as session:
         rows = (
             await session.scalars(
-                select(Quiz).where(Quiz.user_id == ctx.user_id).order_by(Quiz.created_at.desc())
+                select(Quiz)
+                .where(
+                    Quiz.user_id == ctx.user_id,
+                    or_(
+                        Quiz.blueprint_json["kind"].astext.is_(None),
+                        Quiz.blueprint_json["kind"].astext != ERROR_IMPORT_QUIZ_KIND,
+                    ),
+                )
+                .order_by(Quiz.created_at.desc())
             )
         ).all()
         return [
@@ -157,7 +165,11 @@ async def list_quizzes(ctx: AuthContext = Depends(api_rate_limited)):
 async def get_quiz(quiz_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     async with tenant_session(ctx.tenant_id) as session:
         quiz = await session.get(Quiz, quiz_id)
-        if quiz is None or quiz.user_id != ctx.user_id:
+        if (
+            quiz is None
+            or quiz.user_id != ctx.user_id
+            or (quiz.blueprint_json or {}).get("kind") == ERROR_IMPORT_QUIZ_KIND
+        ):
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         questions = (
             await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
@@ -189,7 +201,11 @@ async def submit_attempts(
 ):
     async with tenant_session(ctx.tenant_id) as session:
         quiz = await session.get(Quiz, quiz_id)
-        if quiz is None or quiz.user_id != ctx.user_id:
+        if (
+            quiz is None
+            or quiz.user_id != ctx.user_id
+            or (quiz.blueprint_json or {}).get("kind") == ERROR_IMPORT_QUIZ_KIND
+        ):
             raise HTTPException(status_code=404, detail="NOT_FOUND")
     # 业务时间走虚拟时钟 (§9): 错题入本的 FSRS 卡 due 随 time-travel 前进
     now_dt = await timectl.now(request.app.state.redis)

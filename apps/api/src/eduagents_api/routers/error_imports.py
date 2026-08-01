@@ -5,18 +5,35 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 import orjson
 from eduagents_core.gateway import ChatMessage, ChatRequest, Tier
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..error_analysis import CAUSES
-from ..models import Attempt, ErrorImport, ErrorItem, KnowledgeBase, Question, Quiz
+from ..error_import_cleanup import (
+    cleanup_expired_error_imports,
+    error_import_storage_prefix,
+    pending_error_import_count,
+)
+from ..models import (
+    ERROR_IMPORT_QUIZ_KIND,
+    ErrorImport,
+    ErrorItem,
+    KnowledgeBase,
+    LearningReportSnapshot,
+    MasteryLog,
+    Question,
+    Quiz,
+)
+from ..profile_summary import invalidate_profile_summary_cache
 from ..services import _resolve_kc_ids
 from .chat_attachments import _extract_document, _read_capped, _safe_filename, _validate_file
 
@@ -24,6 +41,25 @@ router = APIRouter(prefix="/api/errors", tags=["errors"])
 
 _QUESTION_TYPES = ("single", "multi", "blank", "short")
 _DIFFICULTIES = ("easy", "mid", "hard")
+_SOURCE_MIMES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+_INLINE_SOURCE_MIMES = {
+    "application/pdf",
+    "text/markdown",
+    "text/plain",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
 
 _EXTRACT_PROMPT = """你是试题录入助手。请从用户提供的内容中提取最主要的一道题，供用户校对。
 只做忠实转录，不要补造看不清的条件、选项或答案。无法确认的字段用空字符串或空数组。
@@ -121,10 +157,15 @@ def _parse_draft(text: str) -> dict:
 
 
 def _out(row: ErrorImport) -> dict:
+    source_url = (
+        f"/api/errors/imports/{row.id}/source" if row.storage_key and row.filename else None
+    )
     return {
         "id": str(row.id),
         "source_type": row.source_type,
         "filename": row.filename,
+        "mime_type": row.mime_type,
+        "source_url": source_url,
         "status": row.status,
         "draft": row.draft_json or _blank_draft(),
         "recognition_warning": row.recognition_warning,
@@ -133,6 +174,53 @@ def _out(row: ErrorImport) -> dict:
         ),
         "created_at": row.created_at,
     }
+
+
+async def _prepare_new_import(ctx: AuthContext, request: Request, settings) -> None:
+    await cleanup_expired_error_imports(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        storage=request.app.state.storage,
+        ttl_hours=settings.error_import_draft_ttl_hours,
+    )
+    limit = settings.max_error_import_drafts
+    if limit > 0 and await pending_error_import_count(ctx.tenant_id, ctx.user_id) >= limit:
+        raise HTTPException(status_code=429, detail="TOO_MANY_PENDING_ERROR_IMPORTS")
+
+
+def _source_headers(filename: str, mime_type: str) -> dict[str, str]:
+    safe_name = _safe_filename(filename)
+    ascii_name = "".join(
+        char if 32 <= ord(char) < 127 and char not in {'"', "\\"} else "_"
+        for char in safe_name
+    ).strip()
+    ascii_name = ascii_name or "source"
+    disposition = "inline" if mime_type in _INLINE_SOURCE_MIMES else "attachment"
+    encoded_name = quote(safe_name, safe="")
+    return {
+        "Content-Disposition": (
+            f'{disposition}; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+        ),
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
+async def _source_response(row: ErrorImport, request: Request) -> Response:
+    if not row.storage_key or not row.filename:
+        raise HTTPException(status_code=404, detail="SOURCE_NOT_FOUND")
+    try:
+        data = await request.app.state.storage.load(row.storage_key)
+    except Exception:  # noqa: BLE001 - 不泄露对象存储细节
+        raise HTTPException(status_code=404, detail="SOURCE_NOT_FOUND") from None
+    mime_type = _SOURCE_MIMES.get(Path(row.filename).suffix.lower(), "application/octet-stream")
+    return Response(
+        content=data,
+        media_type=mime_type,
+        headers={
+            **_source_headers(row.filename, mime_type),
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 async def _recognize(request: Request, ctx: AuthContext, *, kind: str, mime: str, data: bytes,
@@ -187,7 +275,12 @@ async def import_capabilities(settings=Depends(get_app_settings)):
 
 
 @router.post("/imports/manual", status_code=201)
-async def create_manual_import(ctx: AuthContext = Depends(api_rate_limited)):
+async def create_manual_import(
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+    settings=Depends(get_app_settings),
+):
+    await _prepare_new_import(ctx, request, settings)
     async with tenant_session(ctx.tenant_id) as session:
         row = ErrorImport(
             tenant_id=ctx.tenant_id,
@@ -207,6 +300,7 @@ async def upload_error_import(
     ctx: AuthContext = Depends(api_rate_limited),
     settings=Depends(get_app_settings),
 ):
+    await _prepare_new_import(ctx, request, settings)
     filename = _safe_filename(file.filename)
     data = await _read_capped(file, settings.max_chat_attachment_mb * 1024 * 1024)
     kind, mime = _validate_file(filename, data, vision_enabled=bool(settings.vision_model))
@@ -225,7 +319,7 @@ async def upload_error_import(
         settings=settings,
     )
     import_id = uuid.uuid4()
-    storage_prefix = f"{ctx.tenant_id}/error-imports/{import_id}"
+    storage_prefix = error_import_storage_prefix(ctx.tenant_id, import_id)
     storage_key = f"{storage_prefix}/{filename}"
     await request.app.state.storage.save(storage_key, data)
     try:
@@ -250,10 +344,16 @@ async def upload_error_import(
         raise
 
 
-async def _load_import(session, import_id: uuid.UUID, ctx: AuthContext) -> ErrorImport:
-    row = await session.get(ErrorImport, import_id)
+async def _load_import(
+    session, import_id: uuid.UUID, ctx: AuthContext, *, allow_deleting: bool = False
+) -> ErrorImport:
+    row = await session.scalar(
+        select(ErrorImport).where(ErrorImport.id == import_id).with_for_update()
+    )
     if row is None or row.user_id != ctx.user_id:
         raise HTTPException(status_code=404, detail="NOT_FOUND")
+    if row.status == "deleting" and not allow_deleting:
+        raise HTTPException(status_code=409, detail="IMPORT_DELETE_PENDING")
     return row
 
 
@@ -266,8 +366,10 @@ async def _validate_kb(session, kb_id: uuid.UUID | None) -> None:
 async def confirm_error_import(
     import_id: uuid.UUID,
     body: ErrorDraftIn,
+    request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
+    verified = False
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         imported = await _load_import(session, import_id, ctx)
         if imported.status == "confirmed" and imported.confirmed_error_item_id:
@@ -290,7 +392,7 @@ async def confirm_error_import(
             user_id=ctx.user_id,
             kb_id=body.kb_id,
             title=body.stem[:120],
-            blueprint_json={"kind": "error_import", "source_type": imported.source_type},
+            blueprint_json={"kind": ERROR_IMPORT_QUIZ_KIND, "source_type": imported.source_type},
             status="ready",
         )
         session.add(quiz)
@@ -315,16 +417,6 @@ async def confirm_error_import(
         )
         session.add(question)
         await session.flush()
-        session.add(
-            Attempt(
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                question_id=question.id,
-                response=body.my_answer.strip(),
-                is_correct=False if body.answer_verified else None,
-                scored_reason="用户手动收录错题",
-            )
-        )
         item = ErrorItem(
             tenant_id=ctx.tenant_id,
             user_id=ctx.user_id,
@@ -334,28 +426,46 @@ async def confirm_error_import(
             state="new",
             verification_status="verified" if body.answer_verified else "pending",
             source_import_id=imported.id,
+            original_response=body.my_answer.strip(),
         )
         session.add(item)
         await session.flush()
         imported.status = "confirmed"
         imported.draft_json = json.loads(body.model_dump_json())
         imported.confirmed_error_item_id = item.id
-        return {
+        verified = item.verification_status == "verified"
+        result = {
             "error_item_id": str(item.id),
             "verification_status": item.verification_status,
         }
+        # 仅派生画像/报告需要失效；pending 导入不会改变它们。
+        if verified:
+            await session.execute(
+                delete(LearningReportSnapshot).where(
+                    LearningReportSnapshot.user_id == ctx.user_id
+                )
+            )
+    if verified:
+        await invalidate_profile_summary_cache(request.app.state.redis, ctx.user_id)
+    return result
 
 
 @router.patch("/{error_item_id}/content")
 async def update_imported_error(
     error_item_id: uuid.UUID,
     body: ErrorDraftIn,
+    request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
+    verified = False
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
-        item = await session.get(ErrorItem, error_item_id)
+        item = await session.scalar(
+            select(ErrorItem).where(ErrorItem.id == error_item_id).with_for_update()
+        )
         if item is None or item.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if item.verification_status == "verified" and not body.answer_verified:
+            raise HTTPException(status_code=409, detail="VERIFICATION_ROLLBACK_FORBIDDEN")
         question = await session.get(Question, item.question_id)
         if question is None or question.source_type not in {"manual", "image", "document"}:
             raise HTTPException(status_code=409, detail="ERROR_ITEM_NOT_EDITABLE")
@@ -366,6 +476,27 @@ async def update_imported_error(
             body.kc_names,
             user_id=ctx.user_id,
         )
+        has_evidence = bool(item.fsrs_card_json)
+        if not has_evidence:
+            has_evidence = (
+                await session.scalar(
+                    select(MasteryLog.id)
+                    .where(
+                        MasteryLog.user_id == ctx.user_id,
+                        MasteryLog.evidence_id == item.id,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+        semantic_changed = (
+            question.type != body.type
+            or list(question.options_json or []) != list(body.options)
+            or question.answer.strip() != body.answer.strip()
+            or [str(k) for k in (question.kc_ids or [])] != [str(k) for k in kc_ids]
+        )
+        if has_evidence and semantic_changed:
+            raise HTTPException(status_code=409, detail="ERROR_ITEM_LOCKED_AFTER_REVIEW")
         question.type = body.type
         question.stem = body.stem
         question.options_json = body.options
@@ -383,19 +514,54 @@ async def update_imported_error(
             quiz.kb_id = body.kb_id
         item.kc_ids = kc_ids
         item.cause = body.cause
-        item.verification_status = "verified" if body.answer_verified else "pending"
-        attempt = await session.scalar(
-            select(Attempt)
-            .where(Attempt.user_id == ctx.user_id, Attempt.question_id == question.id)
-            .order_by(Attempt.at.desc())
-        )
-        if attempt is not None:
-            attempt.response = body.my_answer.strip()
-            attempt.is_correct = False if body.answer_verified else None
-        return {
+        item.original_response = body.my_answer.strip()
+        if item.verification_status == "pending" and body.answer_verified:
+            item.verification_status = "verified"
+        verified = item.verification_status == "verified"
+        if item.source_import_id is not None:
+            imported = await session.get(ErrorImport, item.source_import_id)
+            if imported is not None and imported.user_id == ctx.user_id:
+                imported.draft_json = json.loads(body.model_dump_json())
+        if verified:
+            await session.execute(
+                delete(LearningReportSnapshot).where(
+                    LearningReportSnapshot.user_id == ctx.user_id
+                )
+            )
+        result = {
             "error_item_id": str(item.id),
             "verification_status": item.verification_status,
         }
+    if verified:
+        await invalidate_profile_summary_cache(request.app.state.redis, ctx.user_id)
+    return result
+
+
+@router.get("/imports/{import_id}/source")
+async def read_error_import_source(
+    import_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """读取本人错题导入的原始文件；文件字节不经前端可猜的对象 key 直取。"""
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await _load_import(session, import_id, ctx)
+        return await _source_response(row, request)
+
+
+@router.get("/{error_item_id}/source")
+async def read_error_item_source(
+    error_item_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """编辑已保存错题时的来源别名；仍同时校验租户和错题所有权。"""
+    async with tenant_session(ctx.tenant_id) as session:
+        item = await session.get(ErrorItem, error_item_id)
+        if item is None or item.user_id != ctx.user_id or item.source_import_id is None:
+            raise HTTPException(status_code=404, detail="SOURCE_NOT_FOUND")
+        row = await _load_import(session, item.source_import_id, ctx)
+        return await _source_response(row, request)
 
 
 @router.delete("/imports/{import_id}", status_code=204)
@@ -405,11 +571,21 @@ async def delete_error_import(
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     async with tenant_session(ctx.tenant_id) as session:
-        row = await _load_import(session, import_id, ctx)
+        row = await _load_import(session, import_id, ctx, allow_deleting=True)
         if row.status == "confirmed":
             raise HTTPException(status_code=409, detail="IMPORT_ALREADY_CONFIRMED")
+        row.status = "deleting"
+        storage_prefix = error_import_storage_prefix(ctx.tenant_id, row.id)
+
+    try:
         if row.storage_key:
-            await request.app.state.storage.delete_prefix(
-                f"{ctx.tenant_id}/error-imports/{row.id}"
-            )
-        await session.delete(row)
+            await request.app.state.storage.delete_prefix(storage_prefix)
+    except Exception:  # noqa: BLE001 - deleting 状态保留，后续可重试
+        raise HTTPException(status_code=503, detail="ERROR_IMPORT_DELETE_FAILED") from None
+
+    # 只有对象删除成功后才删除数据库行。若此事务失败，row 仍是 deleting，
+    # 不会向客户端返回 204，也不会留下错误的“已删除”状态。
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.get(ErrorImport, import_id)
+        if row is not None and row.user_id == ctx.user_id and row.status == "deleting":
+            await session.delete(row)

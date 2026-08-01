@@ -531,11 +531,15 @@ async def list_errors(
         wrong_count: dict[str, int] = {}
         last_wrong: dict[str, str] = {}
         last_any: dict[str, str] = {}
-        if question_ids:
+        attempt_question_ids = [r.question_id for r in rows if r.source_import_id is None]
+        if attempt_question_ids:
             attempts = (
                 await session.execute(
                     select(Attempt.question_id, Attempt.response, Attempt.is_correct)
-                    .where(Attempt.user_id == ctx.user_id, Attempt.question_id.in_(question_ids))
+                    .where(
+                        Attempt.user_id == ctx.user_id,
+                        Attempt.question_id.in_(attempt_question_ids),
+                    )
                     .order_by(Attempt.at.asc())
                 )
             ).all()
@@ -547,6 +551,20 @@ async def list_errors(
                     last_wrong[key] = response
 
         name_map = await _kc_names(session, [k for r in rows for k in (r.kc_ids or [])])
+        evidence_ids = set()
+        if rows:
+            evidence_ids = {
+                evidence_id
+                for evidence_id in (
+                    await session.scalars(
+                        select(MasteryLog.evidence_id).where(
+                            MasteryLog.user_id == ctx.user_id,
+                            MasteryLog.evidence_id.in_([r.id for r in rows]),
+                        )
+                    )
+                ).all()
+                if evidence_id is not None
+            }
         items = []
         for row in rows:
             question = questions.get(str(row.question_id))
@@ -567,8 +585,16 @@ async def list_errors(
                         name_map[str(k)] for k in (row.kc_ids or []) if str(k) in name_map
                     ],
                     "next_due": due.isoformat() if due else None,
-                    "error_count": wrong_count.get(qid, 0),
-                    "my_answer": last_wrong.get(qid, last_any.get(qid, "")),
+                    "error_count": 0 if row.source_import_id is not None else wrong_count.get(qid, 0),
+                    "my_answer": (
+                        row.original_response or ""
+                        if row.source_import_id is not None
+                        else last_wrong.get(qid, last_any.get(qid, ""))
+                    ),
+                    "source_import_id": (
+                        str(row.source_import_id) if row.source_import_id else None
+                    ),
+                    "content_editable": not bool(row.fsrs_card_json) and row.id not in evidence_ids,
                     "is_variant": row.variant_of is not None,
                     "created_at": row.created_at,
                     "question": (
@@ -606,7 +632,10 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
             for cause, n in (
                 await session.execute(
                     select(ErrorItem.cause, func.count())
-                    .where(ErrorItem.user_id == ctx.user_id)
+                    .where(
+                        ErrorItem.user_id == ctx.user_id,
+                        ErrorItem.verification_status == "verified",
+                    )
                     .group_by(ErrorItem.cause)
                 )
             ).all()
@@ -616,7 +645,10 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
             for state, n in (
                 await session.execute(
                     select(ErrorItem.state, func.count())
-                    .where(ErrorItem.user_id == ctx.user_id)
+                    .where(
+                        ErrorItem.user_id == ctx.user_id,
+                        ErrorItem.verification_status == "verified",
+                    )
                     .group_by(ErrorItem.state)
                 )
             ).all()
@@ -635,7 +667,12 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
         )
         # KC 计数: kc_ids 是 JSONB 数组, 逐行内存展开 (单用户错题量级极小, 免 unnest 方言依赖)
         kc_rows = (
-            await session.scalars(select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id))
+            await session.scalars(
+                select(ErrorItem.kc_ids).where(
+                    ErrorItem.user_id == ctx.user_id,
+                    ErrorItem.verification_status == "verified",
+                )
+            )
         ).all()
         counter: dict[str, int] = {}
         for kc_ids in kc_rows:
@@ -721,11 +758,18 @@ class AppealIn(BaseModel):
 
 async def _load_appeal_attempt(session, body: AppealIn, ctx: AuthContext) -> Attempt:
     """定位可申诉的 attempt: 必须属于本人; question_id 路径取最近一次 LLM 判分作答。"""
+
+    async def _ordinary(attempt: Attempt) -> Attempt:
+        question = await session.get(Question, attempt.question_id)
+        if question is not None and (question.source_meta_json or {}).get("import_id"):
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        return attempt
+
     if body.attempt_id is not None:
         attempt = await session.get(Attempt, body.attempt_id)
         if attempt is None or attempt.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
-        return attempt
+        return await _ordinary(attempt)
     attempt = await session.scalar(
         select(Attempt)
         .where(
@@ -738,7 +782,7 @@ async def _load_appeal_attempt(session, body: AppealIn, ctx: AuthContext) -> Att
     )
     if attempt is None:
         raise HTTPException(status_code=404, detail="NOT_FOUND")
-    return attempt
+    return await _ordinary(attempt)
 
 
 @appeals_router.post("")
