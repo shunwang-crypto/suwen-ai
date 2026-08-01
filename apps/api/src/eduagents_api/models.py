@@ -313,8 +313,10 @@ class Question(Base):
     __tablename__ = "questions"
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
-    quiz_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("quizzes.id", ondelete="CASCADE"), index=True
+    # 正式智能练习题仍属于 Quiz；题目资料中的题通过 ResourceQuestion 关联，
+    # 因而不再需要为每道导入题伪造一个隐藏 Quiz。
+    quiz_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quizzes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     type: Mapped[str] = mapped_column(String(16), nullable=False)  # single/multi/blank/short
     stem: Mapped[str] = mapped_column(Text, nullable=False)
@@ -365,6 +367,12 @@ class ErrorItem(Base):
         String(16), nullable=False, default="verified", server_default="verified"
     )
     source_import_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    resource_question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    assessment_answer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     # 导入时用户在原题上写下的答案；它不是平台作答证据，不进入 Attempt/学情统计。
     original_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     fsrs_card_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -394,6 +402,125 @@ class ErrorImport(Base):
     confirmed_error_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LearningResource(Base):
+    """统一的学习资料元数据。
+
+    题目资料只保留结构化题目和原始文件，不自动进入 KnowledgeBase/RAG；参考资料
+    仍沿用现有 Document/Chunk 链路，``linked_kb_id`` 只表达用户显式建立的关联。
+    """
+
+    __tablename__ = "learning_resources"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    owner_type: Mapped[str] = mapped_column(String(16), nullable=False, default="personal")
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    resource_type: Mapped[str] = mapped_column(String(24), nullable=False, default="other")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    subject: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
+    grade: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    term: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    storage_key: Mapped[str | None] = mapped_column(String(768), nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
+    retrieval_policy: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="questions_only"
+    )
+    linked_kb_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ResourceQuestion(Base):
+    """题目资料中的一题及其在原文件中的定位。"""
+
+    __tablename__ = "resource_questions"
+    __table_args__ = (
+        UniqueConstraint("resource_id", "question_id", name="uq_resource_questions_resource_question"),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    resource_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("learning_resources.id", ondelete="CASCADE"), index=True
+    )
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    question_no: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    section_path: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_region_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    points: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AssessmentAttempt(Base):
+    """一次真实考试、作业或练习记录；同一资源可以有多次 attempt。"""
+
+    __tablename__ = "assessment_attempts"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("learning_resources.id", ondelete="SET NULL"), index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    attempt_type: Mapped[str] = mapped_column(String(24), nullable=False, default="practice")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    grader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AssessmentAnswer(Base):
+    """一次真实 attempt 对一道题的作答和评分。"""
+
+    __tablename__ = "assessment_answers"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessment_attempts.id", ondelete="CASCADE"), index=True
+    )
+    resource_question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resource_questions.id", ondelete="CASCADE"), index=True
+    )
+    response: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    grading_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    teacher_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
