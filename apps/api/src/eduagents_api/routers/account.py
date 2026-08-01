@@ -12,7 +12,7 @@
   账号状态检查立即拒绝; refresh 已随 users 行级联删除 (等价全部撤销)。
 
 导出 (个保法第 45 条可携带权): POST 入队 export_user_data -> 业务表 JSON
-(含 learner_insights/user_preferences/chat_attachments) + chunk 文本 + 上传文件清单打 ZIP
+(含 learner_insights/user_preferences/chat_attachments/error_imports) + chunk 文本 + 上传文件清单打 ZIP
 落对象存储 exports/{uid}/{ts}.zip (worker/export.py);
 GET 查状态; GET /download 经 API 流式转发 (LocalStorage 无预签名 URL 概念)。
 

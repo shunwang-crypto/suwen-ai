@@ -27,6 +27,7 @@ from .routers import (
     billing,
     chat,
     chat_attachments,
+    error_imports,
     evals,
     feedback,
     health,
@@ -181,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(ops.router)
     app.include_router(reviews.router)
     app.include_router(reviews.errors_router)  # 错题本 /api/errors (F6)
+    app.include_router(error_imports.router)  # 学生上传/手动录入错题
     app.include_router(reviews.appeals_router)  # P2-3 判分申诉
     app.include_router(next_actions.router)  # P2-2/P2-5 可解释推荐 (F8-A2 开场卡数据源)
     app.include_router(admin.router)

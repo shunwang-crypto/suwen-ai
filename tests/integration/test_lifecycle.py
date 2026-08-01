@@ -553,12 +553,13 @@ async def test_export_user_data(client):
     names = set(zf.namelist())
     assert {"profile.json", "chunks.json", "uploads_manifest.json"} <= names
     tables = {n for n in names if n.startswith("tables/")}
-    assert len(tables) == 16  # 0009 起再含聊天附件
+    assert len(tables) == 17  # 0010 起再含错题导入来源
     assert {
         "tables/learner_insights.json",
         "tables/user_preferences.json",
         "tables/learning_report_snapshots.json",
         "tables/chat_attachments.json",
+        "tables/error_imports.json",
     } <= tables
     kbs = json.loads(zf.read("tables/knowledge_bases.json"))
     assert any(row["id"] == kb_id for row in kbs)

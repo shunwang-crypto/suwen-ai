@@ -320,6 +320,11 @@ class Question(Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
     kc_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     source_chunk_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # generated/manual/image/document; source_meta_json 保留导入文件和原始草稿追溯信息。
+    source_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="generated", server_default="generated"
+    )
+    source_meta_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     difficulty: Mapped[str] = mapped_column(String(8), nullable=False, default="mid")
 
 
@@ -352,7 +357,38 @@ class ErrorItem(Base):
     # 状态机: new→reviewing→mastered→archived
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="new")
     variant_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # 待核验题不进入复习、变式或掌握度链路，避免模型猜测答案污染学习画像。
+    verification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="verified", server_default="verified"
+    )
+    source_import_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     fsrs_card_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ErrorImport(Base):
+    """错题上传/手动录入的可恢复草稿；确认后才进入正式题目与错题表。"""
+
+    __tablename__ = "error_imports"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    storage_key: Mapped[str | None] = mapped_column(String(768), nullable=True)
+    draft_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    recognition_warning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_error_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

@@ -17,6 +17,7 @@ import {
   fmtDateTime,
   fmtRelative,
 } from "@/components/common";
+import { ErrorImportDialog } from "@/components/errors/error-import-dialog";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -119,6 +120,8 @@ export default function ErrorsPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<ErrorItemOut | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -288,7 +291,12 @@ export default function ErrorsPage() {
     if (!stats) return 0;
     if (key === "total") return stats.total;
     if (key === "active")
-      return (stats.by_state.new ?? 0) + (stats.by_state.reviewing ?? 0);
+      return Math.max(
+        0,
+        (stats.by_state.new ?? 0) +
+          (stats.by_state.reviewing ?? 0) -
+          (stats.pending_verification ?? 0),
+      );
     return stats.by_state[key] ?? 0;
   };
 
@@ -301,13 +309,25 @@ export default function ErrorsPage() {
         title="错题本"
         subtitle="沉淀每一道错误，看清原因，再决定下一步该练什么。"
         action={
-          <button
-            type="button"
-            onClick={reload}
-            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700"
-          >
-            刷新
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingItem(null);
+                setImportOpen(true);
+              }}
+              className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-[12px] font-medium text-white hover:bg-brand-800"
+            >
+              录入错题
+            </button>
+            <button
+              type="button"
+              onClick={reload}
+              className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700"
+            >
+              刷新
+            </button>
+          </>
         }
       />
 
@@ -521,7 +541,7 @@ export default function ErrorsPage() {
           description={
             filtered
               ? "换个状态或错因看看，或清除筛选查看全部"
-              : "做一次练习吧——答错的题会 100% 自动收进这里，并按遗忘曲线安排复习"
+              : "练习中的错题会自动收录，也可以拍照、上传文件或手动录入"
           }
           illustration="notebook"
         />
@@ -535,7 +555,7 @@ export default function ErrorsPage() {
                 <li key={item.id} className="rounded-[12px] border border-line bg-white p-4">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[13px] font-semibold text-ink">{item.question?.stem ? <MathText text={item.question.stem} /> : "原题已删除"}</h2><StateBadge state={item.state} /></div>
+                        <div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[13px] font-semibold text-ink">{item.question?.stem ? <MathText text={item.question.stem} /> : "原题已删除"}</h2><StateBadge state={item.state} />{item.verification_status === "pending" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium text-warning-700">答案待核验</span>}</div>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <label
                         className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ring-inset ${
@@ -569,13 +589,13 @@ export default function ErrorsPage() {
                           变式题
                         </span>
                       )}
-                      <span className="text-[10px] text-ink-muted">错 {item.error_count} 次{item.next_due && ` · 下次 ${fmtRelative(item.next_due)}`}</span>
+                      <span className="text-[10px] text-ink-muted">{item.question?.source_type && item.question.source_type !== "generated" ? "手动收录" : `错 ${item.error_count} 次`}{item.next_due && ` · 下次 ${fmtRelative(item.next_due)}`}</span>
                         </div>
                       </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={busy || item.verification_status !== "verified"}
                         onClick={() => void makeVariant(item)}
                         className="flex items-center gap-1.5 rounded-[7px] bg-brand-50 px-3 py-1.5 text-[11px] font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-50"
                       >
@@ -628,13 +648,32 @@ export default function ErrorsPage() {
           <aside className="relative flex h-full w-full max-w-[580px] flex-col border-l border-line bg-white shadow-floating">
             <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><div className="flex items-center gap-2"><StateBadge state={selectedItem.state} /><span className="text-[10px] text-ink-muted">{selectedItem.kc_names.join(" · ") || "未关联知识点"}</span></div><h2 className="mt-2 text-[18px] font-semibold text-ink">错题详情</h2></div><button type="button" onClick={() => setSelectedItemId(null)} className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted" aria-label="关闭">✕</button></header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
-              {selectedItem.question ? <><section><p className="text-[10px] font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-[10px] font-semibold text-danger-600">我的答案</p><p className="mt-2 text-[12px] text-ink-secondary">{selectedItem.my_answer || "（未作答）"}</p></div><div className="rounded-[10px] border border-success-200 bg-success-50 p-4"><p className="text-[10px] font-semibold text-success-600">正确答案</p><div className="mt-2 text-[12px] text-ink-secondary"><MathText text={selectedItem.question.answer} /></div></div></div>{selectedItem.question.explanation && <section><p className="text-[10px] font-semibold text-ink-muted">解析</p><div className="mt-2 text-[12px] leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-[12px] text-ink-muted">原题已删除，历史记录仍保留。</p>}
+              {selectedItem.verification_status === "pending" && <section className="rounded-[10px] border border-warning-200 bg-warning-50 p-4"><p className="text-[11px] font-medium text-warning-700">这道题的正确答案尚未核验</p><p className="mt-1 text-[10px] leading-4 text-warning-700">核验前不会进入今日复习、生成变式题或影响学习画像。</p></section>}
+              {selectedItem.question ? <><section><p className="text-[10px] font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-[10px] font-semibold text-danger-600">我的答案</p><p className="mt-2 text-[12px] text-ink-secondary">{selectedItem.my_answer || "（未作答）"}</p></div><div className={`rounded-[10px] border p-4 ${selectedItem.verification_status === "verified" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}><p className={`text-[10px] font-semibold ${selectedItem.verification_status === "verified" ? "text-success-600" : "text-warning-700"}`}>{selectedItem.verification_status === "verified" ? "正确答案" : "待核验答案"}</p><div className="mt-2 text-[12px] text-ink-secondary">{selectedItem.question.answer ? <MathText text={selectedItem.question.answer} /> : "尚未填写"}</div></div></div>{selectedItem.question.explanation && <section><p className="text-[10px] font-semibold text-ink-muted">解析</p><div className="mt-2 text-[12px] leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-[12px] text-ink-muted">原题已删除，历史记录仍保留。</p>}
               <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-[11px] text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-[11px] text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
               <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">加入日期</p><strong className="mt-1 block text-[11px] text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">下次复习</p><strong className="mt-1 block text-[11px] text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
             </div>
-            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]"><button type="button" disabled={busyId === selectedItem.id} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">生成变式题去练习</button><Link href={selectedItem.question ? `/tutor?problem=${encodeURIComponent(selectedItem.question.stem)}` : "/tutor"} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-[12px] font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
+            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]">{selectedItem.question?.source_type && selectedItem.question.source_type !== "generated" ? <button type="button" onClick={() => { setEditingItem(selectedItem); setImportOpen(true); }} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">{selectedItem.verification_status === "verified" ? "编辑题目" : "编辑并核验"}</button> : <button type="button" disabled={busyId === selectedItem.id || selectedItem.verification_status !== "verified"} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40">生成变式题去练习</button>}<Link href={selectedItem.question ? `/tutor?problem=${encodeURIComponent(selectedItem.question.stem)}` : "/tutor"} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-[12px] font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
           </aside>
         </div>
+      )}
+      {importOpen && (
+        <ErrorImportDialog
+          editItem={editingItem}
+          knowledgeBases={kbs}
+          onClose={() => {
+            setImportOpen(false);
+            setEditingItem(null);
+          }}
+          onSaved={(message) => {
+            setImportOpen(false);
+            setEditingItem(null);
+            setSelectedItemId(null);
+            setNotice(message);
+            setLoading(true);
+            setReloadKey((key) => key + 1);
+          }}
+        />
       )}
     </div>
   );

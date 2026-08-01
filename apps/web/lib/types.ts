@@ -602,12 +602,15 @@ export interface ErrorQuestion {
   answer: string;
   explanation: string;
   difficulty: string;
+  source_type: "generated" | "manual" | "image" | "document" | string;
+  source_meta: Record<string, unknown>;
 }
 
 export interface ErrorItemOut {
   id: string;
   state: string;
   cause: string;
+  verification_status: "pending" | "verified";
   kc_ids: string[];
   kc_names: string[];
   next_due: string | null;
@@ -617,6 +620,35 @@ export interface ErrorItemOut {
   is_variant: boolean;
   created_at: string;
   question: ErrorQuestion | null;
+}
+
+export interface ErrorImportDraft {
+  type: "single" | "multi" | "blank" | "short";
+  stem: string;
+  options: string[];
+  my_answer: string;
+  answer: string;
+  explanation: string;
+  kc_names: string[];
+  difficulty: "easy" | "mid" | "hard";
+}
+
+export interface ErrorImportOut {
+  id: string;
+  source_type: "manual" | "image" | "document";
+  filename: string | null;
+  status: "draft" | "confirmed";
+  draft: ErrorImportDraft;
+  recognition_warning: string | null;
+  confirmed_error_item_id: string | null;
+  created_at: string;
+}
+
+export interface ErrorImportCapabilities {
+  max_file_mb: number;
+  document_suffixes: string[];
+  image_suffixes: string[];
+  vision_enabled: boolean;
 }
 
 export interface ErrorListResponse {
@@ -637,6 +669,7 @@ export interface ErrorStatsResponse {
   total: number;
   by_cause: Record<string, number>;
   by_state: Record<string, number>;
+  pending_verification: number;
   by_kc: ErrorKcCount[];
 }
 

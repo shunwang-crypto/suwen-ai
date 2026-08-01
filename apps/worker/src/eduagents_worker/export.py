@@ -1,6 +1,6 @@
 """用户数据导出 (P1-8, 个保法第 45 条可携带权)。
 
-export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (15 张业务表 JSON,
+export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (17 张业务表 JSON,
 含个性化记忆/偏好、学情报告快照与聊天附件 — 均属可携带权范围) +
 chunk 文本 + 上传文件清单, 打 ZIP 存对象存储 exports/{uid}/{ts}.zip,
 完成后写 Redis export:{uid}=path (24h TTL)。下载经 API 流式转发
@@ -55,6 +55,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         ChatSession,
         Chunk,
         Document,
+        ErrorImport,
         ErrorItem,
         KnowledgeBase,
         LearnerInsight,
@@ -73,7 +74,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
     settings = ctx.get("settings") or get_settings()
     tenant_id = str(tenant_id)
 
-    # 15 张业务表 (RLS 租户会话天然只见本人行, 不越权)
+    # RLS 租户会话天然只见本人行，不越权。
     tables = {
         "knowledge_bases": KnowledgeBase,
         "documents": Document,
@@ -84,6 +85,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         "questions": Question,
         "attempts": Attempt,
         "error_items": ErrorItem,
+        "error_imports": ErrorImport,
         "plans": Plan,
         "plan_adjustments": PlanAdjustment,
         "mastery_records": MasteryRecord,
@@ -141,6 +143,17 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
             "storage_key": attachment["storage_key"],
         }
         for attachment in dumped["chat_attachments"]
+    )
+    uploads.extend(
+        {
+            "error_import_id": imported["id"],
+            "filename": imported["filename"],
+            "size_bytes": imported["size_bytes"],
+            "kind": imported["source_type"],
+            "storage_key": imported["storage_key"],
+        }
+        for imported in dumped["error_imports"]
+        if imported["storage_key"]
     )
 
     buf = io.BytesIO()

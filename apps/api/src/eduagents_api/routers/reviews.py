@@ -100,6 +100,7 @@ async def due_error_items(session, user_id, now_dt: datetime) -> list:
             select(ErrorItem).where(
                 ErrorItem.user_id == user_id,
                 ErrorItem.state.in_(_ACTIVE_STATES),
+                ErrorItem.verification_status == "verified",
             )
         )
     ).all()
@@ -250,6 +251,8 @@ async def answer_review(
         item = await session.get(ErrorItem, error_item_id)
         if item is None or item.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if item.verification_status != "verified":
+            raise HTTPException(status_code=409, detail="ANSWER_NOT_VERIFIED")
         question = await session.get(Question, item.question_id)
         if question is None:
             raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
@@ -333,6 +336,8 @@ async def make_variant(
         item = await session.get(ErrorItem, error_item_id)
         if item is None or item.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if item.verification_status != "verified":
+            raise HTTPException(status_code=409, detail="ANSWER_NOT_VERIFIED")
         original = await session.get(Question, item.question_id)
         if original is None:
             raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
@@ -390,6 +395,8 @@ async def make_variant(
             explanation=model.explanation,
             kc_ids=list(original.kc_ids or []),  # 考点一致: 直接沿用原题归一化 kc_ids
             source_chunk_id=original.source_chunk_id,
+            source_type="generated",
+            source_meta_json={"variant_of": str(original.id)},
             difficulty=model.difficulty,
         )
         session.add(new_q)
@@ -454,6 +461,7 @@ async def list_errors(
         conditions = [ErrorItem.user_id == ctx.user_id]
         if state == "active":
             conditions.append(ErrorItem.state.in_(_ACTIVE_STATES))
+            conditions.append(ErrorItem.verification_status == "verified")
         elif state is not None:
             conditions.append(ErrorItem.state == state)
         if cause is not None:
@@ -542,13 +550,18 @@ async def list_errors(
         items = []
         for row in rows:
             question = questions.get(str(row.question_id))
-            due = scheduler.due_at(row.fsrs_card_json)
+            due = (
+                scheduler.due_at(row.fsrs_card_json)
+                if row.verification_status == "verified"
+                else None
+            )
             qid = str(row.question_id)
             items.append(
                 {
                     "id": str(row.id),
                     "state": row.state,
                     "cause": row.cause,
+                    "verification_status": row.verification_status,
                     "kc_ids": [str(k) for k in (row.kc_ids or [])],
                     "kc_names": [
                         name_map[str(k)] for k in (row.kc_ids or []) if str(k) in name_map
@@ -567,6 +580,8 @@ async def list_errors(
                             "answer": question.answer,
                             "explanation": question.explanation,
                             "difficulty": question.difficulty,
+                            "source_type": question.source_type,
+                            "source_meta": question.source_meta_json or {},
                         }
                         if question is not None
                         else None
@@ -606,6 +621,18 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
                 )
             ).all()
         }
+        pending_verification = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(ErrorItem)
+                .where(
+                    ErrorItem.user_id == ctx.user_id,
+                    ErrorItem.state.in_(_ACTIVE_STATES),
+                    ErrorItem.verification_status == "pending",
+                )
+            )
+            or 0
+        )
         # KC 计数: kc_ids 是 JSONB 数组, 逐行内存展开 (单用户错题量级极小, 免 unnest 方言依赖)
         kc_rows = (
             await session.scalars(select(ErrorItem.kc_ids).where(ErrorItem.user_id == ctx.user_id))
@@ -622,6 +649,7 @@ async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
         "total": sum(by_state.values()),
         "by_cause": {c: by_cause.get(c, 0) for c in CAUSES},
         "by_state": {s: by_state.get(s, 0) for s in _ALL_STATES},
+        "pending_verification": pending_verification,
         "by_kc": by_kc,
     }
 

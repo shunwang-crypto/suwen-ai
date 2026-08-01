@@ -182,6 +182,10 @@ def install_error_handlers(app: FastAPI) -> None:
             "CHAT_ATTACHMENT_PARSE_FAILED": "未能解析该文件，请检查文件是否损坏",
             "CHAT_ATTACHMENT_EMPTY_TEXT": "文件中没有可读取的文字",
             "CHAT_ATTACHMENT_TEXT_TOO_LARGE": "文件正文超过当前对话容量，请拆分后上传",
+            "ANSWER_NOT_VERIFIED": "请先核验正确答案，再进入复习或生成变式题",
+            "ERROR_ITEM_NOT_EDITABLE": "只有手动录入或上传识别的错题可以修改题目内容",
+            "IMPORT_ALREADY_CONFIRMED": "该导入已经写入错题本",
+            "KB_NOT_FOUND": "选择的知识库不存在或无权访问",
             # 0006 预付额度 (routers/billing.py)
             "AMOUNT_NOT_ALLOWED": "充值金额不在可选档位内",
             "ORDER_NOT_PENDING": "订单不是待支付状态，请勿重复支付",
