@@ -174,28 +174,8 @@ function WebSearchStatus({
     (item) => item.kind === "trace" && !item.data.skipped,
   ).length;
   const deep = mode === "research";
-  const status =
-    citations.length > 0
-      ? `${streaming ? "正在整理" : "已参考"} ${citations.length} 个网页来源${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`
-      : deep
-        ? "正在进行深度搜索…"
-        : "正在搜索网页…";
-
-  if (citations.length === 0) {
-    return (
-      <div className="mb-3 flex items-center gap-2 text-[12px] text-ink-muted">
-        {streaming ? (
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line-strong border-t-ink-secondary" aria-hidden />
-        ) : (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-4 w-4" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16 16 4 4" />
-          </svg>
-        )}
-        {streaming ? status : "未找到可用网页来源"}
-      </div>
-    );
-  }
+  if (streaming || citations.length === 0) return null;
+  const status = `已参考 ${citations.length} 个网页来源${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
 
   return (
     <details className="group mb-3 text-[12px] text-ink-secondary">
@@ -1308,9 +1288,7 @@ function ChatView() {
                                 <span />
                                 <span />
                               </span>
-                              {m.chatMode === "web" || m.chatMode === "research"
-                                ? "正在整理搜索结果…"
-                                : "正在思考…"}
+                              思考中…
                             </span>
                           )}
                         </div>
