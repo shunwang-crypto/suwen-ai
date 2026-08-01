@@ -146,25 +146,18 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sourceHost(url?: string): string {
-  if (!url) return "网页来源";
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "网页来源";
-  }
-}
-
 function WebSearchStatus({
   mode,
   streaming,
   timeline,
   citations,
+  onOpen,
 }: {
   mode: ChatMode;
   streaming: boolean;
   timeline: TimelineItem[];
   citations: CitationData[];
+  onOpen: () => void;
 }) {
   if (mode !== "web" && mode !== "research") return null;
   const searchEvents = timeline.filter(
@@ -175,40 +168,20 @@ function WebSearchStatus({
   ).length;
   const deep = mode === "research";
   if (streaming || citations.length === 0) return null;
-  const status = `已参考 ${citations.length} 个网页来源${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
+  const status = `搜索到 ${citations.length} 个网页${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
 
   return (
-    <details className="group mb-3 text-[12px] text-ink-secondary">
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[8px] py-1.5 hover:text-ink [&::-webkit-details-marker]:hidden">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
-        </svg>
-        <span>{status}</span>
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden>
-          <path d="m5 7.5 5 5 5-5" />
-        </svg>
-      </summary>
-      <ul className="mt-1 grid gap-1.5 border-l border-line pl-3 sm:grid-cols-2">
-        {citations.map((citation) => (
-          <li key={`${citation.idx}-${citation.url}`} className="min-w-0">
-            <a
-              href={citation.url}
-              target="_blank"
-              rel="noreferrer"
-              className="block rounded-[7px] px-2 py-1.5 hover:bg-surface-muted"
-            >
-              <span className="block truncate text-[11px] font-medium text-ink-secondary">
-                {citation.idx}. {citation.doc_name || "网页来源"}
-              </span>
-              <span className="block truncate text-[10px] text-ink-muted">
-                {sourceHost(citation.url)}
-              </span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </details>
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mb-3 inline-flex items-center gap-2 rounded-full bg-surface-muted px-3 py-1.5 text-[12px] text-ink-secondary hover:bg-line hover:text-ink"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden>
+        <circle cx="11" cy="11" r="7" />
+        <path d="m16 16 4 4" />
+      </svg>
+      <span>{status}</span>
+    </button>
   );
 }
 
@@ -968,6 +941,12 @@ function ChatView() {
     setCitationsOpen(true);
   }, []);
 
+  const openMessageCitations = useCallback((msgId: string) => {
+    setCitationMsgId(msgId);
+    setActiveCitation(null);
+    setCitationsOpen(true);
+  }, []);
+
   // 引用面板数据源：优先用户选中的消息，否则最近一条带引用的助手消息
   const citedMsg =
     messages.find((m) => m.id === citationMsgId && m.citations.length > 0) ??
@@ -975,6 +954,13 @@ function ChatView() {
       (m) => m.role === "assistant" && m.citations.length > 0,
     );
   const panelCitations = citedMsg?.citations ?? [];
+  const citationsPanelTitle = panelCitations.every(
+    (citation) => citation.source_type === "web",
+  )
+    ? "搜索结果"
+    : panelCitations.every((citation) => citation.source_type !== "web")
+      ? "知识库引用"
+      : "引用依据";
   const activeSessionTitle =
     sessions.find((session) => session.id === activeSessionId)?.title ?? "新对话";
   const selectedKbLabel =
@@ -1211,6 +1197,7 @@ function ChatView() {
                           streaming={Boolean(m.streaming)}
                           timeline={m.timeline}
                           citations={m.citations.filter((citation) => citation.source_type === "web")}
+                          onOpen={() => openMessageCitations(m.id)}
                         />
                       )}
                       {m.done?.refused && (
@@ -1414,9 +1401,17 @@ function ChatView() {
                               ` · ${(m.done.usage.latency_ms / 1000).toFixed(1)} 秒`}
                             {m.done.usage?.mode &&
                               ` · ${MODE_LABELS[m.done.usage.mode] ?? m.done.usage.mode}`}
-                            {m.citations.length > 0 &&
-                              ` · ${m.citations.length} 条引用`}
                           </span>
+                          {m.citations.length > 0 &&
+                            !m.citations.some((citation) => citation.source_type === "web") && (
+                              <button
+                                type="button"
+                                onClick={() => openMessageCitations(m.id)}
+                                className="rounded-full px-2 py-0.5 text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
+                              >
+                                {m.citations.length} 条知识库引用
+                              </button>
+                            )}
                         </div>
                       )}
                     </div>
@@ -1759,25 +1754,35 @@ function ChatView() {
         </div>
       </section>
 
-      {/* 右：引用面板（桌面）—— 无引用时不渲染，对话区自动占满宽度（移动端抽屉不受影响） */}
-      {panelCitations.length > 0 && (
+      {/* 右：引用面板（桌面）—— 用户点击引用后才打开 */}
+      {citationsOpen && panelCitations.length > 0 && (
       <aside className="hidden w-[318px] shrink-0 flex-col border-l border-line bg-white xl:flex">
-        <div className="flex h-14 shrink-0 items-center border-b border-slate-100 px-4">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-100 px-4">
           <h2 className="text-base font-medium text-slate-900">
-            引用
+            {citationsPanelTitle}
             {panelCitations.length > 0 && (
               <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-brand-50 px-1.5 py-0.5 text-xs font-normal text-brand-700">
                 {panelCitations.length}
               </span>
             )}
           </h2>
+          <button
+            type="button"
+            onClick={() => setCitationsOpen(false)}
+            className="rounded-[7px] p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="关闭引用面板"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="h-4 w-4" aria-hidden>
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
         </div>
         <div className="min-h-0 flex-1">{citationsPanel}</div>
       </aside>
       )}
 
       {/* 右：引用面板（移动端抽屉） */}
-      {citationsOpen && (
+      {citationsOpen && panelCitations.length > 0 && (
         <div className="fixed inset-0 z-40 xl:hidden">
           <button
             type="button"
@@ -1787,7 +1792,7 @@ function ChatView() {
           />
           <div className="absolute inset-y-0 right-0 flex w-80 max-w-[85vw] flex-col bg-white shadow-xl">
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-slate-100 px-4">
-              <h2 className="text-sm font-semibold text-slate-800">引用溯源</h2>
+              <h2 className="text-sm font-semibold text-slate-800">{citationsPanelTitle}</h2>
               <button
                 type="button"
                 onClick={() => setCitationsOpen(false)}

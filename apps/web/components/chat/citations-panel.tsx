@@ -58,9 +58,30 @@ export function CitationsPanel({
     );
   }
 
+  const groups = [
+    {
+      key: "web",
+      label: "网页搜索结果",
+      items: citations.filter((citation) => citation.source_type === "web"),
+    },
+    {
+      key: "kb",
+      label: "知识库依据",
+      items: citations.filter((citation) => citation.source_type !== "web"),
+    },
+  ].filter((group) => group.items.length > 0);
+  const showGroupLabels = groups.length > 1;
+
   return (
     <div ref={containerRef} className="h-full overflow-y-auto px-4">
-      {citations.map((c) => {
+      {groups.map((group) => (
+        <section key={group.key}>
+          {showGroupLabels && (
+            <h3 className="sticky top-0 z-10 border-b border-line bg-white py-2.5 text-[11px] font-medium text-ink-muted">
+              {group.label} · {group.items.length}
+            </h3>
+          )}
+          {group.items.map((c) => {
         const active = activeIdx === c.idx;
         // 来源归属：优先 chat 页传入的 kb 映射，回退引用自带字段（可选扩展字段）
         const ownerType =
@@ -162,7 +183,9 @@ export function CitationsPanel({
             )}
           </button>
         );
-      })}
+          })}
+        </section>
+      ))}
     </div>
   );
 }
