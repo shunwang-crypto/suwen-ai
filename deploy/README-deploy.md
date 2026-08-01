@@ -101,12 +101,20 @@ file being validated.
 若 `PUBLIC_REGISTRATION=false`，首个管理员只能在服务器上通过交互式一次性流程创建：
 
 ~~~bash
-PURGE_EXPECTED_DB_HOST=postgres \
-python scripts/create_first_admin.py --email admin@your-domain.example \
-  --confirm-instance=eduagents-prod
+docker compose --env-file .env.production \
+  -f deploy/docker-compose.prod.yml run --rm --no-deps migrate \
+  python /app/scripts/create_first_admin.py \
+  --email admin@your-domain.example \
+  --instance-name=eduagents-prod \
+  --confirm-instance=eduagents-prod \
+  --expected-db-host=postgres \
+  --expected-database=eduagents_prod
 ~~~
 
-该流程拒绝已有管理员、不会打印密码，随后应立即退出服务器 shell 并保管生成账号的审计记录。
+该流程使用 migration job 的高权限连接，只在 API 镜像中携带脚本；密码通过容器内
+`getpass` 交互输入两次，不出现在参数、shell history 或日志中。它拒绝已有管理员、
+校验实例名和精确数据库目标，完成后容器退出。创建后应立即退出服务器 shell 并保管
+生成账号的审计记录。
 从服务器之外的网络执行验收：
 
 ~~~bash

@@ -18,6 +18,13 @@ ready_file="$tmp_dir/ready.json"
 
 curl -fsS --max-time 20 "$BASE_URL/api/health/live" -o "$live_file"
 curl -fsS --max-time 20 "$BASE_URL/api/health/ready" -o "$ready_file"
+curl -fsS --max-time 20 "$BASE_URL/" -o /dev/null
+
+for path in /api/docs /api/openapi.json; do
+  status="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$BASE_URL$path")"
+  [[ "$status" == 404 ]] || { echo "$path must return 404, got $status" >&2; exit 1; }
+done
+echo "HTTPS page and private API docs: PASS"
 
 python - "$live_file" "$ready_file" <<'PY'
 import json
@@ -43,7 +50,7 @@ case "$redirect" in
 esac
 
 openssl s_client -connect "$host:443" -servername "$host" </dev/null 2>/dev/null \
-  | openssl x509 -noout -subject -issuer -dates
+  | openssl x509 -checkhost "$host" -noout -subject -issuer -dates
 echo "TLS certificate: PASS"
 
 if command -v nc >/dev/null 2>&1; then

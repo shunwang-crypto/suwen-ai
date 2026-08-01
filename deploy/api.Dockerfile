@@ -14,6 +14,7 @@ RUN grep -v 'file:///' requirements.lock > /tmp/req.lock \
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/worker/ apps/worker/
+COPY scripts/create_first_admin.py scripts/create_first_admin.py
 COPY alembic.ini ./
 COPY alembic/ alembic/
 
