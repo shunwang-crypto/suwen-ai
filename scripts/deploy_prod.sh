@@ -15,7 +15,8 @@ docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
 
 required=(
   APP_ENV EDUAGENTS_DOMAIN WEB_ORIGIN POSTGRES_DB POSTGRES_MIGRATION_PASSWORD
-  POSTGRES_APP_PASSWORD REDIS_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD JWT_SECRET
+  POSTGRES_APP_PASSWORD REDIS_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
+  MINIO_APP_ACCESS_KEY MINIO_APP_SECRET_KEY JWT_SECRET
   CHEAP_API_KEY STANDARD_API_KEY STRONG_API_KEY EMBEDDING_API_KEY SMTP_HOST SMTP_USER
   SMTP_PASSWORD SMTP_FROM
 )
@@ -42,6 +43,9 @@ echo "[deploy] validated production compose and secret policy"
 "${compose[@]}" build --pull api worker web
 "${compose[@]}" up -d postgres redis qdrant minio
 "${compose[@]}" up -d --wait postgres redis qdrant minio
+"${compose[@]}" up --no-deps minio-init
+init_status=$("${compose[@]}" ps -a --format json minio-init | python -c 'import json,sys; row=json.load(sys.stdin); print(row.get("State",""), row.get("ExitCode",""))')
+[[ "$init_status" == "exited 0" ]] || die "MinIO initialization failed: $init_status"
 echo "[deploy] infrastructure is healthy; running one migration job"
 "${compose[@]}" run --rm --no-deps migrate
 "${compose[@]}" up -d api worker web caddy

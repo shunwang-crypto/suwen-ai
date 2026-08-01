@@ -133,8 +133,8 @@ def _minio_snapshot(settings: Settings) -> StorageSnapshot:
 
     client = Minio(
         settings.minio_endpoint,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
+        access_key=settings.minio_app_access_key,
+        secret_key=settings.minio_app_secret_key,
         secure=settings.minio_secure,
     )
     if not client.bucket_exists(settings.minio_bucket):
@@ -357,8 +357,8 @@ def _delete_storage(settings: Settings) -> int:
 
         client = Minio(
             settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
+            access_key=settings.minio_app_access_key,
+            secret_key=settings.minio_app_secret_key,
             secure=settings.minio_secure,
         )
         if not client.bucket_exists(settings.minio_bucket):

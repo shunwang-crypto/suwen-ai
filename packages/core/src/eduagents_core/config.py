@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,8 +31,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
     qdrant_url: str = "http://localhost:6333"
     minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "eduagents"
-    minio_secret_key: str = "eduagents-secret"
+    minio_app_access_key: str = Field(
+        default="eduagents",
+        validation_alias=AliasChoices("MINIO_APP_ACCESS_KEY", "MINIO_ACCESS_KEY"),
+    )
+    minio_app_secret_key: str = Field(
+        default="eduagents-secret",
+        validation_alias=AliasChoices("MINIO_APP_SECRET_KEY", "MINIO_SECRET_KEY"),
+    )
     minio_bucket: str = "eduagents"
     minio_secure: bool = False
 

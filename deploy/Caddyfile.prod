@@ -5,8 +5,13 @@
 
 	# Keep API documentation private in the public deployment. Operators can
 	# inspect the schema from an internal network or a separate admin service.
-	@private_docs path /api/docs /api/docs/* /api/openapi.json
-	respond @private_docs 404
+	handle /api/docs* {
+		respond 404
+	}
+
+	handle /api/openapi.json {
+		respond 404
+	}
 
 	# Do not buffer SSE events. Caddy's default HTTP transport remains in use.
 	handle /api/* {
