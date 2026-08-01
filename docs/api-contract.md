@@ -142,6 +142,8 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 
 `GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；题目资料错题还返回 `resource_id/resource_question_id`，前端可回到题目资料查看原题。`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
 
+`ErrorItem.verification_status` 的状态只能从 `pending` 前进到 `verified`，不能回退；待核验错题不会进入复习、FSRS、掌握度、画像、报告或推荐。题目资料错题的“查看原题资料”链接使用 `/resources?resource_id=<resource_id>&question_id=<resource_question_id>`，页面会通过受保护接口打开资料并定位题目；无效题目参数不会跨资料读取，返回列表时会清理这两个查询参数。
+
 导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`ERROR_ITEM_NOT_EDITABLE`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`STORAGE_QUOTA_EXCEEDED`、`SOURCE_NOT_FOUND`。
 
 用户数据导出仍在 `uploads_manifest.json` 保留来源元数据；可用的错题原文件同时写入 `uploads/error_imports/{import_id}/{safe_filename}`，缺失对象以 `available=false` 和 `error=SOURCE_NOT_FOUND` 记录，不阻断其他数据导出。
@@ -192,12 +194,16 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 改变判分语义的编辑。`pending` 题不会进入复习、FSRS、掌握度、画像、报告或推荐；confirm
 请求中的空 `resource_question_ids/error_question_ids` 表示不选择任何错题。
 
+题目资料返回的 `owner_type` 取值为 `personal | organization`；这是资料契约，不能与知识库返回的 `owner_type=user | org` 混用。
+
+修改 `linked_kb_id` 会在同一事务中按题目保存的 `kc_names` 重新解析每道题的 `kc_ids`；取消关联会清空这些 ID。若资料题已有 `ErrorItem`、`AssessmentAnswer`、`MasteryLog` 或其他学习证据，返回 `409 RESOURCE_KB_LOCKED_AFTER_EVIDENCE`，资料和题目映射均保持原值。
+
 `Question.quiz_id` 对资源题为空；资源题只能在本人租户内读取。题目产生 FSRS review、
 ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题型、选项、
 正确答案、知识点会返回 `409 ERROR_ITEM_LOCKED_AFTER_REVIEW`；状态只能
 `pending → verified`，不能倒退。错误码还包括 `RESOURCE_QUESTION_NOT_VERIFIED`、
 `RESOURCE_QUESTION_QUOTA_EXCEEDED`、`RESOURCE_QUESTION_HAS_ERROR_ITEM`、
-`RESOURCE_QUESTION_HAS_ASSESSMENT`、`RESOURCE_QUESTION_HAS_ATTEMPT`、
+`RESOURCE_QUESTION_HAS_ASSESSMENT`、`RESOURCE_QUESTION_HAS_ATTEMPT`、`RESOURCE_KB_LOCKED_AFTER_EVIDENCE`、
 `QUESTION_HAS_QUIZ_OWNER`、`TOO_MANY_PENDING_RESOURCES`、`RESOURCE_QUOTA_EXCEEDED`、
 `RESOURCE_PAGE_LIMIT_EXCEEDED`、`RESOURCE_FILE_TOO_LARGE`、`STORAGE_QUOTA_EXCEEDED`、
 `RESOURCE_SOURCE_REQUIRED`、`SOURCE_SAVE_FAILED`、`RESOURCE_DELETE_FAILED`、
@@ -213,7 +219,8 @@ ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题
 | GET | `/api/assessment-attempts/{id}` | 作答和评分；提交前不泄漏参考答案 |
 | PATCH | `/api/assessment-attempts/{id}` | 仅 draft 可修改元数据 |
 | DELETE | `/api/assessment-attempts/{id}` | 仅删除本人 `draft`；答案级联删除；`submitted/graded` 返回 `409 ASSESSMENT_NOT_DRAFT`，越权或重复删除返回 404 |
-| PUT/PATCH | `/api/assessment-attempts/{id}/answers` | 保存学生真实作答 |
+| PUT | `/api/assessment-attempts/{id}/answers` | 整体替换当前 attempt 的答案集合；请求未出现的旧答案会删除，空字符串且 `unanswered=false` 也会删除，`unanswered=true` 保存为“未作答” |
+| PATCH | `/api/assessment-attempts/{id}/answers` | 部分更新请求涉及的题目；未出现的旧答案保留，明确空答案只删除对应题目 |
 | POST | `/api/assessment-attempts/{id}/submit` | `draft → submitted`；至少有一条实际作答或显式 `unanswered=true`，否则 `409 ASSESSMENT_ANSWER_REQUIRED` |
 | POST | `/api/assessment-attempts/{id}/grade-or-verify` | 写入评分；`verify=true` 才写 mastery/error；错误通过 `AssessmentAnswer → ErrorItem` 幂等关联，不创建 Attempt |
 
@@ -228,10 +235,12 @@ ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题
 attempt 置为 graded。相同请求重试幂等，已 graded 的语义字段改变返回 409。
 未核验作答/主观评分不进入掌握度、FSRS、画像、报告、推荐。已核验测评答案会纳入
 报告真实作答次数和正确率。缺省主观题满分使用 `ResourceQuestion.points`，否则为 `1.0`；
-正确得满分，错误得 `0`。相关错误码：`ASSESSMENT_NOT_EDITABLE`、
+正确得满分，错误得 `0`。主观题的 `score` 只是原始分数，不能自动推断正确性；最终
+`verify=true` 必须显式提供 `is_correct`。分数必须满足 `score >= 0`、`max_score > 0`
+且 `score <= max_score`，否则返回 `422 INVALID_ASSESSMENT_SCORE`。相关错误码：`ASSESSMENT_NOT_EDITABLE`、
 `ASSESSMENT_NOT_SUBMITTED`、`ASSESSMENT_ALREADY_GRADED`、`ASSESSMENT_ANSWER_LOCKED`、
 `ASSESSMENT_NOT_DRAFT`、`ASSESSMENT_ANSWER_REQUIRED`、`ASSESSMENT_ANSWER_NOT_FOUND`、
-`ATTEMPT_VERIFICATION_REQUIRED`、`ANSWER_CORRECTNESS_REQUIRED`、`INVALID_ATTEMPT_TYPE`、
+`ATTEMPT_VERIFICATION_REQUIRED`、`ANSWER_CORRECTNESS_REQUIRED`、`INVALID_ASSESSMENT_SCORE`、`INVALID_ATTEMPT_TYPE`、
 `INVALID_GRADING_STATUS`、`DUPLICATE_ANSWER`、`RESOURCE_QUESTION_NOT_FOUND`、
 `RESOURCE_QUESTION_NOT_VERIFIED`。
 

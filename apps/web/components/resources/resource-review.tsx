@@ -83,6 +83,7 @@ function friendlyError(reason: unknown, fallback: string): string {
       RESOURCE_QUESTION_NOT_VERIFIED: "请先核验题目，再进行这项操作。",
       VERIFICATION_ROLLBACK_FORBIDDEN: "题目状态只能向前推进，不能退回。",
       ERROR_ITEM_LOCKED_AFTER_REVIEW: "这道题已经产生学习证据，判分语义字段已锁定。",
+      RESOURCE_KB_LOCKED_AFTER_EVIDENCE: "这份资料已有学习证据，不能更换或取消关联知识库。",
       RESOURCE_QUESTION_HAS_ERROR_ITEM: "这道题已经进入错题本，不能删除。",
       RESOURCE_QUESTION_HAS_ASSESSMENT: "这道题已有测评作答记录，不能删除。",
     };
@@ -146,6 +147,7 @@ export function ResourceReview({
   onReload,
   onResourceChanged,
   onStartAssessment,
+  initialQuestionId = null,
 }: {
   resource: LearningResourceOut;
   questions: ResourceQuestionOut[];
@@ -153,9 +155,18 @@ export function ResourceReview({
   onReload: () => Promise<void>;
   onResourceChanged: (resource: LearningResourceOut) => void;
   onStartAssessment: () => void;
+  initialQuestionId?: string | null;
 }) {
-  const [currentId, setCurrentId] = useState<string | null>(questions[0]?.id ?? null);
-  const [draft, setDraft] = useState<QuestionDraft | null>(questions[0] ? draftFromQuestion(questions[0]) : null);
+  const [currentId, setCurrentId] = useState<string | null>(() => {
+    if (initialQuestionId && questions.some((question) => question.id === initialQuestionId)) {
+      return initialQuestionId;
+    }
+    return questions[0]?.id ?? null;
+  });
+  const [draft, setDraft] = useState<QuestionDraft | null>(() => {
+    const initial = (initialQuestionId && questions.find((question) => question.id === initialQuestionId)) ?? questions[0];
+    return initial ? draftFromQuestion(initial) : null;
+  });
   const [dirty, setDirty] = useState(false);
   const [selectedErrors, setSelectedErrors] = useState<Set<string>>(
     () => new Set(questions.filter((question) => question.is_error_selected).map((question) => question.id)),
@@ -321,7 +332,7 @@ export function ResourceReview({
     });
   };
 
-  const updateLinkedKb = async (value: string) => {
+  const applyLinkedKb = async (value: string) => {
     setLinkedKbId(value);
     setKbBusy(true);
     setMessage(null);
@@ -336,6 +347,7 @@ export function ResourceReview({
         question_count: resource.question_count,
         pending_question_count: resource.pending_question_count,
       });
+      await onReload();
       setMessage(value ? "已更新关联知识库。" : "已取消关联知识库。 ");
     } catch (reason) {
       setLinkedKbId(resource.linked_kb_id ?? "");
@@ -343,6 +355,21 @@ export function ResourceReview({
     } finally {
       setKbBusy(false);
     }
+  };
+
+  const updateLinkedKb = (value: string) => {
+    if (value === linkedKbId || kbBusy) return;
+    setConfirmRequest({
+      title: value ? "更换关联知识库？" : "取消关联知识库？",
+      description: value
+        ? "尚未产生学习证据的题目会按已保存的知识点名称重新映射到新知识库；已有学习证据的资料将由服务端拒绝修改。"
+        : "取消关联后，尚未产生学习证据的题目会清空知识点 ID，避免继续引用旧知识库。",
+      confirmLabel: value ? "更换并重映射" : "取消关联",
+      onConfirm: () => {
+        setConfirmRequest(null);
+        void applyLinkedKb(value);
+      },
+    });
   };
 
   const confirmErrors = async () => {

@@ -1197,7 +1197,7 @@ export type LearningResourceRetrievalPolicy = "none" | "reference" | "questions_
 export interface LearningResourceOut {
   id: string;
   tenant_id: string;
-  owner_type: "personal" | "org";
+  owner_type: "personal" | "organization";
   owner_id: string;
   resource_type: LearningResourceType;
   title: string;

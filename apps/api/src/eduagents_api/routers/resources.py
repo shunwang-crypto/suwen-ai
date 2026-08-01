@@ -8,7 +8,7 @@ from pathlib import Path
 from eduagents_core.mastery.scheduler import new_card_json
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from .. import timectl
 from ..db import tenant_session
@@ -247,32 +247,43 @@ async def _resource_question_editability(session, resource_id: uuid.UUID) -> dic
     a real AssessmentAnswer, and an FSRS review on an ErrorItem, both lock the
     fields that change grading semantics.
     """
-    question_ids = [
-        question_id
-        for (question_id,) in (
-            await session.execute(
-                select(ResourceQuestion.id).where(ResourceQuestion.resource_id == resource_id)
+    resource_rows = (
+        await session.execute(
+            select(ResourceQuestion.id, ResourceQuestion.question_id).where(
+                ResourceQuestion.resource_id == resource_id
             )
-        ).all()
-    ]
-    if not question_ids:
+        )
+    ).all()
+    resource_question_ids = [resource_question_id for resource_question_id, _ in resource_rows]
+    question_ids = [question_id for _, question_id in resource_rows]
+    if not resource_question_ids:
         return {}
     error_rows = (
         await session.execute(
-            select(ErrorItem.resource_question_id, ErrorItem.id, ErrorItem.fsrs_card_json).where(
-                ErrorItem.resource_question_id.in_(question_ids)
+            select(
+                ErrorItem.resource_question_id,
+                ErrorItem.question_id,
+                ErrorItem.id,
+                ErrorItem.fsrs_card_json,
+            ).where(
+                or_(
+                    ErrorItem.resource_question_id.in_(resource_question_ids),
+                    ErrorItem.question_id.in_(question_ids),
+                )
             )
         )
     ).all()
     answer_rows = (
         await session.execute(
             select(AssessmentAnswer.resource_question_id, AssessmentAnswer.id).where(
-                AssessmentAnswer.resource_question_id.in_(question_ids)
+                AssessmentAnswer.resource_question_id.in_(resource_question_ids)
             )
         )
     ).all()
-    evidence_ids = [error_id for _rq_id, error_id, _card in error_rows]
+    evidence_ids = [error_id for _rq_id, _question_id, error_id, _card in error_rows]
     evidence_ids.extend(answer_id for _rq_id, answer_id in answer_rows)
+    evidence_ids.extend(resource_question_ids)
+    evidence_ids.extend(question_ids)
     mastered_evidence = set()
     if evidence_ids:
         mastered_evidence = set(
@@ -284,13 +295,66 @@ async def _resource_question_editability(session, resource_id: uuid.UUID) -> dic
         )
     locked: set[uuid.UUID] = {
         rq_id
-        for rq_id, error_id, card in error_rows
-        if bool((card or {}).get("last_review")) or error_id in mastered_evidence
+        for rq_id, question_id, error_id, card in error_rows
+        if (
+            bool((card or {}).get("last_review"))
+            or error_id in mastered_evidence
+            or question_id in mastered_evidence
+        )
     }
     locked.update(
         rq_id for rq_id, answer_id in answer_rows if answer_id in mastered_evidence
     )
-    return {question_id: question_id not in locked for question_id in question_ids}
+    return {resource_question_id: resource_question_id not in locked for resource_question_id in resource_question_ids}
+
+
+async def _resource_kb_has_evidence(session, resource_id: uuid.UUID) -> bool:
+    """Return whether remapping this resource could rewrite learning history."""
+    resource_questions = (
+        await session.execute(
+            select(ResourceQuestion.id, ResourceQuestion.question_id).where(
+                ResourceQuestion.resource_id == resource_id
+            )
+        )
+    ).all()
+    if not resource_questions:
+        return False
+    resource_question_ids = [resource_question_id for resource_question_id, _ in resource_questions]
+    question_ids = [question_id for _, question_id in resource_questions]
+    error_rows = (
+        await session.execute(
+            select(ErrorItem.id, ErrorItem.fsrs_card_json).where(
+                or_(
+                    ErrorItem.resource_question_id.in_(resource_question_ids),
+                    ErrorItem.question_id.in_(question_ids),
+                )
+            )
+        )
+    ).all()
+    answer_ids = (
+        await session.scalars(
+            select(AssessmentAnswer.id).where(
+                AssessmentAnswer.resource_question_id.in_(resource_question_ids)
+            )
+        )
+    ).all()
+    if error_rows or answer_ids:
+        return True
+    evidence_ids = resource_question_ids + question_ids
+    attempt_ids = (
+        await session.scalars(
+            select(Attempt.id).where(Attempt.question_id.in_(question_ids))
+        )
+    ).all()
+    if attempt_ids:
+        return True
+    if await session.scalar(
+        select(MasteryLog.id)
+        .where(MasteryLog.evidence_id.in_(evidence_ids))
+        .limit(1)
+    ):
+        return True
+    return False
 
 
 async def _file_data(file, settings) -> tuple[str, str, bytes] | None:
@@ -527,8 +591,44 @@ async def update_resource(
         row = await _owned_resource(session, resource_id, ctx, lock=True)
         if row.status == "archived":
             raise HTTPException(status_code=409, detail="RESOURCE_ARCHIVED")
-        if values.get("linked_kb_id") is not None and await session.get(KnowledgeBase, values["linked_kb_id"]) is None:
-            raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
+        if "linked_kb_id" in values:
+            linked_kb_id = values["linked_kb_id"]
+            if linked_kb_id is not None and await session.get(KnowledgeBase, linked_kb_id) is None:
+                # KnowledgeBase is read through the same scoped tenant session;
+                # an inaccessible organization or another user's KB is therefore
+                # intentionally indistinguishable from a missing one.
+                raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
+            if linked_kb_id != row.linked_kb_id:
+                if await _resource_kb_has_evidence(session, row.id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="RESOURCE_KB_LOCKED_AFTER_EVIDENCE",
+                    )
+                question_rows = (
+                    await session.execute(
+                        select(ResourceQuestion, Question)
+                        .join(Question, Question.id == ResourceQuestion.question_id)
+                        .where(ResourceQuestion.resource_id == row.id)
+                        .with_for_update()
+                    )
+                ).all()
+                for _resource_question, question in question_rows:
+                    meta = dict(question.source_meta_json or {})
+                    kc_names = meta.get("kc_names") or []
+                    question.kc_ids = (
+                        await _resolve_kc_ids(
+                            session,
+                            str(linked_kb_id) if linked_kb_id else None,
+                            kc_names,
+                            user_id=ctx.user_id,
+                        )
+                        if linked_kb_id
+                        else []
+                    )
+                    meta["kb_id"] = str(linked_kb_id) if linked_kb_id else None
+                    question.source_meta_json = meta
+            row.linked_kb_id = linked_kb_id
+            values.pop("linked_kb_id")
         for key, value in values.items():
             setattr(row, key, value)
         return _resource_dict(row)
@@ -898,7 +998,12 @@ async def _edit_resource_question(
             raise HTTPException(status_code=409, detail="VERIFICATION_ROLLBACK_FORBIDDEN")
         errors = (
             await session.scalars(
-                select(ErrorItem).where(ErrorItem.resource_question_id == rq.id)
+                select(ErrorItem).where(
+                    or_(
+                        ErrorItem.resource_question_id == rq.id,
+                        ErrorItem.question_id == question.id,
+                    )
+                )
             )
         ).all()
         has_evidence = any(bool((item.fsrs_card_json or {}).get("last_review")) for item in errors)

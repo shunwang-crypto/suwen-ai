@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from math import isfinite
 
 from eduagents_core.graphs.quiz_graph import grade_objective
 from eduagents_core.mastery.scheduler import new_card_json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .. import timectl
 from ..db import tenant_session
@@ -59,8 +60,8 @@ class AnswerIn(BaseModel):
     resource_question_id: uuid.UUID
     response: str = Field(default="", max_length=12000)
     unanswered: bool = False
-    score: float | None = Field(default=None, ge=0)
-    max_score: float | None = Field(default=None, ge=0)
+    score: float | None = None
+    max_score: float | None = None
     is_correct: bool | None = None
     grading_status: str | None = None
     teacher_comment: str | None = Field(default=None, max_length=4000)
@@ -72,6 +73,30 @@ class AnswersIn(BaseModel):
 
 class GradeIn(AnswersIn):
     verify: bool = False
+
+
+def _default_max_score(rq: ResourceQuestion) -> float:
+    points = rq.points
+    return float(points) if points is not None and isfinite(float(points)) and points > 0 else 1.0
+
+
+def _validate_assessment_score(
+    score: float | None,
+    max_score: float | None,
+    *,
+    default_max_score: float,
+) -> float:
+    """Validate score semantics before any answer or evidence is changed."""
+    if score is not None and (not isfinite(float(score)) or score < 0):
+        raise HTTPException(status_code=422, detail="INVALID_ASSESSMENT_SCORE")
+    if max_score is not None and (not isfinite(float(max_score)) or max_score <= 0):
+        raise HTTPException(status_code=422, detail="INVALID_ASSESSMENT_SCORE")
+    effective_max_score = max_score if max_score is not None else default_max_score
+    if effective_max_score <= 0 or (
+        score is not None and score > effective_max_score
+    ):
+        raise HTTPException(status_code=422, detail="INVALID_ASSESSMENT_SCORE")
+    return float(effective_max_score)
 
 
 def _attempt_dict(row: AssessmentAttempt) -> dict:
@@ -261,18 +286,30 @@ async def update_assessment(
         return _attempt_dict(attempt)
 
 
-@router.put("/{attempt_id}/answers")
-@router.patch("/{attempt_id}/answers")
-async def put_assessment_answers(
+async def _save_assessment_answers(
     attempt_id: uuid.UUID,
     body: AnswersIn,
     ctx: AuthContext = Depends(api_rate_limited),
+    *,
+    replace: bool,
 ):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         attempt = await _owned_attempt(session, attempt_id, ctx, lock=True)
         if attempt.status != "draft":
             raise HTTPException(status_code=409, detail="ASSESSMENT_NOT_EDITABLE")
         question_map = await _validate_resource_questions(session, attempt, body.answers, ctx)
+        if replace:
+            retained_ids = {
+                item.resource_question_id
+                for item in body.answers
+                if item.unanswered or item.response.strip()
+            }
+            stale_query = delete(AssessmentAnswer).where(AssessmentAnswer.attempt_id == attempt.id)
+            if retained_ids:
+                stale_query = stale_query.where(
+                    AssessmentAnswer.resource_question_id.not_in(retained_ids)
+                )
+            await session.execute(stale_query)
         for item in body.answers:
             rq, _question = question_map[item.resource_question_id]
             answer = await session.scalar(
@@ -309,6 +346,26 @@ async def put_assessment_answers(
         return {"attempt_id": str(attempt.id), "status": attempt.status, "answer_count": answer_count}
 
 
+@router.put("/{attempt_id}/answers")
+async def replace_assessment_answers(
+    attempt_id: uuid.UUID,
+    body: AnswersIn,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Replace the complete answer set for a draft assessment."""
+    return await _save_assessment_answers(attempt_id, body, ctx, replace=True)
+
+
+@router.patch("/{attempt_id}/answers")
+async def patch_assessment_answers(
+    attempt_id: uuid.UUID,
+    body: AnswersIn,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Partially update only the answers named by the request."""
+    return await _save_assessment_answers(attempt_id, body, ctx, replace=False)
+
+
 @router.post("/{attempt_id}/submit")
 async def submit_assessment(attempt_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
@@ -343,12 +400,21 @@ async def grade_or_verify_assessment(
         # 本阶段明确返回 409，不静默覆盖历史。
         if attempt.status == "graded":
             existing = {
-                answer.resource_question_id: answer
-                for answer, _rq, _question in await _answer_rows(session, attempt.id)
+                answer.resource_question_id: (answer, rq, question)
+                for answer, rq, question in await _answer_rows(session, attempt.id)
             }
             for item in body.answers:
-                answer = existing.get(item.resource_question_id)
-                if answer is None or answer.response != item.response:
+                row = existing.get(item.resource_question_id)
+                if row is None:
+                    raise HTTPException(status_code=409, detail="ASSESSMENT_ALREADY_GRADED")
+                answer, rq, question = row
+                _validate_assessment_score(
+                    item.score,
+                    item.max_score if item.max_score is not None else answer.max_score,
+                    default_max_score=_default_max_score(rq),
+                )
+                requested_response = "未作答" if item.unanswered else item.response.strip()
+                if answer.response != requested_response:
                     raise HTTPException(status_code=409, detail="ASSESSMENT_ALREADY_GRADED")
                 if item.is_correct is not None and answer.is_correct != item.is_correct:
                     raise HTTPException(status_code=409, detail="ASSESSMENT_ALREADY_GRADED")
@@ -368,6 +434,17 @@ async def grade_or_verify_assessment(
             # 单题的 verified 不能绕过整次 attempt 的最终核验。
             raise HTTPException(status_code=409, detail="ATTEMPT_VERIFICATION_REQUIRED")
         question_map = await _validate_resource_questions(session, attempt, body.answers, ctx)
+        if body.verify:
+            # 最终核验的主观题必须在本次请求中明确给出正确性；不能用先前
+            # 仅保存了分数的 graded 草稿悄悄完成核验。
+            submitted_by_question = {
+                item.resource_question_id: item for item in body.answers
+            }
+            for _answer, rq, question in await _answer_rows(session, attempt.id):
+                if question.type == "short":
+                    submitted = submitted_by_question.get(rq.id)
+                    if submitted is None or submitted.is_correct is None:
+                        raise HTTPException(status_code=409, detail="ANSWER_CORRECTNESS_REQUIRED")
         changes: list[dict] = []
         for item in body.answers:
             rq, question = question_map[item.resource_question_id]
@@ -383,13 +460,30 @@ async def grade_or_verify_assessment(
                 # 提交后的评分只能处理实际保存过的作答；不能借评分接口
                 # 为“未录入”的题目补造答案记录。
                 raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_NOT_FOUND")
+            default_max_score = _default_max_score(rq)
+            requested_max_score = (
+                item.max_score if item.max_score is not None else answer.max_score
+            )
+            effective_max_score = _validate_assessment_score(
+                item.score,
+                requested_max_score,
+                default_max_score=default_max_score,
+            )
             response = "未作答" if item.unanswered else item.response.strip()
             if not response or answer.response != response:
                 # submitted 后 response 已经是学生提交的事实；graded/verified
                 # 也不能借重试修改它。
                 raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
             if answer.grading_status in {"graded", "verified"}:
-                if item.is_correct is not None and answer.is_correct != item.is_correct:
+                # ``verify=false`` may have persisted a subjective score while
+                # correctness was still NULL.  Final verification is allowed to
+                # fill that missing fact explicitly; once correctness exists it
+                # is immutable.
+                if (
+                    item.is_correct is not None
+                    and answer.is_correct is not None
+                    and answer.is_correct != item.is_correct
+                ):
                     raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
                 if item.score is not None and answer.score != item.score:
                     raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
@@ -402,11 +496,12 @@ async def grade_or_verify_assessment(
                 # 历史脏数据仍非 graded，拒绝静默修复证据链。
                 raise HTTPException(status_code=409, detail="ASSESSMENT_ANSWER_LOCKED")
             answer.response = response
-            if question.type in {"single", "multi", "blank"} and item.is_correct is None:
+            if question.type in {"single", "multi", "blank"}:
+                # 客观题始终以服务端标准答案自动判分，不能由客户端覆盖正确性。
                 answer.is_correct = grade_objective(
                     {"type": question.type, "answer": question.answer}, answer.response
                 )
-                answer.max_score = item.max_score if item.max_score is not None else (rq.points or 1.0)
+                answer.max_score = effective_max_score
                 answer.score = answer.max_score if answer.is_correct else 0.0
             else:
                 if item.is_correct is not None:
@@ -415,16 +510,18 @@ async def grade_or_verify_assessment(
                     answer.score = item.score
                 if item.max_score is not None:
                     answer.max_score = item.max_score
-                if item.score is not None and item.is_correct is None:
-                    answer.is_correct = item.score >= 0.6
+                # 主观题的原始分数不是 0~1 比例；没有显式正确性时保持
+                # NULL，直到最终核验接口拒绝或收到明确 is_correct。
             if answer.max_score is None:
-                answer.max_score = rq.points or 1.0
+                answer.max_score = effective_max_score
             if answer.is_correct is not None and answer.score is None:
                 answer.score = answer.max_score if answer.is_correct else 0.0
             if body.verify:
-                answer.grading_status = "verified"
                 if answer.is_correct is None:
                     raise HTTPException(status_code=409, detail="ANSWER_CORRECTNESS_REQUIRED")
+                if question.type == "short" and item.is_correct is None:
+                    raise HTTPException(status_code=409, detail="ANSWER_CORRECTNESS_REQUIRED")
+                answer.grading_status = "verified"
             else:
                 answer.grading_status = "graded"
             if item.teacher_comment is not None:

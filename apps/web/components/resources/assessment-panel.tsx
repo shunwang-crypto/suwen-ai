@@ -192,11 +192,8 @@ export function AssessmentPanel({
   const submitAttempt = async () => {
     if (!detail) return;
     if (!(await saveAnswers())) return;
-    const recordedCount = verifiedQuestions.filter((question) => unanswered[question.id] || (responses[question.id] ?? "").trim()).length;
-    if (recordedCount === 0) {
-      setError("至少录入一道题后才能提交作答。");
-      return;
-    }
+    // The server validates the persisted answer set.  The local count is only
+    // a display hint and must not replace ASSESSMENT_ANSWER_REQUIRED.
     setSubmitConfirmOpen(true);
   };
 

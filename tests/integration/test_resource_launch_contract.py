@@ -14,6 +14,16 @@ FRONTEND_UPLOAD_DIALOG = (
     Path(__file__).resolve().parents[2]
     / "apps/web/components/resources/resource-upload-dialog.tsx"
 )
+FRONTEND_RESOURCES_PAGE = (
+    Path(__file__).resolve().parents[2] / "apps/web/app/resources/page.tsx"
+)
+FRONTEND_RESOURCE_REVIEW = (
+    Path(__file__).resolve().parents[2]
+    / "apps/web/components/resources/resource-review.tsx"
+)
+FRONTEND_CONFIRM_DIALOG = (
+    Path(__file__).resolve().parents[2] / "apps/web/components/ui/confirm-dialog.tsx"
+)
 EXPECTED_UPLOAD_TYPES = [
     "exam_paper",
     "mock_paper",
@@ -22,6 +32,20 @@ EXPECTED_UPLOAD_TYPES = [
     "homework",
     "other",
 ]
+
+
+def test_frontend_resource_deep_link_and_dialog_contract():
+    page = FRONTEND_RESOURCES_PAGE.read_text(encoding="utf-8")
+    review = FRONTEND_RESOURCE_REVIEW.read_text(encoding="utf-8")
+    dialog = FRONTEND_CONFIRM_DIALOG.read_text(encoding="utf-8")
+    assert 'useSearchParams' in page
+    assert 'searchParams.get("resource_id")' in page
+    assert 'searchParams.get("question_id")' in page
+    assert "initialQuestionId" in page and "initialQuestionId" in review
+    assert 'router.replace("/resources"' in page
+    assert "useId" in dialog
+    assert 'aria-modal="true"' in dialog
+    assert 'event.key === "Escape"' in dialog
 
 
 async def _register(client, prefix: str):
@@ -201,3 +225,263 @@ async def test_assessment_draft_delete_empty_answers_and_scoring_defaults(client
     visible = await client.get(f"/api/resources/{resource_id}/questions", headers=headers)
     assert visible.status_code == 200
     assert visible.json()[0]["answer"] == "42"
+
+
+async def test_assessment_put_replaces_answers_and_patch_is_partial(client):
+    headers = await _register(client, "assessment-answer-replacement")
+    resource = await client.post(
+        "/api/resources",
+        headers=headers,
+        json={"title": "答案替换测试", "resource_type": "worksheet"},
+    )
+    assert resource.status_code == 201, resource.text
+    resource_id = resource.json()["id"]
+    question_ids: list[str] = []
+    for stem in ("第一题", "第二题"):
+        created = await client.post(
+            f"/api/resources/{resource_id}/questions/manual",
+            headers=headers,
+            json={"type": "short", "stem": stem, "answer": stem},
+        )
+        assert created.status_code == 201, created.text
+        question_id = created.json()["id"]
+        verified = await client.post(
+            f"/api/resource-questions/{question_id}/verify", headers=headers, json={}
+        )
+        assert verified.status_code == 200, verified.text
+        question_ids.append(question_id)
+
+    attempt = await client.post(
+        "/api/assessment-attempts",
+        headers=headers,
+        json={"resource_id": resource_id},
+    )
+    assert attempt.status_code == 201, attempt.text
+    attempt_id = attempt.json()["id"]
+
+    saved = await client.put(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={
+            "answers": [
+                {"resource_question_id": question_ids[0], "response": "第一题答案"},
+                {"resource_question_id": question_ids[1], "response": "第二题答案"},
+            ]
+        },
+    )
+    assert saved.status_code == 200 and saved.json()["answer_count"] == 2
+
+    patched = await client.patch(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={"answers": [{"resource_question_id": question_ids[0], "response": "第一题修订"}]},
+    )
+    assert patched.status_code == 200 and patched.json()["answer_count"] == 2
+    detail = await client.get(f"/api/assessment-attempts/{attempt_id}", headers=headers)
+    assert detail.status_code == 200
+    assert {
+        answer["resource_question_id"]: answer["response"]
+        for answer in detail.json()["answers"]
+    } == {question_ids[0]: "第一题修订", question_ids[1]: "第二题答案"}
+
+    # PUT is the complete current answer set: omitting q1 deletes its old answer.
+    replaced = await client.put(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={"answers": [{"resource_question_id": question_ids[1], "response": "第二题答案"}]},
+    )
+    assert replaced.status_code == 200 and replaced.json()["answer_count"] == 1
+    detail = await client.get(f"/api/assessment-attempts/{attempt_id}", headers=headers)
+    assert [answer["resource_question_id"] for answer in detail.json()["answers"]] == [question_ids[1]]
+
+    # An explicitly empty item also removes the persisted answer.
+    cleared = await client.put(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={"answers": [{"resource_question_id": question_ids[1], "response": ""}]},
+    )
+    assert cleared.status_code == 200 and cleared.json()["answer_count"] == 0
+    detail = await client.get(f"/api/assessment-attempts/{attempt_id}", headers=headers)
+    assert detail.json()["answers"] == []
+    submit = await client.post(f"/api/assessment-attempts/{attempt_id}/submit", headers=headers)
+    assert submit.status_code == 409
+    assert submit.json()["code"] == "ASSESSMENT_ANSWER_REQUIRED"
+
+    # A cleared answer cannot be graded into an error or mastery event.
+    save_again = await client.put(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={"answers": [{"resource_question_id": question_ids[1], "response": "第二题答案"}]},
+    )
+    assert save_again.status_code == 200
+    assert (await client.post(f"/api/assessment-attempts/{attempt_id}/submit", headers=headers)).status_code == 200
+    missing_grade = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": True,
+            "answers": [
+                {"resource_question_id": question_ids[0], "response": "第一题修订", "is_correct": False},
+                {"resource_question_id": question_ids[1], "response": "第二题答案", "is_correct": False},
+            ],
+        },
+    )
+    assert missing_grade.status_code == 409
+    assert missing_grade.json()["code"] == "ASSESSMENT_ANSWER_NOT_FOUND"
+    verified = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": True,
+            "answers": [
+                {"resource_question_id": question_ids[1], "response": "第二题答案", "is_correct": False},
+            ],
+        },
+    )
+    assert verified.status_code == 200, verified.text
+    errors = (await client.get("/api/errors", headers=headers)).json()["items"]
+    assert [item["question"]["stem"] for item in errors] == ["第二题"]
+    report = await client.get("/api/reports/learning", headers=headers)
+    assert report.status_code == 200
+    assert report.json()["metrics"]["attempt_count"] == 1
+    assert sum(point["attempts"] for point in report.json()["trend"]) == 1
+
+    empty_attempt = await client.post(
+        "/api/assessment-attempts", headers=headers, json={"resource_id": resource_id}
+    )
+    assert empty_attempt.status_code == 201
+    empty_id = empty_attempt.json()["id"]
+    assert (
+        await client.put(
+            f"/api/assessment-attempts/{empty_id}/answers",
+            headers=headers,
+            json={"answers": []},
+        )
+    ).json()["answer_count"] == 0
+    empty_submit = await client.post(f"/api/assessment-attempts/{empty_id}/submit", headers=headers)
+    assert empty_submit.status_code == 409
+    assert empty_submit.json()["code"] == "ASSESSMENT_ANSWER_REQUIRED"
+
+
+async def test_assessment_subjective_scores_require_explicit_correctness_and_objective_grading(client):
+    headers = await _register(client, "assessment-score-contract")
+    resource = await client.post(
+        "/api/resources",
+        headers=headers,
+        json={"title": "评分语义测试", "resource_type": "worksheet"},
+    )
+    assert resource.status_code == 201, resource.text
+    resource_id = resource.json()["id"]
+    questions: list[dict] = []
+    for payload in (
+        {"type": "short", "stem": "主观题", "answer": "答案", "points": 10},
+        {"type": "single", "stem": "客观题", "options": ["A", "B", "C", "D"], "answer": "B"},
+    ):
+        created = await client.post(
+            f"/api/resources/{resource_id}/questions/manual", headers=headers, json=payload
+        )
+        assert created.status_code == 201, created.text
+        question_id = created.json()["id"]
+        assert (await client.post(f"/api/resource-questions/{question_id}/verify", headers=headers, json={})).status_code == 200
+        questions.append({"id": question_id, **payload})
+
+    attempt = await client.post(
+        "/api/assessment-attempts", headers=headers, json={"resource_id": resource_id}
+    )
+    assert attempt.status_code == 201
+    attempt_id = attempt.json()["id"]
+    saved = await client.put(
+        f"/api/assessment-attempts/{attempt_id}/answers",
+        headers=headers,
+        json={
+            "answers": [
+                {"resource_question_id": questions[0]["id"], "response": "学生答案"},
+                {"resource_question_id": questions[1]["id"], "response": "A"},
+            ]
+        },
+    )
+    assert saved.status_code == 200
+    assert (await client.post(f"/api/assessment-attempts/{attempt_id}/submit", headers=headers)).status_code == 200
+
+    staged = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": False,
+            "answers": [
+                {"resource_question_id": questions[0]["id"], "response": "学生答案", "score": 5, "max_score": 10},
+                # Deliberately wrong client values: objective grading is server-owned.
+                {"resource_question_id": questions[1]["id"], "response": "A", "is_correct": True, "score": 1, "max_score": 1},
+            ],
+        },
+    )
+    assert staged.status_code == 200, staged.text
+    assert staged.json()["status"] == "submitted"
+    no_correctness = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": True,
+            "answers": [
+                {"resource_question_id": questions[0]["id"], "response": "学生答案", "score": 5, "max_score": 10},
+                {"resource_question_id": questions[1]["id"], "response": "A"},
+            ],
+        },
+    )
+    assert no_correctness.status_code == 409
+    assert no_correctness.json()["code"] == "ANSWER_CORRECTNESS_REQUIRED"
+
+    invalid_score = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": False,
+            "answers": [{"resource_question_id": questions[0]["id"], "response": "学生答案", "score": 11, "max_score": 10}],
+        },
+    )
+    assert invalid_score.status_code == 422
+    assert invalid_score.json()["code"] == "INVALID_ASSESSMENT_SCORE"
+    zero_max = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": False,
+            "answers": [{"resource_question_id": questions[0]["id"], "response": "学生答案", "score": 0, "max_score": 0}],
+        },
+    )
+    assert zero_max.status_code == 422
+    assert zero_max.json()["code"] == "INVALID_ASSESSMENT_SCORE"
+
+    verified = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": True,
+            "answers": [
+                {"resource_question_id": questions[0]["id"], "response": "学生答案", "is_correct": False, "score": 5, "max_score": 10},
+                {"resource_question_id": questions[1]["id"], "response": "A"},
+            ],
+        },
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["status"] == "graded"
+    detail = await client.get(f"/api/assessment-attempts/{attempt_id}", headers=headers)
+    answers = {item["resource_question_id"]: item for item in detail.json()["answers"]}
+    assert answers[questions[0]["id"]]["score"] == 5
+    assert answers[questions[0]["id"]]["is_correct"] is False
+    assert answers[questions[1]["id"]]["is_correct"] is False
+    assert answers[questions[1]["id"]]["score"] == 0
+
+    retry = await client.post(
+        f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
+        headers=headers,
+        json={
+            "verify": True,
+            "answers": [
+                {"resource_question_id": questions[0]["id"], "response": " 学生答案 ", "is_correct": False, "score": 5, "max_score": 10},
+                {"resource_question_id": questions[1]["id"], "response": "A"},
+            ],
+        },
+    )
+    assert retry.status_code == 200
+    assert retry.json()["mastery_changes"] == []

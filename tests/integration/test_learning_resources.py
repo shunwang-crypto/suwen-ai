@@ -22,6 +22,16 @@ async def _register(client, prefix: str):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+async def _register_with_id(client, prefix: str):
+    email = f"{prefix}-{uuid.uuid4().hex[:10]}@test.eduagents.cn"
+    response = await client.post("/api/auth/register", json={"email": email, "password": PASSWORD})
+    assert response.status_code == 201, response.text
+    user_id = response.json()["id"]
+    response = await client.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    assert response.status_code == 200, response.text
+    return user_id, {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 async def test_image_extraction_bypasses_document_parser_and_stays_conservative(monkeypatch):
     from eduagents_core.config import get_settings
     from eduagents_worker import resources as resource_worker
@@ -187,6 +197,145 @@ async def test_worker_uses_resource_owner_for_kc_resolution(client, monkeypatch)
     assert seen == [other_id]
 
 
+async def test_resource_kb_switch_rebuilds_question_kc_ids_and_clears_on_unlink(client):
+    owner_id, headers = await _register_with_id(client, "resource-kb-remap")
+    other_headers = await _register(client, "resource-kb-remap-other")
+    kb_a = await client.post("/api/kb", headers=headers, json={"name": "知识库 A", "subject": "数学"})
+    kb_b = await client.post("/api/kb", headers=headers, json={"name": "知识库 B", "subject": "数学"})
+    assert kb_a.status_code == 201 and kb_b.status_code == 201
+    kb_a_id, kb_b_id = kb_a.json()["id"], kb_b.json()["id"]
+
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import KnowledgeBase, KnowledgeComponent
+
+    async with tenant_session(uuid.UUID(owner_id)) as session:
+        kb_a_row = await session.get(KnowledgeBase, uuid.UUID(kb_a_id))
+        kb_b_row = await session.get(KnowledgeBase, uuid.UUID(kb_b_id))
+        kc_a = KnowledgeComponent(
+            tenant_id=uuid.UUID(owner_id),
+            kb_id=kb_a_row.id,
+            canonical_name="函数极值",
+            aliases=[],
+        )
+        kc_b = KnowledgeComponent(
+            tenant_id=uuid.UUID(owner_id),
+            kb_id=kb_b_row.id,
+            canonical_name="函数极值",
+            aliases=[],
+        )
+        session.add_all([kc_a, kc_b])
+        await session.flush()
+        kc_a_id, kc_b_id = str(kc_a.id), str(kc_b.id)
+
+    resource = await client.post(
+        "/api/resources",
+        headers=headers,
+        json={"title": "知识点重映射", "resource_type": "worksheet"},
+    )
+    assert resource.status_code == 201, resource.text
+    resource_id = resource.json()["id"]
+    question = await client.post(
+        f"/api/resources/{resource_id}/questions/manual",
+        headers=headers,
+        json={"type": "short", "stem": "求函数最大值", "answer": "1", "kc_names": ["函数极值"]},
+    )
+    assert question.status_code == 201, question.text
+    assert question.json()["kc_ids"] == []
+
+    linked_a = await client.patch(
+        f"/api/resources/{resource_id}", headers=headers, json={"linked_kb_id": kb_a_id}
+    )
+    assert linked_a.status_code == 200, linked_a.text
+    questions = await client.get(f"/api/resources/{resource_id}/questions", headers=headers)
+    assert questions.status_code == 200
+    assert questions.json()[0]["kc_ids"] == [kc_a_id]
+
+    linked_b = await client.patch(
+        f"/api/resources/{resource_id}", headers=headers, json={"linked_kb_id": kb_b_id}
+    )
+    assert linked_b.status_code == 200, linked_b.text
+    questions = await client.get(f"/api/resources/{resource_id}/questions", headers=headers)
+    assert questions.json()[0]["kc_ids"] == [kc_b_id]
+    assert kc_a_id not in questions.json()[0]["kc_ids"]
+
+    unlinked = await client.patch(
+        f"/api/resources/{resource_id}", headers=headers, json={"linked_kb_id": None}
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    questions = await client.get(f"/api/resources/{resource_id}/questions", headers=headers)
+    assert questions.json()[0]["kc_ids"] == []
+
+    forbidden = await client.patch(
+        f"/api/resources/{resource_id}", headers=other_headers, json={"linked_kb_id": kb_a_id}
+    )
+    assert forbidden.status_code == 404
+    assert forbidden.json()["code"] == "NOT_FOUND"
+
+
+async def test_resource_kb_switch_is_locked_after_error_or_assessment_evidence(client):
+    headers = await _register(client, "resource-kb-evidence")
+    first_kb = await client.post("/api/kb", headers=headers, json={"name": "锁定库 A", "subject": "数学"})
+    second_kb = await client.post("/api/kb", headers=headers, json={"name": "锁定库 B", "subject": "数学"})
+    assert first_kb.status_code == 201 and second_kb.status_code == 201
+    kb_a_id, kb_b_id = first_kb.json()["id"], second_kb.json()["id"]
+
+    resource = await client.post(
+        "/api/resources", headers=headers, json={"title": "证据锁定", "resource_type": "worksheet"}
+    )
+    assert resource.status_code == 201
+    resource_id = resource.json()["id"]
+    question = await client.post(
+        f"/api/resources/{resource_id}/questions/manual",
+        headers=headers,
+        json={"type": "short", "stem": "错题证据", "answer": "正确答案"},
+    )
+    assert question.status_code == 201
+    question_id = question.json()["id"]
+    assert (await client.post(f"/api/resource-questions/{question_id}/verify", headers=headers, json={})).status_code == 200
+    assert (await client.patch(f"/api/resources/{resource_id}", headers=headers, json={"linked_kb_id": kb_a_id})).status_code == 200
+    confirmed = await client.post(
+        f"/api/resources/{resource_id}/confirm",
+        headers=headers,
+        json={"resource_question_ids": [question_id]},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    locked_by_error = await client.patch(
+        f"/api/resources/{resource_id}", headers=headers, json={"linked_kb_id": kb_b_id}
+    )
+    assert locked_by_error.status_code == 409
+    assert locked_by_error.json()["code"] == "RESOURCE_KB_LOCKED_AFTER_EVIDENCE"
+
+    resource_2 = await client.post(
+        "/api/resources", headers=headers, json={"title": "测评证据锁定", "resource_type": "worksheet"}
+    )
+    assert resource_2.status_code == 201
+    resource_2_id = resource_2.json()["id"]
+    question_2 = await client.post(
+        f"/api/resources/{resource_2_id}/questions/manual",
+        headers=headers,
+        json={"type": "short", "stem": "测评题", "answer": "答案"},
+    )
+    assert question_2.status_code == 201
+    question_2_id = question_2.json()["id"]
+    assert (await client.post(f"/api/resource-questions/{question_2_id}/verify", headers=headers, json={})).status_code == 200
+    assert (await client.patch(f"/api/resources/{resource_2_id}", headers=headers, json={"linked_kb_id": kb_a_id})).status_code == 200
+    attempt = await client.post(
+        "/api/assessment-attempts", headers=headers, json={"resource_id": resource_2_id}
+    )
+    assert attempt.status_code == 201
+    answer = await client.put(
+        f"/api/assessment-attempts/{attempt.json()['id']}/answers",
+        headers=headers,
+        json={"answers": [{"resource_question_id": question_2_id, "response": "答案"}]},
+    )
+    assert answer.status_code == 200
+    locked_by_assessment = await client.patch(
+        f"/api/resources/{resource_2_id}", headers=headers, json={"linked_kb_id": kb_b_id}
+    )
+    assert locked_by_assessment.status_code == 409
+    assert locked_by_assessment.json()["code"] == "RESOURCE_KB_LOCKED_AFTER_EVIDENCE"
+
+
 async def test_resource_extraction_does_not_requeue_finished_states(client):
     headers = await _register(client, "resource-extract-idempotent")
     created = await client.post(
@@ -281,6 +430,12 @@ async def test_resource_extract_verify_select_error_and_assessment(client):
     )
     assert rollback.status_code == 409
     assert rollback.json()["code"] == "VERIFICATION_ROLLBACK_FORBIDDEN"
+    editable_after_verification = await client.patch(
+        f"/api/resource-questions/{questions[0]['id']}",
+        headers=headers,
+        json={"stem": "1+1 等于多少（已校对）？"},
+    )
+    assert editable_after_verification.status_code == 200, editable_after_verification.text
     response = await client.post(
         f"/api/resources/{resource_id}/confirm",
         headers=headers,

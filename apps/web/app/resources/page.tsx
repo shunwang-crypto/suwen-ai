@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { EmptyState, ErrorBanner, SkeletonList } from "@/components/common";
 import { AssessmentPanel } from "@/components/resources/assessment-panel";
@@ -123,6 +124,14 @@ function ResourceCard({
   );
 }
 
+export default function ResourcesPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto w-full max-w-[1180px] px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={5} /></div></div>}>
+      <ResourcesPageContent />
+    </Suspense>
+  );
+}
+
 function ReferenceResourceView({
   resource,
   onBack,
@@ -143,7 +152,9 @@ function ReferenceResourceView({
   );
 }
 
-export default function ResourcesPage() {
+function ResourcesPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [resources, setResources] = useState<LearningResourceOut[] | null>(null);
   const [selectedResource, setSelectedResource] = useState<LearningResourceOut | null>(null);
   const [questions, setQuestions] = useState<ResourceQuestionOut[]>([]);
@@ -155,6 +166,10 @@ export default function ResourcesPage() {
   const [assessmentOpen, setAssessmentOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LearningResourceOut | null>(null);
+  const deepLinkHandled = useRef<string | null>(null);
+  const deepResourceId = searchParams.get("resource_id");
+  const deepQuestionId = searchParams.get("question_id");
+  const deepLinkKey = deepResourceId ? `${deepResourceId}:${deepQuestionId ?? ""}` : null;
 
   const loadResources = useCallback(async () => {
     try {
@@ -190,11 +205,28 @@ export default function ResourcesPage() {
     }
   }, []);
 
-  const openResource = (resource: LearningResourceOut) => {
+  const openResource = useCallback((resource: LearningResourceOut) => {
     setSelectedResource(resource);
     setQuestions([]);
     void loadResource(resource.id);
-  };
+  }, [loadResource]);
+
+  useEffect(() => {
+    if (!resources || !deepResourceId || deepLinkHandled.current === deepLinkKey) return;
+    const timer = window.setTimeout(() => {
+      if (deepLinkHandled.current === deepLinkKey) return;
+      deepLinkHandled.current = deepLinkKey;
+      const listed = resources.find((resource) => resource.id === deepResourceId);
+      if (listed) {
+        openResource(listed);
+      } else {
+        // The detail endpoint applies the same ownership check. A stale or
+        // forbidden deep link therefore stays indistinguishable from a missing one.
+        void loadResource(deepResourceId);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [deepLinkKey, deepResourceId, openResource, loadResource, resources]);
 
   const reloadSelected = useCallback(async () => {
     if (!selectedResource) return;
@@ -295,14 +327,22 @@ export default function ResourcesPage() {
     return true;
   }), [filter, resources]);
 
+  const backToResourceList = () => {
+    setSelectedResource(null);
+    setQuestions([]);
+    setAssessmentOpen(false);
+    router.replace("/resources", { scroll: false });
+    void loadResources();
+  };
+
   if (selectedResource) {
     if (selectedLoading && questions.length === 0) {
       return <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={6} /></div></div>;
     }
     if (isReferenceResource(selectedResource)) {
-      return <ReferenceResourceView resource={selectedResource} onBack={() => { setSelectedResource(null); void loadResources(); }} />;
+      return <ReferenceResourceView resource={selectedResource} onBack={backToResourceList} />;
     }
-    return <><ResourceReview key={`${selectedResource.id}:${questions.map((question) => `${question.id}:${question.verification_status}`).join("|")}`} resource={selectedResource} questions={questions} onBack={() => { setSelectedResource(null); setAssessmentOpen(false); void loadResources(); }} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={selectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
+    return <><ResourceReview key={`${selectedResource.id}:${questions.map((question) => `${question.id}:${question.verification_status}`).join("|")}`} resource={selectedResource} questions={questions} initialQuestionId={deepQuestionId} onBack={backToResourceList} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={selectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
   }
 
   return (
