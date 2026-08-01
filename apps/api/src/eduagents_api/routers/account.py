@@ -38,7 +38,18 @@ from ..deps import (
     get_app_settings,
     invalidate_org_cache,
 )
-from ..models import ChatSession, KnowledgeBase, PendingCleanup, User
+from ..models import (
+    AssessmentAttempt,
+    Attempt,
+    ChatSession,
+    ErrorItem,
+    KnowledgeBase,
+    LearningResource,
+    PendingCleanup,
+    Question,
+    ResourceQuestion,
+    User,
+)
 from ..schemas import AccountDeleteIn
 from ..security import verify_password
 
@@ -80,6 +91,72 @@ async def delete_account(
         await session.execute(
             delete(KnowledgeBase).where(KnowledgeBase.owner_type == "user")
         )
+        # 记录本账号产生的脱离 Quiz 的结构化题目；删除资源/RQ 后只回收
+        # 仍无任何历史引用的题目，不能误删普通 Quiz 题或被其他资源共享的题。
+        resource_question_question_ids = {
+            question_id
+            for (question_id,) in (
+                await session.execute(
+                    select(ResourceQuestion.question_id)
+                    .join(LearningResource, LearningResource.id == ResourceQuestion.resource_id)
+                    .where(LearningResource.owner_id == ctx.user_id)
+                )
+            ).all()
+        }
+        personal_error_question_ids = {
+            question_id
+            for (question_id,) in (
+                await session.execute(
+                    select(ErrorItem.question_id).where(ErrorItem.user_id == ctx.user_id)
+                )
+            ).all()
+        }
+        personal_attempt_question_ids = {
+            question_id
+            for (question_id,) in (
+                await session.execute(
+                    select(Attempt.question_id).where(Attempt.user_id == ctx.user_id)
+                )
+            ).all()
+        }
+        question_ids = (
+            resource_question_question_ids
+            | personal_error_question_ids
+            | personal_attempt_question_ids
+        )
+
+        # 新增的资源/真实测评表显式清理；对象存储前缀则由同一
+        # pending_cleanup outbox 事务后置回收。
+        await session.execute(
+            delete(AssessmentAttempt).where(AssessmentAttempt.student_id == ctx.user_id)
+        )
+        await session.execute(delete(ErrorItem).where(ErrorItem.user_id == ctx.user_id))
+        await session.execute(delete(Attempt).where(Attempt.user_id == ctx.user_id))
+        await session.execute(
+            delete(LearningResource).where(LearningResource.owner_id == ctx.user_id)
+        )
+        await session.flush()
+
+        for question_id in question_ids:
+            question = await session.get(Question, question_id)
+            if question is None or question.quiz_id is not None:
+                continue
+            if await session.scalar(
+                select(ResourceQuestion.id)
+                .where(ResourceQuestion.question_id == question_id)
+                .limit(1)
+            ):
+                continue
+            if await session.scalar(
+                select(ErrorItem.id).where(ErrorItem.question_id == question_id).limit(1)
+            ):
+                continue
+            if await session.scalar(
+                select(Attempt.id).where(Attempt.question_id == question_id).limit(1)
+            ):
+                continue
+            await session.delete(question)
+
         # users 行: 0003 外键级联清 8 张学情表 + refresh_tokens, 0005 级联清
         # learner_insights/user_preferences (users 无 RLS, 显式限定 id);
         # usage_log.user_id 置 NULL 留审计

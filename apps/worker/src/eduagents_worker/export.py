@@ -63,9 +63,19 @@ def _error_import_zip_path(import_id: str, filename: str | None) -> str:
     return f"uploads/error_imports/{safe_import_id}/{_safe_zip_filename(filename)}"
 
 
+def _resource_zip_path(resource_id: str, filename: str | None) -> str:
+    try:
+        safe_resource_id = str(uuid.UUID(str(resource_id)))
+    except (ValueError, TypeError, AttributeError):
+        safe_resource_id = "unknown"
+    return f"uploads/resources/{safe_resource_id}/{_safe_zip_filename(filename)}"
+
+
 async def export_user_data(ctx: dict, tenant_id: str) -> str:
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
+        AssessmentAnswer,
+        AssessmentAttempt,
         Attempt,
         ChatAttachment,
         ChatMessage,
@@ -77,12 +87,14 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         KnowledgeBase,
         LearnerInsight,
         LearningReportSnapshot,
+        LearningResource,
         MasteryLog,
         MasteryRecord,
         Plan,
         PlanAdjustment,
         Question,
         Quiz,
+        ResourceQuestion,
         User,
         UserPreference,
     )
@@ -103,6 +115,10 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         "attempts": Attempt,
         "error_items": ErrorItem,
         "error_imports": ErrorImport,
+        "learning_resources": LearningResource,
+        "resource_questions": ResourceQuestion,
+        "assessment_attempts": AssessmentAttempt,
+        "assessment_answers": AssessmentAnswer,
         "plans": Plan,
         "plan_adjustments": PlanAdjustment,
         "mastery_records": MasteryRecord,
@@ -162,7 +178,31 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         for attachment in dumped["chat_attachments"]
     )
     storage = create_storage(settings)
-    error_import_files: list[tuple[str, bytes]] = []
+    source_files: list[tuple[str, bytes]] = []
+    for resource in dumped["learning_resources"]:
+        zip_path = _resource_zip_path(resource["id"], resource.get("source_filename"))
+        entry = {
+            "resource_id": resource["id"],
+            "filename": resource.get("source_filename"),
+            "size_bytes": resource.get("size_bytes", 0),
+            "kind": resource.get("resource_type"),
+            "storage_key": resource.get("storage_key"),
+            "zip_path": zip_path,
+            "available": False,
+        }
+        if resource.get("storage_key"):
+            try:
+                source_data = await storage.load(resource["storage_key"])
+            except Exception:  # noqa: BLE001 - one missing object must not abort export
+                entry["error"] = "SOURCE_NOT_FOUND"
+                log.warning("export_resource_source_missing", resource_id=resource["id"])
+            else:
+                entry["available"] = True
+                source_files.append((zip_path, source_data))
+        else:
+            entry["error"] = "SOURCE_NOT_FOUND"
+        uploads.append(entry)
+
     for imported in dumped["error_imports"]:
         zip_path = _error_import_zip_path(imported["id"], imported.get("filename"))
         entry = {
@@ -182,7 +222,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
                 log.warning("export_source_missing", error_import_id=imported["id"])
             else:
                 entry["available"] = True
-                error_import_files.append((zip_path, source_data))
+                source_files.append((zip_path, source_data))
         else:
             entry["error"] = "SOURCE_NOT_FOUND"
         uploads.append(entry)
@@ -194,7 +234,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
             zf.writestr(f"tables/{name}.json", _dumps(rows))
         zf.writestr("chunks.json", _dumps(chunk_rows))
         zf.writestr("uploads_manifest.json", _dumps(uploads))
-        for zip_path, source_data in error_import_files:
+        for zip_path, source_data in source_files:
             zf.writestr(zip_path, source_data)
     data = buf.getvalue()
 

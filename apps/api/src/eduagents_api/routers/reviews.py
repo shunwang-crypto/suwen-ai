@@ -594,7 +594,8 @@ async def list_errors(
                     "source_import_id": (
                         str(row.source_import_id) if row.source_import_id else None
                     ),
-                    "content_editable": not bool(row.fsrs_card_json) and row.id not in evidence_ids,
+                    "content_editable": not bool((row.fsrs_card_json or {}).get("last_review"))
+                    and row.id not in evidence_ids,
                     "is_variant": row.variant_of is not None,
                     "created_at": row.created_at,
                     "question": (

@@ -140,9 +140,9 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | GET | /api/errors/{error_item_id}/source | 已保存错题读取来源的等价入口，继续校验错题所有权 |
 | DELETE | /api/errors/imports/{id} | 仅可删除未确认草稿；数据库先进入内部 `deleting` 状态，原件删除成功后才删除数据库行 |
 
-`GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`，导入生成的 `Quiz.blueprint.kind` 固定为 `error_import`，不会出现在普通测验或教师组卷列表。
+`GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
 
-导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`SOURCE_NOT_FOUND`。
+导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`ERROR_ITEM_NOT_EDITABLE`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`STORAGE_QUOTA_EXCEEDED`、`SOURCE_NOT_FOUND`。
 
 用户数据导出仍在 `uploads_manifest.json` 保留来源元数据；可用的错题原文件同时写入 `uploads/error_imports/{import_id}/{safe_filename}`，缺失对象以 `available=false` 和 `error=SOURCE_NOT_FOUND` 记录，不阻断其他数据导出。
 
@@ -151,3 +151,90 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 - M3: `/api/threads/{thread_id}/resume`（interrupt 恢复协议）、`/api/quiz`、`/api/plans`
 - M4: `/api/profile`（AI 眼中的我）、`/api/reports`、
   `/api/admin/usage`、`/api/admin/time-travel`
+
+## 结构化学习资料与真实测评（0012）
+
+题目资料不进入普通 KnowledgeBase/RAG。资源文件由 `LearningResource` 保存，题目由
+`ResourceQuestion` 保存并通过 `Question.quiz_id = null` 与正式题目脱钩；真实考试/作业
+记录使用 `AssessmentAttempt → AssessmentAnswer → ResourceQuestion`。所有端点只返回本人
+租户的数据；资源、题目和测评记录的越权访问统一返回 404。
+
+### 学习资料
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/resources` | JSON 创建无文件资料，或 multipart `file` 上传 PDF/Word/PPT/文本/图片；返回 `status=uploaded` |
+| GET | `/api/resources` | 本人资源列表 |
+| GET | `/api/resources/{id}` | 资源元数据、识别状态和题数 |
+| PATCH | `/api/resources/{id}` | 修改标题、科目、年级、学期、资源类型、关联 KB；不自动摄取 RAG |
+| DELETE | `/api/resources/{id}` | 删除草稿资源；对象删除失败返回 `503 RESOURCE_DELETE_FAILED`，数据库行保留待重试 |
+| GET | `/api/resources/{id}/source` | 本人原始文件；图片/PDF inline，Word/PPT attachment，固定 `nosniff` 和安全文件名 |
+| POST | `/api/resources/{id}/extract` | 入队异步识别，状态 `uploaded/failed → extracting → reviewing/failed`；`extracting/reviewing/ready` 重试幂等且不重复入队 |
+| GET | `/api/resources/{id}/questions` | 题目校对列表；存在未提交 attempt 时不返回参考答案 |
+| POST | `/api/resources/{id}/questions/manual` | 手动新增一题，初始 `verification_status=pending` |
+| POST | `/api/resources/{id}/confirm` | 按 `resource_question_ids` 选择性确认并将选中错题加入错题本；不创建 Attempt/Quiz |
+| PATCH | `/api/resource-questions/{id}` | 修改题干、题型、选项、答案、知识点、页码、区域和置信度 |
+| POST | `/api/resource-questions/{id}/verify` | 幂等确认 `pending → verified`；不允许倒退 |
+| DELETE | `/api/resource-questions/{id}` | 删除尚未关联错题/测评的误识别题 |
+
+`LearningResource` 返回 `owner_id/created_by/source_filename/mime_type/size_bytes/sha256/`
+`page_count/status/retrieval_policy/linked_kb_id/source_url/question_count/`
+`pending_question_count`；`retrieval_policy=questions_only|none` 的题目资料不会自动创建
+`Document/Chunk` 或进入普通 RAG。`ResourceQuestion.verification_status` 为
+`pending | verified | rejected`；题目识别字段包含
+`question_no/page_no/type/stem/options/detected_student_answer/`
+`detected_reference_answer/explanation/points/kc_names/difficulty/confidence`，并返回
+`is_error_selected`。`pending` 题不会进入复习、FSRS、掌握度、画像、报告或推荐；confirm
+请求中的空 `resource_question_ids/error_question_ids` 表示不选择任何错题。
+
+`Question.quiz_id` 对资源题为空；资源题只能在本人租户内读取。题目产生 FSRS review、
+ErrorItem mastery evidence 或 AssessmentAnswer mastery evidence 后，改变题型、选项、
+正确答案、知识点会返回 `409 ERROR_ITEM_LOCKED_AFTER_REVIEW`；状态只能
+`pending → verified`，不能倒退。错误码还包括 `RESOURCE_QUESTION_NOT_VERIFIED`、
+`RESOURCE_QUESTION_QUOTA_EXCEEDED`、`RESOURCE_QUESTION_HAS_ERROR_ITEM`、
+`RESOURCE_QUESTION_HAS_ASSESSMENT`、`RESOURCE_QUESTION_HAS_ATTEMPT`、
+`QUESTION_HAS_QUIZ_OWNER`、`TOO_MANY_PENDING_RESOURCES`、`RESOURCE_QUOTA_EXCEEDED`、
+`RESOURCE_PAGE_LIMIT_EXCEEDED`、`RESOURCE_FILE_TOO_LARGE`、`STORAGE_QUOTA_EXCEEDED`、
+`RESOURCE_SOURCE_REQUIRED`、`SOURCE_SAVE_FAILED`、`RESOURCE_DELETE_FAILED`、
+`RESOURCE_HAS_ERROR_ITEMS`、`RESOURCE_HAS_ASSESSMENTS`、`RESOURCE_HAS_ATTEMPTS`、
+`EXTRACTION_QUEUE_FAILED`。
+
+### 真实考试/练习
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/assessment-attempts` | 创建 `draft` attempt；同一资源允许多次 |
+| GET | `/api/assessment-attempts` | 本人 attempt 列表 |
+| GET | `/api/assessment-attempts/{id}` | 作答和评分；提交前不泄漏参考答案 |
+| PATCH | `/api/assessment-attempts/{id}` | 仅 draft 可修改元数据 |
+| PUT/PATCH | `/api/assessment-attempts/{id}/answers` | 保存学生真实作答 |
+| POST | `/api/assessment-attempts/{id}/submit` | `draft → submitted`，未核验评分不进入学习画像 |
+| POST | `/api/assessment-attempts/{id}/grade-or-verify` | 写入评分；`verify=true` 才写 mastery/error；错误通过 `AssessmentAnswer → ErrorItem` 幂等关联，不创建 Attempt |
+
+attempt 类型为 `formal_exam | mock_exam | homework | practice | imported_record`，状态
+只能从 `draft → submitted → graded` 单调前进；作答评分状态为 `pending | graded | verified`。
+`draft` 才能保存作答，`submitted` 后 response 锁定；`verify=false` 只能写入 graded，不能
+单独把 answer 标成 verified；`verify=true` 必须为所有已保存答案提供正确性，才会将整次
+attempt 置为 graded。相同请求重试幂等，已 graded 的语义字段改变返回 409。
+未核验作答/主观评分不进入掌握度、FSRS、画像、报告、推荐。已核验测评答案会纳入
+报告真实作答次数和正确率。相关错误码：`ASSESSMENT_NOT_EDITABLE`、
+`ASSESSMENT_NOT_SUBMITTED`、`ASSESSMENT_ALREADY_GRADED`、`ASSESSMENT_ANSWER_LOCKED`、
+`ATTEMPT_VERIFICATION_REQUIRED`、`ANSWER_CORRECTNESS_REQUIRED`、`INVALID_ATTEMPT_TYPE`、
+`INVALID_GRADING_STATUS`、`DUPLICATE_ANSWER`、`RESOURCE_QUESTION_NOT_FOUND`、
+`RESOURCE_QUESTION_NOT_VERIFIED`。
+
+### 迁移与导出
+
+0012 新增 `learning_resources`、`resource_questions`、`assessment_attempts` 和
+`assessment_answers`，并为 `questions.quiz_id` 改为可空、`error_items` 增加
+`original_response/resource_question_id/assessment_answer_id` 引用。迁移会把旧
+`ErrorImport` 和 `blueprint.kind=error_import` 的题转成资源，保留 ErrorItem、FSRS、
+MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt。资源 owner、创建者、
+测评学生/阅卷人和关联 KB 均有明确 FK 删除语义；downgrade 先移除引用再删除结构化表，
+不伪造已删除的隐藏 Quiz。
+旧环境可执行 `scripts/audit_0011_error_import_isolation.sql` 做只读审计。
+
+账号导出的 `uploads_manifest.json` 保留原始对象元数据，同时把可读取的资源文件写入
+`uploads/resources/{resource_id}/{safe_filename}`，旧错题导入文件写入
+`uploads/error_imports/{import_id}/{safe_filename}`。缺失对象记录
+`available=false,error=SOURCE_NOT_FOUND`，不阻断其他数据导出。

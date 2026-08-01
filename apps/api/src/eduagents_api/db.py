@@ -82,3 +82,19 @@ async def plain_session() -> AsyncIterator[AsyncSession]:
     async with get_sessionmaker()() as session:
         async with session.begin():
             yield session
+
+
+@asynccontextmanager
+async def internal_cleanup_session() -> AsyncIterator[AsyncSession]:
+    """Worker-only session for paged lifecycle scans.
+
+    The migration adds a narrowly named RLS policy requiring this transaction
+    GUC.  No HTTP dependency sets it, so cleanup does not become a general
+    cross-tenant data access path.
+    """
+    async with get_sessionmaker()() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.internal_cleanup', 'true', true)")
+            )
+            yield session

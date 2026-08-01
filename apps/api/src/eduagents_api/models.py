@@ -402,7 +402,12 @@ class ErrorImport(Base):
     confirmed_error_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
-    resource_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("learning_resources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -420,7 +425,12 @@ class LearningResource(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     owner_type: Mapped[str] = mapped_column(String(16), nullable=False, default="personal")
-    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     resource_type: Mapped[str] = mapped_column(String(24), nullable=False, default="other")
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     subject: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
@@ -437,8 +447,17 @@ class LearningResource(Base):
     retrieval_policy: Mapped[str] = mapped_column(
         String(16), nullable=False, default="questions_only"
     )
-    linked_kb_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    linked_kb_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -458,7 +477,7 @@ class ResourceQuestion(Base):
         UUID(as_uuid=True), ForeignKey("learning_resources.id", ondelete="CASCADE"), index=True
     )
     question_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="CASCADE"), unique=True, index=True
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="CASCADE"), index=True
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     question_no: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -485,7 +504,12 @@ class AssessmentAttempt(Base):
     resource_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("learning_resources.id", ondelete="SET NULL"), index=True
     )
-    student_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     attempt_type: Mapped[str] = mapped_column(String(24), nullable=False, default="practice")
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -493,7 +517,11 @@ class AssessmentAttempt(Base):
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
-    grader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    grader_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
@@ -505,6 +533,13 @@ class AssessmentAnswer(Base):
     """一次真实 attempt 对一道题的作答和评分。"""
 
     __tablename__ = "assessment_answers"
+    __table_args__ = (
+        UniqueConstraint(
+            "attempt_id",
+            "resource_question_id",
+            name="uq_assessment_answers_attempt_question",
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     attempt_id: Mapped[uuid.UUID] = mapped_column(

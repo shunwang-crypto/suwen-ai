@@ -23,6 +23,7 @@ from .ratelimit import RateLimiter
 from .routers import (
     account,
     admin,
+    assessments,
     auth,
     billing,
     chat,
@@ -40,6 +41,7 @@ from .routers import (
     profile,
     quiz,
     reports,
+    resources,
     reviews,
     teacher,
     threads,
@@ -179,6 +181,9 @@ def create_app() -> FastAPI:
     app.include_router(profile.router)
     app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)
     app.include_router(reports.router)
+    app.include_router(resources.router)
+    app.include_router(resources.questions_router)
+    app.include_router(assessments.router)
     app.include_router(ops.router)
     app.include_router(reviews.router)
     app.include_router(reviews.errors_router)  # 错题本 /api/errors (F6)

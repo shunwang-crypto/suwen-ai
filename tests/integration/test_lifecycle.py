@@ -84,6 +84,8 @@ def _worker_ctx():
 async def test_account_deletion_wipes_all_tables(client):
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
+        AssessmentAnswer,
+        AssessmentAttempt,
         Attempt,
         ChatMessage,
         ChatSession,
@@ -93,6 +95,7 @@ async def test_account_deletion_wipes_all_tables(client):
         KnowledgeBase,
         KnowledgeComponent,
         LearnerInsight,
+        LearningResource,
         MasteryLog,
         MasteryRecord,
         PendingCleanup,
@@ -101,6 +104,7 @@ async def test_account_deletion_wipes_all_tables(client):
         Question,
         Quiz,
         RefreshToken,
+        ResourceQuestion,
         UsageLog,
         UserPreference,
     )
@@ -165,6 +169,54 @@ async def test_account_deletion_wipes_all_tables(client):
                 feature="qa_generate", model="m", tier="cheap",
             )
         )
+        resource = LearningResource(
+            tenant_id=uid,
+            owner_type="personal",
+            owner_id=uid,
+            created_by=uid,
+            resource_type="worksheet",
+            title="注销资料",
+            status="ready",
+        )
+        s.add(resource)
+        await s.flush()
+        # Use an explicit resource-owned Question so the account deletion test
+        # catches the orphan path separately from the legacy Quiz cascade.
+        orphan_question = Question(
+            tenant_id=uid,
+            quiz_id=None,
+            type="short",
+            stem="注销后不能残留的题",
+            answer="答案",
+            source_type="document",
+        )
+        s.add(orphan_question)
+        await s.flush()
+        resource_question = ResourceQuestion(
+            tenant_id=uid,
+            resource_id=resource.id,
+            question_id=orphan_question.id,
+            verification_status="verified",
+        )
+        s.add(resource_question)
+        await s.flush()
+        assessment = AssessmentAttempt(
+            tenant_id=uid,
+            resource_id=resource.id,
+            student_id=uid,
+            attempt_type="practice",
+            status="submitted",
+        )
+        s.add(assessment)
+        await s.flush()
+        s.add(
+            AssessmentAnswer(
+                tenant_id=uid,
+                attempt_id=assessment.id,
+                resource_question_id=resource_question.id,
+                response="作答",
+            )
+        )
         s.add(
             Chunk(
                 tenant_id=uid, doc_id=doc_id, text="chunk 文本",
@@ -197,8 +249,9 @@ async def test_account_deletion_wipes_all_tables(client):
 
     # 12+ 张表零残留 (RLS 租户会话: 有残留必可见)
     models_zero = [
-        Attempt, ChatSession, ChatMessage, ErrorItem, MasteryLog, MasteryRecord,
-        Plan, PlanAdjustment, Quiz, Question,
+        Attempt, AssessmentAnswer, AssessmentAttempt, ChatSession, ChatMessage,
+        ErrorItem, LearningResource, MasteryLog, MasteryRecord, Plan, PlanAdjustment,
+        Quiz, Question, ResourceQuestion,
         KnowledgeBase, Document, Chunk, KnowledgeComponent,
         LearnerInsight, UserPreference,
     ]
@@ -553,7 +606,7 @@ async def test_export_user_data(client):
     names = set(zf.namelist())
     assert {"profile.json", "chunks.json", "uploads_manifest.json"} <= names
     tables = {n for n in names if n.startswith("tables/")}
-    assert len(tables) == 17  # 0010 起再含错题导入来源
+    assert len(tables) == 21  # 0012 新增资源/测评四张结构化表
     assert {
         "tables/learner_insights.json",
         "tables/user_preferences.json",

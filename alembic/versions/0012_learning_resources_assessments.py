@@ -42,6 +42,13 @@ def _has_index(bind, table: str, name: str) -> bool:
     return any(index.get("name") == name for index in sa.inspect(bind).get_indexes(table))
 
 
+def _has_unique_constraint(bind, table: str, name: str) -> bool:
+    return any(
+        constraint.get("name") == name
+        for constraint in sa.inspect(bind).get_unique_constraints(table)
+    )
+
+
 def _create_rls(table: str) -> None:
     op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO edu_app")
     op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
@@ -167,6 +174,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["resource_id"], ["learning_resources.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["student_id"], ["users.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["grader_id"], ["users.id"], ondelete="SET NULL"),
         sa.CheckConstraint(
             "attempt_type IN ('formal_exam', 'mock_exam', 'homework', 'practice', 'imported_record')",
             name="ck_assessment_attempt_type",
@@ -176,6 +185,14 @@ def upgrade() -> None:
             name="ck_assessment_attempt_status",
         ),
     )
+    # A Question can be referenced by more than one legacy ErrorItem and may
+    # also be reused by more than one resource.  The resource-local pair is
+    # unique; a global question_id uniqueness rule is too strong and made the
+    # historical backfill fail for legitimate shared questions.
+    if _has_unique_constraint(bind, "resource_questions", "uq_resource_questions_question"):
+        op.drop_constraint(
+            "uq_resource_questions_question", "resource_questions", type_="unique"
+        )
     _create_table_if_missing(
         bind,
         "assessment_answers",
@@ -228,6 +245,51 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+    if not _has_fk(bind, "learning_resources", "fk_learning_resources_created_by"):
+        op.create_foreign_key(
+            "fk_learning_resources_created_by",
+            "learning_resources",
+            "users",
+            ["created_by"],
+            ["id"],
+            ondelete="CASCADE",
+        )
+    if not _has_fk(bind, "learning_resources", "fk_learning_resources_owner"):
+        op.create_foreign_key(
+            "fk_learning_resources_owner",
+            "learning_resources",
+            "users",
+            ["owner_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
+    if not _has_fk(bind, "learning_resources", "fk_learning_resources_linked_kb"):
+        op.create_foreign_key(
+            "fk_learning_resources_linked_kb",
+            "learning_resources",
+            "knowledge_bases",
+            ["linked_kb_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
+    if not _has_fk(bind, "assessment_attempts", "fk_assessment_attempts_student"):
+        op.create_foreign_key(
+            "fk_assessment_attempts_student",
+            "assessment_attempts",
+            "users",
+            ["student_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
+    if not _has_fk(bind, "assessment_attempts", "fk_assessment_attempts_grader"):
+        op.create_foreign_key(
+            "fk_assessment_attempts_grader",
+            "assessment_attempts",
+            "users",
+            ["grader_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
     if not _has_index(bind, "resource_questions", "ix_resource_questions_resource_id"):
         op.create_index("ix_resource_questions_resource_id", "resource_questions", ["resource_id"])
     if not _has_index(bind, "resource_questions", "ix_resource_questions_question_id"):
@@ -248,6 +310,12 @@ def upgrade() -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_error_items_assessment_answer "
         "ON error_items (assessment_answer_id) WHERE assessment_answer_id IS NOT NULL"
     )
+    if not _has_unique_constraint(bind, "assessment_answers", "uq_assessment_answers_attempt_question"):
+        op.create_unique_constraint(
+            "uq_assessment_answers_attempt_question",
+            "assessment_answers",
+            ["attempt_id", "resource_question_id"],
+        )
 
     # Existing 0010/0011 hidden Quiz rows are converted before the rows are
     # deleted.  IDs are deterministic (legacy import/quiz ID) so the SQL is
@@ -283,16 +351,26 @@ def upgrade() -> None:
                 (id, tenant_id, resource_id, question_id, ordinal, question_no,
                  section_path, page_no, source_region_json, extraction_confidence,
                  verification_status, created_at, updated_at)
-            SELECT gen_random_uuid(), e.tenant_id, ei.resource_id, e.question_id, 0,
+            SELECT gen_random_uuid(), picked.tenant_id, picked.resource_id, picked.question_id, 0,
                    COALESCE(q.source_meta_json->>'question_no', ''), '',
                    CASE WHEN q.source_meta_json->>'page_no' ~ '^[0-9]+$'
                         THEN (q.source_meta_json->>'page_no')::integer END,
                    '{}', NULL,
-                   e.verification_status, e.created_at, e.updated_at
-            FROM error_items e
-            JOIN error_imports ei ON ei.id = e.source_import_id
-            JOIN questions q ON q.id = e.question_id
-            WHERE ei.resource_id IS NOT NULL
+                   picked.verification_status, picked.created_at, picked.updated_at
+            FROM (
+                SELECT DISTINCT ON (ei.resource_id, e.question_id)
+                       e.tenant_id, ei.resource_id, e.question_id,
+                       e.verification_status, e.created_at, e.updated_at
+                FROM error_items e
+                JOIN error_imports ei ON ei.id = e.source_import_id
+                WHERE ei.resource_id IS NOT NULL
+                -- Multiple historical ErrorItems can share a Question.  A
+                -- pending row wins so migration never upgrades uncertainty.
+                ORDER BY ei.resource_id, e.question_id,
+                         CASE WHEN e.verification_status = 'pending' THEN 0 ELSE 1 END,
+                         e.created_at ASC, e.id ASC
+            ) picked
+            JOIN questions q ON q.id = picked.question_id
             ON CONFLICT (resource_id, question_id) DO UPDATE
               SET verification_status = EXCLUDED.verification_status,
                   updated_at = EXCLUDED.updated_at
@@ -411,13 +489,59 @@ def upgrade() -> None:
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
 
+    # Worker cleanup uses a transaction-scoped internal capability instead of
+    # opening one tenant session per user.  It is not exposed through any API
+    # dependency and is only set by the worker's plain internal session.
+    for table in ("error_imports", "learning_resources", "resource_questions"):
+        op.execute(
+            sa.text(
+                f"""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies
+                        WHERE schemaname = current_schema()
+                          AND tablename = '{table}'
+                          AND policyname = 'internal_cleanup'
+                    ) THEN
+                        CREATE POLICY internal_cleanup ON {table}
+                        USING (current_setting('app.internal_cleanup', true) = 'true')
+                        WITH CHECK (current_setting('app.internal_cleanup', true) = 'true');
+                    END IF;
+                END $$
+                """
+            )
+        )
+
 
 def downgrade() -> None:
     # Data backfill is deliberately not reversed: restoring hidden quizzes or
     # deleting resource/assessment history would be destructive.  The schema
     # can still be downgraded safely for an empty 0012 database.
     bind = op.get_bind()
+    if _has_index(bind, "error_items", "uq_error_items_assessment_answer"):
+        op.drop_index("uq_error_items_assessment_answer", table_name="error_items")
+    for table, name in (
+        ("error_items", "fk_error_items_assessment_answer"),
+        ("error_items", "fk_error_items_resource_question"),
+        ("error_imports", "fk_error_imports_resource"),
+        ("learning_resources", "fk_learning_resources_created_by"),
+        ("learning_resources", "fk_learning_resources_owner"),
+        ("learning_resources", "fk_learning_resources_linked_kb"),
+        ("assessment_attempts", "fk_assessment_attempts_student"),
+        ("assessment_attempts", "fk_assessment_attempts_grader"),
+    ):
+        if _has_fk(bind, table, name):
+            op.drop_constraint(name, table, type_="foreignkey")
+    for table in ("error_imports", "learning_resources", "resource_questions"):
+        if _has_table(bind, table):
+            op.execute(f"DROP POLICY IF EXISTS internal_cleanup ON {table}")
     if _has_table(bind, "assessment_answers"):
+        if _has_unique_constraint(bind, "assessment_answers", "uq_assessment_answers_attempt_question"):
+            op.drop_constraint(
+                "uq_assessment_answers_attempt_question",
+                "assessment_answers",
+                type_="unique",
+            )
         op.execute("DROP TABLE assessment_answers")
     if _has_table(bind, "assessment_attempts"):
         op.execute("DROP TABLE assessment_attempts")

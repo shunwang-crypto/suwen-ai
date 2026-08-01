@@ -56,6 +56,17 @@ def upgrade() -> None:
     op.execute("ALTER TABLE knowledge_bases DROP COLUMN IF EXISTS owner_type")
     op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS uploaded_by")
     op.execute("ALTER TABLE users DROP COLUMN IF EXISTS display_name")
+    # These columns were introduced by later migrations but the frozen 0001
+    # table list is built from the current ORM metadata.  Drop them here so
+    # 0010/0011 can replay their historical ADD COLUMN operations on an empty
+    # database without changing those already-released migrations.
+    op.execute("ALTER TABLE questions DROP COLUMN IF EXISTS source_type")
+    op.execute("ALTER TABLE questions DROP COLUMN IF EXISTS source_meta_json")
+    op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS verification_status")
+    op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS source_import_id")
+    op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS resource_question_id")
+    op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS assessment_answer_id")
+    op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS original_response")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
     # 开发默认密码 'edu', 生产部署后必须 ALTER ROLE edu_app PASSWORD ...

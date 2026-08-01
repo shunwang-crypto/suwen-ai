@@ -21,6 +21,7 @@ from .ingestion import (
 from .purge import purge_tenant
 from .reflection import reflect_session
 from .reports import refresh_learning_report
+from .resources import extract_learning_resource
 from .retention import purge_retention
 from .study_guide import build_study_guide
 
@@ -60,6 +61,7 @@ class WorkerSettings:
         run_retrieval_eval_task,
         reflect_session,
         refresh_learning_report,
+        extract_learning_resource,
         build_study_guide,
         export_user_data,
         purge_tenant,

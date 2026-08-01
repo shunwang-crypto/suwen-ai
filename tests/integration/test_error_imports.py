@@ -157,12 +157,15 @@ async def test_manual_error_import_verification_flow(client):
         assert attempt is None
         assert error.original_response == "A"
 
+        assert question.quiz_id is None
         imported_quiz = await session.scalar(
-            select(Quiz).where(Quiz.user_id == user_id, Quiz.blueprint_json["kind"].astext == "error_import")
+            select(Quiz).where(
+                Quiz.user_id == user_id,
+                Quiz.blueprint_json["kind"].astext == "error_import",
+            )
         )
-        imported_quiz_id = str(imported_quiz.id)
+        assert imported_quiz is None
     assert (await client.get("/api/quiz", headers=headers)).json() == []
-    assert (await client.get(f"/api/quiz/{imported_quiz_id}", headers=headers)).status_code == 404
     async with plain_session() as session:
         user = await session.get(User, user_id)
         user.role = "teacher"
@@ -171,7 +174,7 @@ async def test_manual_error_import_verification_flow(client):
     teacher_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     teacher_quizzes = await client.get("/api/teacher/quizzes", headers=teacher_headers)
     assert teacher_quizzes.status_code == 200
-    assert all(row["id"] != imported_quiz_id for row in teacher_quizzes.json())
+    assert teacher_quizzes.json() == []
 
 
 async def test_document_error_import_keeps_real_source_and_editable_draft(client):

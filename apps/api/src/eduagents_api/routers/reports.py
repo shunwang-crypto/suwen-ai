@@ -35,6 +35,8 @@ from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..kc_hierarchy import FALLBACK_CHAPTER, chapter_sort_key, resolve_kc_meta
 from ..models import (
     ERROR_IMPORT_QUIZ_KIND,
+    AssessmentAnswer,
+    AssessmentAttempt,
     Attempt,
     ErrorItem,
     KcEdge,
@@ -187,6 +189,31 @@ async def _build_aggregates(
             )
         ).all()
     }
+    assessment_day_col = cast(func.timezone("Asia/Shanghai", AssessmentAnswer.created_at), Date)
+    assessment_daily = {
+        day: (int(total), int(correct))
+        for day, total, correct in (
+            await session.execute(
+                select(
+                    assessment_day_col.label("day"),
+                    func.count(),
+                    func.count().filter(AssessmentAnswer.is_correct.is_(True)),
+                )
+                .select_from(AssessmentAnswer)
+                .join(AssessmentAttempt, AssessmentAttempt.id == AssessmentAnswer.attempt_id)
+                .where(
+                    AssessmentAttempt.student_id == ctx.user_id,
+                    AssessmentAttempt.status == "graded",
+                    AssessmentAnswer.grading_status == "verified",
+                    AssessmentAnswer.created_at >= since,
+                )
+                .group_by(assessment_day_col)
+            )
+        ).all()
+    }
+    for day, (total, correct) in assessment_daily.items():
+        old_total, old_correct = daily.get(day, (0, 0))
+        daily[day] = (old_total + total, old_correct + correct)
     trend = []
     for i in range(_TREND_DAYS):
         d = today - timedelta(days=_TREND_DAYS - 1 - i)
@@ -227,6 +254,27 @@ async def _build_aggregates(
     previous_attempts = int(previous_row[0] or 0)
     previous_correct = int(previous_row[1] or 0)
     previous_active_days = int(previous_row[2] or 0)
+    previous_assessment = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(AssessmentAnswer.is_correct.is_(True)),
+                func.count(func.distinct(assessment_day_col)),
+            )
+            .select_from(AssessmentAnswer)
+            .join(AssessmentAttempt, AssessmentAttempt.id == AssessmentAnswer.attempt_id)
+            .where(
+                AssessmentAttempt.student_id == ctx.user_id,
+                AssessmentAttempt.status == "graded",
+                AssessmentAnswer.grading_status == "verified",
+                AssessmentAnswer.created_at >= previous_since,
+                AssessmentAnswer.created_at < since,
+            )
+        )
+    ).one()
+    previous_attempts += int(previous_assessment[0] or 0)
+    previous_correct += int(previous_assessment[1] or 0)
+    previous_active_days = max(previous_active_days, int(previous_assessment[2] or 0))
 
     scoped_kc_ids = [r.kc_id for r, _ in scoped]
     mastery_log_query = select(MasteryLog).where(
