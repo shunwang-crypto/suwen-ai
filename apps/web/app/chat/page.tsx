@@ -536,7 +536,7 @@ function ChatView() {
     async (id: string) => {
       if (id === activeSessionId && activeRunId) {
         setBanner("回答仍在后台生成，请先点击停止后再删除会话");
-        return;
+        return false;
       }
       try {
         await apiJson<void>(`/api/chat/sessions/${id}`, { method: "DELETE" });
@@ -552,8 +552,10 @@ function ChatView() {
           return next;
         });
         await loadSessions();
+        return true;
       } catch (err) {
         setBanner(err instanceof ApiError ? err.message : "删除失败");
+        return false;
       }
     },
     [activeRunId, activeSessionId, loadSessions],

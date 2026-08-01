@@ -48,13 +48,15 @@ export function SessionList({
   onNew: () => void;
   onCollapse: () => void;
   onRename: (id: string, title: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onDelete: (id: string) => Promise<boolean>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [pinnedIds, setPinnedIds] = useState<string[]>(readPinnedSessions);
+  const [deleteTarget, setDeleteTarget] = useState<SessionOut | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [menu, setMenu] = useState<{
     id: string;
     top: number;
@@ -91,6 +93,15 @@ export function SessionList({
       window.removeEventListener("scroll", closeOnViewportChange, true);
     };
   }, [menu]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && !deleting) setDeleteTarget(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [deleteTarget, deleting]);
 
   const pinnedSet = new Set(pinnedIds);
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
@@ -148,12 +159,22 @@ export function SessionList({
     setMenu(null);
   };
 
-  const confirmDelete = async (session: SessionOut) => {
+  const requestDelete = (session: SessionOut) => {
     setMenu(null);
-    if (!window.confirm(`删除会话「${session.title}」？该操作不可恢复。`))
-      return;
-    await onDelete(session.id);
-    setPinnedIds((prev) => prev.filter((id) => id !== session.id));
+    setDeleteTarget(session);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const deleted = await onDelete(deleteTarget.id);
+      if (!deleted) return;
+      setPinnedIds((prev) => prev.filter((id) => id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const menuSession = menu
@@ -410,7 +431,7 @@ export function SessionList({
             <button
               type="button"
               role="menuitem"
-              onClick={() => void confirmDelete(menuSession)}
+              onClick={() => requestDelete(menuSession)}
               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
             >
               <svg
@@ -427,6 +448,59 @@ export function SessionList({
               </svg>
               删除
             </button>
+          </div>,
+          document.body,
+        )}
+
+      {deleteTarget &&
+        createPortal(
+          <div className="fixed inset-0 z-[90] flex items-center justify-center px-4">
+            <button
+              type="button"
+              aria-label="取消删除会话"
+              className="absolute inset-0 bg-black/40"
+              onClick={() => {
+                if (!deleting) setDeleteTarget(null);
+              }}
+            />
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-session-title"
+              className="relative w-full max-w-[460px] rounded-[16px] border border-line bg-white p-6 shadow-floating"
+            >
+              <h2 id="delete-session-title" className="text-[20px] font-semibold text-ink">
+                删除对话？
+              </h2>
+              <p className="mt-5 text-[15px] leading-6 text-ink-secondary">
+                这将永久删除“
+                <strong className="font-semibold text-ink">
+                  {deleteTarget.title || "未命名会话"}
+                </strong>
+                ”以及其中的所有消息和附件。
+              </p>
+              <p className="mt-2 text-[13px] leading-5 text-ink-muted">
+                已提取的长期学习记忆不会随对话删除，可在“账户设置 → AI 记忆”中单独管理。
+              </p>
+              <div className="mt-7 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => setDeleteTarget(null)}
+                  className="h-10 rounded-full border border-line-strong bg-white px-5 text-[14px] font-medium text-ink hover:bg-surface-muted disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void confirmDelete()}
+                  className="h-10 rounded-full bg-danger-600 px-5 text-[14px] font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleting ? "正在删除…" : "删除"}
+                </button>
+              </div>
+            </section>
           </div>,
           document.body,
         )}
