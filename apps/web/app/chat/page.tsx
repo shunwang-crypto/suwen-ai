@@ -453,14 +453,16 @@ function ChatView() {
     setSessionsOpen(false);
     setActiveCitation(null);
     setCitationMsgId(null);
+    let restoredPlaceholderId: string | null = null;
     try {
       let [history, run] = await Promise.all([
         apiJson<MessageOut[]>(`/api/chat/sessions/${id}/messages`),
         apiJson<ChatRunStatusOut>(`/api/chat/sessions/${id}/run`),
       ]);
       if (viewEpochRef.current !== epoch) return;
-      setMessages(historyToMessages(history));
+      const restoredMessages = historyToMessages(history);
       if (run.status !== "running" || !run.run_id) {
+        setMessages(restoredMessages);
         setSessionIndicators((prev) => {
           if (!(id in prev)) return prev;
           const next = { ...prev };
@@ -470,6 +472,21 @@ function ChatView() {
         return;
       }
 
+      // 运行中的回答尚未落库时，历史里只有用户消息。补一个临时助手消息，
+      // 让刷新页面或切回会话后仍显示“正在思考”动画；完成后由真实历史替换。
+      if (restoredMessages.at(-1)?.role !== "assistant") {
+        restoredPlaceholderId = `running-${run.run_id}`;
+        restoredMessages.push({
+          id: restoredPlaceholderId,
+          role: "assistant",
+          content: "",
+          timeline: [],
+          citations: [],
+          streaming: true,
+          chatMode: restoredMessages.at(-1)?.chatMode ?? "fast",
+        });
+      }
+      setMessages(restoredMessages);
       setSessionIndicators((prev) => ({ ...prev, [id]: "running" }));
       setActiveRunId(run.run_id);
       setStreaming(true);
@@ -499,11 +516,19 @@ function ChatView() {
       void loadSessions();
     } catch (err) {
       if (viewEpochRef.current !== epoch) return;
+      const message = err instanceof ApiError ? err.message : "历史消息加载失败";
+      if (restoredPlaceholderId) {
+        patchMsg(restoredPlaceholderId, (item) => ({
+          ...item,
+          streaming: false,
+          errorText: message,
+        }));
+      }
       setActiveRunId(null);
       setStreaming(false);
-      setBanner(err instanceof ApiError ? err.message : "历史消息加载失败");
+      setBanner(message);
     }
-  }, [detachCurrentStream, discardPendingAttachments, loadSessions]);
+  }, [detachCurrentStream, discardPendingAttachments, loadSessions, patchMsg]);
 
   // 从其他功能页返回 /chat 时恢复上次查看的会话；带 ?q= 的推荐问题仍开启新对话。
   useEffect(() => {
