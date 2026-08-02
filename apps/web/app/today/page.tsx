@@ -4,61 +4,23 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
+import { buildTodayItems, taskExecutionHref, type FlatPlanTask } from "@/app/today/today-plan";
 import { apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
   MasteryItem,
   PlanDetail,
   PlanListItem,
-  PlanTask,
   PlanToggleResult,
   ProfileResponse,
-  ReviewItem,
   ReviewTodayResponse,
 } from "@/lib/types";
 
 type ScopedMastery = MasteryItem & { kb_name?: string | null; subject?: string | null };
-type FlatTask = PlanTask & { day: number; stage: string };
-
 interface DashboardData {
   plan: PlanDetail | null;
   reviews: ReviewTodayResponse | null;
   profile: ProfileResponse | null;
-}
-
-interface TodayItem {
-  id: string;
-  type: "study" | "practice" | "review";
-  title: string;
-  context: string;
-  duration: string;
-  priority: "high" | "normal";
-  dueLabel?: string;
-  done: boolean;
-  task?: FlatTask;
-  review?: ReviewItem;
-  href: string;
-}
-
-function taskExecutionHref(task: PlanTask, kbId?: string | null): string {
-  const topic = task.kc_names?.[0] || task.title;
-  const kb = kbId ? `&kb=${encodeURIComponent(kbId)}` : "";
-  const count = task.practice_count && task.practice_count >= 1 && task.practice_count <= 20 ? task.practice_count : 3;
-  const difficultyValue = task.difficulty && ["easy", "mid", "hard"].includes(task.difficulty) ? task.difficulty : "mid";
-  const difficulty = `&difficulty=${encodeURIComponent(difficultyValue)}`;
-  switch (task.action_type) {
-    case "practice":
-      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
-    case "read":
-      return task.resource?.url || (task.resource?.kb_id || kbId ? `/kb?kb=${encodeURIComponent(task.resource?.kb_id || kbId || "")}` : `/tutor?problem=${encodeURIComponent(task.objective || task.title)}`);
-    case "review_errors":
-      return kbId ? `/errors?kb_id=${encodeURIComponent(kbId)}` : "/errors";
-    case "mixed":
-      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
-    case "tutor":
-    default:
-      return `/tutor?problem=${encodeURIComponent(task.objective || task.title)}${kb}`;
-  }
 }
 
 function ArrowIcon() {
@@ -149,14 +111,11 @@ export default function TodayPage() {
 
   const view = useMemo(() => {
     if (!data) return null;
-    const tasks: FlatTask[] = (data.plan?.structure.stages ?? []).flatMap((stage) =>
+    const tasks: FlatPlanTask[] = (data.plan?.structure.stages ?? []).flatMap((stage) =>
       stage.days.flatMap((day) => day.tasks.map((task) => ({ ...task, day: day.day, stage: stage.name }))),
     );
-    const todayKeys = new Set(data.plan?.schedule?.today_tasks ?? []);
-    const overdueKeys = new Set(data.plan?.schedule?.overdue_tasks ?? []);
-    const todayTasks = tasks.filter((task) => !task.done && task.task_key && todayKeys.has(task.task_key));
-    const overdueTasks = tasks.filter((task) => !task.done && task.task_key && overdueKeys.has(task.task_key));
-    const nextTask = todayTasks[0] ?? overdueTasks[0] ?? null;
+    const today = buildTodayItems(tasks, data.plan?.schedule, data.reviews?.items ?? [], data.plan?.kb_id);
+    const { nextTask } = today;
     const currentStage = nextTask?.stage ?? data.plan?.structure.stages[0]?.name ?? data.plan?.goal ?? "当前学习";
     const stageTasks = tasks.filter((task) => task.stage === currentStage).slice(0, 4);
     const stageDone = stageTasks.filter((task) => task.done).length;
@@ -164,49 +123,6 @@ export default function TodayPage() {
     const topic = nextTask?.kc_names?.[0] || nextTask?.title || data.plan?.goal || "";
     const tutorHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "tutor" }, data.plan?.kb_id) : `/tutor?problem=${encodeURIComponent(data.plan?.goal || "请描述你正在学习的问题")}`;
     const quizHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "practice" }, data.plan?.kb_id) : "/quiz";
-    const reviews = data.reviews?.items ?? [];
-    const reviewItems: TodayItem[] = reviews.slice(0, 2).map((review) => ({
-      id: `review-${review.error_item_id}`,
-      type: "review",
-      title: review.question.stem,
-      context: "今日到期复习",
-      duration: "约 10 分钟",
-      priority: "high",
-      dueLabel: "今日到期",
-      done: false,
-      review,
-      href: "/reviews",
-    }));
-    const planItems: TodayItem[] = [...todayTasks, ...overdueTasks]
-      .slice(0, Math.max(0, 5 - reviewItems.length))
-      .map((task, index) => {
-      const practice = task.action_type === "practice" || (!task.action_type && /练习|测验|测试|习题/.test(task.title));
-      const isOverdue = overdueKeys.has(task.task_key ?? "");
-      return {
-        id: `task-${task.task_key ?? `${task.day}-${index}`}`,
-        type: practice ? "practice" : "study",
-        title: task.title,
-        context: `${task.stage} · 第 ${task.day} 天`,
-        duration: `${task.minutes} 分钟`,
-        priority: !isOverdue && index === 0 ? "high" : "normal",
-        dueLabel: isOverdue ? "逾期" : "计划今日",
-        done: Boolean(task.done),
-        task,
-        href: taskExecutionHref(task, data.plan?.kb_id),
-      };
-    });
-    const completed = [...tasks].reverse().find((task) => task.done);
-    const completedItem: TodayItem[] = completed && reviewItems.length + planItems.length < 5 ? [{
-      id: `task-${completed.task_key ?? "completed"}`,
-      type: /练习|测验|测试|习题/.test(completed.title) ? "practice" : "study",
-      title: completed.title,
-      context: `${completed.stage} · 第 ${completed.day} 天`,
-      duration: `${completed.minutes} 分钟`,
-      priority: "normal",
-      done: true,
-      task: completed,
-      href: taskExecutionHref(completed, data.plan?.kb_id),
-    }] : [];
     const mastery = (data.profile?.mastery ?? []) as ScopedMastery[];
     const weak = [...mastery].filter((item) => item.p_mastery < 0.6).sort((a, b) => a.p_mastery - b.p_mastery)[0] ?? null;
     return {
@@ -219,13 +135,13 @@ export default function TodayPage() {
       topic,
       tutorHref,
       quizHref,
-      todos: [...reviewItems, ...planItems, ...completedItem],
-      totalDue: data.reviews?.total_due ?? reviews.length,
+      todos: today.todos,
+      totalDue: data.reviews?.total_due ?? data.reviews?.items?.length ?? 0,
       weak,
     };
   }, [data]);
 
-  const toggleTask = async (task: FlatTask) => {
+  const toggleTask = async (task: FlatPlanTask) => {
     if (!data?.plan || !task.task_key || togglingKey) return;
     const snapshot = data;
     setTogglingKey(task.task_key);

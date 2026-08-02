@@ -4,7 +4,7 @@
 // + 错题卡片列表（我的答案 vs 正确答案 / 解析 / 可改错因 / 变式重练 / 归档）+ 分页 + 空态。
 
 import Link from "next/link";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Card,
@@ -19,6 +19,7 @@ import {
 } from "@/components/common";
 import { ErrorImportDialog } from "@/components/errors/error-import-dialog";
 import { ApiError, apiJson } from "@/lib/api";
+import { buildErrorQuery, useKnowledgeBaseFilter } from "@/lib/error-filters";
 import { MathText } from "@/lib/katex";
 import type {
   ErrorItemOut,
@@ -80,21 +81,6 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
 };
 
 const PAGE_SIZE = 10;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function subscribeSearch(onStoreChange: () => void) {
-  window.addEventListener("popstate", onStoreChange);
-  return () => window.removeEventListener("popstate", onStoreChange);
-}
-
-function getSearch() {
-  return window.location.search;
-}
-
-function getServerSearch() {
-  return "";
-}
-
 /** 顶部统计卡片：state=null 表示"全部"。 */
 const STAT_CARDS: { key: string; label: string; state: string | null }[] = [
   { key: "total", label: "在库错题", state: null },
@@ -116,9 +102,6 @@ function StateBadge({ state }: { state: string }) {
 }
 
 export default function ErrorsPage() {
-  const search = useSyncExternalStore(subscribeSearch, getSearch, getServerSearch);
-  const rawUrlKbFilter = new URLSearchParams(search).get("kb_id");
-  const urlKbFilter = rawUrlKbFilter && UUID_RE.test(rawUrlKbFilter) ? rawUrlKbFilter : null;
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,8 +113,8 @@ export default function ErrorsPage() {
   const [causeFilter, setCauseFilter] = useState<string | null>(null);
   // B4 真实规模: 科目 tab 与全文搜索都走后端过滤，结果数和翻页保持一致。
   const [kbs, setKbs] = useState<KbOut[]>([]);
-  const [kbFilter, setKbFilter] = useState<string | null>(urlKbFilter);
   const [kbListLoaded, setKbListLoaded] = useState(false);
+  const { kbFilter, selectKb } = useKnowledgeBaseFilter(kbs, kbListLoaded);
   const [query, setQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -157,16 +140,16 @@ export default function ErrorsPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const params = new URLSearchParams({
-        page: String(page),
-        page_size: String(PAGE_SIZE),
+      const query = buildErrorQuery({
+        page,
+        pageSize: PAGE_SIZE,
+        state: stateFilter,
+        cause: causeFilter,
+        kbId: kbFilter,
+        query: searchQuery,
       });
-      if (stateFilter) params.set("state", stateFilter);
-      if (causeFilter) params.set("cause", causeFilter);
-      if (kbFilter) params.set("kb_id", kbFilter);
-      if (searchQuery) params.set("q", searchQuery);
       const [listRes, statsRes] = await Promise.allSettled([
-        apiJson<ErrorListResponse>(`/api/errors?${params.toString()}`),
+        apiJson<ErrorListResponse>(`/api/errors?${query}`),
         apiJson<ErrorStatsResponse>("/api/errors/stats"),
       ]);
       if (!alive) return;
@@ -210,27 +193,6 @@ export default function ErrorsPage() {
     };
   }, []);
 
-  // The URL is an input only at the navigation boundary.  Once the visible
-  // KB list is known, local state becomes the single request source.  This
-  // also makes popstate (back/forward) restore only an accessible KB id.
-  useEffect(() => {
-    if (!kbListLoaded) return;
-    const next = urlKbFilter && kbs.some((kb) => kb.id === urlKbFilter) ? urlKbFilter : null;
-    let active = true;
-    queueMicrotask(() => {
-      if (!active) return;
-      setKbFilter((previous) => {
-        if (previous === next) return previous;
-        setPage(1);
-        setLoading(true);
-        return next;
-      });
-    });
-    return () => {
-      active = false;
-    };
-  }, [kbListLoaded, kbs, urlKbFilter]);
-
   const reload = () => {
     setLoading(true);
     setError(null);
@@ -250,16 +212,9 @@ export default function ErrorsPage() {
   };
 
   const pickKb = (next: string | null) => {
-    setKbFilter(next);
+    selectKb(next);
     setPage(1);
     setLoading(true);
-    const params = new URLSearchParams(window.location.search);
-    if (next) params.set("kb_id", next);
-    else params.delete("kb_id");
-    const queryString = params.toString();
-    const href = `${window.location.pathname}${queryString ? `?${queryString}` : ""}`;
-    window.history.pushState({}, "", href);
-    window.dispatchEvent(new PopStateEvent("popstate"));
   };
 
   const patchItem = (id: string, patch: Partial<ErrorItemOut>) => {
