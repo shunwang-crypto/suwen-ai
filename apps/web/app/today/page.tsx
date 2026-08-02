@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
 import { apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -37,6 +38,27 @@ interface TodayItem {
   task?: FlatTask;
   review?: ReviewItem;
   href: string;
+}
+
+function taskExecutionHref(task: PlanTask, kbId?: string | null): string {
+  const topic = task.kc_names?.[0] || task.title;
+  const kb = kbId ? `&kb=${encodeURIComponent(kbId)}` : "";
+  const count = task.practice_count && task.practice_count >= 1 && task.practice_count <= 20 ? task.practice_count : 3;
+  const difficultyValue = task.difficulty && ["easy", "mid", "hard"].includes(task.difficulty) ? task.difficulty : "mid";
+  const difficulty = `&difficulty=${encodeURIComponent(difficultyValue)}`;
+  switch (task.action_type) {
+    case "practice":
+      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
+    case "read":
+      return task.resource?.url || (task.resource?.kb_id || kbId ? `/kb?kb=${encodeURIComponent(task.resource?.kb_id || kbId || "")}` : `/tutor?problem=${encodeURIComponent(task.objective || task.title)}`);
+    case "review_errors":
+      return kbId ? `/errors?kb_id=${encodeURIComponent(kbId)}` : "/errors";
+    case "mixed":
+      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
+    case "tutor":
+    default:
+      return `/tutor?problem=${encodeURIComponent(task.objective || task.title)}${kb}`;
+  }
 }
 
 function ArrowIcon() {
@@ -89,6 +111,8 @@ function EmptyToday() {
 export default function TodayPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
+  const [openTask, setOpenTask] = useState<PlanTaskLocation | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const [todosExpanded, setTodosExpanded] = useState(true);
   const [reminderExpanded, setReminderExpanded] = useState(false);
 
@@ -133,8 +157,8 @@ export default function TodayPage() {
     const stageDone = stageTasks.filter((task) => task.done).length;
     const stagePct = stageTasks.length ? Math.round((stageDone / stageTasks.length) * 100) : 0;
     const topic = nextTask?.kc_names?.[0] || nextTask?.title || data.plan?.goal || "";
-    const tutorHref = `/tutor?problem=${encodeURIComponent(nextTask?.title || data.plan?.goal || "请描述你正在学习的问题")}`;
-    const quizHref = topic ? `/quiz?topic=${encodeURIComponent(topic)}` : "/quiz";
+    const tutorHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "tutor" }, data.plan?.kb_id) : `/tutor?problem=${encodeURIComponent(data.plan?.goal || "请描述你正在学习的问题")}`;
+    const quizHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "practice" }, data.plan?.kb_id) : "/quiz";
     const reviews = data.reviews?.items ?? [];
     const reviewItems: TodayItem[] = reviews.slice(0, 2).map((review) => ({
       id: `review-${review.error_item_id}`,
@@ -149,8 +173,7 @@ export default function TodayPage() {
       href: "/reviews",
     }));
     const planItems: TodayItem[] = tasks.filter((task) => !task.done).slice(0, Math.max(0, 5 - reviewItems.length)).map((task, index) => {
-      const practice = /练习|测验|测试|习题/.test(task.title);
-      const taskTopic = task.kc_names?.[0] || task.title;
+      const practice = task.action_type === "practice" || (!task.action_type && /练习|测验|测试|习题/.test(task.title));
       return {
         id: `task-${task.task_key ?? `${task.day}-${index}`}`,
         type: practice ? "practice" : "study",
@@ -161,7 +184,7 @@ export default function TodayPage() {
         dueLabel: index === 0 ? "计划今日" : undefined,
         done: Boolean(task.done),
         task,
-        href: practice ? `/quiz?topic=${encodeURIComponent(taskTopic)}` : `/tutor?problem=${encodeURIComponent(task.title)}`,
+        href: taskExecutionHref(task, data.plan?.kb_id),
       };
     });
     const completed = tasks.filter((task) => task.done)[0];
@@ -174,7 +197,7 @@ export default function TodayPage() {
       priority: "normal",
       done: true,
       task: completed,
-      href: "/plans",
+      href: taskExecutionHref(completed, data.plan?.kb_id),
     }] : [];
     const mastery = (data.profile?.mastery ?? []) as ScopedMastery[];
     const weak = [...mastery].filter((item) => item.p_mastery < 0.6).sort((a, b) => a.p_mastery - b.p_mastery)[0] ?? null;
@@ -196,7 +219,17 @@ export default function TodayPage() {
 
   const toggleTask = async (task: FlatTask) => {
     if (!data?.plan || !task.task_key || togglingKey) return;
+    const snapshot = data;
     setTogglingKey(task.task_key);
+    setToggleError(null);
+    setData((current) => current ? {
+      ...current,
+      plan: current.plan ? {
+        ...current.plan,
+        progress: { ...current.plan.progress, done: current.plan.progress.done + (task.done ? -1 : 1), ratio: current.plan.progress.total ? (current.plan.progress.done + (task.done ? -1 : 1)) / current.plan.progress.total : 0 },
+        structure: { stages: current.plan.structure.stages.map((stage) => ({ ...stage, days: stage.days.map((day) => ({ ...day, tasks: day.tasks.map((item) => item.task_key === task.task_key ? { ...item, done: !task.done } : item) })) })) },
+      } : null,
+    } : current);
     try {
       const result = await apiJson<PlanToggleResult>(`/api/plans/${data.plan.id}/tasks/${task.task_key}/toggle`, { method: "POST", body: { done: !task.done } });
       setData((current) => {
@@ -218,6 +251,9 @@ export default function TodayPage() {
           },
         };
       });
+    } catch {
+      setData(snapshot);
+      setToggleError("任务状态更新失败，已恢复原状态");
     } finally {
       setTogglingKey(null);
     }
@@ -275,6 +311,8 @@ export default function TodayPage() {
         </div>
       </Panel>
 
+      {toggleError && <p role="alert" className="rounded-[8px] border border-danger-200 bg-danger-50 px-4 py-2 text-[11px] text-danger-700">{toggleError}</p>}
+
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Panel>
           <button type="button" onClick={() => setTodosExpanded((value) => !value)} className={`flex w-full items-center justify-between px-5 py-4 text-left ${todosExpanded ? "border-b border-line" : ""}`}>
@@ -292,17 +330,18 @@ export default function TodayPage() {
                     ) : <Link href={item.href} aria-label={`开始 ${item.title}`} className="h-[18px] w-[18px] shrink-0 rounded-[4px] border border-line-strong bg-white transition-colors hover:border-ink-muted" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}>{item.review ? <MathText text={item.title} /> : item.title}</p>
+                        {item.task ? <button type="button" onClick={() => setOpenTask({ task: item.task!, stageName: item.task!.stage, day: item.task!.day, planKbId: data.plan?.kb_id })} className={`min-w-0 truncate text-left text-[13px] font-medium hover:text-brand-700 ${item.done ? "text-ink-muted line-through" : "text-ink"}`}>{item.review ? <MathText text={item.title} /> : item.title}</button> : <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}>{item.review ? <MathText text={item.title} /> : item.title}</p>}
                         {item.dueLabel && !item.done && <span className="shrink-0 rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-semibold text-warning-700">{item.dueLabel}</span>}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-[10px] text-ink-muted"><span className="rounded-[3px] bg-[#f1f0ed] px-1.5 py-0.5 font-semibold text-ink-secondary">{item.type === "review" ? "复习" : item.type === "practice" ? "练习" : "学习"}</span><span className="truncate">{item.context}</span></div>
+                      {item.task && <p className="mt-1 truncate text-[10px] leading-4 text-ink-muted">目标：{item.task.objective || item.task.completion_criteria || "完成本任务并检查理解"}</p>}
                     </div>
                     <span className="shrink-0 text-[11px] text-ink-muted">{item.duration}</span>
-                    {!item.done && <Link href={item.href} className="hidden shrink-0 text-[11px] font-medium text-indigo-600 group-hover:inline-flex">开始 →</Link>}
+                    {!item.done && <Link href={item.href} className="inline-flex shrink-0 rounded-[7px] px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50">开始任务 →</Link>}
                   </li>
                 ))}
               </ul> : <p className="px-5 py-10 text-center text-[12px] text-ink-muted">今天没有待办，保持当前节奏即可。</p>}
-              {data.plan && <div className="flex items-center justify-between border-t border-line px-5 py-3 text-[11px] text-ink-muted"><span>来自「{data.plan.goal}」</span><Link href={`/plans?id=${data.plan.id}`} className="font-medium text-indigo-600 hover:underline">查看完整计划 →</Link></div>}
+              {data.plan && <div className="flex items-center justify-between border-t border-line px-5 py-3 text-[11px] text-ink-muted"><span>来自「{data.plan.goal}」· 最近创建的计划用于今日任务与自动调整</span><Link href={`/plans?id=${data.plan.id}`} className="font-medium text-indigo-600 hover:underline">查看完整计划 →</Link></div>}
             </>
           )}
         </Panel>
@@ -324,6 +363,7 @@ export default function TodayPage() {
           ) : <p className="px-5 py-8 text-center text-[12px] text-ink-muted">暂未发现需要优先加强的知识点。</p>}
         </Panel>
       </div>
+      {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} />}
     </div>
   );
 }

@@ -46,6 +46,8 @@ export function QuizForm({
   onSubmit,
   initialTopic,
   initialKbId,
+  initialQuestionCount,
+  initialDifficulty,
 }: {
   kbs: KbOut[];
   busy: boolean;
@@ -53,12 +55,15 @@ export function QuizForm({
   /** URL 预填（/quiz?topic=..&kb=..，对话页「考考我」chip 跳转）；变化时由调用方换 key 重挂载 */
   initialTopic?: string;
   initialKbId?: string;
+  initialQuestionCount?: number;
+  initialDifficulty?: "easy" | "mid" | "hard";
 }) {
   const [topic, setTopic] = useState(initialTopic ?? "");
   const [kbId, setKbId] = useState(initialKbId ?? "");
-  const [easy, setEasy] = useState(2);
-  const [mid, setMid] = useState(2);
-  const [hard, setHard] = useState(1);
+  const requestedCount = Math.max(1, Math.min(20, initialQuestionCount ?? 5));
+  const [easy, setEasy] = useState(initialDifficulty === "easy" ? requestedCount : initialDifficulty ? 0 : 2);
+  const [mid, setMid] = useState(initialDifficulty === "mid" ? requestedCount : initialDifficulty ? 0 : 2);
+  const [hard, setHard] = useState(initialDifficulty === "hard" ? requestedCount : initialDifficulty ? 0 : 1);
 
   const total = easy + mid + hard;
   const valid = topic.trim().length > 0 && total >= 1 && total <= 20;

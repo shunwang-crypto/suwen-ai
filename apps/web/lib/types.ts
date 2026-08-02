@@ -416,9 +416,17 @@ export interface GraphTraceData {
 
 export interface PlanTask {
   title: string;
+  objective?: string;
+  instructions?: string[];
+  completion_criteria?: string;
   minutes: number;
   kc_names: string[];
-  resource_ref: number | null;
+  resource_ref?: number | null;
+  resource_id?: string | null;
+  resource?: PlanResource | null;
+  action_type?: "read" | "practice" | "tutor" | "review_errors" | "mixed" | string;
+  practice_count?: number | null;
+  difficulty?: "easy" | "mid" | "hard" | string | null;
   /** 计划详情接口下发：stages/days/tasks 三层 0 基下标组成的任务键（前端只回传不自造） */
   task_key?: string;
   done?: boolean;
@@ -441,19 +449,26 @@ export interface PlanStructure {
 }
 
 export interface PlanResource {
-  type: string;
+  id?: string;
+  type?: string;
+  source_type?: "kb_chunk" | "web" | string;
   title: string;
+  kb_id?: string | null;
   url?: string;
-  doc_id?: string;
-  chunk_id?: string;
+  doc_id?: string | null;
+  chunk_id?: string | null;
+  created_at?: string;
 }
 
 export interface PlanListItem {
   id: string;
   goal: string;
   budget_hours: number;
+  kb_id?: string | null;
+  kb_name?: string | null;
   structure: PlanStructure | null;
   created_at: string;
+  is_current?: boolean;
 }
 
 /** 任务粒度完成进度（GET /api/plans/{id}）。 */
@@ -467,8 +482,11 @@ export interface PlanDetail {
   id: string;
   goal: string;
   budget_hours: number;
+  kb_id: string | null;
+  kb_name: string | null;
   version: number;
   structure: PlanStructure;
+  resources: PlanResource[];
   progress: PlanProgress;
   created_at: string;
 }
@@ -485,9 +503,15 @@ export interface PlanInsertedTask {
   day: number;
   stage_name: string;
   title: string;
+  objective?: string;
+  instructions?: string[];
+  completion_criteria?: string;
   minutes: number;
   kc_id: string;
   kc_names: string[];
+  action_type?: string;
+  practice_count?: number;
+  difficulty?: string | null;
   p_mastery: number;
 }
 

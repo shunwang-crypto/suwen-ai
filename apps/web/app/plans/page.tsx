@@ -25,6 +25,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
+import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
@@ -169,11 +170,13 @@ function withTaskDone(
 function PlanCalendar({
   structure,
   onToggle,
+  onTaskOpen,
   pendingKeys,
   highlightKeys,
 }: {
   structure: PlanStructure;
   onToggle?: (taskKey: string, done: boolean) => void;
+  onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
   pendingKeys?: Set<string>;
   highlightKeys?: Set<string>;
 }) {
@@ -196,7 +199,7 @@ function PlanCalendar({
             const done = Boolean(task.done);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><p className={`truncate text-[12px] ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} /></p><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
@@ -243,7 +246,7 @@ function PlanCalendar({
                               return (
                                 <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
                                   <input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-brand-600" />
-                                  <div className="min-w-0 flex-1"><p className={`text-[11px] leading-relaxed ${done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={task.title} /></p><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
+                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
                                 </li>
                               );
                             })}
@@ -540,6 +543,7 @@ export default function PlansPage() {
   const [adjustResult, setAdjustResult] = useState<PlanAdjustResult | null>(null);
   const [taskBanner, setTaskBanner] = useState<string | null>(null);
   const [detailKey, setDetailKey] = useState(0);
+  const [openTask, setOpenTask] = useState<PlanTaskLocation | null>(null);
 
   // 表单
   const [goal, setGoal] = useState("");
@@ -670,6 +674,7 @@ export default function PlansPage() {
     setAdjustResult(null);
     setHighlightKeys(new Set());
     setTaskBanner(null);
+    setOpenTask(null);
   };
 
   /** 任务勾选：乐观更新，失败整体回滚到上一份详情。 */
@@ -1004,7 +1009,7 @@ export default function PlansPage() {
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
                       <span className="block text-xs font-normal text-slate-400">
-                        每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
+                        {p.is_current ? "当前联动计划 · " : ""}每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
                       </span>
                     </button>
                   </li>
@@ -1046,7 +1051,7 @@ export default function PlansPage() {
                 }
                 extra={
                   <span className="text-xs text-slate-400">
-                    每日 {selected.budget_hours} 小时
+                    {selected.is_current ? "当前联动计划 · " : ""}每日 {selected.budget_hours} 小时
                   </span>
                 }
               >
@@ -1173,6 +1178,7 @@ export default function PlansPage() {
                     key={detail.id}
                     structure={detail.structure}
                     onToggle={(key, done) => void toggleTask(key, done)}
+                    onTaskOpen={(location) => setOpenTask({ ...location, planKbId: detail.kb_id })}
                     pendingKeys={pendingKeys}
                     highlightKeys={highlightKeys}
                   />
@@ -1182,6 +1188,8 @@ export default function PlansPage() {
                   <SkeletonList rows={4} />
                 )}
               </Card>
+
+              {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} />}
 
               <Card
                 title="调整历史"

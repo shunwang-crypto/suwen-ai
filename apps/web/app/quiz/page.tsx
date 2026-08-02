@@ -156,6 +156,11 @@ export default function QuizPage() {
   const urlParams = new URLSearchParams(search);
   const prefillTopic = urlParams.get("topic") ?? "";
   const prefillKb = urlParams.get("kb") ?? "";
+  const rawQuestionCount = Number(urlParams.get("count") ?? "");
+  const prefillQuestionCount = Number.isInteger(rawQuestionCount) && rawQuestionCount >= 1 && rawQuestionCount <= 20 ? rawQuestionCount : undefined;
+  const prefillDifficulty = ["easy", "mid", "hard"].includes(urlParams.get("difficulty") ?? "")
+    ? (urlParams.get("difficulty") as "easy" | "mid" | "hard")
+    : undefined;
   // /quiz?weak=1（画像页/学情报告页的「针对此点练习」）：高亮薄弱点定向出题卡片
   const fromWeakLink = urlParams.get("weak") === "1";
   // /quiz?kc=<KC名>&n=3（画像页「验证一下」，P2-6 可争辩画像）：
@@ -927,7 +932,7 @@ export default function QuizPage() {
 
             <details className="group rounded-[14px] border border-line bg-white" open={Boolean(prefillTopic || prefillKb)}>
               <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4"><div><h2 className="text-[13px] font-semibold text-ink">自定义练习</h2><p className="mt-0.5 text-[10px] text-ink-muted">自选主题、资料范围和难度，生成一组专属练习</p></div><span className="text-[11px] font-medium text-brand-700 group-open:hidden">展开设置⌄</span><span className="hidden text-[11px] font-medium text-brand-700 group-open:inline">收起设置⌃</span></summary>
-              <div className="border-t border-line p-5"><QuizForm key={`${prefillTopic}|${prefillKb}`} kbs={kbs} busy={busy} onSubmit={startQuiz} initialTopic={prefillTopic} initialKbId={prefillKb} /></div>
+              <div className="border-t border-line p-5"><QuizForm key={`${prefillTopic}|${prefillKb}|${prefillQuestionCount ?? ""}|${prefillDifficulty ?? ""}`} kbs={kbs} busy={busy} onSubmit={startQuiz} initialTopic={prefillTopic} initialKbId={prefillKb} initialQuestionCount={prefillQuestionCount} initialDifficulty={prefillDifficulty} /></div>
             </details>
 
             {phase === "await_confirm" && interruptData?.blueprint && (

@@ -4,7 +4,7 @@
 // + 错题卡片列表（我的答案 vs 正确答案 / 解析 / 可改错因 / 变式重练 / 归档）+ 分页 + 空态。
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import {
   Card,
@@ -80,6 +80,7 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
 };
 
 const PAGE_SIZE = 10;
+const emptySubscribe = () => () => {};
 
 /** 顶部统计卡片：state=null 表示"全部"。 */
 const STAT_CARDS: { key: string; label: string; state: string | null }[] = [
@@ -102,6 +103,8 @@ function StateBadge({ state }: { state: string }) {
 }
 
 export default function ErrorsPage() {
+  const search = useSyncExternalStore(emptySubscribe, () => window.location.search, () => "");
+  const urlKbFilter = new URLSearchParams(search).get("kb_id");
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,7 +148,7 @@ export default function ErrorsPage() {
       });
       if (stateFilter) params.set("state", stateFilter);
       if (causeFilter) params.set("cause", causeFilter);
-      if (kbFilter) params.set("kb_id", kbFilter);
+      if (kbFilter || urlKbFilter) params.set("kb_id", kbFilter || urlKbFilter || "");
       if (searchQuery) params.set("q", searchQuery);
       const [listRes, statsRes] = await Promise.allSettled([
         apiJson<ErrorListResponse>(`/api/errors?${params.toString()}`),
@@ -168,7 +171,7 @@ export default function ErrorsPage() {
     return () => {
       alive = false;
     };
-  }, [stateFilter, causeFilter, kbFilter, searchQuery, page, reloadKey]);
+  }, [stateFilter, causeFilter, kbFilter, urlKbFilter, searchQuery, page, reloadKey]);
 
   // 知识库列表 (科目 tab 数据源); 失败静默降级为"全部"单 tab, 不拖垮错题本
   useEffect(() => {
@@ -381,7 +384,7 @@ export default function ErrorsPage() {
           <div className="flex flex-wrap items-center gap-1.5">
             {[{ id: null, name: "全部科目" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
               (tab) => {
-                const on = kbFilter === tab.id;
+                const on = (kbFilter || urlKbFilter) === tab.id;
                 return (
                   <button
                     key={tab.id ?? "__all__"}
