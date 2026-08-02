@@ -34,6 +34,7 @@ DAY = "20260726"
 # 档位预扣额 (厘)
 EST_STANDARD = RESERVE_CNY_PER_TIER["standard"] * MICRO_PER_CNY  # 20
 EST_CHEAP = RESERVE_CNY_PER_TIER["cheap"] * MICRO_PER_CNY  # 5
+EST_PLAN = RESERVE_CNY_PER_TIER["plan"] * MICRO_PER_CNY  # 20
 
 
 @pytest.fixture
@@ -71,14 +72,16 @@ def make_guard(
     )
 
 
-def event(cost: float, mode: str = "live", user: str = "user-1") -> UsageEvent:
+def event(
+    cost: float, mode: str = "live", user: str = "user-1", tier: str = "standard"
+) -> UsageEvent:
     return UsageEvent(
         request_id="req-1",
         tenant_id="tenant-1",
         user_id=user,
         feature="chat",
         model="deepseek-chat",
-        tier="standard",
+        tier=tier,
         prompt_tokens=100,
         completion_tokens=100,
         cached_tokens=0,
@@ -186,6 +189,19 @@ async def test_settle_reconciles_reservation_delta(redis):
     await guard.precheck("tenant-1", "user-1", tier="standard")  # 预扣 20 厘
     # 实际成本 0.008 元 = 8 厘 -> 返还 12 厘
     await guard.settle(event(0.008), reserved_tier="standard")
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(8.0)
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(8.0)
+
+
+async def test_plan_reservation_and_settlement_use_plan_tier(redis):
+    guard, _ = make_guard(redis)
+    assert await guard.precheck("tenant-1", "user-1", tier="plan") is None
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(EST_PLAN)
+    assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(EST_PLAN)
+
+    # Actual plan cost is lower than its reservation; settle returns the
+    # difference while retaining the usage event's plan tier.
+    await guard.settle(event(0.008, tier="plan"), reserved_tier="plan")
     assert float(await redis.get(f"budget:user-1:{DAY}")) == pytest.approx(8.0)
     assert float(await redis.get(f"budget:global:{DAY}")) == pytest.approx(8.0)
 

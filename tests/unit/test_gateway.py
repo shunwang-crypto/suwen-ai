@@ -119,6 +119,66 @@ async def test_usage_sink_receives_event(tmp_path):
     assert e.prompt_tokens > 0
 
 
+async def test_plan_config_cost_budget_settlement_and_usage_tier(tmp_path, monkeypatch):
+    events: list[UsageEvent] = []
+    settlements: list[tuple[UsageEvent, str | None]] = []
+
+    class RecordingGuard:
+        def __init__(self):
+            self.prechecks: list[str] = []
+
+        async def precheck(self, tenant_id: str, user_id: str, tier: str = "standard"):
+            self.prechecks.append(tier)
+            return None
+
+        async def settle(self, event: UsageEvent, reserved_tier: str | None = None):
+            settlements.append((event, reserved_tier))
+
+    async def sink(event: UsageEvent) -> None:
+        events.append(event)
+
+    settings = make_settings(
+        tmp_path,
+        gateway_mode="live",
+        plan_api_key="plan-test-key",
+        plan_model="plan-test-model",
+        plan_input_price_per_m=1.0,
+        plan_output_price_per_m=2.0,
+    )
+    guard = RecordingGuard()
+    gw = OpenAIGateway(settings, usage_sink=sink, budget_guard=guard)
+
+    async def fake_call(request, tier):
+        cfg = settings.tier(tier.value)
+        return ChatResult(
+            text="计划回答",
+            model=cfg.model,
+            tier=tier.value,
+            prompt_tokens=1000,
+            completion_tokens=2000,
+            cost_cny=gw._cost(cfg, 1000, 2000),
+            latency_ms=1,
+            mode="live",
+        )
+
+    monkeypatch.setattr(gw, "_call_tier", fake_call)
+    result = await gw.chat(req("制定学习计划", tier=Tier.plan))
+
+    assert settings.tier("plan").model == "plan-test-model"
+    assert settings.tier("plan").input_price_per_m == 1.0
+    assert settings.tier("plan").output_price_per_m == 2.0
+    assert result.tier == Tier.plan.value
+    assert result.cost_cny == pytest.approx(0.005)
+    assert guard.prechecks == [Tier.plan.value]
+    assert len(settlements) == 1
+    settled_event, reserved_tier = settlements[0]
+    assert reserved_tier == Tier.plan.value
+    assert settled_event.tier == Tier.plan.value
+    assert settled_event.cost_cny == pytest.approx(0.005)
+    assert len(events) == 1
+    assert events[0].tier == Tier.plan.value
+
+
 async def test_live_without_keys_degrades_to_stub_in_dev(tmp_path):
     # live 模式但没有任何 API key: 链路全失败 -> 开发环境回退 stub (M1-D3 的最底层)
     settings = make_settings(

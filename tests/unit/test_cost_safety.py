@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway import BudgetExceeded, GatewayError, Tier
-from eduagents_core.gateway.openai_gateway import _DEGRADE
+from eduagents_core.gateway.openai_gateway import _DEGRADE, _TIER_RANK, _warn_if_upcost
 from eduagents_core.graphs.qa_graph import build_qa_graph
 from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
@@ -55,11 +55,47 @@ def test_worker_gateway_singleton_with_guard_and_sink(_reset_worker_gateway):
 
 
 def test_degrade_chain_never_upgrades_price():
-    rank = {Tier.cheap: 0, Tier.standard: 1, Tier.strong: 2}
+    generic_rank = {tier: rank for tier, rank in _TIER_RANK.items() if rank is not None}
     assert _DEGRADE[Tier.cheap] == [Tier.cheap]  # cheap 降级不得升价 5.7~23 倍
-    for requested, chain in _DEGRADE.items():
+    for requested in (Tier.cheap, Tier.standard, Tier.strong):
+        chain = _DEGRADE[requested]
         assert chain[0] == requested
-        assert all(rank[t] <= rank[requested] for t in chain)
+        assert all(generic_rank[t] <= generic_rank[requested] for t in chain)
+
+    # plan is an independent business tier, not a claim that its dedicated
+    # provider is always more expensive than strong. Its fallback path is an
+    # explicit contract and must be reviewed as a whole when changed.
+    assert _TIER_RANK[Tier.plan] is None
+    assert _DEGRADE[Tier.plan] == [Tier.plan, Tier.strong, Tier.standard, Tier.cheap]
+
+
+def test_plan_fallback_cost_warning_uses_active_prices(monkeypatch):
+    from eduagents_core.gateway import openai_gateway
+
+    settings = Settings(
+        _env_file=None,
+        plan_input_price_per_m=1.0,
+        plan_output_price_per_m=2.0,
+        strong_input_price_per_m=4.0,
+        strong_output_price_per_m=16.0,
+        standard_input_price_per_m=2.0,
+        standard_output_price_per_m=8.0,
+    )
+    warnings: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        openai_gateway.log,
+        "warning",
+        lambda event, **fields: warnings.append((event, fields)),
+    )
+
+    _warn_if_upcost(settings, Tier.plan, Tier.strong)
+    assert len(warnings) == 1  # strong output is more expensive in current config
+    assert warnings[0][0] == "degraded_upcost"
+    assert warnings[0][1]["comparable_rank"] is False
+
+    warnings.clear()
+    _warn_if_upcost(settings, Tier.plan, Tier.cheap)
+    assert warnings == []  # cheap is below plan in both configured units
 
 
 # ---------- qa_graph: BudgetExceeded 冒头 (P1-9) ----------

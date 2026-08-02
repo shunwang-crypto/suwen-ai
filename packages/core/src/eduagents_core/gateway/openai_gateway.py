@@ -54,19 +54,43 @@ _DEGRADE: dict[Tier, list[Tier]] = {
     Tier.plan: [Tier.plan, Tier.strong, Tier.standard, Tier.cheap],
 }
 
-# 档位价格序 (P1-10 升价降级告警用): 任何未来改动 _DEGRADE 引入"降级到更贵档"
-# 都会打出 degraded_upcost 告警, 供成本看板报警。
-_TIER_RANK: dict[Tier, int] = {
+# 档位序只表达 generic cheap/standard/strong 的历史顺序，供审计和契约检查。
+# plan 是独立业务档，不能用静态序号假定它总比 strong 贵；实际是否升价由
+# 当前配置的输入/输出单价判断。
+_TIER_RANK: dict[Tier, int | None] = {
     Tier.cheap: 0,
     Tier.standard: 1,
     Tier.strong: 2,
-    Tier.plan: 3,
+    Tier.plan: None,
 }
 
 
-def _warn_if_upcost(requested: Tier, used: Tier) -> None:
-    if _TIER_RANK[used] > _TIER_RANK[requested]:
-        log.warning("degraded_upcost", requested=requested.value, used=used.value)
+def _warn_if_upcost(settings: Settings, requested: Tier, used: Tier) -> None:
+    """Warn when fallback can cost more under the active provider config.
+
+    A plan fallback crosses a provider/business boundary, so its cost cannot
+    be inferred from the generic tier ordinal. Comparing both token prices and
+    warning when either is higher is conservative: no possible up-cost is
+    silently treated as safe.
+    """
+    if requested == used:
+        return
+    requested_cfg = settings.tier(requested.value)
+    used_cfg = settings.tier(used.value)
+    input_upcost = used_cfg.input_price_per_m > requested_cfg.input_price_per_m
+    output_upcost = used_cfg.output_price_per_m > requested_cfg.output_price_per_m
+    if input_upcost or output_upcost:
+        log.warning(
+            "degraded_upcost",
+            requested=requested.value,
+            used=used.value,
+            requested_input_price_per_m=requested_cfg.input_price_per_m,
+            requested_output_price_per_m=requested_cfg.output_price_per_m,
+            used_input_price_per_m=used_cfg.input_price_per_m,
+            used_output_price_per_m=used_cfg.output_price_per_m,
+            comparable_rank=_TIER_RANK[requested] is not None
+            and _TIER_RANK[used] is not None,
+        )
 
 
 class OpenAIGateway:
@@ -368,7 +392,7 @@ class OpenAIGateway:
                 breaker.record(True)
                 if result.degraded:
                     log.warning("tier_degraded", requested=req.tier.value, used=tier.value)
-                    _warn_if_upcost(req.tier, tier)
+                    _warn_if_upcost(self._s, req.tier, tier)
                 return result
             except Exception as exc:  # noqa: BLE001 — 每个 provider 失败都要继续降级链
                 breaker.record(False)
@@ -427,7 +451,7 @@ class OpenAIGateway:
                             yield StreamDelta(delta)
                     breaker.record(True)
                     if tier != req.tier:
-                        _warn_if_upcost(req.tier, tier)
+                        _warn_if_upcost(self._s, req.tier, tier)
                     text = "".join(parts)
                     if not p_tok:
                         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
