@@ -241,8 +241,10 @@ class FaultsIn(BaseModel):
     provider_down: bool | None = None
     latency_ms: int | None = Field(default=None, ge=0, le=30_000)
     error_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    # 一键熔断: 直接把断路器拉开 (不必等错误率累积), "all" = 三档全开
-    trip_breaker: str | None = Field(default=None, pattern="^(cheap|standard|strong|all)$")
+    # 一键熔断: 直接把断路器拉开 (不必等错误率累积), "all" = 全档打开
+    trip_breaker: str | None = Field(
+        default=None, pattern="^(cheap|standard|strong|plan|all)$"
+    )
     reset_breakers: bool = False
 
 

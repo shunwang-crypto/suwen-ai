@@ -88,10 +88,15 @@ API/Worker 只使用 `edu_app` 的表级 DML 权限，不会在启动时执行 D
 
 ### 双供应商内测配置
 
-约 10 人内测时，推荐让 `cheap` 指向硅基流动，承载高频对话；让 `standard`
-和 `strong` 指向 DeepSeek，承载规划和结构化任务。`strong` 暂时可以与
-`standard` 使用同一模型和密钥。档位由业务代码选择，环境变量只决定每个档位的
-实际供应商和模型，不会改变功能路由。
+约 10 人内测时，推荐让 `cheap`、`standard` 和 `strong` 指向硅基流动，分别承载
+高频对话、结构化任务和通用复杂任务；让独立的 `plan` 档指向 DeepSeek，只承载
+学习计划的目标解析、诊断补全和计划草拟。`VISION_MODEL` 复用 `standard` 的供应商
+地址和密钥，因此应填写同一硅基流动账户中真实支持图片输入的模型 ID。
+
+计划档的环境变量是 `PLAN_API_KEY`、`PLAN_BASE_URL`、`PLAN_MODEL`、
+`PLAN_INPUT_PRICE_PER_M` 和 `PLAN_OUTPUT_PRICE_PER_M`。DeepSeek 计划调用失败时会依次
+降级到硅基流动的 `strong`、`standard` 和 `cheap`，保证上游短暂故障不会直接阻断
+计划功能；降级后的实际模型仍会如实写入用量记录。
 
 模型账户中的赠送余额不是模型单价。`*_INPUT_PRICE_PER_M` 与
 `*_OUTPUT_PRICE_PER_M` 必须填写所选模型的真实人民币价格，单位均为“元/百万

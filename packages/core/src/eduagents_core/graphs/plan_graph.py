@@ -87,7 +87,7 @@ async def _chat_json(
     tier: Tier,
     temperature: float = 0.2,
 ) -> dict[str, Any] | None:
-    """cheap/standard 档 json_mode 调用: 解析失败自动重试一次, 仍失败返回 None (调用方降级)。"""
+    """计划专用档 json_mode 调用: 解析失败自动重试一次, 仍失败返回 None (调用方降级)。"""
     request = ChatRequest(
         messages=(ChatMessage(role="user", content=prompt),),
         tier=tier,
@@ -355,7 +355,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         goal = state.get("goal", "")
         prompt = _load_prompt("plan_parse_goal.md").replace("{{GOAL}}", goal)
         data = await _chat_json(
-            deps, state, feature="plan_parse_goal", prompt=prompt, tier=Tier.cheap, temperature=0.0
+            deps, state, feature="plan_parse_goal", prompt=prompt, tier=Tier.plan, temperature=0.0
         )
         parsed = {"subject": "", "key_topics": [], "level_hint": ""}
         degraded = data is None
@@ -406,7 +406,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{LEVEL_HINT}}", parsed.get("level_hint") or "(未提供)")
         )
         data = await _chat_json(
-            deps, state, feature="plan_diagnose", prompt=prompt, tier=Tier.cheap, temperature=0.0
+            deps, state, feature="plan_diagnose", prompt=prompt, tier=Tier.plan, temperature=0.0
         )
         raw = data.get("diagnosis") if isinstance(data, dict) else None
         llm_est: dict[str, float] = {}
@@ -504,7 +504,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{KC_ORDER}}", " -> ".join(kc_order) or "(无硬性先后约束)")
         )
         data = await _chat_json(
-            deps, state, feature="plan_draft", prompt=prompt, tier=Tier.standard, temperature=0.4
+            deps, state, feature="plan_draft", prompt=prompt, tier=Tier.plan, temperature=0.4
         )
         fixes: list[dict] = []
         plan = _coerce_plan(data)

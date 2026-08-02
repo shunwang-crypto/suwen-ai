@@ -160,7 +160,7 @@ async def usage_overview(
         ).all():
             savings_calls += int(calls)
             savings_tokens += int(cached_tokens)
-            if tier_name in ("cheap", "standard", "strong"):
+            if tier_name in ("cheap", "standard", "strong", "plan"):
                 saved_cny += (
                     int(cached_tokens) / 1e6 * settings.tier(tier_name).output_price_per_m
                 )

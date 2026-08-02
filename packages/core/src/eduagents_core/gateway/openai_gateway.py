@@ -45,16 +45,23 @@ _RETRYABLE = (APIConnectionError, APITimeoutError, RateLimitError, InternalServe
 
 # Degradation chain per requested tier: real different endpoints, tried in order.
 # P1-10: cheap 不得降级到 standard (降级即涨价 5.7~23 倍, 高峰抖动时成本反向放大);
-# cheap 失败直接走 cassette/stub 兜底。standard/strong 链只降不升。
+# cheap 失败直接走 cassette/stub 兜底。standard/strong 链只降不升；plan 是
+# 独立业务档，DeepSeek 不可用时回退到通用 strong/standard/cheap 档。
 _DEGRADE: dict[Tier, list[Tier]] = {
     Tier.cheap: [Tier.cheap],
     Tier.standard: [Tier.standard, Tier.cheap],
     Tier.strong: [Tier.strong, Tier.standard, Tier.cheap],
+    Tier.plan: [Tier.plan, Tier.strong, Tier.standard, Tier.cheap],
 }
 
 # 档位价格序 (P1-10 升价降级告警用): 任何未来改动 _DEGRADE 引入"降级到更贵档"
 # 都会打出 degraded_upcost 告警, 供成本看板报警。
-_TIER_RANK: dict[Tier, int] = {Tier.cheap: 0, Tier.standard: 1, Tier.strong: 2}
+_TIER_RANK: dict[Tier, int] = {
+    Tier.cheap: 0,
+    Tier.standard: 1,
+    Tier.strong: 2,
+    Tier.plan: 3,
+}
 
 
 def _warn_if_upcost(requested: Tier, used: Tier) -> None:
@@ -162,7 +169,7 @@ class OpenAIGateway:
         return self._breakers[tier].state.value
 
     def breaker_states(self) -> dict[str, str]:
-        """三档位熔断器快照 (admin 故障注入面板展示用)。"""
+        """全部档位的熔断器快照 (admin 故障注入面板展示用)。"""
         return {t.value: self._breakers[t].state.value for t in Tier}
 
     def trip_breaker(self, tier: Tier) -> None:

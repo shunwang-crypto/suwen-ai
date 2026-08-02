@@ -1093,7 +1093,7 @@ export interface FaultPatch {
   provider_down?: boolean;
   latency_ms?: number;
   error_rate?: number;
-  trip_breaker?: "cheap" | "standard" | "strong" | "all";
+  trip_breaker?: "cheap" | "standard" | "strong" | "plan" | "all";
   reset_breakers?: boolean;
 }
 

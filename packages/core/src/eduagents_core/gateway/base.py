@@ -10,6 +10,7 @@ class Tier(StrEnum):
     cheap = "cheap"
     standard = "standard"
     strong = "strong"
+    plan = "plan"
 
 
 class GatewayError(Exception):

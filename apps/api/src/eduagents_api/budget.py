@@ -7,8 +7,9 @@
 precheck 顺序 (单个 Lua 脚本内原子完成, P1-12):
 1. 全局硬限: ≥150% 全档拒绝 (含 admin, 全站熔断); ≥100% 拒非 admin;
    ≥80% 全站强制 cheap;
-2. 用户三档: ≥100% 抛 BudgetExceeded / ≥80% 返回 "cheap" / 否则放行;
-3. 通过后按档位定额**原子预扣**估算额 (cheap 0.005 / standard 0.02 / strong 0.05 元),
+2. 用户档位: ≥100% 抛 BudgetExceeded / ≥80% 返回 "cheap" / 否则放行;
+3. 通过后按档位定额**原子预扣**估算额 (cheap 0.005 / standard 0.02 /
+   strong 0.05 / plan 0.02 元),
    同时打进用户键与全局键 — 并发下不再有 "都读到 spent=0" 的 check-then-act 竞态。
 settle 按实际成本与预扣差额结算 (delta 可负 = 返还); 调用失败时网关以零成本事件
 整额返还。用户键与全局键在同一 pipeline 内更新 (P0-2b)。
@@ -48,6 +49,7 @@ RESERVE_CNY_PER_TIER: dict[str, float] = {
     "cheap": 0.005,
     "standard": 0.02,
     "strong": 0.05,
+    "plan": 0.02,
 }
 
 # 单个 Lua 脚本原子完成 检查(全局→用户) + 预扣(用户键+全局键)。

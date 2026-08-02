@@ -170,6 +170,14 @@ class Settings(BaseSettings):
     strong_input_price_per_m: float = 4.0
     strong_output_price_per_m: float = 16.0
 
+    # Learning plans use a dedicated provider instead of sharing the generic
+    # strong tier with thinking chat and other complex tasks.
+    plan_api_key: str = ""
+    plan_base_url: str = "https://api.deepseek.com"
+    plan_model: str = "deepseek-chat"
+    plan_input_price_per_m: float = 1.0
+    plan_output_price_per_m: float = 2.0
+
     # --- observability: Langfuse (M3-D1) ---
     # 三项齐全才启用; 未启用时不 import langfuse, 热路径零额外开销
     langfuse_public_key: str = ""
