@@ -139,14 +139,16 @@ python -m compileall -q packages apps tests alembic
 生产环境必须使用 `APP_ENV=prod`，并按部署手册配置真实密钥、对象存储、备份和 TLS。
 历史运行数据、演示账号、录制磁带、截图和评测输出已在上线前清除；新的生产验收证据必须针对明确日期和环境重新生成。
 
-### 公网注册与 Resend SMTP
+### 注册模式与 Resend SMTP
 
-公网注册先通过图形验证码（防机器人），再通过邮箱验证码（证明邮箱所有权）；普通登录不要求
-每次输入邮箱验证码。公开注册只创建 `student`，教师和管理员必须通过受控流程创建。生产使用
+注册模式由唯一配置 `REGISTRATION_MODE` 控制：`closed` 关闭公开注册，`invite` 要求邮箱验证码
+和管理员发出的独立邀请码，`open` 只要求邮箱验证码。切换模式不会删除历史邀请码记录。
+图形验证码用于防机器人，邮箱验证码用于证明邮箱所有权；普通登录不要求每次输入邮箱验证码。
+公开入口只创建 `student`，教师和管理员必须通过受控流程创建。生产使用
 已验证域名的 Resend SMTP：主机 `smtp.resend.com`、用户 `resend`、API Key 作为
 `SMTP_PASSWORD`，发件地址使用 `noreply@mail.adfgt.xyz` 或同一 Verified 域名下的地址，
 并配置 `SMTP_REPLY_TO`。真实 Key 只存在服务器 Secrets 或未提交的 `.env`，不要写入代码、
-测试、日志或文档；建议同时配置 SPF、DKIM 和 DMARC。生产公开注册缺少 SMTP 时 API 拒绝启动。
+测试、日志或文档；建议同时配置 SPF、DKIM 和 DMARC。`invite`/`open` 模式缺少 SMTP 时 API 拒绝启动。
 
 ## 文档导航
 

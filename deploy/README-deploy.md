@@ -73,7 +73,7 @@ openssl rand -hex 32  # 为数据库应用密码、迁移密码、Redis、MinIO�
 | `MIGRATION_DATABASE_URL` | 只供一次性 migration job，应用进程不可持有 |
 | Redis/Qdrant/MinIO | 使用生产地址、认证、TLS/网络隔离和独立凭据 |
 | `WEB_ORIGIN` | 精确生产 HTTPS 域名 |
-| PUBLIC_REGISTRATION | 生产公开注册开启时必须配合邮箱所有权验证；关闭时接口明确返回 `REGISTRATION_CLOSED` |
+| `REGISTRATION_MODE` | `closed` 关闭公开注册；`invite` 要求邮箱验证码和独立邀请码；`open` 只要求邮箱验证码。生产显式设置，默认不开放 |
 | SMTP_HOST/PORT/USER/PASSWORD/FROM | Resend SMTP：`smtp.resend.com:465`、用户 `resend`、API Key 作为密码；发件人使用已验证 `mail.adfgt.xyz` 域名 |
 | SMTP_REPLY_TO | 服务器端真实联系邮箱；邮件使用 `Reply-To`，不要写进 Git |
 | 配额和预算 | 根据套餐、供应商限额和压测结果设定 |
@@ -100,7 +100,7 @@ file being validated.
 
 脚本只做本机发布编排：校验配置、构建 API/Worker/Web 镜像、启动基础设施、执行一次
 `alembic upgrade head`，再启动并等待 API、Worker、Web、Caddy 健康。它不会运行 `make seed`。
-若 `PUBLIC_REGISTRATION=false`，首个管理员只能在服务器上通过交互式一次性流程创建：
+若 `REGISTRATION_MODE=closed`，首个管理员只能在服务器上通过交互式一次性流程创建：
 
 ~~~bash
 docker compose --env-file .env.production \

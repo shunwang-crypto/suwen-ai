@@ -18,8 +18,9 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/auth/captcha | 获取一次性图形验证码；用于防机器人 |
-| POST | /api/auth/register/email-code | `{email, captcha_id, captcha_answer}`；通过图形验证码后发送 6 位邮箱验证码，202；邮箱 60 秒冷却、分钟/日限额 |
-| POST | /api/auth/register | 生产公开注册必须带 `{email, email_code, password≥8, display_name?}` → 201 UserOut；新用户固定 `student` 且 `email_verified_at` 非空，重复 409 EMAIL_EXISTS |
+| GET | /api/config/public | 返回非敏感 `registration_mode`（`closed`/`invite`/`open`）和邮箱验证要求 |
+| POST | /api/auth/register/email-code | `closed` 返回 `REGISTRATION_CLOSED`；其他模式接受 `{email, captcha_id, captcha_answer}`，通过图形验证码后发送 6 位邮箱验证码，202；邮箱 60 秒冷却、分钟/日限额 |
+| POST | /api/auth/register | `closed` 返回 `REGISTRATION_CLOSED`；`invite` 必须带 `{email, email_code, invite_code, password≥8, display_name?}`；`open` 忽略 `invite_code`。成功 → 201 UserOut；新用户固定 `student` 且 `email_verified_at` 非空，重复 409 EMAIL_EXISTS |
 | POST | /api/auth/login | → {access_token, expires_at} + httpOnly refresh cookie（path=/api/auth） |
 | POST | /api/auth/refresh | cookie 轮换；旧 token 重放 → 401 并撤销该用户全部 refresh token |
 | POST | /api/auth/logout | (用户) access jti 进 Redis 黑名单 + 撤销 refresh + 清 cookie → 204 |
@@ -36,7 +37,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 验证码、有效期和忽略提示，不含密码或系统敏感信息。
 
 认证错误码还包括 `EMAIL_CODE_REQUIRED`、`EMAIL_CODE_INVALID`、`EMAIL_CODE_RATE_LIMITED`、
-`CAPTCHA_REQUIRED`、`CAPTCHA_INVALID`、`EMAIL_EXISTS` 和 `REGISTRATION_CLOSED`；错误统一使用
+`CAPTCHA_REQUIRED`、`CAPTCHA_INVALID`、`EMAIL_EXISTS`、`INVITE_CODE_INVALID` 和 `REGISTRATION_CLOSED`；错误统一使用
 `{code, message, request_id}`。生产使用 Resend SMTP：`smtp.resend.com:465`、用户 `resend`、
 服务器 Secrets 中的 API Key 作为 `SMTP_PASSWORD`，发件人必须是已验证的
 `@mail.adfgt.xyz` 地址，并建议配置 `SMTP_REPLY_TO`。

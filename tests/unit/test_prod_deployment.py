@@ -62,7 +62,8 @@ def test_deploy_requires_clean_tracked_tree_and_reports_release_identity():
     assert 'commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"' in DEPLOY
     assert 'image_tag="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"' in DEPLOY
     assert "SMTP_REPLY_TO" in DEPLOY
-    assert "PUBLIC_REGISTRATION=false" in DEPLOY
+    assert "REGISTRATION_MODE" in DEPLOY
+    assert "PUBLIC_REGISTRATION is obsolete" in DEPLOY
     assert "EMAIL_VERIFICATION_REQUIRED=true" in DEPLOY
 
 

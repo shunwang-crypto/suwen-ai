@@ -74,14 +74,15 @@ key 越权。
 ### 认证邮件与生产密钥
 
 - 图形验证码用于防机器人，邮箱验证码用于证明邮箱所有权；普通登录不要求邮箱验证码。
-- 生产公开注册缺少 SMTP 时启动失败，不会回退 `DevEmailSender`；找回密码继续复用同一
+- 生产 `REGISTRATION_MODE=invite|open` 缺少 SMTP 时启动失败，不会回退 `DevEmailSender`；找回密码继续复用同一
   `EmailSender`，并保持恒定防枚举响应。
 - Resend 使用 SMTP：主机 `smtp.resend.com`、用户 `resend`、API Key 仅作为服务器端
   `SMTP_PASSWORD`。发件人必须来自 Verified 的 `mail.adfgt.xyz` 域名，建议配置 SPF、DKIM、
   DMARC 和 `SMTP_REPLY_TO`。
 - 日志只写收件邮箱哈希、事件和异常类型，不写收件人明文、验证码、Key、密码、重置链接或
   完整正文；测试只使用 fake sender。
-- 公开注册只创建 `student`；教师和管理员通过受控流程产生。
+- 公开注册和邀请码注册只创建 `student`；教师和管理员通过受控流程产生。邀请码只保存安全哈希，
+  原文仅在管理员创建响应中返回一次。
 
 - 发送给模型的内容应限于当前任务需要的消息、检索片段和定性画像。
 - 掌握度精确小数不进入第三方 LLM；提示中使用定性档位。
