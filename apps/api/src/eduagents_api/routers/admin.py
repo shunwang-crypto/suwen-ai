@@ -539,7 +539,8 @@ class FaultsIn(BaseModel):
     error_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     # 一键熔断: 直接把断路器拉开 (不必等错误率累积), "all" = 全档打开
     trip_breaker: str | None = Field(
-        default=None, pattern="^(cheap|standard|strong|plan|all)$"
+        default=None,
+        pattern="^(cheap|standard|strong|plan|opencode-text|siliconflow-text|opencode-vision|siliconflow-vision|deepseek-plan|opencode-plan|siliconflow-plan|all)$",
     )
     reset_breakers: bool = False
 
@@ -548,14 +549,22 @@ def _faults_payload(request: Request) -> dict:
     injector = get_fault_injector()
     gateway = getattr(request.app.state, "gateway", None)
     if gateway is not None and hasattr(gateway, "breaker_states"):
-        states = gateway.breaker_states()
+        all_states = gateway.breaker_states()
+        # Keep the original four-item `breakers` contract stable. New
+        # candidate-level state is exposed in the additive `routing` field.
+        states = {tier.value: all_states.get(tier.value, "unknown") for tier in Tier}
     else:  # 网关未就绪 (极早期/测试替身): 如实报 unknown, 不假装 closed
         states = {t.value: "unknown" for t in Tier}
+    routing = gateway.routing_status() if gateway is not None and hasattr(gateway, "routing_status") else []
     return {
         **injector.snapshot(),
         "gateway_mode": get_settings().gateway_mode,
         "note": _FAULT_NOTE,
-        "breakers": [{"tier": tier, "state": state} for tier, state in states.items()],
+        "breakers": [
+            {"tier": tier, "candidate_id": tier, "state": state}
+            for tier, state in states.items()
+        ],
+        "routing": routing,
     }
 
 
@@ -583,7 +592,14 @@ async def set_faults(
     if body.reset_breakers and gateway is not None and hasattr(gateway, "reset_breakers"):
         gateway.reset_breakers()
     if body.trip_breaker and gateway is not None and hasattr(gateway, "trip_breaker"):
-        tiers = list(Tier) if body.trip_breaker == "all" else [Tier(body.trip_breaker)]
-        for tier in tiers:
-            gateway.trip_breaker(tier)
+        if body.trip_breaker == "all":
+            for tier in Tier:
+                gateway.trip_breaker(tier)
+            for row in getattr(gateway, "routing_status", lambda: [])():
+                if hasattr(gateway, "trip_candidate"):
+                    gateway.trip_candidate(str(row["id"]))
+        elif body.trip_breaker in {tier.value for tier in Tier}:
+            gateway.trip_breaker(Tier(body.trip_breaker))
+        elif hasattr(gateway, "trip_candidate"):
+            gateway.trip_candidate(body.trip_breaker)
     return _faults_payload(request)

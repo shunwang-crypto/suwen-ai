@@ -27,6 +27,7 @@ from ..observability import observe_generation
 from .base import (
     BudgetExceeded,
     BudgetGuard,
+    ChatMessage,
     ChatRequest,
     ChatResult,
     CredentialResolver,
@@ -42,6 +43,12 @@ from .base import (
 from .circuit import CircuitBreaker
 from .faults import FaultInjector, get_fault_injector
 from .recorder import Cassette
+from .routing import (
+    BusinessRoute,
+    ProviderCandidate,
+    configured_candidates,
+    route_candidates,
+)
 from .stub import estimate_tokens, stub_text
 
 log = get_logger("gateway")
@@ -67,6 +74,17 @@ _TIER_RANK: dict[Tier, int | None] = {
     Tier.standard: 1,
     Tier.strong: 2,
     Tier.plan: None,
+}
+
+_ROUTING_RETRYABLE_CODES = {
+    "PROVIDER_UNAVAILABLE",
+    "MODEL_UNAVAILABLE",
+    "MODEL_NOT_FOUND",
+    "NO_API_KEY",
+    "PUBLIC_AUTH_UNAVAILABLE",
+    "UPSTREAM_UNAVAILABLE",
+    "UPSTREAM_TIMEOUT",
+    "UPSTREAM_RATE_LIMITED",
 }
 
 
@@ -123,6 +141,7 @@ class OpenAIGateway:
         self._faults = faults or get_fault_injector()
         self._cassette = Cassette(settings.gateway_cassette_dir)
         self._clients: dict[Tier, AsyncOpenAI] = {}
+        self._candidate_clients: dict[str, AsyncOpenAI] = {}
         self._breakers: dict[Tier, CircuitBreaker] = {
             t: CircuitBreaker(
                 window_seconds=settings.breaker_window_seconds,
@@ -132,6 +151,22 @@ class OpenAIGateway:
             )
             for t in Tier
         }
+        self._candidate_breakers: dict[str, CircuitBreaker] = {
+            candidate.id: self._new_breaker()
+            for route in BusinessRoute
+            for candidate in configured_candidates(settings, route)
+        }
+        self._candidate_failures: dict[str, str | None] = {
+            candidate_id: None for candidate_id in self._candidate_breakers
+        }
+
+    def _new_breaker(self) -> CircuitBreaker:
+        return CircuitBreaker(
+            window_seconds=self._s.breaker_window_seconds,
+            min_samples=self._s.breaker_min_samples,
+            failure_rate=self._s.breaker_failure_rate,
+            open_seconds=self._s.breaker_open_seconds,
+        )
 
     # ---------- public API ----------
 
@@ -160,6 +195,22 @@ class OpenAIGateway:
             user_request = (
                 credential is not None and credential.source == CredentialSource.user
             )
+            if self._routing_for_request(req):
+                try:
+                    result = await self._live_chat(
+                        req,
+                        started,
+                        credential=credential,
+                        allow_cassette=False,
+                    )
+                except BaseException:
+                    raise
+                await self._emit_usage(
+                    req,
+                    result,
+                    reserved_tier=result.reserved_tier,
+                )
+                return result
             req, reserved_tier = await self._budget_precheck(
                 req, skip=user_request
             )
@@ -232,6 +283,10 @@ class OpenAIGateway:
             async for item in self._live_user_stream(req, credential):
                 yield item
             return
+        if self._routing_for_request(req):
+            async for item in self._routed_stream(req):
+                yield item
+            return
         req, reserved_tier = await self._budget_precheck(req)
         inner = self._live_stream(
             req,
@@ -252,30 +307,75 @@ class OpenAIGateway:
         return self._breakers[tier].state.value
 
     def breaker_states(self) -> dict[str, str]:
-        """全部档位的熔断器快照 (admin 故障注入面板展示用)。"""
-        return {t.value: self._breakers[t].state.value for t in Tier}
+        """Return legacy tier aliases plus safe candidate breaker states."""
+        states = {t.value: self._breakers[t].state.value for t in Tier}
+        states.update(
+            {candidate_id: breaker.state.value for candidate_id, breaker in self._candidate_breakers.items()}
+        )
+        return states
 
     def trip_breaker(self, tier: Tier) -> None:
         """M5-D2: 一键熔断某一档 (不真的打 provider, 直接把断路器拉开)。"""
         self._breakers[tier].trip()
         log.warning("breaker_tripped_manually", tier=tier.value)
 
+    def trip_candidate(self, candidate_id: str) -> None:
+        breaker = self._candidate_breakers.get(candidate_id)
+        if breaker is None:
+            raise ValueError("unknown provider candidate")
+        breaker.trip()
+        log.warning("candidate_breaker_tripped_manually", candidate_id=candidate_id)
+
     def reset_breakers(self) -> None:
         for breaker in self._breakers.values():
             breaker.reset()
+        for breaker in self._candidate_breakers.values():
+            breaker.reset()
+        for candidate_id in self._candidate_failures:
+            self._candidate_failures[candidate_id] = None
         log.warning("breakers_reset_manually")
+
+    def routing_status(self) -> list[dict[str, object]]:
+        """Safe candidate status for operators; never includes key or request data."""
+        rows: list[dict[str, object]] = []
+        for route in BusinessRoute:
+            for candidate in configured_candidates(self._s, route):
+                breaker = self._candidate_breakers[candidate.id]
+                rows.append(
+                    {
+                        "id": candidate.id,
+                        "route": route.value,
+                        "provider": candidate.provider,
+                        "model": candidate.model,
+                        "configured": candidate.configured,
+                        "disabled": not self._s.model_routing_enabled or not candidate.configured,
+                        "routing_enabled": self._s.model_routing_enabled,
+                        "breaker_open": breaker.state.value == "open",
+                        "state": breaker.state.value,
+                        "last_failure_code": self._candidate_failures.get(candidate.id),
+                    }
+                )
+        return rows
 
     @property
     def faults(self) -> FaultInjector:
         return self._faults
 
     async def _resolve_credential(self, req: ChatRequest) -> ResolvedCredential | None:
+        # Plan and visual routes are platform-owned even when an old caller
+        # forgot to set credential_policy="platform".
+        if self._route_for(req) in (BusinessRoute.vision, BusinessRoute.plan):
+            return None
         if self._credential_resolver is None or req.credential_policy != "text":
             return None
         return await self._credential_resolver(req)
 
     def _is_visual_request(self, req: ChatRequest) -> bool:
-        if self._s.vision_model and req.model_override == self._s.vision_model:
+        vision_models = {self._s.vision_model}
+        if self._s.model_routing_enabled:
+            vision_models.add(self._s.opencode_vision_model)
+            vision_models.add(self._s.vision_fallback_model)
+        if req.model_override and req.model_override in vision_models:
             return True
         return any(
             isinstance(message.content, list)
@@ -285,6 +385,17 @@ class OpenAIGateway:
             )
             for message in req.messages
         )
+
+    def _route_for(self, req: ChatRequest) -> BusinessRoute:
+        if self._is_visual_request(req):
+            return BusinessRoute.vision
+        if req.tier == Tier.plan:
+            return BusinessRoute.plan
+        return BusinessRoute.text
+
+    def _routing_for_request(self, req: ChatRequest) -> bool:
+        """Cheap internal tasks retain their historical SiliconFlow semantics."""
+        return self._s.model_routing_enabled and req.tier != Tier.cheap
 
     @staticmethod
     def _enforce_visual_policy(req: ChatRequest, visual_request: bool) -> None:
@@ -297,7 +408,12 @@ class OpenAIGateway:
     # ---------- internals ----------
 
     async def _budget_precheck(
-        self, req: ChatRequest, *, skip: bool = False
+        self,
+        req: ChatRequest,
+        *,
+        skip: bool = False,
+        reserve_tier: str | None = None,
+        apply_soft_downgrade: bool = True,
     ) -> tuple[ChatRequest, str | None]:
         """live/record 入口预检 (预算强制唯一 choke point; stub/replay 零成本不预检)。
 
@@ -311,7 +427,7 @@ class OpenAIGateway:
         """
         if skip or self._guard is None:
             return req, None
-        reserved_tier = req.tier.value
+        reserved_tier = reserve_tier or req.tier.value
         try:
             verdict = await self._guard.precheck(req.tenant_id, req.user_id, tier=reserved_tier)
         except BudgetExceeded:
@@ -319,7 +435,7 @@ class OpenAIGateway:
         except Exception:  # noqa: BLE001 — 预算预检故障不阻断业务, 只记日志
             log.exception("budget_precheck_failed_open")
             return req, None
-        if verdict == "cheap":
+        if verdict == "cheap" and apply_soft_downgrade:
             cap = self._s.budget_cheap_max_tokens
             max_tokens = min(req.max_tokens, cap) if req.max_tokens else cap
             target_tier = req.tier if req.model_override else Tier.cheap
@@ -368,7 +484,7 @@ class OpenAIGateway:
             }
         )
 
-    def _cost(self, tier_cfg: TierConfig, p_tok: int, c_tok: int) -> float:
+    def _cost(self, tier_cfg: TierConfig | ProviderCandidate, p_tok: int, c_tok: int) -> float:
         return round(
             p_tok / 1e6 * tier_cfg.input_price_per_m + c_tok / 1e6 * tier_cfg.output_price_per_m,
             6,
@@ -421,6 +537,17 @@ class OpenAIGateway:
             )
         return self._clients[tier]
 
+    def _candidate_client(self, candidate: ProviderCandidate) -> AsyncOpenAI:
+        """Cache clients by candidate identity, never by business tier."""
+        if candidate.id not in self._candidate_clients:
+            self._candidate_clients[candidate.id] = AsyncOpenAI(
+                api_key=candidate.api_key or "missing-key",
+                base_url=candidate.base_url,
+                timeout=self._s.gateway_timeout_seconds,
+                max_retries=0,
+            )
+        return self._candidate_clients[candidate.id]
+
     async def _user_client(self, credential: ResolvedCredential) -> AsyncOpenAI:
         """Create a request-scoped client; never cache plaintext user keys."""
         return AsyncOpenAI(
@@ -430,21 +557,407 @@ class OpenAIGateway:
             max_retries=0,
         )
 
-    def _completion_kwargs(self, req: ChatRequest, cfg: TierConfig) -> dict:
+    def _completion_kwargs(
+        self,
+        req: ChatRequest,
+        cfg: TierConfig,
+        candidate: ProviderCandidate | None = None,
+    ) -> dict:
         kwargs: dict = {
-            "model": req.model_override or cfg.model,
+            "model": candidate.model if candidate is not None else req.model_override or cfg.model,
             "messages": [{"role": m.role, "content": m.content} for m in req.messages],
             "temperature": req.temperature,
         }
         if req.max_tokens:
             kwargs["max_tokens"] = req.max_tokens
-        if req.json_mode:
+        if req.json_mode and (candidate is None or candidate.supports_json):
             kwargs["response_format"] = {"type": "json_object"}
-        if cfg.enable_thinking is not None:
+        if candidate is None and cfg.enable_thinking is not None:
             # SiliconFlow exposes Qwen's dual-mode switch as an extension to
             # the OpenAI-compatible request body. Omit it for other providers.
             kwargs["extra_body"] = {"enable_thinking": cfg.enable_thinking}
+        elif (
+            candidate is not None
+            and candidate.supports_thinking
+            and candidate.enable_thinking is not None
+        ):
+            kwargs["extra_body"] = {"enable_thinking": candidate.enable_thinking}
         return kwargs
+
+    @staticmethod
+    def _has_image_parts(req: ChatRequest) -> bool:
+        return any(
+            isinstance(message.content, list)
+            and any(
+                part.get("type") == "image_url" or "image_url" in part
+                for part in message.content
+            )
+            for message in req.messages
+        )
+
+    def _candidate_capable(self, req: ChatRequest, candidate: ProviderCandidate, *, streaming: bool) -> bool:
+        if self._has_image_parts(req) and not candidate.supports_vision:
+            return False
+        if req.json_mode and not candidate.supports_json:
+            return False
+        if streaming and not candidate.supports_stream:
+            return False
+        return True
+
+    async def _call_candidate(self, req: ChatRequest, candidate: ProviderCandidate) -> ChatResult:
+        """Call one concrete provider candidate with its own endpoint/model."""
+        if not candidate.configured:
+            raise GatewayError("NO_API_KEY", "provider candidate is not configured")
+        if not self._candidate_capable(req, candidate, streaming=False):
+            raise GatewayError("MODEL_CAPABILITY_UNSUPPORTED", "provider candidate lacks request capability")
+        started = perf_counter()
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(self._s.gateway_max_retries),
+            wait=wait_exponential(multiplier=0.5, max=8),
+            retry=retry_if_exception_type(_RETRYABLE),
+            reraise=True,
+        ):
+            with attempt:
+                await self._faults.apply(candidate.id, candidate.base_url)
+                resp = await self._candidate_client(candidate).chat.completions.create(
+                    **self._completion_kwargs(req, TierConfig(model=candidate.model), candidate)
+                )
+        usage = resp.usage
+        p_tok = usage.prompt_tokens if usage else 0
+        c_tok = usage.completion_tokens if usage else 0
+        cost = self._cost(candidate, p_tok, c_tok)
+        return ChatResult(
+            text=resp.choices[0].message.content or "",
+            model=candidate.model,
+            tier=req.tier.value,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            cost_cny=cost,
+            latency_ms=int((perf_counter() - started) * 1000),
+            mode="live",
+            degraded=False,
+            credential_source=CredentialSource.platform.value,
+            provider=candidate.provider,
+            route=candidate.route.value,
+            platform_billed_cost_cny=cost,
+        )
+
+    async def _create_candidate_stream(self, req: ChatRequest, candidate: ProviderCandidate):
+        if not candidate.configured:
+            raise GatewayError("NO_API_KEY", "provider candidate is not configured")
+        if not self._candidate_capable(req, candidate, streaming=True):
+            raise GatewayError("MODEL_CAPABILITY_UNSUPPORTED", "provider candidate lacks request capability")
+        stream = None
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(self._s.gateway_max_retries),
+            wait=wait_exponential(multiplier=0.5, max=8),
+            retry=retry_if_exception_type(_RETRYABLE),
+            reraise=True,
+        ):
+            with attempt:
+                await self._faults.apply(candidate.id, candidate.base_url)
+                stream = await self._candidate_client(candidate).chat.completions.create(
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    **self._completion_kwargs(req, TierConfig(model=candidate.model), candidate),
+                )
+        return stream
+
+    async def _routed_chat(self, req: ChatRequest, *, allow_cassette: bool = False) -> ChatResult:
+        del allow_cassette  # routed platform responses never enter shared cassettes
+        route = self._route_for(req)
+        if route == BusinessRoute.vision and req.json_mode:
+            # MiMo/Qwen-VL is deliberately used as a faithful Markdown
+            # transcriber.  A second text call performs JSON structuring, so
+            # response_format is never sent to a visual candidate that lacks it.
+            vision_req = replace(req, json_mode=False, allow_tier_fallback=False)
+            vision_result = await self._routed_chat_single(vision_req, BusinessRoute.vision)
+            await self._emit_usage(
+                vision_req,
+                vision_result,
+                reserved_tier=vision_result.reserved_tier,
+                billing_reference=f"{req.request_id}:vision" if req.request_id else "",
+            )
+            plain_messages = tuple(
+                ChatMessage(role=message.role, content=message_text(message.content))
+                for message in req.messages
+                if message_text(message.content)
+            )
+            structure_messages = plain_messages + (
+                ChatMessage(
+                    role="user",
+                    content=(
+                        "请根据以下视觉模型忠实转写的 Markdown，完成原请求要求的结构化输出。"
+                        "只输出符合 JSON schema 的 JSON，不要添加解释。\n\n"
+                        + vision_result.text
+                    ),
+                ),
+            )
+            structure_req = replace(
+                req,
+                messages=structure_messages,
+                model_override=None,
+                json_mode=True,
+                credential_policy="platform",
+            )
+            return await self._routed_chat_single(structure_req, BusinessRoute.text)
+        return await self._routed_chat_single(req, route)
+
+    async def _routed_chat_single(
+        self, req: ChatRequest, route: BusinessRoute
+    ) -> ChatResult:
+        candidates = route_candidates(self._s, route)
+        if not candidates:
+            raise self._route_unavailable(route)
+        last_failure_code: str | None = None
+        for candidate in candidates:
+            if not self._candidate_capable(req, candidate, streaming=False):
+                continue
+            breaker = self._candidate_breakers[candidate.id]
+            if not breaker.allow():
+                continue
+            reserved_tier: str | None = None
+            try:
+                candidate_req = req
+                if not candidate.free:
+                    # Free candidates must be attempted before this call.  A
+                    # paid candidate gets its own wallet/budget precheck and
+                    # reservation only at the moment it is about to run.
+                    candidate_req, reserved_tier = await self._budget_precheck(
+                        req,
+                        reserve_tier=candidate.reserve_tier,
+                        apply_soft_downgrade=False,
+                    )
+                result = await self._call_candidate(candidate_req, candidate)
+                breaker.record(True)
+                result.reserved_tier = reserved_tier
+                result.degraded = candidate.id != candidates[0].id
+                return result
+            except BudgetExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 — classify before fallback
+                breaker.record(False)
+                last_failure_code = self._failure_code(exc)
+                self._candidate_failures[candidate.id] = last_failure_code
+                if reserved_tier is not None:
+                    await self._refund_reservation(req, reserved_tier)
+                log.warning(
+                    "provider_candidate_failed",
+                    candidate_id=candidate.id,
+                    route=route.value,
+                    failure_code=last_failure_code,
+                )
+                if not self._is_routing_retryable(exc):
+                    raise self._route_request_error(route) from exc
+        raise self._route_unavailable(route, last_failure_code)
+
+    async def _routed_stream(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
+        route = self._route_for(req)
+        if route == BusinessRoute.vision and req.json_mode:
+            vision_req = replace(req, json_mode=False, allow_tier_fallback=False)
+            vision_result = await self._routed_chat_single(vision_req, BusinessRoute.vision)
+            await self._emit_usage(
+                vision_req,
+                vision_result,
+                reserved_tier=vision_result.reserved_tier,
+                billing_reference=f"{req.request_id}:vision" if req.request_id else "",
+            )
+            plain_messages = tuple(
+                ChatMessage(role=message.role, content=message_text(message.content))
+                for message in req.messages
+                if message_text(message.content)
+            )
+            structure_req = replace(
+                req,
+                messages=plain_messages
+                + (
+                    ChatMessage(
+                        role="user",
+                        content="请将以下视觉转写 Markdown 结构化为 JSON：\n\n" + vision_result.text,
+                    ),
+                ),
+                model_override=None,
+                credential_policy="platform",
+            )
+            async for item in self._routed_stream_single(structure_req, BusinessRoute.text):
+                yield item
+            return
+        async for item in self._routed_stream_single(req, route):
+            yield item
+
+    async def _routed_stream_single(
+        self, req: ChatRequest, route: BusinessRoute
+    ) -> AsyncIterator[StreamDelta | ChatResult]:
+        candidates = route_candidates(self._s, route)
+        if not candidates:
+            raise self._route_unavailable(route)
+        last_failure_code: str | None = None
+        for candidate in candidates:
+            if not self._candidate_capable(req, candidate, streaming=True):
+                continue
+            breaker = self._candidate_breakers[candidate.id]
+            if not breaker.allow():
+                continue
+            reserved_tier: str | None = None
+            parts: list[str] = []
+            started = perf_counter()
+            try:
+                candidate_req = req
+                if not candidate.free:
+                    candidate_req, reserved_tier = await self._budget_precheck(
+                        req,
+                        reserve_tier=candidate.reserve_tier,
+                        apply_soft_downgrade=False,
+                    )
+                stream = await self._create_candidate_stream(candidate_req, candidate)
+                p_tok = c_tok = 0
+                async for chunk in stream:
+                    if chunk.usage:
+                        p_tok = chunk.usage.prompt_tokens
+                        c_tok = chunk.usage.completion_tokens
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        delta = chunk.choices[0].delta.content
+                        parts.append(delta)
+                        yield StreamDelta(delta)
+                breaker.record(True)
+                text = "".join(parts)
+                if not p_tok:
+                    p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
+                    c_tok = estimate_tokens(text)
+                cost = self._cost(candidate, p_tok, c_tok)
+                result = ChatResult(
+                    text=text,
+                    model=candidate.model,
+                    tier=req.tier.value,
+                    prompt_tokens=p_tok,
+                    completion_tokens=c_tok,
+                    cost_cny=cost,
+                    latency_ms=int((perf_counter() - started) * 1000),
+                    mode="live",
+                    degraded=candidate.id != candidates[0].id,
+                    credential_source=CredentialSource.platform.value,
+                    provider=candidate.provider,
+                    route=route.value,
+                    platform_billed_cost_cny=cost,
+                    reserved_tier=reserved_tier,
+                )
+                await self._emit_usage(req, result, reserved_tier=reserved_tier)
+                yield result
+                return
+            except BudgetExceeded:
+                raise
+            except BaseException as exc:
+                # Once a delta escaped, retrying would duplicate visible text.
+                if parts:
+                    if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                        breaker.record(False)
+                        self._candidate_failures[candidate.id] = self._failure_code(exc)
+                    if reserved_tier is not None:
+                        await self._refund_reservation(req, reserved_tier)
+                    await self._settle_partial_candidate(
+                        req, candidate, "".join(parts), started, reserved_tier=None
+                    )
+                    if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                        raise
+                    raise self._route_stream_error(route) from exc
+                if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                    if reserved_tier is not None:
+                        await self._refund_reservation(req, reserved_tier)
+                    raise
+                if reserved_tier is not None:
+                    await self._refund_reservation(req, reserved_tier)
+                breaker.record(False)
+                last_failure_code = self._failure_code(exc)
+                self._candidate_failures[candidate.id] = last_failure_code
+                if not self._is_routing_retryable(exc):
+                    raise self._route_request_error(route) from exc
+        raise self._route_unavailable(route, last_failure_code)
+
+    async def _settle_partial_candidate(
+        self,
+        req: ChatRequest,
+        candidate: ProviderCandidate,
+        text: str,
+        started: float,
+        reserved_tier: str | None,
+    ) -> None:
+        p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
+        c_tok = estimate_tokens(text)
+        cost = self._cost(candidate, p_tok, c_tok)
+        result = ChatResult(
+            text=text,
+            model=candidate.model,
+            tier=req.tier.value,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            cost_cny=cost,
+            latency_ms=int((perf_counter() - started) * 1000),
+            mode="live",
+            degraded=True,
+            credential_source=CredentialSource.platform.value,
+            provider=candidate.provider,
+            route=candidate.route.value,
+            platform_billed_cost_cny=cost,
+        )
+        await self._emit_usage(req, result, reserved_tier=reserved_tier)
+
+    @staticmethod
+    def _failure_code(exc: BaseException) -> str:
+        if isinstance(exc, GatewayError):
+            return exc.code
+        status = getattr(exc, "status_code", None)
+        if status == 429:
+            return "UPSTREAM_RATE_LIMITED"
+        if status in (401, 403):
+            return "PUBLIC_AUTH_UNAVAILABLE"
+        if status == 404:
+            return "MODEL_NOT_FOUND"
+        if isinstance(exc, APITimeoutError) or isinstance(exc, asyncio.TimeoutError):
+            return "UPSTREAM_TIMEOUT"
+        if isinstance(exc, APIConnectionError):
+            return "UPSTREAM_UNAVAILABLE"
+        if isinstance(exc, APIStatusError) and status is not None and status >= 500:
+            return "UPSTREAM_UNAVAILABLE"
+        return "MODEL_REQUEST_INVALID"
+
+    @staticmethod
+    def _is_routing_retryable(exc: BaseException) -> bool:
+        if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)):
+            return True
+        if isinstance(exc, asyncio.TimeoutError):
+            return True
+        if isinstance(exc, AuthenticationError):
+            return True
+        if isinstance(exc, APIStatusError):
+            status = exc.status_code
+            # A generic 403 may be content-safety rejection. Only the SDK's
+            # explicit AuthenticationError (or a sanitized GatewayError) is
+            # eligible for provider fallback.
+            return status == 404 or status == 429 or status == 401 or status >= 500
+        return isinstance(exc, GatewayError) and (
+            exc.code in _ROUTING_RETRYABLE_CODES or exc.code.startswith("UPSTREAM_")
+        )
+
+    @staticmethod
+    def _route_unavailable(route: BusinessRoute, failure_code: str | None = None) -> GatewayError:
+        del failure_code
+        codes = {
+            BusinessRoute.text: ("MODEL_ROUTE_UNAVAILABLE", "文本模型通道暂时不可用，请稍后重试"),
+            BusinessRoute.vision: ("VISION_ROUTE_UNAVAILABLE", "视觉模型通道暂时不可用，请稍后重试"),
+            BusinessRoute.plan: ("PLAN_ROUTE_UNAVAILABLE", "学习计划模型通道暂时不可用，请稍后重试"),
+        }
+        code, message = codes[route]
+        return GatewayError(code, message)
+
+    @staticmethod
+    def _route_request_error(route: BusinessRoute) -> GatewayError:
+        del route
+        return GatewayError("MODEL_REQUEST_INVALID", "模型请求格式无效，请修改后重试")
+
+    @staticmethod
+    def _route_stream_error(route: BusinessRoute) -> GatewayError:
+        del route
+        return GatewayError("MODEL_STREAM_INTERRUPTED", "模型输出已中断，请重试")
 
     async def _call_tier(self, req: ChatRequest, tier: Tier) -> ChatResult:
         cfg = self._s.tier(tier.value)
@@ -558,6 +1071,9 @@ class OpenAIGateway:
             if not credential.fallback_to_platform:
                 raise
             # Only an explicit opt-in reaches the original platform chain.
+            if self._routing_for_request(req):
+                result = await self._routed_chat(req, allow_cassette=False)
+                return result
             req, reserved = await self._budget_precheck(req)
             try:
                 result = await self._live_chat(
@@ -579,6 +1095,8 @@ class OpenAIGateway:
     ) -> ChatResult:
         if credential is not None and credential.source == CredentialSource.user:
             return await self._live_user_chat(req, started, credential)
+        if self._routing_for_request(req):
+            return await self._routed_chat(req, allow_cassette=allow_cassette)
         last_error: Exception | None = None
         tiers = _DEGRADE[req.tier] if req.allow_tier_fallback else (req.tier,)
         for tier in tiers:
@@ -596,7 +1114,7 @@ class OpenAIGateway:
             except Exception as exc:  # noqa: BLE001 — 每个 provider 失败都要继续降级链
                 breaker.record(False)
                 last_error = exc
-                log.error("tier_call_failed", tier=tier.value, error=str(exc))
+                log.error("tier_call_failed", tier=tier.value, failure_code=self._failure_code(exc))
         # all live providers failed -> cassette, then (optionally) stub
         hit = self._cassette.get(self._cassette_key(req)) if allow_cassette else None
         if hit is not None:
@@ -605,11 +1123,11 @@ class OpenAIGateway:
             result.degraded = True
             return result
         if self._s.gateway_replay_fallback_stub and self._s.app_env != "prod":
-            log.error("live_failed_fallback_stub", error=str(last_error))
+            log.error("live_failed_fallback_stub", failure_code=self._failure_code(last_error) if last_error else None)
             result = self._stub_result(req, started)
             result.degraded = True
             return result
-        raise GatewayError("ALL_PROVIDERS_FAILED", f"全部模型通道失败: {last_error}")
+        raise GatewayError("ALL_PROVIDERS_FAILED", "全部模型通道失败，请稍后重试")
 
     async def _live_user_stream(
         self, req: ChatRequest, credential: ResolvedCredential
@@ -684,6 +1202,10 @@ class OpenAIGateway:
                     continue
                 if not credential.fallback_to_platform:
                     raise error from exc
+                if self._routing_for_request(req):
+                    async for item in self._routed_stream(req):
+                        yield item
+                    return
                 req, reserved = await self._budget_precheck(req)
                 async for item in self._live_stream(
                     req, reserved, allow_cassette=False, allow_record=False
@@ -817,9 +1339,25 @@ class OpenAIGateway:
                     yield result
                     return
                 except Exception as exc:  # noqa: BLE001
-                    streaming_tier = None  # 本档已失败计入降级链, 不再按部分消耗结算
                     breaker.record(False)
-                    log.error("stream_tier_failed", tier=tier.value, error=str(exc))
+                    log.error(
+                        "stream_tier_failed",
+                        tier=tier.value,
+                        failure_code=self._failure_code(exc),
+                    )
+                    if parts:
+                        await self._settle_partial_stream(
+                            req, tier, "".join(parts), started, reserved_tier
+                        )
+                        settled = True
+                        raise GatewayError(
+                            "MODEL_STREAM_INTERRUPTED", "模型输出已中断，请重试"
+                        ) from exc
+                    streaming_tier = None  # 本档尚未输出, 才允许进入兼容降级链
+                    if not self._is_routing_retryable(exc):
+                        raise GatewayError(
+                            "MODEL_REQUEST_INVALID", "模型请求格式无效，请修改后重试"
+                        ) from exc
             # degrade to non-stream fallback path (cassette/stub), chunked out
             streaming_tier = None
             try:
@@ -894,6 +1432,7 @@ class OpenAIGateway:
         req: ChatRequest,
         result: ChatResult,
         reserved_tier: str | None = None,
+        billing_reference: str | None = None,
     ) -> None:
         event = UsageEvent(
             request_id=req.request_id,
@@ -910,11 +1449,13 @@ class OpenAIGateway:
             mode=result.mode,
             credential_source=result.credential_source,
             provider=result.provider,
+            route=result.route or self._route_for(req).value,
             platform_billed_cost_cny=(
                 result.cost_cny
                 if result.credential_source == CredentialSource.platform.value
                 else result.platform_billed_cost_cny
             ),
+            billing_reference=billing_reference or req.request_id,
         )
         # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
         # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。

@@ -151,6 +151,8 @@ def observe_generation(settings: Settings, req: ChatRequest, result: ChatResult)
             "mode": result.mode,
             "requested_tier": req.tier.value,
             "used_tier": result.tier,
+            "route": result.route,
+            "provider": result.provider,
             "degraded": result.degraded,
             "cache_hit": result.mode in ("replay", "cache"),
             "cost_cny": result.cost_cny,

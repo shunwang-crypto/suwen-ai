@@ -11,6 +11,7 @@ import orjson
 from eduagents_core.gateway import (
     BudgetExceeded,
     ChatResult,
+    GatewayError,
     StreamDelta,
     Tier,
     UsageEvent,
@@ -75,6 +76,23 @@ _HISTORY_LIMIT = 20  # M3 接入 LangGraph checkpointer 后由滚动摘要接管
 _ATTACHMENT_CONTEXT_CHARS = 60_000
 _ATTACHMENT_CHUNK_CHARS = 1_600
 _ATTACHMENT_CHUNK_STEP = 1_400
+
+_SAFE_GATEWAY_ERROR_MESSAGES = {
+    "MODEL_ROUTE_UNAVAILABLE": "文本模型通道暂时不可用，请稍后重试",
+    "VISION_ROUTE_UNAVAILABLE": "视觉模型通道暂时不可用，请稍后重试",
+    "PLAN_ROUTE_UNAVAILABLE": "学习计划模型通道暂时不可用，请稍后重试",
+    "MODEL_REQUEST_INVALID": "模型请求格式无效，请修改后重试",
+    "MODEL_STREAM_INTERRUPTED": "模型输出已中断，请重试",
+    "BYOK_KEY_INVALID": "自带 DeepSeek API Key 无效",
+    "BYOK_RATE_LIMITED": "自带 DeepSeek 请求过于频繁",
+    "BYOK_BALANCE_INSUFFICIENT": "自带 DeepSeek 账户余额不足",
+    "BYOK_PROVIDER_UNAVAILABLE": "自带 DeepSeek 服务暂时不可用",
+}
+
+
+def _safe_gateway_error(exc: GatewayError) -> dict[str, str]:
+    code = exc.code if exc.code in _SAFE_GATEWAY_ERROR_MESSAGES else "GENERATION_FAILED"
+    return {"code": code, "message": _SAFE_GATEWAY_ERROR_MESSAGES.get(code, "回答生成失败，请重试")}
 
 
 def _attachment_summary(row: ChatAttachment) -> dict:
@@ -385,7 +403,7 @@ async def chat(
             ):
                 raise HTTPException(status_code=413, detail="CHAT_ATTACHMENTS_TOTAL_TOO_LARGE")
             if any(row.kind == "image" for row in current_attachments) and not (
-                settings.vision_model
+                settings.routing_vision_enabled
             ):
                 raise HTTPException(status_code=503, detail="VISION_MODEL_UNAVAILABLE")
         if body.session_id is not None:
@@ -492,7 +510,7 @@ async def chat(
     )
     has_attachments = bool(current_attachments)
     has_images = any(row.kind == "image" for row in current_attachments) or bool(prior_images)
-    if has_images and not settings.vision_model:
+    if has_images and not settings.routing_vision_enabled:
         raise HTTPException(status_code=503, detail="VISION_MODEL_UNAVAILABLE")
 
     # 画像注入 (F8-A2 / P1-5 全路径): 绑定 kb 时按库取材; 未绑定传空列表走全量画像
@@ -808,6 +826,9 @@ async def chat(
                         ),
                     }
                     return
+                except GatewayError as exc:
+                    yield {"event": "error", "data": _sse(_safe_gateway_error(exc))}
+                    return
                 except Exception:
                     log.exception("qa_graph_failed")
                     yield {
@@ -1037,7 +1058,9 @@ async def chat(
                     Tier.strong if chat_mode in {"think", "research"} else Tier.standard
                 ),
                 model_override=(
-                    settings.vision_model if has_images and chat_mode == "fast" else None
+                    settings.vision_model
+                    if has_images and chat_mode == "fast" and not settings.model_routing_enabled
+                    else None
                 ),
                 allow_tier_fallback=(
                     not has_images and chat_mode not in {"think", "research"}
@@ -1083,6 +1106,12 @@ async def chat(
                                 break  # 停止消费上游流, 不再下发原文
                     else:
                         final = item
+            except GatewayError as exc:
+                yield {
+                    "event": "error",
+                    "data": _sse(_safe_gateway_error(exc)),
+                }
+                return
             except Exception:
                 log.exception("chat_stream_failed")
                 yield {

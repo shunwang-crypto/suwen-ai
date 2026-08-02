@@ -84,6 +84,10 @@ curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000
 
 CI 默认不需要真实模型密钥。生产环境必须显式使用 `APP_ENV=prod` 并遵守部署手册。
 
+生产可选启用 `MODEL_ROUTING_ENABLED=true` 使用独立的 text/vision/plan 候选链；候选端点必须是
+HTTPS，密钥只放服务器 Secrets 或未提交的 `.env`。`OPENCODE_ZEN_API_KEY=public` 不是 OpenCode
+官方保证的长期生产认证方式，需上线前验证 401/403 并准备真实 Key。完整候选变量见 `.env.example`。
+
 ## 测试与质量检查
 
 ### Python

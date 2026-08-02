@@ -113,6 +113,7 @@ class ChatResult:
     degraded: bool = False
     credential_source: str = CredentialSource.platform.value
     provider: str = ""
+    route: str = ""
     platform_billed_cost_cny: float = 0.0
     # Internal hand-off when a BYOK request explicitly falls back to platform
     # after the initial gateway precheck was intentionally skipped.
@@ -140,7 +141,11 @@ class UsageEvent:
     mode: str
     credential_source: str = CredentialSource.platform.value
     provider: str = ""
+    route: str = ""
     platform_billed_cost_cny: float = 0.0
+    # Internal idempotency reference for multi-stage requests.  It is not a
+    # user-facing request ID and never contains credentials or request text.
+    billing_reference: str = ""
 
 
 UsageSink = Callable[[UsageEvent], Awaitable[None]]

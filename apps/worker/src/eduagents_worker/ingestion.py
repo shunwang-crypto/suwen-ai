@@ -107,7 +107,11 @@ async def _parse_pdf(
             data,
             policy=policy,
             gateway=gateway,
-            vision_model=settings.vision_model,
+        vision_model=(
+            settings.vision_model
+            if not settings.model_routing_enabled
+            else settings.opencode_vision_model
+        ),
             tenant_id=tenant_id,
             user_id=user_id,
             inspection=inspection,

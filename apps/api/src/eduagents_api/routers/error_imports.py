@@ -254,7 +254,11 @@ async def _recognize(request: Request, ctx: AuthContext, *, kind: str, mime: str
                 tenant_id=str(ctx.tenant_id),
                 user_id=str(ctx.user_id),
                 request_id=getattr(request.state, "request_id", ""),
-                model_override=settings.vision_model if kind == "image" else None,
+                model_override=(
+                    settings.vision_model
+                    if kind == "image" and not settings.model_routing_enabled
+                    else None
+                ),
                 allow_tier_fallback=kind != "image",
                 credential_policy="platform" if kind == "image" else "text",
             )
@@ -272,8 +276,10 @@ async def import_capabilities(settings=Depends(get_app_settings)):
     return {
         "max_file_mb": settings.max_chat_attachment_mb,
         "document_suffixes": [".pdf", ".docx", ".pptx", ".md", ".txt"],
-        "image_suffixes": [".png", ".jpg", ".jpeg", ".webp"] if settings.vision_model else [],
-        "vision_enabled": bool(settings.vision_model),
+        "image_suffixes": [".png", ".jpg", ".jpeg", ".webp"]
+        if settings.routing_vision_enabled
+        else [],
+        "vision_enabled": settings.routing_vision_enabled,
     }
 
 
@@ -306,7 +312,9 @@ async def upload_error_import(
     await _prepare_new_import(ctx, request, settings)
     filename = _safe_filename(file.filename)
     data = await _read_capped(file, settings.max_chat_attachment_mb * 1024 * 1024)
-    kind, mime = _validate_file(filename, data, vision_enabled=bool(settings.vision_model))
+    kind, mime = _validate_file(
+        filename, data, vision_enabled=settings.routing_vision_enabled
+    )
     from .resources import _resource_quota_used
 
     async with tenant_session(ctx.tenant_id) as session:

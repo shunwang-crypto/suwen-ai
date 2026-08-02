@@ -75,7 +75,11 @@ async def _model_questions(
                 feature="tutor_problem_recognition",
                 tenant_id=tenant_id,
                 user_id=user_id,
-                model_override=settings.vision_model if vision else None,
+                model_override=(
+                    settings.vision_model
+                    if vision and not settings.model_routing_enabled
+                    else None
+                ),
                 allow_tier_fallback=not vision,
                 credential_policy="platform" if vision else "text",
             )
@@ -171,7 +175,11 @@ async def _recognize_source(
             data,
             page_number=1,
             extraction_method="scanned",
-            vision_model=settings.vision_model,
+                vision_model=(
+                    settings.vision_model
+                    if not settings.model_routing_enabled
+                    else settings.opencode_vision_model
+                ),
             tenant_id=tenant_id,
             user_id=user_id,
             timeout_seconds=settings.tutor_ocr_timeout_seconds,
@@ -201,7 +209,11 @@ async def _recognize_source(
             data,
             policy=_tutor_pdf_policy(settings),
             gateway=gateway,
-            vision_model=settings.vision_model,
+                vision_model=(
+                    settings.vision_model
+                    if not settings.model_routing_enabled
+                    else settings.opencode_vision_model
+                ),
             tenant_id=tenant_id,
             user_id=user_id,
             selected_pages=selected_pages,

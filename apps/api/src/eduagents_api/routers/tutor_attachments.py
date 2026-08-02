@@ -157,7 +157,7 @@ async def tutor_attachment_capabilities(settings=Depends(get_app_settings)):
         "max_pdf_pages": settings.max_tutor_attachment_pages,
         "default_pdf_pages": settings.max_tutor_default_pages,
         "max_recognition_pages": settings.max_tutor_recognition_pages,
-        "vision_enabled": bool(settings.vision_model),
+        "vision_enabled": settings.routing_vision_enabled,
         "vision_uses_platform_quota": True,
     }
 

@@ -76,6 +76,23 @@ key 越权。
 
 ## 数据最小化和第三方模型
 
+### 多供应商模型路由
+
+启用 `MODEL_ROUTING_ENABLED=true` 后，网关按业务路由选择候选，而不是把 tier 当作供应商：
+普通文本为 OpenCode Zen 免费模型 → SiliconFlow/Qwen，视觉为 OpenCode Zen/MiMo →
+SiliconFlow/Qwen VL，学习计划为官方 DeepSeek → OpenCode 免费模型 → SiliconFlow/Qwen。
+每个候选有独立的模型、端点、能力、熔断器和客户端缓存；视觉与学习计划始终使用平台凭据。
+OpenCode 的 `public` 认证可以用于验证，但不是 OpenCode 官方保证的长期生产认证方式，生产上线前
+必须实际验证并准备真实 Key。免费候选调用前不预扣钱包额度；只有准备调用付费候选时才预算预检，
+最终 usage 记录实际 provider、model、token、凭据来源和成本。
+
+视觉 JSON 请求采用“视觉模型忠实转写 Markdown → 文本模型结构化 JSON”两阶段流程，避免向不支持
+JSON Mode 的 MiMo/Qwen VL 发送 `response_format`。流式请求只有首 token 前允许切换候选，已经输出
+内容后不切换并按部分用量结算。
+
+免费第三方通道可能将请求用于服务改进；平台不承诺零保留或完全私密。不要上传身份证、成绩单姓名页
+或其他敏感资料。管理员可通过 `MODEL_ROUTING_ENABLED=false` 关闭该路由。
+
 ### 认证邮件与生产密钥
 
 - 图形验证码用于防机器人，邮箱验证码用于证明邮箱所有权；普通登录不要求邮箱验证码。

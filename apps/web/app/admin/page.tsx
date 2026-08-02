@@ -540,6 +540,36 @@ function FaultInjectionSection() {
             {(state?.breakers ?? []).length === 0 && (
               <p className="py-2 text-xs text-slate-400">暂无熔断器信息</p>
             )}
+            {(state?.routing ?? []).length > 0 && (
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <p className="mb-2 text-xs font-medium text-slate-500">业务路由候选</p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {(state?.routing ?? []).map((candidate) => {
+                    const meta = BREAKER_STATE_META[candidate.state] ?? BREAKER_STATE_META.closed;
+                    return (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        disabled={busy || candidate.disabled}
+                        onClick={() => void patch({ trip_breaker: candidate.id as FaultPatch["trip_breaker"] })}
+                        className={`rounded-xl border px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-50 ${meta.cls}`}
+                        title={candidate.last_failure_code ?? "无最近失败"}
+                      >
+                        <span className="block truncate font-mono text-xs">{candidate.id}</span>
+                        <span className="mt-1 block truncate text-[11px] opacity-80">
+                          {candidate.provider} · {candidate.model || "未配置"}
+                        </span>
+                        <span className="mt-1 flex items-center gap-1.5 text-xs font-semibold">
+                          <span className={`h-2 w-2 rounded-full ${meta.dot}`} aria-hidden />
+                          {candidate.disabled ? "已禁用" : meta.text}
+                          {candidate.last_failure_code ? ` · ${candidate.last_failure_code}` : ""}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

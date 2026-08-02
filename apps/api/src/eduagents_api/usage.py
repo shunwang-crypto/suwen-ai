@@ -56,7 +56,7 @@ async def persist_usage(event: UsageEvent) -> None:
                     session,
                     user_id=uuid.UUID(event.user_id),
                     cost_cny=event.platform_billed_cost_cny,
-                    request_id=event.request_id,
+                    request_id=event.billing_reference or event.request_id,
                     feature=event.feature,
                 )
     except Exception:

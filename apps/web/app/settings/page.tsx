@@ -530,6 +530,7 @@ export default function SettingsPage() {
               <SettingRow label="账户资料" value="仅用于认证与权限" note="邮箱和角色不会作为学习能力证据。" />
               <SettingRow label="学习证据" value="用于掌握度更新" note="练习、复习和辅导证据共同形成成长页画像，并保留来源。" action={<Link href="/profile" className="text-xs font-medium text-brand-600">查看画像</Link>} />
               <SettingRow label="长期记忆" value={`${insights?.length ?? 0} 条`} note="你可以在“AI 记住的你”中逐条查看和删除。" action={<button type="button" onClick={() => setSection("memory")} className="text-xs font-medium text-brand-600">管理</button>} />
+              <div className="mt-5 rounded-overlay border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">免费 AI 通道由第三方提供，请求可能被用于服务改进；不要上传身份证、成绩单姓名页或其他敏感资料。平台不承诺零保留或完全私密。</div>
             </section>
           )}
 

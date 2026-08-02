@@ -149,7 +149,11 @@ async def _recognize(
             feature="resource_extract",
             tenant_id=tenant_id,
             user_id=user_id,
-            model_override=settings.vision_model if suffix in _IMAGE_MIMES else None,
+            model_override=(
+                settings.vision_model
+                if suffix in _IMAGE_MIMES and not settings.model_routing_enabled
+                else None
+            ),
             allow_tier_fallback=suffix not in _IMAGE_MIMES,
             credential_policy="platform" if suffix in _IMAGE_MIMES else "text",
         )

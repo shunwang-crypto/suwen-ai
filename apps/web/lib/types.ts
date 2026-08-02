@@ -1223,7 +1223,21 @@ export type BreakerState = "closed" | "open" | "half_open";
 
 export interface FaultBreaker {
   tier: string;
+  candidate_id?: string;
   state: BreakerState;
+}
+
+export interface ProviderRouteStatus {
+  id: string;
+  route: "text" | "vision" | "plan";
+  provider: string;
+  model: string;
+  configured: boolean;
+  disabled: boolean;
+  routing_enabled: boolean;
+  breaker_open: boolean;
+  state: BreakerState;
+  last_failure_code: string | null;
 }
 
 export interface FaultState {
@@ -1235,13 +1249,14 @@ export interface FaultState {
   active: boolean;
   note: string;
   breakers: FaultBreaker[];
+  routing?: ProviderRouteStatus[];
 }
 
 export interface FaultPatch {
   provider_down?: boolean;
   latency_ms?: number;
   error_rate?: number;
-  trip_breaker?: "cheap" | "standard" | "strong" | "plan" | "all";
+  trip_breaker?: "cheap" | "standard" | "strong" | "plan" | "opencode-text" | "siliconflow-text" | "opencode-vision" | "siliconflow-vision" | "deepseek-plan" | "opencode-plan" | "siliconflow-plan" | "all";
   reset_breakers?: boolean;
 }
 

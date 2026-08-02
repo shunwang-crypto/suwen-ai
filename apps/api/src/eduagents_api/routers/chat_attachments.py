@@ -138,8 +138,8 @@ async def attachment_capabilities(settings=Depends(get_app_settings)):
         "max_file_mb": settings.max_chat_attachment_mb,
         "max_files_per_message": settings.max_chat_attachments_per_message,
         "document_suffixes": sorted(_DOCUMENT_SUFFIXES),
-        "image_suffixes": sorted(_IMAGE_SUFFIXES) if settings.vision_model else [],
-        "vision_enabled": bool(settings.vision_model),
+        "image_suffixes": sorted(_IMAGE_SUFFIXES) if settings.routing_vision_enabled else [],
+        "vision_enabled": settings.routing_vision_enabled,
         "thinking_enabled": bool(settings.strong_api_key and settings.strong_model),
         "web_search_enabled": bool(settings.tavily_api_key),
     }
@@ -154,7 +154,9 @@ async def upload_chat_attachment(
 ):
     filename = _safe_filename(file.filename)
     data = await _read_capped(file, settings.max_chat_attachment_mb * 1024 * 1024)
-    kind, mime_type = _validate_file(filename, data, vision_enabled=bool(settings.vision_model))
+    kind, mime_type = _validate_file(
+        filename, data, vision_enabled=settings.routing_vision_enabled
+    )
 
     # Bound rows are lifecycle-owned by their message. Cap unbound uploads to
     # prevent abandoned composer selections from becoming unlimited storage.

@@ -96,6 +96,9 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 
 第一期 provider 固定为 `deepseek`，base URL 和模型白名单只由服务端配置。`fallback_to_platform=false` 时用户文本 Key 失败直接返回 `BYOK_*` 错误；开启后才执行平台预算预检、平台降级链和钱包扣费，UsageLog 标记 `credential_source=platform`。成功使用用户 Key 的记录标记 `credential_source=user`、`platform_billed_cost_cny=0`，仍保留 token 用量。图片理解、Embedding、Rerank、Tavily、解析和存储不使用用户 Key。
 
+启用 `MODEL_ROUTING_ENABLED=true` 后，平台文本、视觉和学习计划分别使用独立候选链；候选状态和熔断器由管理员故障面板按候选 ID 展示，不返回密钥、密钥后四位、完整供应商错误或请求内容。链路全部失败时返回稳定错误码
+`MODEL_ROUTE_UNAVAILABLE`、`VISION_ROUTE_UNAVAILABLE` 或 `PLAN_ROUTE_UNAVAILABLE`。免费候选不在调用前预扣钱包，只有即将调用付费候选时才预检；usage 仍记录实际候选的 provider、model 和 token。视觉请求和学习计划不使用 BYOK。
+
 ## SSE 事件协议（九类）
 
 ```json

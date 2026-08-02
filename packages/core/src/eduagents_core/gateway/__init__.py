@@ -18,6 +18,7 @@ from .circuit import BreakerState, CircuitBreaker
 from .faults import FaultInjector, FaultState, get_fault_injector
 from .openai_gateway import OpenAIGateway
 from .recorder import Cassette
+from .routing import BusinessRoute, ProviderCandidate, configured_candidates, route_candidates
 
 __all__ = [
     "BudgetExceeded",
@@ -41,4 +42,8 @@ __all__ = [
     "get_fault_injector",
     "OpenAIGateway",
     "Cassette",
+    "BusinessRoute",
+    "ProviderCandidate",
+    "configured_candidates",
+    "route_candidates",
 ]
