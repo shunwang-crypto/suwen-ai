@@ -28,7 +28,7 @@ from eduagents_core.config import Settings
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 
 from ..db import plain_session, tenant_session
 from ..deps import (
@@ -47,6 +47,7 @@ from ..models import (
     LearningResource,
     PendingCleanup,
     Question,
+    Quiz,
     ResourceQuestion,
     User,
 )
@@ -123,6 +124,17 @@ async def delete_account(
             resource_question_question_ids
             | personal_error_question_ids
             | personal_attempt_question_ids
+            | {
+                question_id
+                for (question_id,) in (
+                    await session.execute(
+                        select(Question.id).where(
+                            Question.tenant_id == ctx.user_id,
+                            Question.quiz_id.is_(None),
+                        )
+                    )
+                ).all()
+            }
         )
 
         # 新增的资源/真实测评表显式清理；对象存储前缀则由同一
@@ -137,6 +149,34 @@ async def delete_account(
         )
         await session.flush()
 
+        # PostgreSQL's historical quiz FK keeps a removed quiz's questions by
+        # setting quiz_id to NULL. Remove questions belonging to this user's
+        # quizzes first so account deletion cannot leave tenant-owned orphans.
+        await session.execute(
+            delete(Question).where(
+                Question.quiz_id.in_(select(Quiz.id).where(Quiz.user_id == ctx.user_id))
+            )
+        )
+
+        # A document/resource question may have no Attempt, ErrorItem, or
+        # ResourceQuestion left by this point. Reclaim only same-tenant,
+        # quiz-free questions with no remaining historical reference; regular
+        # quiz questions and questions shared by another resource stay intact.
+        await session.execute(
+            delete(Question).where(
+                Question.tenant_id == ctx.user_id,
+                Question.quiz_id.is_(None),
+                ~exists(
+                    select(ResourceQuestion.id).where(
+                        ResourceQuestion.question_id == Question.id
+                    )
+                ),
+                ~exists(
+                    select(ErrorItem.id).where(ErrorItem.question_id == Question.id)
+                ),
+                ~exists(select(Attempt.id).where(Attempt.question_id == Question.id)),
+            )
+        )
         for question_id in question_ids:
             question = await session.get(Question, question_id)
             if question is None or question.quiz_id is not None:

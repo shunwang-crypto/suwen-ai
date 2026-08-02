@@ -96,8 +96,17 @@ make test-unit
 
 ### 集成测试
 
+`make test-integration` 会在本机 PostgreSQL 上创建一个带随机后缀的临时数据库，并启动一个
+随机端口的 disposable Redis 容器；迁移使用本地 migration role，应用使用 `edu_app`，两者
+都只指向这次运行创建的数据库。测试结束会先关闭应用连接、LangGraph checkpointer 和
+Qdrant 本地 client，再删除精确匹配的临时数据库、Redis 容器和对象目录。
+
+测试 fixture 会拒绝 `APP_ENV=prod`、远程 PostgreSQL，以及无法确认数据库名的连接；不会
+清空或删除 `eduagents`、共享 Redis、MinIO 或任何生产资源。集成网关、嵌入、重排和邮件
+均强制使用 stub/开发替身，SMTP 测试不会投递邮件。LangGraph 的 checkpointer 表只在临时
+测试数据库中由 migration role 初始化，API role 不会在应用启动时执行 setup。
+
 ~~~bash
-make dev-infra
 make test-integration
 ~~~
 
@@ -107,6 +116,9 @@ make test-integration
 INTEGRATION=1 python -m pytest tests/integration -q
 MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0012.py -q
 ~~~
+
+`test-integration` 已经包含隔离资源生命周期；`test-integration-isolated` 是同一入口的
+显式别名。不要在集成测试中改用开发数据库或 Redis DB 0。
 
 集成测试会使用 PostgreSQL、Redis 和测试配置；不要让测试连接生产数据库或生产对象存储。
 

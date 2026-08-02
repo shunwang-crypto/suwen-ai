@@ -9,8 +9,6 @@
 角色执行, 0001 的 default privileges 自动授权 edu_app), 0006 落地后自动
 变成空操作 — 两条并行开发线互不阻塞。
 """
-import asyncio
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -33,30 +31,6 @@ async def _mark_service(session) -> None:
     await session.execute(
         text("SELECT set_config('app.billing_service', 'true', true)")
     )
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _ensure_reset_table():
-    """0006 (计费线) 未落地时兜底建表 (checkfirst, 结构=ORM 定义=迁移约定)。"""
-    if os.environ.get("INTEGRATION") != "1":
-        yield
-        return
-
-    async def _create():
-        from eduagents_api.models import PasswordResetToken
-        from eduagents_core.config import Settings
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        s = Settings()
-        engine = create_async_engine(s.migration_database_url or s.database_url)
-        async with engine.begin() as conn:
-            await conn.run_sync(
-                lambda c: PasswordResetToken.__table__.create(c, checkfirst=True)
-            )
-        await engine.dispose()
-
-    asyncio.run(_create())
-    yield
 
 
 @pytest.fixture
@@ -84,6 +58,8 @@ def _make_env_client(monkeypatch, **env: str):
     """带环境覆盖的独立 app 客户端 (settings 缓存先清后建)。"""
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    for key in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_REPLY_TO"):
+        monkeypatch.setenv(key, "")
     from eduagents_core.config import get_settings
 
     get_settings.cache_clear()

@@ -5,6 +5,7 @@
 live 网关走完降级链兜到 stub, 不 500。
 """
 
+import json
 import uuid
 
 from sqlalchemy import select
@@ -36,7 +37,75 @@ async def _promote(email: str, role: str) -> str:
 # --------------------------------------------------------------------------
 
 
-async def test_evals_import_idempotent_list_detail_compare(client):
+async def test_evals_import_idempotent_list_detail_compare(client, tmp_path, monkeypatch):
+    import eduagents_api.evals_ingest as evals_ingest
+
+    # Evidence is a test input, not a repository fixture. Keeping it under
+    # tmp_path makes this test deterministic and prevents stale production
+    # reports from affecting idempotency assertions.
+    retrieval_template = """# {title}
+
+生成时间: 2026-07-27T00:00:00Z
+黄金集: `eval/golden_set/v2.jsonl` (version: v2-2026-07-27)
+60 问 = 54 可答 + 6 无答案
+corpus_version: 3 文档
+
+## 配置摘要
+| 配置 | 值 |
+| --- | --- |
+| embedding_mode | live/model |
+| rerank_mode | live/model |
+| sparse 检索 | 开 |
+| rerank 精排 | {rerank} |
+
+## 指标
+| 指标 | 值 |
+| --- | --- |
+| hit@1 | 0.9074 |
+| hit@5 | 1.0000 |
+| mrr | {mrr} |
+
+## 按 category
+| category | n | hit@1 | hit@3 | hit@5 | mrr |
+| --- | --- | --- | --- | --- | --- |
+{categories}
+
+## 拒答正确率
+拒答正确率: 5 / 6 = 0.8333
+| qid | question | n_chunks | top1_score | top1_heading | result |
+| --- | --- | --- | --- | --- | --- |
+| r1 | q1 | 0 | 0 | - | ✓ |
+| r2 | q2 | 0 | 0 | - | ✓ |
+| r3 | q3 | 0 | 0 | - | ✓ |
+| r4 | q4 | 0 | 0 | - | ✓ |
+| r5 | q5 | 0 | 0 | - | ✓ |
+| r6 | q6 | 0 | 0 | - | ✗ |
+"""
+    categories = "\n".join(f"| c{i} | 6 | 0.9 | 0.95 | 1.0 | 0.9 |" for i in range(10))
+    (tmp_path / "retrieval_eval_full.md").write_text(
+        retrieval_template.format(title="完整链路", rerank="开", mrr="0.9222", categories=categories),
+        encoding="utf-8",
+    )
+    (tmp_path / "retrieval_eval_no_rerank.md").write_text(
+        retrieval_template.format(title="关重排", rerank="关", mrr="1.0000", categories=categories),
+        encoding="utf-8",
+    )
+    simulation = {
+        "generated_at": "2026-07-27T00:00:00Z",
+        "seeds": [1, 2],
+        "config": {"n_students": 30, "n_kcs": 8},
+        "experiment_b": {
+            "arms": {
+                "adaptive": {"mean": 10, "ci95": [9, 11], "grad_rate": 1, "final_theta_mean": 0.9, "seed_mean_questions": [10, 10]},
+                "ladder": {"mean": 20, "ci95": [19, 21], "grad_rate": 1, "final_theta_mean": 0.8, "seed_mean_questions": [20, 20]},
+                "random": {"mean": 30, "ci95": [29, 31], "grad_rate": 1, "final_theta_mean": 0.7, "seed_mean_questions": [30, 30]},
+            },
+            "comparisons": {"adaptive_vs_random": {"p_value": 0.01, "cohens_d": -2.0}},
+        },
+        "sensitivity": [{"name": f"variant-{i}"} for i in range(10)],
+    }
+    (tmp_path / "results.json").write_text(json.dumps(simulation), encoding="utf-8")
+    monkeypatch.setattr(evals_ingest, "EVIDENCE_DIRS", (str(tmp_path),))
     email = f"evals-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
     student_headers = await _register_login(client, email)
 
@@ -316,7 +385,7 @@ async def test_fault_injection_admin_api_and_degradation(client):
     try:
         state = (await client.get("/api/admin/faults", headers=headers)).json()
         assert state["provider_down"] is False and state["active"] is False
-        assert {b["tier"] for b in state["breakers"]} == {"cheap", "standard", "strong"}
+        assert {b["tier"] for b in state["breakers"]} == {"cheap", "standard", "strong", "plan"}
         assert all(b["state"] == "closed" for b in state["breakers"])
         assert "stub/replay 不受影响" in state["note"]
 
@@ -366,6 +435,15 @@ async def test_fault_injection_admin_api_and_degradation(client):
         ).json()
         assert state["active"] is False
         assert all(b["state"] == "closed" for b in state["breakers"])
+
+        # The plan tier is a real business tier and must degrade through the
+        # documented strong -> standard -> cheap chain, not disappear from
+        # the fault-injection contract.
+        from eduagents_core.gateway.openai_gateway import _DEGRADE
+
+        assert [tier.value for tier in _DEGRADE[Tier.plan]] == [
+            "plan", "strong", "standard", "cheap"
+        ]
 
         # --- 降级链: provider_down 开启后, live 网关兜到 stub 而不是抛错 ---
         settings = get_settings().model_copy(

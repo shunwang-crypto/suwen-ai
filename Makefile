@@ -4,7 +4,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 # conda libstdc++ 优先 (pymupdf/qdrant ABI 冲突, 见 tests/conftest.py 注释)
 export LD_LIBRARY_PATH := /home/shunw/miniforge3/envs/eduagents/lib
 
-.PHONY: install up up-infra down migrate api worker test test-unit test-integration lint docs-check lock demo-m0 demo-m1
+.PHONY: install up up-infra down migrate api worker test test-unit test-integration test-integration-isolated test-web lint docs-check lock demo-m0 demo-m1
 
 install:
 	$(PIP) install -e packages/core -e apps/api -e apps/worker pytest pytest-asyncio fakeredis httpx ruff
@@ -35,8 +35,13 @@ test: test-unit test-integration
 test-unit:
 	$(PY) -m pytest tests/unit -q
 
-test-integration:  ## 需要 make up-infra 先起 PG/Redis
+test-integration:  ## 创建一次性 PG/Redis/Qdrant 测试资源后运行集成测试
 	INTEGRATION=1 $(PY) -m pytest tests/integration -q
+
+test-integration-isolated: test-integration
+
+test-web:
+	cd apps/web && npm run test:unit && npx tsc --noEmit && npm run lint && npm run build
 
 lint:
 	$(PY) -m ruff check packages apps tests alembic eval scripts loadtest

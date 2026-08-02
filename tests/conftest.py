@@ -1,7 +1,10 @@
 import ctypes
 import os
+import shutil
 import sys
 import tempfile
+
+import pytest
 
 # conda 环境的 libstdc++ 必须先于系统版本加载 (pymupdf 触发系统版, qdrant 的
 # sqlite3/icu 需要 conda 新 ABI, 顺序错了报 CXXABI_1.3.15 not found)。
@@ -21,13 +24,26 @@ os.environ.setdefault("CAPTCHA_REQUIRED_REGISTER", "0")
 # auth flows. Dedicated email-registration tests enable this explicitly.
 os.environ.setdefault("EMAIL_VERIFICATION_REQUIRED", "0")
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
-os.environ.setdefault("GATEWAY_MODE", "stub")
-os.environ.setdefault("EMBEDDING_MODE", "stub")
-os.environ.setdefault("RERANK_MODE", "stub")
+os.environ["GATEWAY_MODE"] = "stub"
+os.environ["EMBEDDING_MODE"] = "stub"
+os.environ["RERANK_MODE"] = "stub"
+# Integration tests must never inherit the developer's SMTP configuration.
+# The password-reset suite uses DevEmailSender and reads its debug link from
+# the isolated Redis instance instead of attempting network delivery.
+for _smtp_key in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_REPLY_TO"):
+    os.environ[_smtp_key] = ""
 
 # 集成测试的向量库/对象存储走独立临时目录 (Qdrant 本地模式 + LocalStorage)
 _tmp_root = tempfile.mkdtemp(prefix="eduagents-test-")
-os.environ.setdefault("QDRANT_LOCAL_PATH", os.path.join(_tmp_root, "qdrant"))
-os.environ.setdefault("LOCAL_STORAGE_DIR", os.path.join(_tmp_root, "objects"))
+TEST_RESOURCE_ROOT = _tmp_root
+os.environ["QDRANT_LOCAL_PATH"] = os.path.join(_tmp_root, "qdrant")
+os.environ["LOCAL_STORAGE_DIR"] = os.path.join(_tmp_root, "objects")
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_resources():
+    """Remove only the per-process local Qdrant/object-storage directory."""
+    yield
+    shutil.rmtree(TEST_RESOURCE_ROOT, ignore_errors=True)
