@@ -88,8 +88,8 @@ class PlanState(TypedDict, total=False):
     budget_hours_per_day: float
     total_days: int
     diagnosis: dict  # {kc_name: 掌握度初值} (M3 用自报+摸底简版)
-    resources: list[dict]  # 知识库章节引用 / web 资源
-    plan: dict  # {stages:[{name, days:[{day, tasks:[{title, minutes, resource_ref, kc_names}]}]}]}
+    resources: list[dict]  # 知识库分块 / 安全 web 资源 (确认后持久化为 PlanResource)
+    plan: dict  # executable tasks; resource_ref is transient until finalize_plan assigns resource_id
     plan_confirmed: bool
     trace: Annotated[list[dict], operator.add]
 

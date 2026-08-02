@@ -12,8 +12,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -36,6 +38,14 @@ _TOPIC_LIMIT = 5  # gather_resources 逐 topic 检索的 topic 上限
 _KB_TOP_K = 3  # 每 topic 取知识库 top3
 _WEB_TOP_K = 2  # 每 topic 取 web top2
 _DIAGNOSIS_LIMIT = 20  # 进 prompt 的掌握度条目上限 (目标相关优先, 防跨学科全量膨胀)
+_MAX_TASK_TITLE = 200
+_MAX_TASK_OBJECTIVE = 600
+_MAX_TASK_INSTRUCTION = 300
+_MAX_TASK_CRITERIA = 600
+_MAX_INSTRUCTIONS = 5
+_MAX_TASKS_PER_DAY = 12
+_ACTION_TYPES = {"read", "practice", "tutor", "review_errors", "mixed"}
+_DIFFICULTIES = {"easy", "mid", "hard"}
 
 
 def _topic_related(name: str, topics: list[str]) -> bool:
@@ -78,6 +88,30 @@ def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
 
+def is_safe_public_url(value: object) -> bool:
+    """Accept only ordinary public http(s) URLs from the safe search chain."""
+    if not isinstance(value, str) or len(value) > 2048:
+        return False
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        if parsed.username or parsed.password:
+            return False
+        hostname = parsed.hostname.lower().rstrip(".")
+        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
+            return False
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and (address.is_private or address.is_loopback or address.is_link_local):
+            return False
+        return True
+    except ValueError:
+        return False
+
+
 async def _chat_json(
     deps: GraphDeps,
     state: dict,
@@ -110,11 +144,16 @@ async def _chat_json(
 
 
 def _coerce_task(raw: object) -> dict | None:
-    """任务字段容错落地; 非 dict 直接丢弃。"""
+    """任务字段容错落地; 非 dict 直接丢弃.
+
+    This is also the schema boundary for model output and user-edited drafts.
+    Unknown ids/task keys are intentionally discarded; stable resource ids are
+    assigned only by the API transaction after confirmation.
+    """
     if not isinstance(raw, dict):
         return None
     title = raw.get("title")
-    title = title.strip() if isinstance(title, str) and title.strip() else "学习任务"
+    title = title.strip()[:_MAX_TASK_TITLE] if isinstance(title, str) and title.strip() else "学习任务"
     try:
         minutes = int(round(float(raw.get("minutes", 0))))
     except (TypeError, ValueError):
@@ -123,13 +162,67 @@ def _coerce_task(raw: object) -> dict | None:
         minutes = 30  # 无效分钟给中性值, 随后由日预算缩放兜底
     raw_kcs = raw.get("kc_names")
     kc_names = (
-        [k.strip() for k in raw_kcs if isinstance(k, str) and k.strip()]
+        [k.strip()[:120] for k in raw_kcs if isinstance(k, str) and k.strip()][:12]
         if isinstance(raw_kcs, list)
         else []
     )
     ref = raw.get("resource_ref")
     resource_ref = ref if isinstance(ref, int) and not isinstance(ref, bool) else None
-    return {"title": title, "minutes": minutes, "kc_names": kc_names, "resource_ref": resource_ref}
+    objective = raw.get("objective")
+    objective = (
+        objective.strip()[:_MAX_TASK_OBJECTIVE]
+        if isinstance(objective, str) and objective.strip()
+        else f"完成“{title}”并能用自己的话说明关键方法"
+    )
+    raw_instructions = raw.get("instructions")
+    instructions = [
+        item.strip()[:_MAX_TASK_INSTRUCTION]
+        for item in raw_instructions
+        if isinstance(item, str) and item.strip()
+    ][: _MAX_INSTRUCTIONS] if isinstance(raw_instructions, list) else []
+    if len(instructions) < 2:
+        instructions = [
+            f"明确本任务涉及的关键概念：{kc_names[0] if kc_names else title}",
+            "完成任务后，用一个例子检验自己是否真正理解",
+        ]
+    completion = raw.get("completion_criteria")
+    completion = (
+        completion.strip()[:_MAX_TASK_CRITERIA]
+        if isinstance(completion, str) and completion.strip()
+        else "能够独立完成本任务，并准确解释关键步骤或结论"
+    )
+    action_type = raw.get("action_type")
+    if action_type not in _ACTION_TYPES:
+        if any(word in title for word in ("阅读", "精读", "资料", "概念")):
+            action_type = "read"
+        elif any(word in title for word in ("练习", "测验", "测试", "习题", "自测")):
+            action_type = "practice"
+        else:
+            action_type = "tutor"
+        if resource_ref is not None and action_type == "tutor":
+            action_type = "mixed"
+    practice_count = raw.get("practice_count")
+    if not isinstance(practice_count, int) or isinstance(practice_count, bool):
+        practice_count = None
+    else:
+        practice_count = min(max(practice_count, 1), 50)
+    raw_difficulty = raw.get("difficulty")
+    difficulty = raw_difficulty if isinstance(raw_difficulty, str) and raw_difficulty in _DIFFICULTIES else None
+    result = {
+        "title": title,
+        "objective": objective,
+        "instructions": instructions,
+        "completion_criteria": completion,
+        "minutes": minutes,
+        "kc_names": kc_names,
+        "resource_ref": resource_ref,
+        "action_type": action_type,
+    }
+    if practice_count is not None:
+        result["practice_count"] = practice_count
+    if difficulty is not None:
+        result["difficulty"] = difficulty
+    return result
 
 
 def _coerce_plan(data: object) -> dict | None:
@@ -140,19 +233,19 @@ def _coerce_plan(data: object) -> dict | None:
     if not isinstance(raw_stages, list):
         return None
     stages: list[dict] = []
-    for idx, raw_stage in enumerate(raw_stages):
+    for idx, raw_stage in enumerate(raw_stages[:12]):
         if not isinstance(raw_stage, dict):
             continue
         raw_days = raw_stage.get("days")
         days: list[dict] = []
-        for raw_day in raw_days if isinstance(raw_days, list) else []:
+        for raw_day in (raw_days[:90] if isinstance(raw_days, list) else []):
             if not isinstance(raw_day, dict):
                 continue
             raw_tasks = raw_day.get("tasks")
             tasks = [
                 task
                 for task in (
-                    _coerce_task(t) for t in (raw_tasks if isinstance(raw_tasks, list) else [])
+                    _coerce_task(t) for t in (raw_tasks[:_MAX_TASKS_PER_DAY] if isinstance(raw_tasks, list) else [])
                 )
                 if task is not None
             ]
@@ -160,7 +253,7 @@ def _coerce_plan(data: object) -> dict | None:
         if not days:
             continue
         name = raw_stage.get("name")
-        name = name.strip() if isinstance(name, str) and name.strip() else f"阶段{idx + 1}"
+        name = name.strip()[:120] if isinstance(name, str) and name.strip() else f"阶段{idx + 1}"
         stages.append({"name": name, "days": days})
     if not stages:
         return None
@@ -190,9 +283,18 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
                 "tasks": [
                     {
                         "title": f"学习: {topic}",
+                        "objective": f"掌握{topic}的核心概念，并能独立应用",
+                        "instructions": [
+                            f"梳理{topic}的定义、关键公式或解题条件",
+                            "完成一个例题或自拟例子，并检查推理过程",
+                        ],
+                        "completion_criteria": f"能不看资料解释{topic}，并独立完成一道基础题",
                         "minutes": max(int(round(budget_minutes)), 1),
                         "kc_names": [topic] if topic in diagnosis else [],
                         "resource_ref": None,
+                        "action_type": "practice" if not state.get("kb_id") else "mixed",
+                        "practice_count": 3,
+                        "difficulty": "mid",
                     }
                 ],
             }
@@ -224,9 +326,18 @@ def _fix_total_days(plan: dict, total_days: int, budget_minutes: float, fixes: l
                 "tasks": [
                     {
                         "title": "综合复习与查漏补缺",
+                        "objective": "整合当天知识并发现仍不熟练的部分",
+                        "instructions": [
+                            "回顾当天的关键概念和错因",
+                            "完成一道综合题并记录仍需补强的知识点",
+                        ],
+                        "completion_criteria": "能够列出至少一个已掌握点和一个待巩固点",
                         "minutes": max(int(round(budget_minutes)), 1),
                         "kc_names": [],
                         "resource_ref": None,
+                        "action_type": "mixed",
+                        "practice_count": 3,
+                        "difficulty": "mid",
                     }
                 ],
             }
@@ -287,12 +398,28 @@ def _fix_kc_order(plan: dict, kc_order: list[str], fixes: list[dict]) -> None:
 
 
 def _fix_resource_refs(plan: dict, n_resources: int, fixes: list[dict]) -> None:
+    next_resource = 0
     for day in _iter_days(plan):
         for task in day["tasks"]:
             ref = task["resource_ref"]
             if ref is not None and not (0 <= ref < n_resources):
                 task["resource_ref"] = None
                 fixes.append({"fix": "resource_ref_nulled", "task": task["title"], "ref": ref})
+                ref = None
+            # A retrieved resource is a real, server-validated candidate.  Keep
+            # resource-less legacy/model tasks executable, but make read/mixed
+            # tasks useful when the model omitted an otherwise safe reference.
+            # The API still re-checks the selected KB/doc/chunk at confirmation.
+            if n_resources and ref is None and task["action_type"] in {"read", "mixed"}:
+                task["resource_ref"] = next_resource % n_resources
+                fixes.append(
+                    {
+                        "fix": "resource_ref_attached",
+                        "task": task["title"],
+                        "ref": task["resource_ref"],
+                    }
+                )
+                next_resource += 1
 
 
 def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> None:
@@ -304,7 +431,21 @@ def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> No
         tasks = day["tasks"]
         if not tasks:
             tasks.append(
-                {"title": "自主复习", "minutes": target, "kc_names": [], "resource_ref": None}
+                {
+                    "title": "自主复习",
+                    "objective": "回顾本阶段知识并找出仍需巩固的内容",
+                    "instructions": [
+                        "回看关键概念和当天笔记",
+                        "完成一道自测题并记录疑问",
+                    ],
+                    "completion_criteria": "能说出一个已掌握点和一个待巩固点",
+                    "minutes": target,
+                    "kc_names": [],
+                    "resource_ref": None,
+                    "action_type": "mixed",
+                    "practice_count": 1,
+                    "difficulty": "mid",
+                }
             )
             fixes.append({"fix": "empty_day_filled", "day": day["day"]})
             continue
@@ -455,7 +596,8 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                     resources.append(
                         {
                             "type": "kb",
-                            "title": chunk.heading_path or chunk.text[:30],
+                            "title": (chunk.heading_path or chunk.text[:30])[:512],
+                            "kb_id": kb_id,
                             "doc_id": chunk.doc_id,
                             "chunk_id": chunk.chunk_id,
                         }
@@ -472,10 +614,16 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                     continue
                 for item in (results or [])[:_WEB_TOP_K]:
                     url = item.get("url") if isinstance(item, dict) else None
-                    if not url or url in seen_urls:
+                    if not is_safe_public_url(url) or url in seen_urls:
                         continue
                     seen_urls.add(url)
-                    resources.append({"type": "web", "title": item.get("title") or url, "url": url})
+                    resources.append(
+                        {
+                            "type": "web",
+                            "title": str(item.get("title") or url)[:512],
+                            "url": url,
+                        }
+                    )
         # 知识库与 web 均不可用: 资源标"待补充", 计划仍生成
         event = "gathered" if resources else "resources_pending"
         trace.append({"node": "gather_resources", "event": event, "count": len(resources)})
@@ -489,8 +637,10 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         diagnosis = state.get("diagnosis") or {}
         kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
         resources_block = "\n".join(
-            f"{i}. [{r.get('type', '')}] {r.get('title', '')}" for i, r in enumerate(resources)
-        ) or "(暂无资源, 所有任务 resource_ref 一律填 null)"
+            f"{i}. [{r.get('type', '')}] {r.get('title', '')}"
+            f" (doc_id={r.get('doc_id', '')}, chunk_id={r.get('chunk_id', '')}, url={r.get('url', '')})"
+            for i, r in enumerate(resources)
+        ) or "(暂无资源, 所有任务 resource_ref 一律填 null; action_type 使用 practice、tutor 或 mixed)"
         prompt = (
             _load_prompt("plan_draft.md")
             .replace("{{TOTAL_DAYS}}", str(total_days))

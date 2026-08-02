@@ -71,14 +71,20 @@ def iter_tasks(structure: dict | None):
                     yield si, di, ti, stage, day, task
 
 
-def enrich_structure(structure: dict | None) -> dict:
-    """读取侧加工: 每个任务补上 task_key 与 done (缺省 False), 返回可直接 JSON 化的副本。"""
+def enrich_structure(structure: dict | None, resources: dict[str, dict] | None = None) -> dict:
+    """读取侧加工 task_key/done and a same-plan resource object.
+
+    Missing resource ids are represented as ``resource: None`` so legacy
+    plans remain readable without inventing a resource association.
+    """
     out = copy.deepcopy(structure or {})
     if not isinstance(out, dict):
         return {"stages": []}
     for si, di, ti, _stage, _day, task in iter_tasks(out):
         task["task_key"] = make_task_key(si, di, ti)
         task["done"] = bool(task.get("done"))
+        resource_id = task.get("resource_id")
+        task["resource"] = resources.get(str(resource_id)) if resources and resource_id else None
     out.setdefault("stages", [])
     return out
 
@@ -227,9 +233,19 @@ async def adjust_plan(
         tasks = new_structure["stages"][stage_idx]["days"][day_idx].setdefault("tasks", [])
         task = {
             "title": f"补强: {name}",
+            "objective": f"补强{name}，把掌握度从当前薄弱状态提升到可以独立应用",
+            "instructions": [
+                f"回顾{name}的定义、条件和典型错误",
+                "完成 3 道由易到难的针对性练习并订正",
+                "用一句话说明仍然容易出错的地方",
+            ],
+            "completion_criteria": f"能独立完成至少 2 道{name}相关题，并解释关键步骤",
             "minutes": REINFORCE_MINUTES,
             "kc_names": [name],
             "resource_ref": None,
+            "action_type": "practice",
+            "practice_count": 3,
+            "difficulty": "mid",
             "done": False,
             "source": "adjust",  # 前端据此高亮"本次插入"
         }
@@ -240,9 +256,15 @@ async def adjust_plan(
                 "day": _day_number(new_structure, stage_idx, day_idx),
                 "stage_name": new_structure["stages"][stage_idx].get("name", ""),
                 "title": task["title"],
+                "objective": task["objective"],
+                "instructions": task["instructions"],
+                "completion_criteria": task["completion_criteria"],
                 "minutes": REINFORCE_MINUTES,
                 "kc_id": kc_id,
                 "kc_names": [name],
+                "action_type": task["action_type"],
+                "practice_count": task["practice_count"],
+                "difficulty": task["difficulty"],
                 "p_mastery": round(p, 4),
             }
         )

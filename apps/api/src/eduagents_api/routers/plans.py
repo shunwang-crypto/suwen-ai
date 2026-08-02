@@ -7,15 +7,23 @@ from eduagents_core.kc.dag import topological_order
 from eduagents_core.kc.types import PrereqEdge
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import KcEdge, KnowledgeComponent, MasteryRecord, Plan, PlanAdjustment
+from ..models import (
+    KcEdge,
+    KnowledgeBase,
+    KnowledgeComponent,
+    MasteryRecord,
+    Plan,
+    PlanAdjustment,
+    PlanResource,
+)
 from ..plan_adjust import adjust_plan, enrich_structure, plan_progress, set_task_done
 from ..profile_summary import ProfileContext, build_profile_context
-from ..services import apply_tutor_summary
+from ..services import _plan_resource_public, apply_tutor_summary
 from .threads import stream_graph_run
 
 log = get_logger("plans")
@@ -30,6 +38,14 @@ class PlanCreate(BaseModel):
     kb_id: uuid.UUID | None = None
     budget_hours_per_day: float = Field(default=1.5, gt=0, le=12)
     total_days: int = Field(default=14, ge=1, le=90)
+
+    @field_validator("goal")
+    @classmethod
+    def non_blank_goal(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("goal must not be blank")
+        return value
 
 
 class TaskToggle(BaseModel):
@@ -93,7 +109,7 @@ async def _load_personalization(
     - kc_order: 相关 KC (绑库时 = 该库全部 KC; 未绑库时 = 该用户有掌握度记录的 KC)
       之间的 prerequisite 边 -> 拓扑序注入 kc_order 通道 (G2)。
     """
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         mastery_rows = (
             await session.execute(
                 select(
@@ -144,6 +160,17 @@ async def create_plan(
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
+    if body.kb_id is not None:
+        # The graph receives only a validated KB id.  This check is repeated
+        # at finalize time because a KB can be deleted while the draft waits.
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+            kb = await session.get(KnowledgeBase, body.kb_id)
+            if kb is None or (
+                kb.owner_type == "user" and kb.tenant_id != ctx.user_id
+            ) or (
+                kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids)
+            ):
+                raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
     local_id = str(uuid.uuid4())
     thread_id = runtime.thread_id("plan", str(ctx.user_id), local_id)
     # 个性化预查失败一律降级为空 (图内 LLM 摸底兜底), 不让个性化故障拖垮规划主链路
@@ -173,21 +200,31 @@ async def create_plan(
 
 @router.get("")
 async def list_plans(ctx: AuthContext = Depends(api_rate_limited)):
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         rows = (
             await session.scalars(
                 select(Plan).where(Plan.user_id == ctx.user_id).order_by(Plan.created_at.desc())
             )
         ).all()
+        kb_ids = [row.kb_id for row in rows if row.kb_id is not None]
+        kb_names = {}
+        if kb_ids:
+            kb_names = {
+                row.id: row.name
+                for row in (await session.scalars(select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids)))).all()
+            }
         return [
             {
                 "id": str(r.id),
                 "goal": r.goal,
                 "budget_hours": r.budget_hours,
+                "kb_id": str(r.kb_id) if r.kb_id else None,
+                "kb_name": kb_names.get(r.kb_id),
                 "structure": r.structure_json,
                 "created_at": r.created_at,
+                "is_current": index == 0,
             }
-            for r in rows
+            for index, r in enumerate(rows)
         ]
 
 
@@ -198,14 +235,24 @@ async def _load_plan(session, plan_id: uuid.UUID, ctx: AuthContext) -> Plan:
     return plan
 
 
-def _plan_detail(plan: Plan) -> dict:
-    structure = enrich_structure(plan.structure_json)
+async def _plan_detail(session, plan: Plan) -> dict:
+    resource_rows = (
+        await session.scalars(
+            select(PlanResource).where(PlanResource.plan_id == plan.id).order_by(PlanResource.created_at)
+        )
+    ).all()
+    resources = {str(row.id): _plan_resource_public(row) for row in resource_rows}
+    kb = await session.get(KnowledgeBase, plan.kb_id) if plan.kb_id else None
+    structure = enrich_structure(plan.structure_json, resources)
     return {
         "id": str(plan.id),
         "goal": plan.goal,
         "budget_hours": plan.budget_hours,
+        "kb_id": str(plan.kb_id) if plan.kb_id else None,
+        "kb_name": kb.name if kb else None,
         "version": plan.version,
         "structure": structure,
+        "resources": list(resources.values()),
         "progress": plan_progress(plan.structure_json),
         "created_at": plan.created_at,
     }
@@ -214,9 +261,9 @@ def _plan_detail(plan: Plan) -> dict:
 @router.get("/{plan_id}")
 async def get_plan(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """计划详情 (F3): 每个任务带 task_key 与 done, 附任务粒度进度。"""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx)
-        return _plan_detail(plan)
+        return await _plan_detail(session, plan)
 
 
 @router.post("/{plan_id}/tasks/{task_key}/toggle")

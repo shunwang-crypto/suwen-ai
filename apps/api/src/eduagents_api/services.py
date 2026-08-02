@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import UTC, datetime
 
@@ -16,12 +17,16 @@ from .deps import AuthContext
 from .models import (
     ERROR_IMPORT_QUIZ_KIND,
     Attempt,
+    Chunk,
+    Document,
     ErrorItem,
+    KnowledgeBase,
     KnowledgeComponent,
     LearnerInsight,
     MasteryLog,
     MasteryRecord,
     Plan,
+    PlanResource,
     Question,
     Quiz,
 )
@@ -207,18 +212,136 @@ async def finalize_quiz(
 
 
 async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
-    async with tenant_session(ctx.tenant_id) as session:
-        session.add(
-            Plan(
-                id=uuid.UUID(local_id),
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                goal=state.get("goal", ""),
-                budget_hours=float(state.get("budget_hours_per_day") or 0),
-                structure_json=state.get("plan") or {},
-            )
+    """Atomically save a confirmed plan and its stable resource snapshots.
+
+    ``resource_ref`` is only a graph/UI draft convenience.  Every referenced
+    retrieval result is re-checked against the visible KB document/chunk rows
+    here, then assigned a UUID and copied into the task as ``resource_id``.
+    Invalid or stale references degrade to an executable task without a
+    resource; they can never attach another tenant's material.
+    """
+    from eduagents_core.graphs.plan_graph import is_safe_public_url
+    try:
+        plan_id = uuid.UUID(local_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="INVALID_PLAN_ID") from None
+
+    raw_kb_id = state.get("kb_id") or ""
+    try:
+        kb_id = uuid.UUID(str(raw_kb_id)) if raw_kb_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="INVALID_KB_ID") from None
+
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        kb = None
+        if kb_id is not None:
+            kb = await session.get(KnowledgeBase, kb_id)
+            if kb is None or (
+                kb.owner_type == "user" and kb.tenant_id != ctx.user_id
+            ) or (
+                kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids)
+            ):
+                raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
+
+        source_rows = state.get("resources") or []
+        resource_ids: dict[int, uuid.UUID] = {}
+        resource_objects: list[PlanResource] = []
+        for index, raw in enumerate(source_rows):
+            if not isinstance(raw, dict):
+                continue
+            source_type = raw.get("type")
+            title = str(raw.get("title") or "学习资料")[:512]
+            if source_type in {"kb", "kb_chunk"}:
+                try:
+                    source_kb_id = uuid.UUID(str(raw.get("kb_id") or raw_kb_id))
+                    doc_id = uuid.UUID(str(raw.get("doc_id")))
+                    chunk_id = uuid.UUID(str(raw.get("chunk_id")))
+                except (TypeError, ValueError):
+                    continue
+                if kb_id is None or source_kb_id != kb_id:
+                    continue
+                # The join verifies that both ids belong to the selected KB.
+                valid = await session.scalar(
+                    select(Chunk.id)
+                    .join(Document, Document.id == Chunk.doc_id)
+                    .where(
+                        Chunk.id == chunk_id,
+                        Chunk.doc_id == doc_id,
+                        Document.kb_id == source_kb_id,
+                    )
+                )
+                if valid is None:
+                    continue
+                row = PlanResource(
+                    id=uuid.uuid4(),
+                    tenant_id=ctx.tenant_id,
+                    plan_id=plan_id,
+                    source_type="kb_chunk",
+                    title=title,
+                    kb_id=source_kb_id,
+                    doc_id=doc_id,
+                    chunk_id=chunk_id,
+                )
+            elif source_type == "web" and is_safe_public_url(raw.get("url")):
+                row = PlanResource(
+                    id=uuid.uuid4(),
+                    tenant_id=ctx.tenant_id,
+                    plan_id=plan_id,
+                    source_type="web",
+                    title=title,
+                    url=str(raw["url"]),
+                )
+            else:
+                continue
+            resource_objects.append(row)
+            resource_ids[index] = row.id
+
+        structure = copy.deepcopy(state.get("plan") or {})
+        for stage in structure.get("stages", []) if isinstance(structure, dict) else []:
+            for day in stage.get("days", []) if isinstance(stage, dict) else []:
+                for task in day.get("tasks", []) if isinstance(day, dict) else []:
+                    if not isinstance(task, dict):
+                        continue
+                    task.pop("task_key", None)
+                    ref = task.get("resource_ref")
+                    task["resource_id"] = (
+                        str(resource_ids[ref])
+                        if isinstance(ref, int) and not isinstance(ref, bool) and ref in resource_ids
+                        else None
+                    )
+
+        plan = Plan(
+            id=plan_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            goal=str(state.get("goal") or "")[:2000],
+            budget_hours=float(state.get("budget_hours_per_day") or 0),
+            kb_id=kb_id,
+            structure_json=structure,
         )
-    return {"plan_id": local_id, "plan": state.get("plan") or {}}
+        session.add(plan)
+        session.add_all(resource_objects)
+        await session.flush()
+        return {
+            "plan_id": local_id,
+            "plan": structure,
+            "kb_id": str(kb_id) if kb_id else None,
+            "resources": [_plan_resource_public(row) for row in resource_objects],
+        }
+
+
+def _plan_resource_public(row: PlanResource) -> dict:
+    return {
+        "id": str(row.id),
+        "type": "kb" if row.source_type == "kb_chunk" else "web",
+        "source_type": row.source_type,
+        "title": row.title,
+        "kb_id": str(row.kb_id) if row.kb_id else None,
+        "doc_id": str(row.doc_id) if row.doc_id else None,
+        "chunk_id": str(row.chunk_id) if row.chunk_id else None,
+        "url": row.url,
+        "created_at": row.created_at,
+    }
 
 
 async def _update_mastery(

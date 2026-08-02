@@ -247,9 +247,11 @@ async def test_approve_with_empty_edited_day_fills_task():
     }
     final = await graph.ainvoke(Command(resume={"approved": True, "plan": edited}), config)
     days = flat_days(final["plan"])
-    assert days[0]["tasks"] == [
-        {"title": "自主复习", "minutes": 60, "kc_names": [], "resource_ref": None}
-    ]
+    assert days[0]["tasks"][0]["title"] == "自主复习"
+    assert days[0]["tasks"][0]["objective"]
+    assert len(days[0]["tasks"][0]["instructions"]) == 2
+    assert days[0]["tasks"][0]["completion_criteria"]
+    assert days[0]["tasks"][0]["action_type"] == "mixed"
     assert any(
         e.get("node") == "confirm_plan"
         and e.get("event") == "fix"

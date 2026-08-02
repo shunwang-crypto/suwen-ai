@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
 import orjson
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..deps import AuthContext, api_rate_limited
@@ -14,7 +16,7 @@ log = get_logger("threads")
 
 
 class ResumeIn(BaseModel):
-    value: dict  # interrupt 决策 payload, 如 {"approved": true, "blueprint": {...}}
+    value: dict[str, Any] = Field(max_length=20)  # interrupt 决策 payload
 
 
 def _sse(data: dict) -> str:
