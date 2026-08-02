@@ -13,6 +13,7 @@ import {
 import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import type { PublicRegistrationConfigOut, RegistrationMode } from "@/lib/types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,6 +23,7 @@ export default function RegisterPage() {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [emailCode, setEmailCode] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +36,22 @@ export default function RegisterPage() {
   // 服务未就绪（captchaId 为 null）时不带字段提交，由后端裁决。
   const [captcha, setCaptcha] = useState<CaptchaState>(EMPTY_CAPTCHA);
   const [captchaEpoch, setCaptchaEpoch] = useState(0);
+  const [registrationMode, setRegistrationMode] = useState<RegistrationMode | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    apiJson<PublicRegistrationConfigOut>("/api/config/public")
+      .then((config) => {
+        if (alive) setRegistrationMode(config.registration_mode);
+      })
+      .catch(() => {
+        // Configuration failure must never accidentally open registration.
+        if (alive) setRegistrationMode("closed");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -104,6 +122,10 @@ export default function RegisterPage() {
       setError("请输入 6 位邮箱验证码");
       return;
     }
+    if (registrationMode === "invite" && !inviteCode.trim()) {
+      setError("请输入邀请码");
+      return;
+    }
     if (password.length < 8) {
       setError("密码长度至少 8 位");
       return;
@@ -128,6 +150,7 @@ export default function RegisterPage() {
         password,
         displayName.trim(),
         emailCode,
+        registrationMode === "invite" ? inviteCode.trim() : undefined,
       );
       // G12 冷启动：新注册用户先走 Onboarding 三步偏好表单（可跳过）；登录页不跳
       router.replace("/onboarding");
@@ -146,6 +169,33 @@ export default function RegisterPage() {
 
   const inputCls =
     "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+
+  if (registrationMode === null || registrationMode === "closed") {
+    return (
+      <div className="grid min-h-dvh lg:grid-cols-2">
+        <AuthHero />
+        <div className="flex items-center justify-center bg-aurora px-4 py-10">
+          <div className="w-full max-w-md text-center">
+            <BrandMark size={48} />
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">
+              {registrationMode === null ? "正在检查注册状态" : "当前暂未开放注册"}
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              {registrationMode === null
+                ? "请稍候…"
+                : "如需注册，请等待管理员发出邀请。"}
+            </p>
+            <Link
+              href="/login"
+              className="mt-6 inline-flex rounded-control bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+            >
+              去登录
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
@@ -246,6 +296,27 @@ export default function RegisterPage() {
                 inputClassName={inputCls}
                 className="mb-6"
               />
+            )}
+
+            {registrationMode === "invite" && (
+              <label className="mb-4 block">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                  邀请码
+                </span>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                  maxLength={128}
+                  placeholder="请输入管理员提供的邀请码"
+                  className={inputCls}
+                  required
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  邀请码只能使用一次，请勿公开分享。
+                </p>
+              </label>
             )}
 
             <div className="mb-4">

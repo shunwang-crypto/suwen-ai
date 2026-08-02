@@ -15,6 +15,25 @@ export interface TokenResponse {
   expires_at: string;
 }
 
+export type RegistrationMode = "closed" | "invite" | "open";
+
+export interface PublicRegistrationConfigOut {
+  registration_mode: RegistrationMode;
+  email_verification_required: boolean;
+}
+
+export interface RegistrationInviteOut {
+  id: string;
+  code: string | null;
+  status: "active" | "used" | "revoked" | "expired";
+  expires_at: string | null;
+  max_uses: number;
+  used_count: number;
+  created_at: string;
+  used_by: string | null;
+  used_by_email: string | null;
+}
+
 export interface SessionOut {
   id: string;
   title: string;

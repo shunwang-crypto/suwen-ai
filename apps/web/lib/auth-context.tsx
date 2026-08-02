@@ -43,6 +43,7 @@ interface AuthContextValue {
     password: string,
     displayName: string,
     emailCode: string,
+    inviteCode?: string,
     captcha?: CaptchaAnswer,
   ) => Promise<void>;
   logout: () => Promise<void>;
@@ -111,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password: string,
       displayName: string,
       emailCode: string,
+      inviteCode?: string,
       captcha?: CaptchaAnswer,
     ) => {
       await apiJson<UserOut>("/api/auth/register", {
@@ -120,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email_code: emailCode,
           password,
           display_name: displayName,
+          ...(inviteCode ? { invite_code: inviteCode } : {}),
           ...(captcha ?? {}),
         },
       });
