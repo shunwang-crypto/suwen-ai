@@ -149,7 +149,7 @@ erDiagram
 
 | 实体 | 语义 |
 |---|---|
-| `Plan / PlanAdjustment` | 学习计划结构和每次调整审计 |
+| `Plan / PlanResource / PlanAdjustment` | 学习计划结构、稳定关联的知识库/网页资源和每次调整审计；`Plan.kb_id` 可空，删除知识库后 SET NULL |
 | `ChatSession / ChatMessage` | 可查询的会话展示历史 |
 | `ChatAttachment` | 当前对话附件、提取文本和对象引用 |
 | `LearnerInsight` | AI 提炼、用户可见可删的长期洞察 |

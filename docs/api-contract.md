@@ -158,11 +158,11 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?} → SSE：Blueprint → interrupt(blueprint_confirm) |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
 | POST | /api/quiz/{id}/attempts | {answers} → 判分（客观本地/简答 LLM 附理由）+ 错题自动入本 + BKT 直写 + mastery_log 审计；正确率<0.6 时附 `plan_adjustment`（自动补强，F3-A3）；导入卷不可作答 |
-| POST | /api/plans | {goal, kb_id?, budget_hours_per_day, total_days} → SSE → interrupt(plan_confirm) |
-| GET | /api/plans | 计划列表 |
-| GET | /api/plans/{id} | 计划详情：每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）与 `done`，附 `progress{total,done,ratio}` |
+| POST | /api/plans | `{goal, kb_id?, budget_hours_per_day, total_days}` → SSE → interrupt(plan_confirm)；服务端重新校验 KB 访问、任务结构与资源引用 |
+| GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
+| GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`，附 `progress{total,done,ratio}` |
 | POST | /api/plans/{id}/tasks/{task_key}/toggle | {done?} 勾选/取消任务（缺省取反）；done 内嵌 structure_json，不另建列 |
-| POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插「补强: {KC}」30 分钟任务 → {inserted, reason} |
+| POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插带目标、步骤、完成标准、`action_type=practice` 的「补强: {KC}」任务 → `{inserted, reason}` |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
 | POST | /api/tutor | {problem, message, thread_local_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level |
 

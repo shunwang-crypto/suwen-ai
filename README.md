@@ -158,6 +158,7 @@ python -m compileall -q packages apps tests alembic
 - [开发与测试规范](docs/development.md)
 - [API 业务契约](docs/api-contract.md)
 - [数据模型](docs/data-model.md)
+- [可执行学习计划](docs/learning-plan.md)
 - [架构决策记录](docs/decisions.md)
 - [安全与合规](docs/safety.md)
 - [生产部署](deploy/README-deploy.md)

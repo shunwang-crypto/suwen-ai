@@ -23,7 +23,7 @@
 | 题目资料 | 已实现 | 图片、PDF、Word、PPT、文本、手动多题；原件、识别、校对、知识库关联、深链接 | learning resources 测试 |
 | 真实作答 | 已实现 | `draft -> submitted -> graded`；PUT 替换、PATCH 部分更新、评分与最终核验 | resource launch contract |
 | 错题本 | 已实现 | 普通测验、人工选择、真实作答三类来源；待核验隔离；FSRS 与变式 | error/review 测试 |
-| 学习计划 | 已实现 | 目标、预算、先修约束、调整历史 | plan 测试 |
+| 学习计划 | 已实现 | 可执行任务详情、稳定 PlanResource 关联、plans/today 执行入口、目标/预算/先修约束、调整历史 | plan 与 migration 测试 |
 | 画像、报告、推荐 | 已实现 | 掌握度、证据日志、洞察、偏好、趋势、下一步建议 | profile/report 测试 |
 | 数据生命周期 | 已实现 | 用户 ZIP 导出、来源文件 manifest、注销级联和异步外部清理 | lifecycle/account 测试 |
 | 评估与运营 | 已实现 | 评估运行/对比、用量/成本/延迟、预算、故障注入、反馈 | eval/admin 测试 |

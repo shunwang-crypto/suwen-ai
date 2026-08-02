@@ -9,7 +9,7 @@
 | 读者/任务 | 首先阅读 | 然后阅读 |
 |---|---|---|
 | 第一次了解项目 | [根 README](../README.md) | [当前状态](../STATUS.md)、[系统架构](architecture.md) |
-| 本地开发 | [开发手册](development.md) | [API 契约](api-contract.md)、[数据模型](data-model.md) |
+| 本地开发 | [开发手册](development.md) | [API 契约](api-contract.md)、[数据模型](data-model.md)、[可执行学习计划](learning-plan.md) |
 | 前端开发 | [开发手册](development.md) | [Web 子项目说明](../apps/web/README.md)、`apps/web/AGENTS.md` |
 | 后端/Worker 开发 | [系统架构](architecture.md) | [API 契约](api-contract.md)、[数据模型](data-model.md) |
 | 测试与验收 | [当前状态](../STATUS.md) | [开发手册](development.md)、`tests/` |
@@ -49,7 +49,7 @@
 
 | 路径 | 分类 | 维护方式 |
 |---|---|---|
-| `docs/api-contract.md`、`data-model.md`、`decisions.md`、`safety.md` | Active | 随相关代码变更 |
+| `docs/api-contract.md`、`data-model.md`、`learning-plan.md`、`decisions.md`、`safety.md` | Active | 随相关代码变更 |
 | `docs/vlse.md`、`scaling.md`、`tradeoffs.md` | Reference | 重大设计变化时复核 |
 | `docs/research/`、`docs/design/` | Reference | 明确“设计不等于实现” |
 | `docs/defense/` | Presentation | 上台前对照 STATUS 和 evidence |
