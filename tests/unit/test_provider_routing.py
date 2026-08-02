@@ -278,3 +278,46 @@ def test_route_candidate_capabilities_are_explicit(tmp_path):
     assert vision[0].supports_vision is True
     assert vision[0].supports_json is False
     assert vision[0].api_key not in repr(vision[0])
+
+
+def test_production_routing_rejects_missing_candidate_chains():
+    with pytest.raises(ValueError, match="routes: text, vision, plan"):
+        Settings(
+            _env_file=None,
+            app_env="prod",
+            model_routing_enabled=True,
+            opencode_zen_api_key="",
+            text_fallback_api_key="",
+            text_fallback_model="",
+            vision_fallback_api_key="",
+            vision_fallback_model="",
+            plan_primary_api_key="",
+            plan_secondary_api_key="",
+            plan_tertiary_api_key="",
+            plan_tertiary_model="",
+            cheap_api_key="",
+            cheap_model="",
+            standard_api_key="",
+            vision_model="",
+            plan_api_key="",
+            plan_model="",
+        )
+
+
+def test_production_routing_accepts_documented_legacy_fallbacks():
+    configured = Settings(
+        _env_file=None,
+        app_env="prod",
+        model_routing_enabled=True,
+        opencode_zen_api_key="public",
+        cheap_api_key="siliconflow-key",
+        cheap_model="Qwen/text-model",
+        standard_api_key="siliconflow-key",
+        vision_model="Qwen/VL-model",
+        plan_api_key="deepseek-key",
+        plan_model="deepseek-v4-flash",
+    )
+
+    assert configured.routing_text_enabled is True
+    assert configured.routing_vision_enabled is True
+    assert configured.routing_plan_enabled is True

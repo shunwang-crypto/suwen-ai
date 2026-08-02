@@ -283,6 +283,21 @@ class Settings(BaseSettings):
             }
             if any(price < 0 for price in route_prices.values()):
                 raise ValueError("provider candidate prices cannot be negative")
+            if self.app_env == "prod":
+                missing_routes = [
+                    route
+                    for route, configured in (
+                        ("text", self.routing_text_enabled),
+                        ("vision", self.routing_vision_enabled),
+                        ("plan", self.routing_plan_enabled),
+                    )
+                    if not configured
+                ]
+                if missing_routes:
+                    raise ValueError(
+                        "MODEL_ROUTING_ENABLED requires at least one configured "
+                        f"candidate for routes: {', '.join(missing_routes)}"
+                    )
         else:
             # Validate newly introduced endpoint settings even while the
             # feature is disabled, so an accidental later enable cannot turn
@@ -451,14 +466,51 @@ class Settings(BaseSettings):
         )
 
     @property
+    def routing_text_enabled(self) -> bool:
+        if not self.model_routing_enabled:
+            return bool(self.standard_api_key and self.standard_model)
+        return bool(
+            self.opencode_zen_api_key
+            and self.opencode_zen_base_url
+            and self.opencode_text_model
+        ) or bool(
+            (self.text_fallback_api_key or self.cheap_api_key)
+            and self.text_fallback_base_url
+            and (self.text_fallback_model or self.cheap_model)
+        )
+
+    @property
     def routing_vision_enabled(self) -> bool:
         """Whether at least one explicitly configured visual route candidate exists."""
         if self.model_routing_enabled:
-            return bool(self.opencode_zen_api_key and self.opencode_vision_model) or bool(
+            return bool(
+                self.opencode_zen_api_key
+                and self.opencode_zen_base_url
+                and self.opencode_vision_model
+            ) or bool(
                 (self.vision_fallback_api_key or self.standard_api_key)
+                and self.vision_fallback_base_url
                 and (self.vision_fallback_model or self.vision_model)
             )
         return bool(self.vision_model)
+
+    @property
+    def routing_plan_enabled(self) -> bool:
+        if not self.model_routing_enabled:
+            return bool(self.plan_api_key and self.plan_model)
+        return bool(
+            (self.plan_primary_api_key or self.plan_api_key)
+            and self.plan_primary_base_url
+            and (self.plan_primary_model or self.plan_model)
+        ) or bool(
+            (self.plan_secondary_api_key or self.opencode_zen_api_key)
+            and self.plan_secondary_base_url
+            and self.plan_secondary_model
+        ) or bool(
+            (self.plan_tertiary_api_key or self.cheap_api_key)
+            and self.plan_tertiary_base_url
+            and (self.plan_tertiary_model or self.cheap_model)
+        )
 
 
 @lru_cache
