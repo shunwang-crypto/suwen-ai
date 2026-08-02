@@ -205,7 +205,7 @@ def _coerce_task(raw: object) -> dict | None:
     if not isinstance(practice_count, int) or isinstance(practice_count, bool):
         practice_count = None
     else:
-        practice_count = min(max(practice_count, 1), 50)
+        practice_count = min(max(practice_count, 1), 20)
     raw_difficulty = raw.get("difficulty")
     difficulty = raw_difficulty if isinstance(raw_difficulty, str) and raw_difficulty in _DIFFICULTIES else None
     result = {

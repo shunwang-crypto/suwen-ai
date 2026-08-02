@@ -23,7 +23,7 @@ def test_task_coercion_adds_executable_fields_and_clamps_public_values():
     assert len(task["instructions"]) == 5
     assert task["completion_criteria"]
     assert task["action_type"] == "read"
-    assert task["practice_count"] == 50
+    assert task["practice_count"] == 20
     assert "task_key" not in task and "resource_id" not in task
 
 
