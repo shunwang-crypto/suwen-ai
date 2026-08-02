@@ -54,6 +54,7 @@ export function TutorProblemInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const reviewButtonRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const onDraftChangeRef = useRef(onDraftChange);
 
@@ -120,6 +121,7 @@ export function TutorProblemInput({
   useEffect(() => {
     if (!reviewOpen) return;
     openerRef.current = document.activeElement as HTMLElement | null;
+    const fallbackOpener = reviewButtonRef.current;
     closeRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -147,7 +149,20 @@ export function TutorProblemInput({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      openerRef.current?.focus();
+      const opener = openerRef.current;
+      if (
+        opener !== null &&
+        opener === fallbackOpener &&
+        opener.isConnected &&
+        opener.tabIndex >= 0
+      ) {
+        opener.focus();
+      } else {
+        // Recognition may open the dialog automatically after a file picker,
+        // leaving body as the active element.  Restore to a deterministic
+        // actionable control in that case.
+        fallbackOpener?.focus();
+      }
     };
   }, [reviewOpen]);
 
@@ -366,7 +381,7 @@ export function TutorProblemInput({
           <span className="text-[10px] text-ink-muted">拖拽文件，或粘贴剪贴板图片</span>
           <span className="flex-1" />
           {draft?.status === "failed" && <button type="button" disabled={busy} onClick={() => void recognize()} className="border border-line-strong px-3 py-1.5 text-[11px] text-ink-secondary">重试识别</button>}
-          <button type="button" disabled={busy || draft?.status === "recognizing" || draft?.status === "uploaded" || !stem.trim()} onClick={() => setReviewOpen(true)} className="bg-ink px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-40">{draft?.status === "review" ? "校对题目" : "校对并确认"}</button>
+          <button ref={reviewButtonRef} type="button" disabled={busy || draft?.status === "recognizing" || draft?.status === "uploaded" || !stem.trim()} onClick={() => setReviewOpen(true)} className="bg-ink px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-40">{draft?.status === "review" ? "校对题目" : "校对并确认"}</button>
           {busy && <Spinner className="h-3.5 w-3.5" />}
         </div>
       )}

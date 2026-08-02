@@ -104,6 +104,23 @@ describe("TutorProblemInput attachments", () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
     expect(input).not.toHaveValue("[object File]");
   });
+
+  it("restores focus to the review action when recognition opens review automatically", async () => {
+    apiFetch.mockResolvedValue({ json: async () => draft() });
+    const { container } = render(<TutorProblemInput onConfirmed={() => {}} />);
+    const file = new File(["image"], "question.png", { type: "image/png" });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fileInput.focus();
+
+    fireEvent.change(fileInput, {
+      target: { files: [file] },
+    });
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    const review = await screen.findByRole("button", { name: "校对题目" });
+    await waitFor(() => expect(review).toHaveFocus());
+  });
 });
 
 describe("TutorProblemInput review", () => {
