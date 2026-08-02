@@ -156,6 +156,8 @@ def install_error_handlers(app: FastAPI) -> None:
             "CAPTCHA_INVALID": "验证码错误或已过期，请刷新后重试",
             "RESET_TOKEN_INVALID": "重置链接无效或已过期，请重新申请",
             "NOT_FOUND": "资源不存在",
+            "USER_QUERY_TOO_SHORT": "邮箱查询至少输入 3 个字符",
+            "WALLET_ADJUST_REFERENCE_CONFLICT": "该业务凭证已用于不同的额度调整，请更换凭证",
             "CONTENT_REJECTED": "内容不符合平台规范，请修改后再试",
             # 画像定向出题 (M4-D2): 掌握度数据不足时不静默降级成普通出题
             "NO_WEAK_POINTS": "还没有识别到薄弱点，先做一次练习积累数据",

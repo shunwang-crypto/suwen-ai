@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -17,21 +18,116 @@ from eduagents_core.gateway import Tier, get_fault_injector
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 
 from .. import timectl
 from ..db import plain_session
 from ..deps import AuthContext, account_status_key, require_admin
-from ..models import RefreshToken, RegistrationInvite, User
+from ..email_utils import normalize_email
+from ..models import RefreshToken, RegistrationInvite, User, WalletAccount
 from ..registration_invites import generate_invite_code, hash_invite_code
 from ..schemas import (
+    AdminUserOut,
+    AdminWalletAdjustIn,
+    AdminWalletAdjustOut,
     RegistrationInviteBatchCreate,
     RegistrationInviteCreate,
     RegistrationInviteOut,
 )
+from ..wallet import WalletAdjustmentConflict, get_wallet_service, q4, service_session
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 log = get_logger("admin")
+
+
+def _money4(value) -> str:
+    return format(q4(value or 0), "f")
+
+
+@router.get("/users", response_model=list[AdminUserOut])
+async def search_users(
+    query: str = Query(..., min_length=3, max_length=320),
+    limit: int = Query(default=20, ge=1, le=100),
+    ctx: AuthContext = Depends(require_admin),
+):
+    """管理员按邮箱精确或安全前缀查询用户，不返回任何认证秘密。"""
+    normalized = normalize_email(query)
+    if len(normalized) < 3:
+        raise HTTPException(status_code=422, detail="USER_QUERY_TOO_SHORT")
+    escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    prefix = f"{escaped}%"
+    exact = func.lower(User.email) == normalized
+    async with service_session() as session:
+        rows = (
+            await session.execute(
+                select(User, WalletAccount.balance)
+                .outerjoin(WalletAccount, WalletAccount.user_id == User.id)
+                .where(or_(exact, func.lower(User.email).like(prefix, escape="\\")))
+                .order_by(exact.desc(), func.lower(User.email))
+                .limit(limit)
+            )
+        ).all()
+    log.info(
+        "admin_user_search",
+        admin_user_id=str(ctx.user_id),
+        query_hash=hashlib.sha256(normalized.encode()).hexdigest()[:16],
+        result_count=len(rows),
+    )
+    return [
+        AdminUserOut(
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+            status=user.status,
+            wallet_balance=_money4(balance),
+            created_at=user.created_at,
+        )
+        for user, balance in rows
+    ]
+
+
+@router.post(
+    "/users/{user_id}/wallet-adjust",
+    response_model=AdminWalletAdjustOut,
+)
+async def adjust_user_wallet(
+    user_id: uuid.UUID,
+    body: AdminWalletAdjustIn,
+    ctx: AuthContext = Depends(require_admin),
+):
+    """原子、可重试的管理员额度调整。"""
+    wallet = get_wallet_service()
+    try:
+        async with service_session() as session:
+            result = await wallet.admin_adjust(
+                user_id,
+                body.delta,
+                body.note,
+                body.reference,
+                session=session,
+            )
+    except ValueError as exc:
+        if not str(exc).startswith("wallet_adjust_no_user:"):
+            raise
+        raise HTTPException(status_code=404, detail="NOT_FOUND") from None
+    except WalletAdjustmentConflict:
+        raise HTTPException(status_code=409, detail="WALLET_ADJUST_REFERENCE_CONFLICT") from None
+
+    log.warning(
+        "admin_wallet_adjusted",
+        admin_user_id=str(ctx.user_id),
+        target_user_id=str(user_id),
+        delta=format(result.delta, "f"),
+        reference=result.reference,
+    )
+    return AdminWalletAdjustOut(
+        user_id=result.user_id,
+        previous_balance=_money4(result.previous_balance),
+        delta=_money4(result.delta),
+        balance=_money4(result.balance),
+        note=result.note,
+        reference=result.reference or body.reference,
+    )
 
 
 def _invite_status(row: RegistrationInvite, now: datetime) -> str:

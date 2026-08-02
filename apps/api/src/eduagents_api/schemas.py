@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -123,6 +125,70 @@ class UserOut(BaseModel):
     role: str
     created_at: datetime
     email_verified_at: datetime | None = None
+
+
+class AdminUserOut(BaseModel):
+    """Minimal user record for administrator operations; never includes secrets."""
+
+    user_id: uuid.UUID
+    email: str
+    role: str
+    status: str
+    wallet_balance: str
+    created_at: datetime
+
+
+_ADMIN_DELTA_RE = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d{1,4})?$")
+_ADMIN_REFERENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+
+
+class AdminWalletAdjustIn(BaseModel):
+    delta: Decimal
+    note: str = Field(min_length=1, max_length=256)
+    reference: str = Field(min_length=1, max_length=128)
+
+    @field_validator("delta", mode="before")
+    @classmethod
+    def validate_delta_string(cls, value: object) -> Decimal:
+        if not isinstance(value, str):
+            raise ValueError("调额必须使用字符串金额")
+        raw = value.strip()
+        if not _ADMIN_DELTA_RE.fullmatch(raw):
+            raise ValueError("金额必须是最多四位小数的数字")
+        try:
+            delta = Decimal(raw)
+        except InvalidOperation as exc:
+            raise ValueError("金额格式不合法") from exc
+        if delta == 0:
+            raise ValueError("调额不能为 0")
+        if abs(delta) > Decimal("1000"):
+            raise ValueError("单次调额范围为 -1000 至 1000")
+        return delta
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("调额原因不能为空")
+        return normalized
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not _ADMIN_REFERENCE_RE.fullmatch(normalized):
+            raise ValueError("业务凭证只能包含字母、数字、点、下划线、冒号、斜线和连字符")
+        return normalized
+
+
+class AdminWalletAdjustOut(BaseModel):
+    user_id: uuid.UUID
+    previous_balance: str
+    delta: str
+    balance: str
+    note: str
+    reference: str
 
 
 class AccountProfileUpdateIn(BaseModel):

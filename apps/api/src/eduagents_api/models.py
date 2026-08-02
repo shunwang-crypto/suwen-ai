@@ -851,8 +851,9 @@ class WalletLedger(Base):
 
     - kind 白名单 CHECK: signup_grant/consume/recharge/refund/admin_adjust;
     - ref: consume=request_id / recharge=order_id (幂等凭证);
-    - 幂等唯一部分索引 (0006): (user_id) WHERE kind='signup_grant' 注册赠送只发一次;
-      (user_id, ref) WHERE kind='consume' 同 request_id 重试不双扣;
+    - 幂等唯一部分索引 (0006/0015): (user_id) WHERE kind='signup_grant' 注册赠送只发一次;
+      (user_id, ref) WHERE kind='consume' 同 request_id 重试不双扣；WHERE kind='admin_adjust'
+      的 (user_id, ref) 保证管理员业务凭证并发重试不重复入账;
     - 读路径索引 (user_id, created_at DESC): 本人最近 N 条 (同 0005 惯例)。
     """
 

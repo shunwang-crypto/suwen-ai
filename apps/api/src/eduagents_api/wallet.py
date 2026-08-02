@@ -31,6 +31,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from eduagents_core.config import Settings, get_settings
@@ -61,6 +62,22 @@ def as_decimal(value: float | int | str | Decimal) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+@dataclass(frozen=True)
+class AdminAdjustment:
+    """The immutable result of one wallet adjustment or its idempotent replay."""
+
+    user_id: uuid.UUID
+    previous_balance: Decimal
+    delta: Decimal
+    balance: Decimal
+    note: str
+    reference: str | None
+
+
+class WalletAdjustmentConflict(Exception):
+    """A reference was already used for a different adjustment payload."""
 
 
 class InsufficientCredits(BudgetExceeded):
@@ -286,27 +303,113 @@ class WalletService:
         return new_balance
 
     async def admin_adjust(
-        self, user_id: uuid.UUID, delta: Decimal, note: str = ""
-    ) -> Decimal:
-        """管理员调账 (kind=admin_adjust, 可正可负): 独立服务层事务。"""
-        async with service_session() as session:
-            balance = await self._lock_balance(session, user_id)
-            if balance is None:
-                raise ValueError(f"wallet_adjust_no_user: {user_id}")
-            new_balance = q4(balance + as_decimal(delta))
+        self,
+        user_id: uuid.UUID,
+        delta: Decimal,
+        note: str = "",
+        reference: str | None = None,
+        *,
+        session: AsyncSession | None = None,
+    ) -> AdminAdjustment:
+        """管理员调额；新 API 传入调用方事务和 reference 实现原子幂等。
+
+        The optional session keeps the old internal helper usable for existing
+        billing tests and callers. New administrative requests always provide
+        ``service_session()`` so user lookup, ledger insert, and balance update
+        share one transaction.
+        """
+        if session is not None:
+            return await self._admin_adjust_in_session(
+                session, user_id, delta, note, reference
+            )
+        async with service_session() as owned_session:
+            return await self._admin_adjust_in_session(
+                owned_session, user_id, delta, note, reference
+            )
+
+    async def _admin_adjust_in_session(
+        self,
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        delta: Decimal,
+        note: str,
+        reference: str | None,
+    ) -> AdminAdjustment:
+        await self._mark_service(session)
+        balance = await self._lock_balance(session, user_id)
+        if balance is None:
+            raise ValueError(f"wallet_adjust_no_user: {user_id}")
+
+        adjustment = q4(as_decimal(delta))
+        normalized_note = (note or "管理员调额")[:256]
+        if reference is not None:
+            result = await session.execute(
+                pg_insert(WalletLedger)
+                .values(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    delta=adjustment,
+                    balance_after=q4(balance + adjustment),
+                    kind="admin_adjust",
+                    ref=reference[:128],
+                    note=normalized_note,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["user_id", "ref"],
+                    index_where=text("kind = 'admin_adjust' AND ref IS NOT NULL"),
+                )
+                .returning(WalletLedger.id)
+            )
+            inserted_id = result.scalar_one_or_none()
+            if inserted_id is None:
+                existing = await session.scalar(
+                    select(WalletLedger)
+                    .where(
+                        WalletLedger.user_id == user_id,
+                        WalletLedger.kind == "admin_adjust",
+                        WalletLedger.ref == reference,
+                    )
+                )
+                if existing is None:  # pragma: no cover - unique index invariant
+                    raise RuntimeError("wallet_adjust_idempotency_row_missing")
+                if q4(existing.delta) != adjustment or existing.note != normalized_note:
+                    raise WalletAdjustmentConflict(reference)
+                return AdminAdjustment(
+                    user_id=user_id,
+                    previous_balance=q4(existing.balance_after - existing.delta),
+                    delta=q4(existing.delta),
+                    balance=q4(existing.balance_after),
+                    note=existing.note or normalized_note,
+                    reference=existing.ref,
+                )
+        else:
             session.add(
                 WalletLedger(
                     user_id=user_id,
-                    delta=q4(as_decimal(delta)),
-                    balance_after=new_balance,
+                    delta=adjustment,
+                    balance_after=q4(balance + adjustment),
                     kind="admin_adjust",
                     ref=None,
-                    note=(note or "管理员调账")[:256],
+                    note=normalized_note,
                 )
             )
-            await self._set_balance(session, user_id, new_balance)
-            log.info("wallet_adjusted", user_id=str(user_id), delta=str(delta))
-            return new_balance
+
+        new_balance = q4(balance + adjustment)
+        await self._set_balance(session, user_id, new_balance)
+        log.info(
+            "wallet_adjusted",
+            user_id=str(user_id),
+            delta=str(adjustment),
+            reference=reference,
+        )
+        return AdminAdjustment(
+            user_id=user_id,
+            previous_balance=q4(balance),
+            delta=adjustment,
+            balance=new_balance,
+            note=normalized_note,
+            reference=reference,
+        )
 
     # ---------- 读路径 (本人 RLS 策略) ----------
 
