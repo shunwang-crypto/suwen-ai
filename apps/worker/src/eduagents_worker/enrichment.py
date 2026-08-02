@@ -88,7 +88,7 @@ async def enrich_document(
     gateway: ModelGateway | None = None,
     user_id: str | None = None,
 ) -> str:
-    """Stage 2 (F2 两阶段摄取): ready → enriching → enriched。
+    """Stage 2 (F2 两阶段摄取): ready/partial_ready → enriching → enriched。
 
     内容: ① 知识库级 KC 受控词表 (首个文档时构建, strong 档) ② chunk 级 KC 抽取
     并经 KcNormalizer 归一化挂载 (cheap 档) ③ 上下文前缀生成并重嵌入 (cheap 档)。
@@ -122,8 +122,9 @@ async def enrich_document(
 
     async with tenant_session(tenant_id) as session:
         doc = await session.get(Document, uuid.UUID(doc_id))
-        if doc is None or doc.status not in ("ready", "enriched"):
+        if doc is None or doc.status not in ("ready", "partial_ready", "enriched"):
             return "not_ready"
+        fallback_status = "partial_ready" if doc.status == "partial_ready" else "ready"
         kb_id = str(doc.kb_id)
         # Personal jobs can use the owner credential; org jobs without a
         # request user deliberately remain platform-only.
@@ -408,6 +409,9 @@ async def enrich_document(
             await session.execute(
                 update(Document)
                 .where(Document.id == uuid.UUID(doc_id))
-                .values(status="ready", error_msg=f"enrich: {type(exc).__name__}")
+                .values(
+                    status=fallback_status,
+                    error_msg="知识增强暂时失败，文档仍可检索，请稍后重试",
+                )
             )
         return "failed"

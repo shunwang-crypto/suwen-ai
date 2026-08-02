@@ -9,6 +9,7 @@ from .base import Element
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 # pymupdf4llm 在页尾/分节处输出 ----- 水平线, 不是内容
 _RULE_RE = re.compile(r"^-{3,}\s*$")
+_PAGE_META_RE = re.compile(r"^<!--\s*(?:page|extraction)\s*:[^>]*-->$", re.IGNORECASE)
 
 
 def table_rows_to_markdown(rows: list[list[str]]) -> str:
@@ -52,6 +53,10 @@ def parse_markdown_elements(md_text: str, page: int | None = None) -> list[Eleme
 
     for raw in md_text.splitlines():
         line = raw.strip()
+
+        if _PAGE_META_RE.match(line):
+            flush_para()
+            continue
 
         if in_formula:
             formula.append(line)

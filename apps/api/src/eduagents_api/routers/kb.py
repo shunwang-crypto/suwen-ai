@@ -388,6 +388,9 @@ async def reindex_document(
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         doc.status = "pending"
         doc.error_msg = None
+        doc.recognition_meta_json = {}
+        if doc.parse_backend.startswith("pdf-"):
+            doc.parse_backend = ""
         await session.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
         # P0-3: 重建索引会改变分块/向量, 旧答案缓存必须随之失效
         await session.execute(

@@ -23,19 +23,130 @@ REAP_STALE_SECONDS = 30 * 60
 REAP_MAX_RETRIES = 3
 _REAP_RETRY_TTL = 48 * 3600
 # 摄取中间态 (parsing/chunking/embedding): 停留超时才允许回收
-_STUCK_STATUSES = ("parsing", "chunking", "embedding")
+_STUCK_STATUSES = ("parsing", "recognizing", "chunking", "embedding")
+
+_PDF_ERROR_MESSAGES = {
+    "PDF_FILE_TYPE_MISMATCH": "PDF 文件内容与扩展名不一致",
+    "PDF_PASSWORD_PROTECTED": "PDF 已加密，请先解除密码保护",
+    "PDF_PAGE_LIMIT_EXCEEDED": "PDF 页数超过安全限制",
+    "PDF_VISION_PAGE_LIMIT_EXCEEDED": "需要识别的扫描页面超过安全限制，请拆分文件后重试",
+    "PDF_RENDER_PIXEL_LIMIT_EXCEEDED": "PDF 页面尺寸超过安全限制",
+    "PDF_RENDER_SIZE_LIMIT_EXCEEDED": "PDF 页面渲染结果超过安全限制",
+    "PDF_VISION_MODEL_UNAVAILABLE": "当前视觉识别服务不可用，请稍后重试",
+    "PDF_DOCUMENT_RECOGNITION_TIMEOUT": "PDF 识别超时，请拆分文件后重试",
+    "PDF_DAMAGED": "PDF 已损坏或格式无效",
+    "PDF_EMPTY": "PDF 没有可处理的页面",
+}
 
 
-async def _set_status(doc_id: str, tenant_id: str, status: str, error: str | None = None) -> None:
+async def _set_status(
+    doc_id: str,
+    tenant_id: str,
+    status: str,
+    error: str | None = None,
+    *,
+    recognition_meta: dict | None = None,
+    parse_backend: str | None = None,
+) -> None:
     from eduagents_api.db import tenant_session
     from eduagents_api.models import Document
 
     async with tenant_session(tenant_id) as session:
+        values: dict = {"status": status, "error_msg": error}
+        if recognition_meta is not None:
+            values["recognition_meta_json"] = recognition_meta
+        if parse_backend is not None:
+            values["parse_backend"] = parse_backend
         await session.execute(
-            update(Document)
-            .where(Document.id == uuid.UUID(doc_id))
-            .values(status=status, error_msg=error)
+            update(Document).where(Document.id == uuid.UUID(doc_id)).values(**values)
         )
+
+
+async def _document_exists(doc_id: str, tenant_id: str) -> bool:
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import Document
+
+    async with tenant_session(tenant_id) as session:
+        return await session.get(Document, uuid.UUID(doc_id)) is not None
+
+
+def _pdf_parse_error(exc: ValueError):
+    from eduagents_core.parsing.base import ParseError
+
+    code = str(exc) if str(exc).startswith("PDF_") else "PDF_RECOGNITION_FAILED"
+    message = _PDF_ERROR_MESSAGES.get(code, "PDF 解析或识别失败，请稍后重试")
+    return ParseError(f"{code}: {message}")
+
+
+async def _parse_pdf(
+    data: bytes,
+    *,
+    settings,
+    gateway,
+    tenant_id: str,
+    user_id: str,
+    doc_id: str,
+):
+    from eduagents_core.document_recognition import (
+        PdfRecognitionPolicy,
+        inspect_pdf,
+        recognize_pdf,
+    )
+    from eduagents_core.parsing.base import ParsedDocument
+    from eduagents_core.parsing.md_structure import parse_markdown_elements
+
+    policy = PdfRecognitionPolicy.from_settings(settings)
+    try:
+        inspection = await asyncio.to_thread(inspect_pdf, data, policy)
+        methods = {page.extraction_method for page in inspection.pages}
+        needs_vision = bool(methods & {"scanned", "mixed"})
+        if needs_vision:
+            await _set_status(doc_id, tenant_id, "recognizing")
+        recognized = await recognize_pdf(
+            data,
+            policy=policy,
+            gateway=gateway,
+            vision_model=settings.vision_model,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            inspection=inspection,
+        )
+    except ValueError as exc:
+        raise _pdf_parse_error(exc) from exc
+
+    elements = []
+    for page in recognized.successful_pages:
+        elements.extend(parse_markdown_elements(page.markdown, page=page.page_number))
+    if not elements:
+        from eduagents_core.parsing.base import ParseError
+
+        await _set_status(
+            doc_id,
+            tenant_id,
+            "failed",
+            "PDF_ALL_PAGES_FAILED: 文件没有可提取或识别的内容",
+            recognition_meta=recognized.bounded_metadata(),
+            parse_backend="pdf-vision" if methods <= {"scanned", "failed"} else "pdf-mixed",
+        )
+        raise ParseError("PDF_ALL_PAGES_FAILED: 文件没有可提取或识别的内容")
+
+    failed_pages = [page.page_number for page in recognized.failed_pages]
+    warning = None
+    if failed_pages:
+        page_list = "、".join(str(page) for page in failed_pages[:20])
+        warning = f"部分页面未能识别：第 {page_list} 页"
+    if methods == {"native_text"}:
+        backend = "pdf-native"
+    elif methods <= {"scanned", "failed"}:
+        backend = "pdf-vision"
+    else:
+        backend = "pdf-mixed"
+    parsed = ParsedDocument(
+        elements=elements,
+        page_count=recognized.page_count,
+        meta={"source": "pdf", "recognition": recognized.bounded_metadata()},
+    )
+    return parsed, recognized.bounded_metadata(), backend, warning
 
 
 async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
@@ -52,6 +163,7 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
     from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
     settings = get_settings()
+    qdrant = QdrantStore(settings)
     redis = ctx.get("redis")
     watch_field = f"{tenant_id}:{doc_id}"
     if redis is not None:
@@ -66,25 +178,46 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
             if doc is None:
                 return "missing"
             kb_id, filename = str(doc.kb_id), doc.filename
+            user_id = str(doc.uploaded_by or doc.tenant_id)
+
+        # A retry starts from a clean vector namespace.  If parsing later
+        # fails, stale vectors from an older version cannot remain searchable.
+        await qdrant.ensure_ready()
+        await qdrant.delete_by_doc(tenant_id, doc_id)
 
         # 1) 解析
         await _set_status(doc_id, tenant_id, "parsing")
         storage = create_storage(settings)
         data = await storage.load(f"{tenant_id}/{kb_id}/{doc_id}/{filename}")
         suffix = Path(filename).suffix.lower()
-        parser = get_parser(suffix)
-        import tempfile
+        recognition_meta: dict = {}
+        parse_backend: str | None = None
+        partial_warning: str | None = None
+        if suffix == ".pdf":
+            from .enrichment import get_worker_gateway
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = Path(tmp.name)
-        try:
-            # 解析超时上限 120s (压缩炸弹/病态文件防护, §8)
-            parsed = await asyncio.wait_for(
-                asyncio.to_thread(parser.parse, tmp_path), timeout=120
+            parsed, recognition_meta, parse_backend, partial_warning = await _parse_pdf(
+                data,
+                settings=settings,
+                gateway=ctx.get("gateway") or get_worker_gateway(settings),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                doc_id=doc_id,
             )
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        else:
+            parser = get_parser(suffix)
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = Path(tmp.name)
+            try:
+                # 解析超时上限 120s (压缩炸弹/病态文件防护, §8)
+                parsed = await asyncio.wait_for(
+                    asyncio.to_thread(parser.parse, tmp_path), timeout=120
+                )
+            finally:
+                tmp_path.unlink(missing_ok=True)
         if not parsed.elements:
             raise ParseError("解析结果为空: 文件无可提取文本")
 
@@ -142,6 +275,13 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
         # 3) 入库 (chunks 表: 父块行 + 子块行, 子块 parent_id 指向父块行)
         child_rows: list[tuple[uuid.UUID, str, dict]] = []  # (id, text, meta)
         async with tenant_session(tenant_id) as session:
+            doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+            if doc is None:
+                return "missing"
+            if recognition_meta:
+                doc.recognition_meta_json = recognition_meta
+            if parse_backend:
+                doc.parse_backend = parse_backend
             await session.execute(delete(Chunk).where(Chunk.doc_id == uuid.UUID(doc_id)))
             for parent in parents:
                 parent_id = uuid.uuid4()
@@ -193,12 +333,12 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
 
         # 4) 向量化 (子块): heading_path 面包屑拼进嵌入文本增强定位
         await _set_status(doc_id, tenant_id, "embedding")
+        if not await _document_exists(doc_id, tenant_id):
+            return "missing"
         embedder = create_embedder(settings)
         sparse_encoder = Bm25SparseEncoder()
         texts = [f"{meta['heading_path']}\n{text}" for _, text, meta in child_rows]
         dense_vectors = await embedder.embed(texts)
-        store = QdrantStore(settings)
-        await store.ensure_ready()
         points = [
             VectorPoint(
                 id=str(child_id),
@@ -214,23 +354,36 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
             )
             for i, (child_id, text, meta) in enumerate(child_rows)
         ]
-        await store.delete_by_doc(tenant_id, doc_id)
-        await store.upsert(points)
+        if not await _document_exists(doc_id, tenant_id):
+            return "missing"
+        await qdrant.upsert(points)
 
         async with tenant_session(tenant_id) as session:
+            doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+            if doc is None:
+                await qdrant.delete_by_doc(tenant_id, doc_id)
+                return "missing"
             await session.execute(
                 update(Chunk)
                 .where(Chunk.doc_id == uuid.UUID(doc_id), Chunk.parent_id.isnot(None))
                 .values(embedding_status="done")
             )
-        await _set_status(doc_id, tenant_id, "ready")
+        terminal_status = "partial_ready" if partial_warning else "ready"
+        await _set_status(
+            doc_id,
+            tenant_id,
+            terminal_status,
+            partial_warning,
+            recognition_meta=recognition_meta or None,
+            parse_backend=parse_backend,
+        )
         log.info(
             "ingest_done", doc_id=doc_id, parents=len(parents), children=len(child_rows)
         )
         # Stage 2 自动串联 (stub 网关下 enrich 无意义, 跳过; 见 enrichment.py)
         if redis is not None and settings.gateway_mode != "stub":
-            await redis.enqueue_job("enrich_document", tenant_id, doc_id)
-        return "ready"
+            await redis.enqueue_job("enrich_document", tenant_id, doc_id, None, user_id)
+        return terminal_status
     except ParseError as exc:
         await _set_status(doc_id, tenant_id, "failed", exc.message)
         log.error("ingest_parse_failed", doc_id=doc_id, error=exc.message)
@@ -245,7 +398,12 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
         log.error("ingest_cancelled", doc_id=doc_id)
         raise
     except BaseException as exc:  # noqa: BLE001 — 摄取失败必须落状态, 不许吞错也不许炸队列
-        await _set_status(doc_id, tenant_id, "failed", f"{type(exc).__name__}: {exc}")
+        await _set_status(
+            doc_id,
+            tenant_id,
+            "failed",
+            "INGESTION_FAILED: 文档处理失败，请稍后重试",
+        )
         log.exception("ingest_failed", doc_id=doc_id)
         if not isinstance(exc, Exception):  # SystemExit/KeyboardInterrupt 等继续向上
             raise

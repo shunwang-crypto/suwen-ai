@@ -274,6 +274,9 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     parse_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bounded page-level facts only: method/status/counts/error codes.  Never
+    # stores PDF text, rendered images, model responses or credentials.
+    recognition_meta_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # 最小审计 (机构库演示"谁传的"); 存量行为 NULL, 不回填
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

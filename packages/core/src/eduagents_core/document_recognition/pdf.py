@@ -215,11 +215,13 @@ async def recognize_pdf(
     tenant_id: str,
     user_id: str,
     selected_pages: Iterable[int] | None = None,
+    inspection: PdfInspection | None = None,
 ) -> PdfRecognitionResult:
     """Recognize selected pages with bounded, partial-failure semantics."""
-    inspection = await asyncio.to_thread(
-        inspect_pdf, data, policy, selected_pages=selected_pages
-    )
+    if inspection is None:
+        inspection = await asyncio.to_thread(
+            inspect_pdf, data, policy, selected_pages=selected_pages
+        )
     visual_pages = [
         page for page in inspection.pages if page.extraction_method in {"scanned", "mixed"}
     ]

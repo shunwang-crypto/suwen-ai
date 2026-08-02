@@ -344,6 +344,7 @@ class DocumentOut(BaseModel):
     status: str
     parse_backend: str
     error_msg: str | None
+    recognition_meta_json: dict = Field(default_factory=dict)
     version: int
     uploaded_by: uuid.UUID | None = None  # 最小审计 (机构库"谁传的"); 存量行 None
     created_at: datetime

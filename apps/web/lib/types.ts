@@ -247,6 +247,20 @@ export interface DocumentOut {
   status: string;
   parse_backend: string;
   error_msg: string | null;
+  recognition_meta_json: {
+    page_count?: number;
+    pages?: Array<{
+      page_number: number;
+      extraction_method: "native_text" | "scanned" | "mixed" | "failed";
+      recognition_status: "ready" | "failed";
+      native_text_chars: number;
+      image_count: number;
+      vision_used: boolean;
+      warning_code?: string;
+      error_code?: string;
+    }>;
+    warnings?: string[];
+  };
   version: number;
   created_at: string;
   updated_at: string;
