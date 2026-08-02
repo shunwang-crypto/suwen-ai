@@ -151,6 +151,7 @@ async def _recognize(
             user_id=user_id,
             model_override=settings.vision_model if suffix in _IMAGE_MIMES else None,
             allow_tier_fallback=suffix not in _IMAGE_MIMES,
+            credential_policy="platform" if suffix in _IMAGE_MIMES else "text",
         )
     )
     payload = parse_json_payload(result.text)

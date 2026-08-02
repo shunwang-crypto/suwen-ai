@@ -136,24 +136,45 @@ class OpenAIGateway:
     # ---------- public API ----------
 
     async def chat(self, req: ChatRequest) -> ChatResult:
+        visual_request = self._is_visual_request(req)
+        self._enforce_visual_policy(req, visual_request)
         started = perf_counter()
         mode = self._s.gateway_mode
         if mode == "stub":
             result = self._stub_result(req, started)
         elif mode == "replay":
+            if visual_request:
+                raise GatewayError(
+                    "VISION_REPLAY_DISABLED",
+                    "视觉识别请求不使用共享回放，请使用平台视觉服务或稍后重试",
+                )
+            credential = await self._resolve_credential(req)
+            if credential is not None and credential.source == CredentialSource.user:
+                raise GatewayError(
+                    "BYOK_REPLAY_DISABLED",
+                    "自带模型请求不使用共享回放，请切换到在线模式",
+                )
             result = self._replay_result(req, started)
         else:  # live / record
             credential = await self._resolve_credential(req)
+            user_request = (
+                credential is not None and credential.source == CredentialSource.user
+            )
             req, reserved_tier = await self._budget_precheck(
-                req, skip=credential is not None and credential.source == CredentialSource.user
+                req, skip=user_request
             )
             try:
-                result = await self._live_chat(req, started, credential=credential)
+                result = await self._live_chat(
+                    req,
+                    started,
+                    credential=credential,
+                    allow_cassette=not user_request and not visual_request,
+                )
             except BaseException:
                 # 全链失败/取消: 返还预算预扣 (P1-12), 否则失败请求也占额度
                 await self._refund_reservation(req, reserved_tier)
                 raise
-            if mode == "record":
+            if mode == "record" and not user_request and not visual_request:
                 self._cassette.put(
                     self._cassette_key(req),
                     {
@@ -173,9 +194,23 @@ class OpenAIGateway:
         return result
 
     async def stream_chat(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
+        visual_request = self._is_visual_request(req)
+        self._enforce_visual_policy(req, visual_request)
         mode = self._s.gateway_mode
         if mode in ("stub", "replay"):
             started = perf_counter()
+            if mode == "replay":
+                if visual_request:
+                    raise GatewayError(
+                        "VISION_REPLAY_DISABLED",
+                        "视觉识别请求不使用共享回放，请使用平台视觉服务或稍后重试",
+                    )
+                credential = await self._resolve_credential(req)
+                if credential is not None and credential.source == CredentialSource.user:
+                    raise GatewayError(
+                        "BYOK_REPLAY_DISABLED",
+                        "自带模型请求不使用共享回放，请切换到在线模式",
+                    )
             result = (
                 self._stub_result(req, started)
                 if mode == "stub"
@@ -198,7 +233,12 @@ class OpenAIGateway:
                 yield item
             return
         req, reserved_tier = await self._budget_precheck(req)
-        inner = self._live_stream(req, reserved_tier)
+        inner = self._live_stream(
+            req,
+            reserved_tier,
+            allow_cassette=not visual_request,
+            allow_record=not visual_request,
+        )
         try:
             async for item in inner:
                 yield item
@@ -233,6 +273,26 @@ class OpenAIGateway:
         if self._credential_resolver is None or req.credential_policy != "text":
             return None
         return await self._credential_resolver(req)
+
+    def _is_visual_request(self, req: ChatRequest) -> bool:
+        if self._s.vision_model and req.model_override == self._s.vision_model:
+            return True
+        return any(
+            isinstance(message.content, list)
+            and any(
+                part.get("type") == "image_url" or "image_url" in part
+                for part in message.content
+            )
+            for message in req.messages
+        )
+
+    @staticmethod
+    def _enforce_visual_policy(req: ChatRequest, visual_request: bool) -> None:
+        if visual_request and req.credential_policy != "platform":
+            raise GatewayError(
+                "VISION_PLATFORM_CREDENTIAL_REQUIRED",
+                "视觉请求必须显式使用平台视觉凭据",
+            )
 
     # ---------- internals ----------
 
@@ -500,7 +560,9 @@ class OpenAIGateway:
             # Only an explicit opt-in reaches the original platform chain.
             req, reserved = await self._budget_precheck(req)
             try:
-                result = await self._live_chat(req, started, credential=None)
+                result = await self._live_chat(
+                    req, started, credential=None, allow_cassette=False
+                )
             except BaseException:
                 await self._refund_reservation(req, reserved)
                 raise
@@ -512,6 +574,8 @@ class OpenAIGateway:
         req: ChatRequest,
         started: float,
         credential: ResolvedCredential | None = None,
+        *,
+        allow_cassette: bool = True,
     ) -> ChatResult:
         if credential is not None and credential.source == CredentialSource.user:
             return await self._live_user_chat(req, started, credential)
@@ -534,7 +598,7 @@ class OpenAIGateway:
                 last_error = exc
                 log.error("tier_call_failed", tier=tier.value, error=str(exc))
         # all live providers failed -> cassette, then (optionally) stub
-        hit = self._cassette.get(self._cassette_key(req))
+        hit = self._cassette.get(self._cassette_key(req)) if allow_cassette else None
         if hit is not None:
             log.warning("live_failed_served_from_cassette")
             result = self._replay_result(req, started)
@@ -621,7 +685,9 @@ class OpenAIGateway:
                 if not credential.fallback_to_platform:
                     raise error from exc
                 req, reserved = await self._budget_precheck(req)
-                async for item in self._live_stream(req, reserved):
+                async for item in self._live_stream(
+                    req, reserved, allow_cassette=False, allow_record=False
+                ):
                     yield item
                 return
             finally:
@@ -673,7 +739,12 @@ class OpenAIGateway:
         await self._emit_usage(req, partial)
 
     async def _live_stream(
-        self, req: ChatRequest, reserved_tier: str | None = None
+        self,
+        req: ChatRequest,
+        reserved_tier: str | None = None,
+        *,
+        allow_cassette: bool = True,
+        allow_record: bool = True,
     ) -> AsyncIterator[StreamDelta | ChatResult]:
         started = perf_counter()
         # P0-6 (计费半段): 客户端断开时 sse_starlette 关闭本生成器 (GeneratorExit/
@@ -731,7 +802,7 @@ class OpenAIGateway:
                         provider="platform",
                         platform_billed_cost_cny=cost,
                     )
-                    if self._s.gateway_mode == "record":
+                    if self._s.gateway_mode == "record" and allow_record:
                         self._cassette.put(
                             self._cassette_key(req),
                             {
@@ -752,7 +823,9 @@ class OpenAIGateway:
             # degrade to non-stream fallback path (cassette/stub), chunked out
             streaming_tier = None
             try:
-                fallback = await self._live_chat(req, started)
+                fallback = await self._live_chat(
+                    req, started, allow_cassette=allow_cassette
+                )
             except BaseException:
                 await self._refund_reservation(req, reserved_tier)
                 settled = True  # 预扣已返还, finally 无需再兜底
