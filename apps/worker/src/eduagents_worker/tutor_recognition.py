@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import tempfile
 import uuid
 import zipfile
@@ -36,6 +37,15 @@ _PROMPT = """你是分级辅导的题目识别助手。忠实识别输入中出�
 每题字段：question_no, page_no, type, stem, options, confidence。
 type 只能是 single、multi、blank、short。不清楚的内容留空，绝不能补造题干、选项或答案。
 保留给出的真实页码。只输出 JSON 数组。"""
+
+
+def _tutor_page_request_id(
+    request_namespace: str, *, tenant_id: str, user_id: str, page_number: int
+) -> str:
+    digest = hashlib.sha256(
+        f"{tenant_id}\0{user_id}\0{request_namespace}\0{page_number}".encode()
+    ).hexdigest()
+    return f"tutorocr-{digest[:56]}"
 
 
 def _payload_questions(text: str) -> list[dict]:
@@ -129,6 +139,7 @@ async def _recognize_source(
     selected_pages: list[int],
     tenant_id: str,
     user_id: str,
+    request_namespace: str = "",
 ) -> tuple[list[dict], int, list[str]]:
     suffix = Path(filename).suffix.lower()
     if settings.gateway_mode == "stub":
@@ -165,6 +176,13 @@ async def _recognize_source(
             user_id=user_id,
             timeout_seconds=settings.tutor_ocr_timeout_seconds,
             mime_type=_IMAGE_MIMES[suffix],
+            request_id=(
+                _tutor_page_request_id(
+                    request_namespace, tenant_id=tenant_id, user_id=user_id, page_number=1
+                )
+                if request_namespace
+                else ""
+            ),
         )
         raw = await _model_questions(
             settings,
@@ -187,6 +205,7 @@ async def _recognize_source(
             tenant_id=tenant_id,
             user_id=user_id,
             selected_pages=selected_pages,
+            request_namespace=request_namespace,
         )
         if not recognized.successful_pages:
             raise ValueError("TUTOR_PDF_ALL_PAGES_FAILED")
@@ -268,13 +287,21 @@ async def recognize_tutor_problem(
             storage_key = resource.storage_key
             selected_pages = [int(page) for page in (draft.selected_pages_json or [])]
             user_id = str(draft.user_id)
+            recognition_attempt = draft.recognition_attempts
         from eduagents_core.storage import create_storage
 
         data = await create_storage(settings).load(storage_key)
         gateway = gateway or get_worker_gateway(settings)
         raw, page_count, warnings = await asyncio.wait_for(
             _recognize_source(
-                settings, gateway, filename, data, selected_pages, tenant_id, user_id
+                settings,
+                gateway,
+                filename,
+                data,
+                selected_pages,
+                tenant_id,
+                user_id,
+                request_namespace=f"{draft_id}:attempt:{recognition_attempt}",
             ),
             timeout=settings.tutor_recognition_timeout_seconds,
         )

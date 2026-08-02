@@ -86,6 +86,7 @@ async def _parse_pdf(
     tenant_id: str,
     user_id: str,
     doc_id: str,
+    document_version: int,
 ):
     from eduagents_core.document_recognition import (
         PdfRecognitionPolicy,
@@ -110,6 +111,7 @@ async def _parse_pdf(
             tenant_id=tenant_id,
             user_id=user_id,
             inspection=inspection,
+            request_namespace=f"kb:{doc_id}:version:{document_version}",
         )
     except ValueError as exc:
         raise _pdf_parse_error(exc) from exc
@@ -179,6 +181,7 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
                 return "missing"
             kb_id, filename = str(doc.kb_id), doc.filename
             user_id = str(doc.uploaded_by or doc.tenant_id)
+            document_version = doc.version
 
         # A retry starts from a clean vector namespace.  If parsing later
         # fails, stale vectors from an older version cannot remain searchable.
@@ -203,6 +206,7 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 doc_id=doc_id,
+                document_version=document_version,
             )
         else:
             parser = get_parser(suffix)

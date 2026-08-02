@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -280,3 +281,127 @@ async def test_platform_only_vision_policy_never_resolves_user_key(monkeypatch, 
     assert resolver_calls == 0
     assert _Client.calls == ["platform-key"]
     assert result.credential_source == "platform"
+
+
+@pytest.mark.asyncio
+async def test_record_mode_never_writes_byok_or_platform_fallback_to_cassette(
+    monkeypatch, tmp_path
+):
+    from eduagents_core.gateway import openai_gateway
+
+    _Client.calls = []
+    _Client.fail_user = False
+    monkeypatch.setattr(openai_gateway, "AsyncOpenAI", _Client)
+    settings = Settings(
+        _env_file=None,
+        gateway_mode="record",
+        gateway_cassette_dir=str(tmp_path / "cassettes"),
+        gateway_max_retries=1,
+        standard_api_key="platform-key",
+    )
+    fallback = False
+
+    async def resolver(_req):
+        return ResolvedCredential(
+            source=CredentialSource.user,
+            provider="deepseek",
+            api_key="user-key",
+            base_url="https://fake-user/v1",
+            model="deepseek-chat",
+            fallback_to_platform=fallback,
+        )
+
+    gateway = OpenAIGateway(settings, credential_resolver=resolver)
+    await gateway.chat(ChatRequest(messages=(ChatMessage(role="user", content="private"),)))
+    assert list((tmp_path / "cassettes").rglob("*.json")) == []
+
+    fallback = True
+    _Client.fail_user = True
+    await gateway.chat(ChatRequest(messages=(ChatMessage(role="user", content="fallback"),)))
+    assert list((tmp_path / "cassettes").rglob("*.json")) == []
+    _Client.fail_user = False
+
+
+@pytest.mark.asyncio
+async def test_visual_requests_require_platform_policy_and_never_use_cassette(
+    monkeypatch, tmp_path
+):
+    from eduagents_core.gateway import openai_gateway
+
+    _Client.calls = []
+    monkeypatch.setattr(openai_gateway, "AsyncOpenAI", _Client)
+    settings = Settings(
+        _env_file=None,
+        gateway_mode="record",
+        gateway_cassette_dir=str(tmp_path / "cassettes"),
+        standard_api_key="platform-key",
+        vision_model="fake-vision",
+    )
+    gateway = OpenAIGateway(settings)
+    visual_content = [
+        {"type": "text", "text": "transcribe"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+    ]
+    with pytest.raises(GatewayError, match="VISION_PLATFORM_CREDENTIAL_REQUIRED"):
+        await gateway.chat(
+            ChatRequest(messages=(ChatMessage(role="user", content=visual_content),))
+        )
+
+    await gateway.chat(
+        ChatRequest(
+            messages=(ChatMessage(role="user", content=visual_content),),
+            model_override="fake-vision",
+            credential_policy="platform",
+            allow_tier_fallback=False,
+        )
+    )
+    assert list((tmp_path / "cassettes").rglob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_replay_never_returns_shared_platform_response_to_byok_user(monkeypatch, tmp_path):
+    from eduagents_core.gateway import openai_gateway
+
+    _Client.calls = []
+    monkeypatch.setattr(openai_gateway, "AsyncOpenAI", _Client)
+    record_settings = Settings(
+        _env_file=None,
+        gateway_mode="record",
+        gateway_cassette_dir=str(tmp_path / "cassettes"),
+        standard_api_key="platform-key",
+    )
+    request = ChatRequest(
+        messages=(ChatMessage(role="user", content="shared platform answer"),),
+        tenant_id="tenant",
+        user_id="user",
+        request_id="safe-request-id",
+    )
+    await OpenAIGateway(record_settings).chat(request)
+    assert list((tmp_path / "cassettes").rglob("*.json"))
+
+    secret = "user-key"
+
+    async def resolver(_req):
+        return ResolvedCredential(
+            source=CredentialSource.user,
+            provider="deepseek",
+            api_key=secret,
+            base_url="https://fake-user/v1",
+            model="deepseek-chat",
+        )
+
+    replay = OpenAIGateway(
+        Settings(
+            _env_file=None,
+            gateway_mode="replay",
+            gateway_cassette_dir=str(tmp_path / "cassettes"),
+        ),
+        credential_resolver=resolver,
+    )
+    with pytest.raises(GatewayError) as exc:
+        await replay.chat(request)
+    assert exc.value.code == "BYOK_REPLAY_DISABLED"
+    assert _Client.calls == ["platform-key"]
+    cassette_key = replay._cassette_key(request)
+    assert secret not in cassette_key
+    assert hashlib.sha256(secret.encode()).hexdigest() not in cassette_key

@@ -73,7 +73,13 @@ def _scanned_pdf(page_count: int) -> bytes:
 async def test_normal_pdf_uses_selected_text_layer_without_vision():
     gateway = FakeGateway(['[{"question_no":"1","page_no":2,"type":"short","stem":"第二页题目","options":[],"confidence":0.9}]'])
     questions, page_count, warnings = await _recognize_source(
-        _settings(), gateway, "paper.pdf", _pdf(["第一页" * 30, "第二页题目" * 30]), [2], "tenant", "user"
+        _settings(),
+        gateway,
+        "paper.pdf",
+        _pdf(["Page one exercise. " * 30, "Page two exercise. " * 30]),
+        [2],
+        "tenant",
+        "user",
     )
     assert page_count == 2
     assert warnings == []
@@ -81,8 +87,8 @@ async def test_normal_pdf_uses_selected_text_layer_without_vision():
     request = gateway.requests[0]
     assert request.credential_policy == "text"
     assert request.model_override is None
-    assert "第 2 页" in request.messages[0].content
-    assert "第 1 页" not in request.messages[0].content
+    assert "Page two exercise" in request.messages[0].content
+    assert "Page one exercise" not in request.messages[0].content
 
 
 @pytest.mark.asyncio
@@ -103,6 +109,35 @@ async def test_scanned_pdf_renders_only_selected_page_and_uses_platform_vision()
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert "真实 PDF 页码是第 2 页" in content[0]["text"]
     assert gateway.requests[1].credential_policy == "text"
+
+
+@pytest.mark.asyncio
+async def test_tutor_visual_request_id_is_stable_per_attempt_and_changes_on_new_attempt():
+    async def recognize(attempt: int) -> str:
+        gateway = FakeGateway([
+            "## 第七题\n扫描题",
+            '[{"question_no":"7","page_no":2,"type":"short","stem":"扫描题","options":[],"confidence":0.8}]',
+        ])
+        await _recognize_source(
+            _settings(),
+            gateway,
+            "scan.pdf",
+            _scanned_pdf(2),
+            [2],
+            "tenant",
+            "user",
+            request_namespace=f"draft:attempt:{attempt}",
+        )
+        return gateway.requests[0].request_id
+
+    first_retry = await recognize(3)
+    second_retry = await recognize(3)
+    new_attempt = await recognize(4)
+
+    assert first_retry == second_retry
+    assert first_retry != new_attempt
+    assert "扫描题" not in first_retry
+    assert "user-key" not in first_retry
 
 
 @pytest.mark.asyncio

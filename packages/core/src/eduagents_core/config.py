@@ -283,6 +283,7 @@ class Settings(BaseSettings):
     # and classification thresholds.
     max_pdf_pages: int = 100
     pdf_native_min_chars: int = 180
+    pdf_native_no_visual_min_chars: int = 60
     pdf_native_min_printable_ratio: float = 0.80
     pdf_native_min_text_coverage: float = 0.015
     pdf_body_min_char_ratio: float = 0.55

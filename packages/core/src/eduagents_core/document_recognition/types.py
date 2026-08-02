@@ -13,6 +13,7 @@ class PdfRecognitionPolicy:
 
     max_pages: int = 100
     native_min_chars: int = 180
+    native_no_visual_min_chars: int = 60
     native_min_printable_ratio: float = 0.80
     native_min_text_coverage: float = 0.015
     body_min_char_ratio: float = 0.55
@@ -40,6 +41,7 @@ class PdfRecognitionPolicy:
         return cls(
             max_pages=configured_pages,
             native_min_chars=settings.pdf_native_min_chars,
+            native_no_visual_min_chars=settings.pdf_native_no_visual_min_chars,
             native_min_printable_ratio=settings.pdf_native_min_printable_ratio,
             native_min_text_coverage=settings.pdf_native_min_text_coverage,
             body_min_char_ratio=settings.pdf_body_min_char_ratio,

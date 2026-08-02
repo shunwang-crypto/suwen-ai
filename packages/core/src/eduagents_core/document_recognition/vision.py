@@ -25,6 +25,7 @@ async def recognize_page_image(
     user_id: str,
     timeout_seconds: float,
     mime_type: str = "image/png",
+    request_id: str = "",
 ) -> str:
     """Transcribe one rendered page using platform credentials only."""
     if not vision_model:
@@ -49,6 +50,7 @@ async def recognize_page_image(
                 temperature=0.0,
                 max_tokens=8000,
                 feature="pdf_page_transcription",
+                request_id=request_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 model_override=vision_model,

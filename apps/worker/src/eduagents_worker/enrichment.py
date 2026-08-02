@@ -403,7 +403,7 @@ async def enrich_document(
                                 }
                                 kb.config_json = config
         return "enriched"
-    except Exception as exc:  # noqa: BLE001 — enriching 失败仅降级为 ready, 不回退 Stage1
+    except Exception:  # noqa: BLE001 — enriching 失败仅降级为 ready, 不回退 Stage1
         log.exception("enrich_failed", doc_id=doc_id)
         async with tenant_session(tenant_id) as session:
             await session.execute(

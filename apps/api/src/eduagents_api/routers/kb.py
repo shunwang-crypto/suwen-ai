@@ -388,6 +388,7 @@ async def reindex_document(
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         doc.status = "pending"
         doc.error_msg = None
+        doc.version += 1
         doc.recognition_meta_json = {}
         if doc.parse_backend.startswith("pdf-"):
             doc.parse_backend = ""

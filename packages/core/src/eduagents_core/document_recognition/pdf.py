@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 
 import pymupdf
@@ -39,7 +41,14 @@ def _printable_ratio(chars: list[str]) -> float:
         for char in chars
         if char.isprintable() and not unicodedata.category(char).startswith("C")
     )
-    return printable / len(chars)
+    ratio = printable / len(chars)
+    # A nominally printable text layer made almost entirely of one replacement
+    # glyph (commonly '?' from a missing embedded font) is still unusable.
+    if len(chars) >= 30:
+        dominant_ratio = Counter(chars).most_common(1)[0][1] / len(chars)
+        if dominant_ratio > 0.35:
+            ratio *= max(0.0, 1.0 - (dominant_ratio - 0.35) / 0.65)
+    return ratio
 
 
 def _classify_page(
@@ -62,13 +71,23 @@ def _classify_page(
         if image_count or drawing_count:
             return "scanned", None
         return "failed", "PDF_BLANK_PAGE"
-    text_is_complete = (
-        char_count >= policy.native_min_chars
-        and printable_ratio >= policy.native_min_printable_ratio
+    text_quality_is_trustworthy = (
+        printable_ratio >= policy.native_min_printable_ratio
         and text_coverage >= policy.native_min_text_coverage
         and body_char_ratio >= policy.body_min_char_ratio
     )
+    text_is_complete = char_count >= policy.native_min_chars and text_quality_is_trustworthy
     if text_is_complete and not has_visual_body:
+        return "native_text", None
+    # Short exercise pages can be entirely text while legitimately containing
+    # fewer characters than a prose page.  Only accept the lower threshold
+    # when there are no image/drawing body signals and layout quality is strong.
+    if (
+        not image_count
+        and not drawing_count
+        and char_count >= policy.native_no_visual_min_chars
+        and text_quality_is_trustworthy
+    ):
         return "native_text", None
     # A small title/footer text layer is not evidence that the visual body was
     # extracted.  Uncertain pages deliberately take the conservative path.
@@ -216,6 +235,7 @@ async def recognize_pdf(
     user_id: str,
     selected_pages: Iterable[int] | None = None,
     inspection: PdfInspection | None = None,
+    request_namespace: str = "",
 ) -> PdfRecognitionResult:
     """Recognize selected pages with bounded, partial-failure semantics."""
     if inspection is None:
@@ -228,6 +248,13 @@ async def recognize_pdf(
     if policy.max_vision_pages > 0 and len(visual_pages) > policy.max_vision_pages:
         raise ValueError("PDF_VISION_PAGE_LIMIT_EXCEEDED")
     semaphore = asyncio.Semaphore(max(1, policy.vision_concurrency))
+    namespace = request_namespace or hashlib.sha256(data).hexdigest()
+
+    def page_request_id(page_number: int) -> str:
+        digest = hashlib.sha256(
+            f"{tenant_id}\0{user_id}\0{namespace}\0{page_number}".encode()
+        ).hexdigest()
+        return f"pdfocr-{digest[:56]}"
 
     async def one(page: PdfPageInspection) -> PdfPageResult:
         if page.extraction_method == "native_text":
@@ -266,6 +293,7 @@ async def recognize_pdf(
                     tenant_id=tenant_id,
                     user_id=user_id,
                     timeout_seconds=policy.page_timeout_seconds,
+                    request_id=page_request_id(page.page_number),
                 )
             if not markdown:
                 raise ValueError("PDF_PAGE_EMPTY")
