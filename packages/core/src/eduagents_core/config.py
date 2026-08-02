@@ -3,8 +3,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+RegistrationMode = Literal["closed", "invite", "open"]
 
 
 class TierConfig(BaseModel):
@@ -48,7 +50,11 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_seconds: int = 14 * 24 * 3600
     bcrypt_rounds: int = 12
-    public_registration: bool = True
+    # REGISTRATION_MODE is the canonical switch. PUBLIC_REGISTRATION remains
+    # a compatibility input for older local/server env files and is normalized
+    # to the canonical mode below; it is never used by application code.
+    registration_mode: RegistrationMode | None = None
+    public_registration: bool | None = None
     # 生产公开注册始终强制邮箱验证；测试可显式关闭以复用旧夹具。
     email_verification_required: bool = True
     email_code_ttl_seconds: int = 600
@@ -118,6 +124,22 @@ class Settings(BaseSettings):
     # Production keeps the admin fault-injection surface off unless an
     # operator explicitly enables it on a private management network.
     enable_fault_injection: bool = True
+
+    @model_validator(mode="after")
+    def resolve_registration_mode(self) -> Settings:
+        legacy_mode = None
+        if self.public_registration is not None:
+            legacy_mode = "open" if self.public_registration else "closed"
+        if self.registration_mode is None:
+            # Keep existing dev/test env files working, while production with
+            # no registration setting fails closed.
+            self.registration_mode = legacy_mode or ("open" if self.app_env != "prod" else "closed")
+        elif legacy_mode is not None and legacy_mode != self.registration_mode:
+            raise ValueError(
+                "REGISTRATION_MODE conflicts with legacy PUBLIC_REGISTRATION; remove the legacy setting"
+            )
+        self.public_registration = self.registration_mode == "open"
+        return self
 
     # circuit breaker
     breaker_window_seconds: float = 60.0

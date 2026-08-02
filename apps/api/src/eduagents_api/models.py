@@ -142,6 +142,29 @@ class User(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class RegistrationInvite(Base):
+    """Hashed platform invite; plaintext is intentionally never a model field."""
+
+    __tablename__ = "registration_invites"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active", index=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = _created_at()
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     id: Mapped[uuid.UUID] = _uuid_pk()
