@@ -14,6 +14,7 @@ import re
 from datetime import date
 from urllib.parse import unquote
 
+from eduagents_api.plan_adjust import plan_schedule_snapshot
 from eduagents_api.routers.next_actions import (
     MAX_ITEMS,
     compose_next_actions,
@@ -218,3 +219,38 @@ def test_plan_item_wording():
     assert "2 个任务" in item["title"]
     assert "第 4 天" in item["reason"] and "期末高数 90 分" in item["reason"]
     assert item["href"] == "/plans"
+
+
+def test_plan_schedule_selects_only_the_server_calculated_current_day():
+    structure = {
+        "stages": [{
+            "days": [
+                {"day": 1, "tasks": [{"title": "逾期"}]},
+                {"day": 2, "tasks": [{"title": "今天"}]},
+                {"day": 3, "tasks": [{"title": "未来"}]},
+            ],
+        }],
+    }
+    snapshot = plan_schedule_snapshot(date(2026, 7, 25), structure, date(2026, 7, 26))
+    assert snapshot == {
+        "current_day": 2,
+        "today_tasks": ["stage0.day1.task0"],
+        "overdue_tasks": ["stage0.day0.task0"],
+        "upcoming_tasks": ["stage0.day2.task0"],
+    }
+
+
+def test_plan_schedule_marks_remaining_tasks_overdue_after_plan_end():
+    structure = {
+        "stages": [{
+            "days": [
+                {"day": 1, "tasks": [{"title": "已过期"}]},
+                {"day": 3, "tasks": [{"title": "也已过期"}]},
+            ],
+        }],
+    }
+    snapshot = plan_schedule_snapshot(date(2026, 7, 25), structure, date(2026, 7, 30))
+    assert snapshot["current_day"] == 6
+    assert snapshot["today_tasks"] == []
+    assert snapshot["overdue_tasks"] == ["stage0.day0.task0", "stage0.day1.task0"]
+    assert snapshot["upcoming_tasks"] == []

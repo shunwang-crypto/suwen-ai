@@ -126,8 +126,9 @@ export default function TodayPage() {
       ]);
       if (!alive) return;
       const plans = plansResult.status === "fulfilled" ? plansResult.value : [];
-      const sortedPlans = [...plans].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-      const latest = sortedPlans.find((item) => item.structure?.stages.some((stage) => stage.days.some((day) => day.tasks.length > 0))) ?? sortedPlans[0];
+      // /api/plans already marks the newest plan as current.  Do not derive
+      // the active plan or its day from a browser-local Date/time zone.
+      const latest = plans.find((item) => item.is_current) ?? plans[0];
       let plan: PlanDetail | null = null;
       if (latest) {
         try {
@@ -151,7 +152,11 @@ export default function TodayPage() {
     const tasks: FlatTask[] = (data.plan?.structure.stages ?? []).flatMap((stage) =>
       stage.days.flatMap((day) => day.tasks.map((task) => ({ ...task, day: day.day, stage: stage.name }))),
     );
-    const nextTask = tasks.find((task) => !task.done) ?? tasks[0] ?? null;
+    const todayKeys = new Set(data.plan?.schedule?.today_tasks ?? []);
+    const overdueKeys = new Set(data.plan?.schedule?.overdue_tasks ?? []);
+    const todayTasks = tasks.filter((task) => !task.done && task.task_key && todayKeys.has(task.task_key));
+    const overdueTasks = tasks.filter((task) => !task.done && task.task_key && overdueKeys.has(task.task_key));
+    const nextTask = todayTasks[0] ?? overdueTasks[0] ?? null;
     const currentStage = nextTask?.stage ?? data.plan?.structure.stages[0]?.name ?? data.plan?.goal ?? "当前学习";
     const stageTasks = tasks.filter((task) => task.stage === currentStage).slice(0, 4);
     const stageDone = stageTasks.filter((task) => task.done).length;
@@ -172,22 +177,25 @@ export default function TodayPage() {
       review,
       href: "/reviews",
     }));
-    const planItems: TodayItem[] = tasks.filter((task) => !task.done).slice(0, Math.max(0, 5 - reviewItems.length)).map((task, index) => {
+    const planItems: TodayItem[] = [...todayTasks, ...overdueTasks]
+      .slice(0, Math.max(0, 5 - reviewItems.length))
+      .map((task, index) => {
       const practice = task.action_type === "practice" || (!task.action_type && /练习|测验|测试|习题/.test(task.title));
+      const isOverdue = overdueKeys.has(task.task_key ?? "");
       return {
         id: `task-${task.task_key ?? `${task.day}-${index}`}`,
         type: practice ? "practice" : "study",
         title: task.title,
         context: `${task.stage} · 第 ${task.day} 天`,
         duration: `${task.minutes} 分钟`,
-        priority: index === 0 ? "high" : "normal",
-        dueLabel: index === 0 ? "计划今日" : undefined,
+        priority: !isOverdue && index === 0 ? "high" : "normal",
+        dueLabel: isOverdue ? "逾期" : "计划今日",
         done: Boolean(task.done),
         task,
         href: taskExecutionHref(task, data.plan?.kb_id),
       };
     });
-    const completed = tasks.filter((task) => task.done)[0];
+    const completed = [...tasks].reverse().find((task) => task.done);
     const completedItem: TodayItem[] = completed && reviewItems.length + planItems.length < 5 ? [{
       id: `task-${completed.task_key ?? "completed"}`,
       type: /练习|测验|测试|习题/.test(completed.title) ? "practice" : "study",

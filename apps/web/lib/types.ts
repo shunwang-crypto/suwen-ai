@@ -425,6 +425,7 @@ export interface PlanTask {
   resource_id?: string | null;
   resource?: PlanResource | null;
   action_type?: "read" | "practice" | "tutor" | "review_errors" | "mixed" | string;
+  /** 题量契约：服务端只接受 1–20。 */
   practice_count?: number | null;
   difficulty?: "easy" | "mid" | "hard" | string | null;
   /** 计划详情接口下发：stages/days/tasks 三层 0 基下标组成的任务键（前端只回传不自造） */
@@ -478,6 +479,14 @@ export interface PlanProgress {
   ratio: number;
 }
 
+export interface PlanSchedule {
+  /** Business-calendar day number, computed by the API time-control clock. */
+  current_day: number;
+  today_tasks: string[];
+  overdue_tasks: string[];
+  upcoming_tasks: string[];
+}
+
 export interface PlanDetail {
   id: string;
   goal: string;
@@ -487,6 +496,7 @@ export interface PlanDetail {
   version: number;
   structure: PlanStructure;
   resources: PlanResource[];
+  schedule?: PlanSchedule;
   progress: PlanProgress;
   created_at: string;
 }
@@ -510,6 +520,7 @@ export interface PlanInsertedTask {
   kc_id: string;
   kc_names: string[];
   action_type?: string;
+  /** 题量契约：服务端只接受 1–20。 */
   practice_count?: number;
   difficulty?: string | null;
   p_mastery: number;

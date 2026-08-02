@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import re
 import uuid
+from datetime import date
 from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
@@ -69,6 +70,47 @@ def iter_tasks(structure: dict | None):
             for ti, task in enumerate(tasks if isinstance(tasks, list) else []):
                 if isinstance(task, dict):
                     yield si, di, ti, stage, day, task
+
+
+def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -> dict:
+    """Return the server-owned day buckets used by plan detail and today.
+
+    The plan clock is a calendar clock: the creation date is day 1.  Tasks
+    whose legacy structure has no usable ``day`` are deliberately put in the
+    overdue bucket, never silently guessed as today's task.  Once the plan is
+    past its last numbered day, every unfinished numbered task is overdue;
+    future-looking schedule entries must not be promoted to today.
+
+    Bucket values are stable task keys.  The task payload itself remains in
+    ``structure`` so old plans continue to be readable without a migration.
+    """
+    current_day = max(1, (today - created).days + 1)
+    numbered_days = [
+        day.get("day")
+        for _si, _di, _ti, _stage, day, _task in iter_tasks(structure)
+        if isinstance(day.get("day"), int) and not isinstance(day.get("day"), bool)
+    ]
+    past_schedule = bool(numbered_days) and current_day > max(numbered_days)
+    today_tasks: list[str] = []
+    overdue_tasks: list[str] = []
+    upcoming_tasks: list[str] = []
+    for stage_idx, day_idx, task_idx, _stage, day, _task in iter_tasks(structure):
+        task_key = make_task_key(stage_idx, day_idx, task_idx)
+        day_number = day.get("day")
+        if not isinstance(day_number, int) or isinstance(day_number, bool) or day_number <= 0:
+            overdue_tasks.append(task_key)
+        elif past_schedule or day_number < current_day:
+            overdue_tasks.append(task_key)
+        elif day_number == current_day:
+            today_tasks.append(task_key)
+        else:
+            upcoming_tasks.append(task_key)
+    return {
+        "current_day": current_day,
+        "today_tasks": today_tasks,
+        "overdue_tasks": overdue_tasks,
+        "upcoming_tasks": upcoming_tasks,
+    }
 
 
 def enrich_structure(structure: dict | None, resources: dict[str, dict] | None = None) -> dict:

@@ -29,7 +29,7 @@ from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import KnowledgeComponent, LearnerInsight
-from ..plan_adjust import iter_tasks, latest_plan
+from ..plan_adjust import iter_tasks, latest_plan, plan_schedule_snapshot
 from ..profile_summary import weak_point_kcs
 
 # B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
@@ -60,16 +60,16 @@ def plan_today_snapshot(
     第 N 天 = 自创建日起算 (创建当天为第 1 天); 任务的日程号取 day.day (int),
     缺失时保守视为已到期 (宁可多提醒, 不静默漏任务)。全部完成 -> 不打扰。
     """
-    day_no = max(1, (today - created).days + 1)
-    undone = 0
-    for _si, _di, _ti, _stage, day, task in iter_tasks(structure):
-        day_number = day.get("day")
-        due = not isinstance(day_number, int) or day_number <= day_no
-        if due and not task.get("done"):
-            undone += 1
+    snapshot = plan_schedule_snapshot(created, structure, today)
+    due_keys = set(snapshot["today_tasks"]) | set(snapshot["overdue_tasks"])
+    undone = sum(
+        1
+        for si, di, ti, _stage, _day, task in iter_tasks(structure)
+        if f"stage{si}.day{di}.task{ti}" in due_keys and not task.get("done")
+    )
     if undone == 0:
         return None
-    return {"goal": goal, "day_no": day_no, "undone": undone}
+    return {"goal": goal, "day_no": snapshot["current_day"], "undone": undone}
 
 
 def _resume_item(insight: dict) -> dict:

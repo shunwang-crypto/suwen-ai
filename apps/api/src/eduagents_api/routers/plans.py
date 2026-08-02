@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from .. import timectl
+from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import (
@@ -21,7 +23,13 @@ from ..models import (
     PlanAdjustment,
     PlanResource,
 )
-from ..plan_adjust import adjust_plan, enrich_structure, plan_progress, set_task_done
+from ..plan_adjust import (
+    adjust_plan,
+    enrich_structure,
+    plan_progress,
+    plan_schedule_snapshot,
+    set_task_done,
+)
 from ..profile_summary import ProfileContext, build_profile_context
 from ..services import _plan_resource_public, apply_tutor_summary
 from .threads import stream_graph_run
@@ -235,7 +243,7 @@ async def _load_plan(session, plan_id: uuid.UUID, ctx: AuthContext) -> Plan:
     return plan
 
 
-async def _plan_detail(session, plan: Plan) -> dict:
+async def _plan_detail(session, plan: Plan, today) -> dict:
     resource_rows = (
         await session.scalars(
             select(PlanResource).where(PlanResource.plan_id == plan.id).order_by(PlanResource.created_at)
@@ -244,6 +252,9 @@ async def _plan_detail(session, plan: Plan) -> dict:
     resources = {str(row.id): _plan_resource_public(row) for row in resource_rows}
     kb = await session.get(KnowledgeBase, plan.kb_id) if plan.kb_id else None
     structure = enrich_structure(plan.structure_json, resources)
+    schedule = plan_schedule_snapshot(
+        plan.created_at.astimezone(CN_TZ).date(), plan.structure_json, today
+    )
     return {
         "id": str(plan.id),
         "goal": plan.goal,
@@ -253,17 +264,23 @@ async def _plan_detail(session, plan: Plan) -> dict:
         "version": plan.version,
         "structure": structure,
         "resources": list(resources.values()),
+        "schedule": schedule,
         "progress": plan_progress(plan.structure_json),
         "created_at": plan.created_at,
     }
 
 
 @router.get("/{plan_id}")
-async def get_plan(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+async def get_plan(
+    plan_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
     """计划详情 (F3): 每个任务带 task_key 与 done, 附任务粒度进度。"""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx)
-        return await _plan_detail(session, plan)
+        now_dt = await timectl.now(request.app.state.redis)
+        return await _plan_detail(session, plan, now_dt.astimezone(CN_TZ).date())
 
 
 @router.post("/{plan_id}/tasks/{task_key}/toggle")

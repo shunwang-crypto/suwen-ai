@@ -80,7 +80,20 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
 };
 
 const PAGE_SIZE = 10;
-const emptySubscribe = () => () => {};
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function subscribeSearch(onStoreChange: () => void) {
+  window.addEventListener("popstate", onStoreChange);
+  return () => window.removeEventListener("popstate", onStoreChange);
+}
+
+function getSearch() {
+  return window.location.search;
+}
+
+function getServerSearch() {
+  return "";
+}
 
 /** 顶部统计卡片：state=null 表示"全部"。 */
 const STAT_CARDS: { key: string; label: string; state: string | null }[] = [
@@ -103,8 +116,9 @@ function StateBadge({ state }: { state: string }) {
 }
 
 export default function ErrorsPage() {
-  const search = useSyncExternalStore(emptySubscribe, () => window.location.search, () => "");
-  const urlKbFilter = new URLSearchParams(search).get("kb_id");
+  const search = useSyncExternalStore(subscribeSearch, getSearch, getServerSearch);
+  const rawUrlKbFilter = new URLSearchParams(search).get("kb_id");
+  const urlKbFilter = rawUrlKbFilter && UUID_RE.test(rawUrlKbFilter) ? rawUrlKbFilter : null;
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -116,7 +130,8 @@ export default function ErrorsPage() {
   const [causeFilter, setCauseFilter] = useState<string | null>(null);
   // B4 真实规模: 科目 tab 与全文搜索都走后端过滤，结果数和翻页保持一致。
   const [kbs, setKbs] = useState<KbOut[]>([]);
-  const [kbFilter, setKbFilter] = useState<string | null>(null);
+  const [kbFilter, setKbFilter] = useState<string | null>(urlKbFilter);
+  const [kbListLoaded, setKbListLoaded] = useState(false);
   const [query, setQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -148,7 +163,7 @@ export default function ErrorsPage() {
       });
       if (stateFilter) params.set("state", stateFilter);
       if (causeFilter) params.set("cause", causeFilter);
-      if (kbFilter || urlKbFilter) params.set("kb_id", kbFilter || urlKbFilter || "");
+      if (kbFilter) params.set("kb_id", kbFilter);
       if (searchQuery) params.set("q", searchQuery);
       const [listRes, statsRes] = await Promise.allSettled([
         apiJson<ErrorListResponse>(`/api/errors?${params.toString()}`),
@@ -171,7 +186,7 @@ export default function ErrorsPage() {
     return () => {
       alive = false;
     };
-  }, [stateFilter, causeFilter, kbFilter, urlKbFilter, searchQuery, page, reloadKey]);
+  }, [stateFilter, causeFilter, kbFilter, searchQuery, page, reloadKey]);
 
   // 知识库列表 (科目 tab 数据源); 失败静默降级为"全部"单 tab, 不拖垮错题本
   useEffect(() => {
@@ -179,15 +194,42 @@ export default function ErrorsPage() {
     (async () => {
       try {
         const res = await apiJson<KbOut[]>("/api/kb");
-        if (alive) setKbs(res);
+        if (alive) {
+          setKbs(res);
+          setKbListLoaded(true);
+        }
       } catch {
-        if (alive) setKbs([]);
+        if (alive) {
+          setKbs([]);
+          setKbListLoaded(true);
+        }
       }
     })();
     return () => {
       alive = false;
     };
   }, []);
+
+  // The URL is an input only at the navigation boundary.  Once the visible
+  // KB list is known, local state becomes the single request source.  This
+  // also makes popstate (back/forward) restore only an accessible KB id.
+  useEffect(() => {
+    if (!kbListLoaded) return;
+    const next = urlKbFilter && kbs.some((kb) => kb.id === urlKbFilter) ? urlKbFilter : null;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setKbFilter((previous) => {
+        if (previous === next) return previous;
+        setPage(1);
+        setLoading(true);
+        return next;
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [kbListLoaded, kbs, urlKbFilter]);
 
   const reload = () => {
     setLoading(true);
@@ -205,6 +247,19 @@ export default function ErrorsPage() {
     setCauseFilter((prev) => (prev === next ? null : next));
     setPage(1);
     setLoading(true);
+  };
+
+  const pickKb = (next: string | null) => {
+    setKbFilter(next);
+    setPage(1);
+    setLoading(true);
+    const params = new URLSearchParams(window.location.search);
+    if (next) params.set("kb_id", next);
+    else params.delete("kb_id");
+    const queryString = params.toString();
+    const href = `${window.location.pathname}${queryString ? `?${queryString}` : ""}`;
+    window.history.pushState({}, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   };
 
   const patchItem = (id: string, patch: Partial<ErrorItemOut>) => {
@@ -384,14 +439,13 @@ export default function ErrorsPage() {
           <div className="flex flex-wrap items-center gap-1.5">
             {[{ id: null, name: "全部科目" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
               (tab) => {
-                const on = (kbFilter || urlKbFilter) === tab.id;
+                const on = kbFilter === tab.id;
                 return (
                   <button
                     key={tab.id ?? "__all__"}
                     type="button"
                     onClick={() => {
-                      setKbFilter(tab.id);
-                      setPage(1);
+                      pickKb(tab.id);
                     }}
                     className={`rounded-[7px] border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
                       on
