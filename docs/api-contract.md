@@ -82,6 +82,20 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 `(user_id, ref)` 的条件唯一索引由 0015 migration 提供，保证并发请求最多一次真正入账。
 管理员审计日志记录执行人、目标用户、金额和业务凭证；搜索日志只记录 query 哈希。
 
+无 `query` 时 `/api/admin/users` 返回 `{items,page,page_size,total,has_more}`，默认按注册时间倒序、每页 20；`query` 参数保留旧数组响应以兼容已有运营客户端。`GET /api/admin/users/{user_id}` 返回聚合详情和脱敏的 BYOK 状态（provider、启用状态、后四位、模型名），绝不返回密码、token、密文或 nonce。所有管理员端点要求 `admin` 角色。
+
+### 用户自带 DeepSeek 模型（0017）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/settings/model-credential | 返回 configured、enabled、fallback、provider、后四位、模型、验证状态和服务端允许模型；不返回 Key、密文或 nonce |
+| PUT | /api/settings/model-credential | 受控验证后整体替换并启用；验证失败不覆盖旧配置 |
+| POST | /api/settings/model-credential/test | 只测试输入 Key，不保存；测试环境 stub 不连接外部服务 |
+| PATCH | /api/settings/model-credential | 只修改启用、平台回退和模型选择，不接收或返回密文 |
+| DELETE | /api/settings/model-credential | 幂等删除，之后使用平台模型 |
+
+第一期 provider 固定为 `deepseek`，base URL 和模型白名单只由服务端配置。`fallback_to_platform=false` 时用户文本 Key 失败直接返回 `BYOK_*` 错误；开启后才执行平台预算预检、平台降级链和钱包扣费，UsageLog 标记 `credential_source=platform`。成功使用用户 Key 的记录标记 `credential_source=user`、`platform_billed_cost_cny=0`，仍保留 token 用量。图片理解、Embedding、Rerank、Tavily、解析和存储不使用用户 Key。
+
 ## SSE 事件协议（九类）
 
 ```json

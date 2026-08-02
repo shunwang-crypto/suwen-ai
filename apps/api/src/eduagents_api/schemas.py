@@ -138,6 +138,42 @@ class AdminUserOut(BaseModel):
     created_at: datetime
 
 
+class AdminUserListItemOut(AdminUserOut):
+    email_verified: bool
+    last_login_at: datetime | None = None
+    last_active_at: datetime | None = None
+    today_platform_cost_cny: str = "0.000000"
+    total_platform_cost_cny: str = "0.000000"
+    platform_call_count: int = 0
+    byok_call_count: int = 0
+    knowledge_base_count: int = 0
+    error_count: int = 0
+    plan_count: int = 0
+
+
+class AdminUserPageOut(BaseModel):
+    items: list[AdminUserListItemOut]
+    page: int
+    page_size: int
+    total: int
+    has_more: bool
+
+
+class AdminModelCredentialSummaryOut(BaseModel):
+    configured: bool
+    provider: str | None = None
+    enabled: bool | None = None
+    fallback_to_platform: bool | None = None
+    key_last_four: str | None = None
+    normal_model: str | None = None
+    reasoning_model: str | None = None
+
+
+class AdminUserDetailOut(AdminUserListItemOut):
+    model_credential: AdminModelCredentialSummaryOut
+    recent_admin_adjustments: list[dict]
+
+
 _ADMIN_DELTA_RE = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d{1,4})?$")
 _ADMIN_REFERENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 

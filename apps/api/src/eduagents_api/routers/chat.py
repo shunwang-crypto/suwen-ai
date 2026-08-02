@@ -1042,6 +1042,7 @@ async def chat(
                 allow_tier_fallback=(
                     not has_images and chat_mode not in {"think", "research"}
                 ),
+                credential_policy="platform" if has_images else "text",
                 feature=(
                     "chat_think" if chat_mode in {"think", "research"} else "chat"
                 ),

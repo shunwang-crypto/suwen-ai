@@ -40,15 +40,22 @@ async def persist_usage(event: UsageEvent) -> None:
                     cost_cny=event.cost_cny,
                     latency_ms=event.latency_ms,
                     mode=event.mode,
+                    credential_source=event.credential_source,
+                    provider=event.provider or event.credential_source,
+                    platform_billed_cost_cny=event.platform_billed_cost_cny,
                 )
             )
-            if event.user_id and event.cost_cny > 0:
+            if (
+                event.user_id
+                and event.credential_source == "platform"
+                and event.platform_billed_cost_cny > 0
+            ):
                 from .wallet import get_wallet_service
 
                 await get_wallet_service().consume(
                     session,
                     user_id=uuid.UUID(event.user_id),
-                    cost_cny=event.cost_cny,
+                    cost_cny=event.platform_billed_cost_cny,
                     request_id=event.request_id,
                     feature=event.feature,
                 )

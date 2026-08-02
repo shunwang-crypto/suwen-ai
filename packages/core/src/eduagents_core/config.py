@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from functools import lru_cache
 from typing import Literal
 
@@ -128,6 +130,15 @@ class Settings(BaseSettings):
     gateway_stream_delay_ms: int = 0
     gateway_max_retries: int = 3
     gateway_timeout_seconds: float = 60.0
+    # --- user-owned text model credentials (BYOK, 0017) ---
+    # Disabled by default in local/test environments.  When enabled the
+    # server must have a real 32-byte base64 key; no development fallback key
+    # is accepted.
+    user_model_credentials_enabled: bool = False
+    user_model_credentials_encryption_key: str = ""
+    user_model_credentials_key_version: int = Field(default=1, ge=1, le=2**31 - 1)
+    deepseek_byok_base_url: str = "https://api.deepseek.com"
+    deepseek_byok_allowed_models: str = "deepseek-chat,deepseek-reasoner"
     # Production keeps the admin fault-injection surface off unless an
     # operator explicitly enables it on a private management network.
     enable_fault_injection: bool = True
@@ -155,6 +166,23 @@ class Settings(BaseSettings):
                 )
             if not 0 < self.referral_reward_credits <= 1000:
                 raise ValueError("REFERRAL_REWARD_CREDITS must be within (0, 1000]")
+        if self.user_model_credentials_enabled:
+            try:
+                key = base64.urlsafe_b64decode(
+                    self.user_model_credentials_encryption_key.encode("ascii")
+                )
+            except (ValueError, UnicodeError, binascii.Error) as exc:
+                raise ValueError(
+                    "USER_MODEL_CREDENTIALS_ENCRYPTION_KEY must be base64"
+                ) from exc
+            if len(key) != 32:
+                raise ValueError(
+                    "USER_MODEL_CREDENTIALS_ENCRYPTION_KEY must decode to 32 bytes"
+                )
+            if not self.deepseek_byok_base_url.startswith("https://"):
+                raise ValueError("DEEPSEEK_BYOK_BASE_URL must be HTTPS")
+            if not any(item.strip() for item in self.deepseek_byok_allowed_models.split(",")):
+                raise ValueError("DEEPSEEK_BYOK_ALLOWED_MODELS cannot be empty")
         return self
 
     # circuit breaker

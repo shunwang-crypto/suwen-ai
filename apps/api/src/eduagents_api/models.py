@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -140,6 +141,45 @@ class User(Base):
     )
     daily_budget_cny_override: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = _created_at()
+
+
+class UserModelCredential(Base):
+    """Encrypted, user-owned provider credential (0017).
+
+    Only ciphertext, nonce, key version and a four-character display hint are
+    persisted.  The plaintext is decrypted by the request-scoped gateway
+    resolver and is never part of an API schema, job payload or trace.
+    """
+
+    __tablename__ = "user_model_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uq_user_model_credentials_provider"),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The tenant column makes the RLS boundary explicit even for future org
+    # membership changes; personal credentials currently use user_id here.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="deepseek")
+    encrypted_api_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    key_last_four: Mapped[str] = mapped_column(String(4), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    fallback_to_platform: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    normal_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    reasoning_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_validation_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class RegistrationInvite(Base):
@@ -724,6 +764,17 @@ class UsageLog(Base):
     cost_cny: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="live")
+    # Explicit audit split: user-owned provider cost is never a platform
+    # wallet charge; platform fallback/vision remain platform-billed.
+    credential_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="platform", server_default="platform"
+    )
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="platform", server_default="platform"
+    )
+    platform_billed_cost_cny: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
     at: Mapped[datetime] = _created_at()
 
 

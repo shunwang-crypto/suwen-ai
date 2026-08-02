@@ -44,7 +44,16 @@ async def _register_and_login(client) -> tuple[uuid.UUID, dict]:
     return user_id, {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def _usage_event(user_id: uuid.UUID, cost: float, request_id: str, mode: str = "live"):
+def _usage_event(
+    user_id: uuid.UUID,
+    cost: float,
+    request_id: str,
+    mode: str = "live",
+    *,
+    credential_source: str = "platform",
+    provider: str = "platform",
+    platform_billed_cost_cny: float | None = None,
+):
     from eduagents_core.gateway import UsageEvent
 
     return UsageEvent(
@@ -60,6 +69,12 @@ def _usage_event(user_id: uuid.UUID, cost: float, request_id: str, mode: str = "
         cost_cny=cost,
         latency_ms=5,
         mode=mode,
+        credential_source=credential_source,
+        provider=provider,
+        platform_billed_cost_cny=(
+            cost if platform_billed_cost_cny is None and credential_source == "platform"
+            else (platform_billed_cost_cny or 0.0)
+        ),
     )
 
 
@@ -185,6 +200,34 @@ async def test_zero_cost_is_free(client):
     await persist_usage(_usage_event(user_id, 0.0, "bill-free-2", mode="cache"))
     assert await get_wallet_service().balance(user_id) == Decimal("10.0000")
     assert [r.kind for r in await _ledger_rows(user_id)] == ["signup_grant"]
+
+
+async def test_user_key_usage_is_audited_without_platform_wallet_charge(client):
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import UsageLog
+    from eduagents_api.usage import persist_usage
+    from eduagents_api.wallet import get_wallet_service
+
+    user_id, _ = await _register_and_login(client)
+    await persist_usage(
+        _usage_event(
+            user_id,
+            0.0,
+            "byok-req-1",
+            credential_source="user",
+            provider="deepseek",
+        )
+    )
+    assert await get_wallet_service().balance(user_id) == Decimal("10.0000")
+    async with tenant_session(user_id) as session:
+        row = await session.scalar(select(UsageLog).where(UsageLog.request_id == "byok-req-1"))
+        assert row is not None
+        assert row.credential_source == "user"
+        assert row.provider == "deepseek"
+        assert row.platform_billed_cost_cny == 0.0
+
+    await persist_usage(_usage_event(user_id, 0.1, "byok-platform-fallback"))
+    assert await get_wallet_service().balance(user_id) == Decimal("9.7000")
 
 
 # ---------- 余额不足: 入口拦截 (先钱包后预算) ----------

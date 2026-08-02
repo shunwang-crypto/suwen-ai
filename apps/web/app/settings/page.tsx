@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiJson } from "@/lib/api";
@@ -27,6 +27,20 @@ interface InsightItem {
 
 interface InsightsResponse {
   insights: InsightItem[];
+}
+
+interface ModelCredential {
+  configured: boolean;
+  server_enabled: boolean;
+  provider: "deepseek";
+  enabled: boolean;
+  fallback_to_platform: boolean;
+  key_last_four: string | null;
+  normal_model: string | null;
+  reasoning_model: string | null;
+  last_validated_at: string | null;
+  last_validation_status: string | null;
+  allowed_models: string[];
 }
 
 type SettingsSection = "profile" | "preferences" | "memory" | "privacy" | "security" | "org";
@@ -55,6 +69,7 @@ const INTERESTS_MAX = 8;
 const INTEREST_CHAR_MAX = 20;
 const GOAL_MAX = 200;
 const emptySubscribe = () => () => {};
+const formatSettingsDate = (value?: string | null) => value ? new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date(value)) : "—";
 
 function Chip({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: ReactNode; title?: string }) {
   return (
@@ -88,6 +103,162 @@ function SettingRow({ label, value, note, action }: { label: string; value: Reac
 
 function InlineNotice({ children, tone = "success" }: { children: ReactNode; tone?: "success" | "error" }) {
   return <div className={`mb-5 border-l-2 px-3 py-2 text-xs ${tone === "error" ? "border-danger-500 bg-danger-50 text-danger-700" : "border-success-500 bg-success-50 text-success-700"}`}>{children}</div>;
+}
+
+function ModelCredentialSection() {
+  const [credential, setCredential] = useState<ModelCredential | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [normalModel, setNormalModel] = useState("deepseek-chat");
+  const [reasoningModel, setReasoningModel] = useState("deepseek-reasoner");
+  const [fallback, setFallback] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const data = await apiJson<ModelCredential>("/api/settings/model-credential");
+        if (!alive) return;
+        setCredential(data);
+        if (data.normal_model) setNormalModel(data.normal_model);
+        if (data.reasoning_model) setReasoningModel(data.reasoning_model);
+        setFallback(data.fallback_to_platform);
+      } catch (caught) {
+        if (alive) setError(caught instanceof ApiError ? caught.message : "模型服务配置加载失败");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    deleteButtonRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setConfirmDelete(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmDelete]);
+
+  const save = async () => {
+    if (!apiKey.trim()) {
+      setError("请输入 DeepSeek API Key");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const data = await apiJson<ModelCredential>("/api/settings/model-credential", {
+        method: "PUT",
+        body: { provider: "deepseek", api_key: apiKey, normal_model: normalModel, reasoning_model: reasoningModel, fallback_to_platform: fallback },
+      });
+      setCredential(data);
+      setApiKey("");
+      setShowKey(false);
+      setNotice("DeepSeek 配置已验证并保存");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const patchCredential = async (body: { enabled?: boolean; fallback_to_platform?: boolean }) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await apiJson<ModelCredential>("/api/settings/model-credential", { method: "PATCH", body });
+      setCredential(data);
+      setFallback(data.fallback_to_platform);
+      setNotice(data.enabled ? "已恢复使用自带 Key" : "已暂停使用自带 Key");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "更新失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiJson<void>("/api/settings/model-credential", { method: "DELETE" });
+      setCredential(null);
+      setApiKey("");
+      setConfirmDelete(false);
+      setNotice("已删除自带模型配置");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "删除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enabled = credential?.enabled === true;
+  const models = credential?.allowed_models?.length ? credential.allowed_models : ["deepseek-chat", "deepseek-reasoner"];
+  return (
+    <div className="mt-8 border-t border-line pt-8">
+      <SettingsHeader title="我的模型服务" description="启用后，普通对话、深度思考、辅导、出题、批改、学习计划和报告等文本生成使用你的 DeepSeek 账户。图片理解、知识库检索、重排、网页搜索和存储仍由苏问提供。" />
+      {error && <InlineNotice tone="error">{error}</InlineNotice>}
+      {notice && <InlineNotice>{notice}</InlineNotice>}
+      {credential?.server_enabled === false ? (
+        <p className="mt-5 text-xs text-ink-muted">当前环境暂未开放自带模型服务。</p>
+      ) : (
+        <div className="mt-5 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+            <span className="text-ink-secondary">Provider：DeepSeek</span>
+            <span className={`rounded-full px-2.5 py-1 ${enabled ? "bg-success-50 text-success-700" : credential?.configured ? "bg-surface-muted text-ink-secondary" : "bg-surface-muted text-ink-muted"}`}>
+              {!credential?.configured ? "未配置" : enabled ? "已启用" : "已暂停"}
+            </span>
+          </div>
+          {credential?.configured && <p className="text-xs text-ink-secondary">当前 Key：••••••••{credential.key_last_four} · 最近验证：{formatSettingsDate(credential.last_validated_at)}</p>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="text-xs text-ink-secondary">普通模型
+              <select value={normalModel} onChange={(event) => setNormalModel(event.target.value)} className="mt-2 w-full rounded-control border border-line-strong bg-white px-3 py-2 text-sm text-ink">
+                {models.map((model) => <option key={model}>{model}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-ink-secondary">深度思考模型
+              <select value={reasoningModel} onChange={(event) => setReasoningModel(event.target.value)} className="mt-2 w-full rounded-control border border-line-strong bg-white px-3 py-2 text-sm text-ink">
+                {models.map((model) => <option key={model}>{model}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="block text-xs text-ink-secondary">API Key
+            <div className="mt-2 flex gap-2">
+              <input type={showKey ? "text" : "password"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" maxLength={260} placeholder={credential?.configured ? "输入新 Key 以替换" : "sk-…"} className="min-w-0 flex-1 rounded-control border border-line-strong px-3 py-2 text-sm text-ink" />
+              <button type="button" onClick={() => setShowKey((value) => !value)} className="rounded-control border border-line-strong px-3 text-xs text-ink-secondary">{showKey ? "隐藏" : "显示"}</button>
+            </div>
+          </label>
+          <label className="flex items-start gap-2 text-xs leading-5 text-ink-secondary">
+            <input type="checkbox" checked={fallback} onChange={(event) => { setFallback(event.target.checked); if (credential?.configured) void patchCredential({ fallback_to_platform: event.target.checked }); }} className="mt-1" />
+            <span>自己的 API 不可用时，允许使用苏问额度继续（发生回退时会按平台服务计费并提示）。</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy || !apiKey.trim()} onClick={() => void save()} className="rounded-control bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-40">{busy ? "处理中…" : credential?.configured ? "测试连接并替换" : "测试连接并保存"}</button>
+            {credential?.configured && <>
+              <button type="button" disabled={busy} onClick={() => void patchCredential({ enabled: !enabled })} className="rounded-control border border-line-strong px-4 py-2 text-xs text-ink-secondary disabled:opacity-40">{enabled ? "暂停使用" : "恢复使用"}</button>
+              <button type="button" disabled={busy} onClick={() => setConfirmDelete(true)} className="rounded-control border border-danger-500 px-4 py-2 text-xs text-danger-600 disabled:opacity-40">删除配置</button>
+            </>}
+          </div>
+          {confirmDelete && <div role="dialog" aria-modal="true" aria-labelledby="delete-model-credential-title" className="rounded-overlay border border-danger-200 bg-danger-50 p-4 text-xs text-danger-700">
+            <p id="delete-model-credential-title" className="font-medium">删除自带模型配置？</p>
+            <p className="mt-1">删除后文本生成恢复使用苏问平台模型和额度，已保存的 Key 不可恢复。</p>
+            <div className="mt-3 flex gap-2"><button ref={deleteButtonRef} type="button" onClick={() => void remove()} className="rounded-control bg-danger-600 px-3 py-1.5 text-white">确认删除</button><button type="button" onClick={() => setConfirmDelete(false)} className="rounded-control border border-danger-300 px-3 py-1.5">取消</button></div>
+          </div>}
+          <p className="text-[11px] leading-5 text-ink-muted">安全说明：Key 只在服务端加密保存，页面不会写入 URL、localStorage 或 sessionStorage；管理员只能看到 provider、状态和后四位。</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -233,7 +404,7 @@ export default function SettingsPage() {
   const roleLabel = user?.role === "admin" ? "管理员" : user?.role === "teacher" ? "教师" : "学习者";
   const accountName = user?.display_name?.trim() || "同学";
   const initial = accountName[0] ?? "学";
-  const dateLabel = (value?: string | null) => value ? new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date(value)) : "—";
+  const dateLabel = formatSettingsDate;
 
   return (
     <div className="mx-auto w-full max-w-[1100px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
@@ -370,6 +541,7 @@ export default function SettingsPage() {
               <SettingRow label="密码" value="已设置" note="重置密码会通过已验证邮箱完成。" action={<Link href="/forgot" className="text-xs font-medium text-brand-600">重置密码</Link>} />
               <SettingRow label="苏问 AI 额度" value="单独管理" note="查看当前额度、套餐与消费记录。" action={<Link href="/billing" className="text-xs font-medium text-brand-600">查看额度 →</Link>} />
               <div className="pt-8"><button type="button" onClick={async () => { await logout(); router.replace("/login"); }} className="rounded-control border border-danger-500 px-4 py-2 text-xs font-medium text-danger-600 hover:bg-danger-50">退出当前账号</button></div>
+              <ModelCredentialSection />
             </section>
           )}
 

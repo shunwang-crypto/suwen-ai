@@ -96,6 +96,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         Quiz,
         ResourceQuestion,
         User,
+        UserModelCredential,
         UserPreference,
     )
     from eduagents_core.storage import create_storage
@@ -143,6 +144,28 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
             }
             for c in (await session.scalars(select(Chunk))).all()
         ]
+        credential = await session.scalar(
+            select(UserModelCredential).where(
+                UserModelCredential.user_id == uuid.UUID(tenant_id),
+                UserModelCredential.provider == "deepseek",
+            )
+        )
+        dumped["model_credentials"] = (
+            [
+                {
+                    "provider": credential.provider,
+                    "enabled": credential.enabled,
+                    "fallback_to_platform": credential.fallback_to_platform,
+                    "key_last_four": credential.key_last_four,
+                    "normal_model": credential.normal_model,
+                    "reasoning_model": credential.reasoning_model,
+                    "last_validated_at": _json_safe(credential.last_validated_at),
+                    "last_validation_status": credential.last_validation_status,
+                }
+            ]
+            if credential is not None
+            else []
+        )
 
     profile: dict = {}
     async with plain_session() as session:

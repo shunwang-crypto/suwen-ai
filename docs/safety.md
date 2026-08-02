@@ -93,6 +93,8 @@ key 越权。
 - Langfuse 等观测系统默认不记录正文，生产必须复核 `LANGFUSE_LOG_CONTENT`。
 - record 磁带、故障日志和导出包可能包含敏感内容；磁带不得进入仓库，提交或共享前必须人工审查。
 - 生产密钥只来自环境/密钥系统，不能进入仓库、镜像层、日志或客户端 bundle。
+- 0017 用户 DeepSeek Key 使用 AES-256-GCM 加密，AAD 绑定用户、provider 和 key version；明文只存在当前网关请求作用域，不进入 `ChatRequest`、LangGraph state、Redis job、cassette、Langfuse、usage_log、导出 ZIP 或管理员响应。生产开启 BYOK 前必须注入由随机数生成的 32 字节主密钥，缺失或非法时启动失败。
+- 成功使用用户 Key 的文本调用不扣平台钱包，但仍记录 token；平台回退、视觉、Embedding、Rerank、搜索、解析和存储继续按平台额度与限流规则执行。
 
 ## 数据留存、导出与删除
 

@@ -13,6 +13,11 @@ class Tier(StrEnum):
     plan = "plan"
 
 
+class CredentialSource(StrEnum):
+    platform = "platform"
+    user = "user"
+
+
 class GatewayError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code
@@ -71,6 +76,28 @@ class ChatRequest:
     # A text-model fallback cannot consume image parts, so multimodal requests
     # must stay on the requested provider tier.
     allow_tier_fallback: bool = True
+    # Images, embeddings and other platform-only work must opt out of BYOK.
+    # The API/worker sets this explicitly for multimodal requests.
+    credential_policy: Literal["text", "platform"] = "text"
+
+
+@dataclass(frozen=True)
+class ResolvedCredential:
+    """Request-scoped credential material returned by an injected resolver.
+
+    The API key is intentionally not part of ChatRequest/state/tracing.  It is
+    held only while the gateway is making the current provider request.
+    """
+
+    source: CredentialSource
+    provider: str
+    api_key: str
+    base_url: str
+    model: str
+    fallback_model: str = ""
+    fallback_to_platform: bool = False
+    credential_id: str = ""
+    key_version: int = 0
 
 
 @dataclass
@@ -84,6 +111,12 @@ class ChatResult:
     latency_ms: int
     mode: str  # live | record | replay | stub
     degraded: bool = False
+    credential_source: str = CredentialSource.platform.value
+    provider: str = ""
+    platform_billed_cost_cny: float = 0.0
+    # Internal hand-off when a BYOK request explicitly falls back to platform
+    # after the initial gateway precheck was intentionally skipped.
+    reserved_tier: str | None = None
 
 
 @dataclass
@@ -105,9 +138,13 @@ class UsageEvent:
     cost_cny: float
     latency_ms: int
     mode: str
+    credential_source: str = CredentialSource.platform.value
+    provider: str = ""
+    platform_billed_cost_cny: float = 0.0
 
 
 UsageSink = Callable[[UsageEvent], Awaitable[None]]
+CredentialResolver = Callable[[ChatRequest], Awaitable[ResolvedCredential | None]]
 
 
 class BudgetGuard(Protocol):

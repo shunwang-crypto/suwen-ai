@@ -256,6 +256,7 @@ async def _recognize(request: Request, ctx: AuthContext, *, kind: str, mime: str
                 request_id=getattr(request.state, "request_id", ""),
                 model_override=settings.vision_model if kind == "image" else None,
                 allow_tier_fallback=kind != "image",
+                credential_policy="platform" if kind == "image" else "text",
             )
         )
         draft = _parse_draft(result.text)

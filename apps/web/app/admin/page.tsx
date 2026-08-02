@@ -21,6 +21,8 @@ import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {
   AdminUserOut,
+  AdminUserDetailOut,
+  AdminUserPageOut,
   AdminWalletAdjustOut,
   AdminLatencyResponse,
   AdminUsageResponse,
@@ -741,9 +743,55 @@ function UserWalletSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [detail, setDetail] = useState<AdminUserDetailOut | null>(null);
+
+  const loadPage = async (nextPage = 1) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiJson<AdminUserPageOut>(`/api/admin/users?page=${nextPage}&page_size=20`);
+      setUsers(data.items);
+      setPage(data.page);
+      setHasMore(data.has_more);
+      setTotal(data.total);
+      setSelected(null);
+      setDetail(null);
+    } catch (err) {
+      setUsers([]);
+      setError(err instanceof ApiError ? err.message : "用户列表加载失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const data = await apiJson<AdminUserPageOut>("/api/admin/users?page=1&page_size=20");
+        if (!alive) return;
+        setUsers(data.items);
+        setPage(data.page);
+        setHasMore(data.has_more);
+        setTotal(data.total);
+      } catch (err) {
+        if (alive) setError(err instanceof ApiError ? err.message : "用户列表加载失败，请稍后重试");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const searchUsers = async () => {
     const normalized = query.trim();
+    if (!normalized) {
+      await loadPage();
+      return;
+    }
     if (normalized.length < 3) {
       setError("邮箱查询至少输入 3 个字符");
       return;
@@ -755,11 +803,26 @@ function UserWalletSection() {
     try {
       const params = new URLSearchParams({ query: normalized, limit: "50" });
       setUsers(await apiJson<AdminUserOut[]>(`/api/admin/users?${params.toString()}`));
+      setPage(1);
+      setHasMore(false);
+      setTotal(0);
+      setDetail(null);
     } catch (err) {
       setUsers([]);
       setError(err instanceof ApiError ? err.message : "用户查询失败，请稍后重试");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openDetail = async (item: AdminUserOut) => {
+    setSelected(item);
+    setDetail(null);
+    setError(null);
+    try {
+      setDetail(await apiJson<AdminUserDetailOut>(`/api/admin/users/${item.user_id}`));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "用户详情加载失败");
     }
   };
 
@@ -849,8 +912,8 @@ function UserWalletSection() {
         <LoadingState text="用户列表加载中…" />
       ) : users.length === 0 ? (
         <EmptyState
-          title={query.trim() ? "没有找到匹配用户" : "搜索用户后管理额度"}
-          description={query.trim() ? "请检查邮箱或换一个前缀。" : "输入邮箱或邮箱前缀开始查询。"}
+          title={query.trim() ? "没有找到匹配用户" : "暂无用户"}
+          description={query.trim() ? "请检查邮箱或换一个前缀。" : "最近注册用户会默认显示在这里。"}
         />
       ) : (
         <Card title="搜索结果">
@@ -885,24 +948,46 @@ function UserWalletSection() {
                     <td className="py-2 text-right">
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelected(item);
-                          setError(null);
-                          setSuccess(null);
-                        }}
+                        onClick={() => void openDetail(item)}
                         className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${
                           selected?.user_id === item.user_id
                             ? "border-indigo-500 bg-indigo-50 text-indigo-700"
                             : "border-slate-300 text-slate-600 hover:bg-slate-50"
                         }`}
                       >
-                        {selected?.user_id === item.user_id ? "已选择" : "选择"}
+                        {selected?.user_id === item.user_id ? "已打开" : "详情"}
                       </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
+            <span>共 {total} 位用户 · 第 {page} 页</span>
+            <span className="flex gap-2">
+              <button type="button" disabled={loading || page <= 1} onClick={() => void loadPage(page - 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 disabled:opacity-40">上一页</button>
+              <button type="button" disabled={loading || !hasMore} onClick={() => void loadPage(page + 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 disabled:opacity-40">下一页</button>
+            </span>
+          </div>
+        </Card>
+      )}
+
+      {detail && (
+        <Card title="用户详情" extra={<span className="text-xs text-slate-500">只显示脱敏信息</span>}>
+          <div className="grid gap-3 text-xs text-slate-600 sm:grid-cols-3">
+            <span>邮箱验证：{detail.email_verified ? "已验证" : "未验证"}</span>
+            <span>知识库：{detail.knowledge_base_count}</span>
+            <span>错题：{detail.error_count}</span>
+            <span>计划：{detail.plan_count}</span>
+            <span>平台调用：{detail.platform_call_count}</span>
+            <span>自带 Key 调用：{detail.byok_call_count}</span>
+          </div>
+          <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+            <p className="font-medium text-slate-700">自带模型服务</p>
+            {detail.model_credential.configured ? (
+              <p className="mt-1">{detail.model_credential.provider} · {detail.model_credential.enabled ? "已启用" : "已暂停"} · 仅显示后四位：••••{detail.model_credential.key_last_four}</p>
+            ) : <p className="mt-1">未配置</p>}
           </div>
         </Card>
       )}

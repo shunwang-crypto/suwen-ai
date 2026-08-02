@@ -20,6 +20,7 @@ from .middleware import (
     RequestContextMiddleware,
     install_error_handlers,
 )
+from .model_credentials import resolve_user_credential
 from .ratelimit import RateLimiter
 from .routers import (
     account,
@@ -48,6 +49,9 @@ from .routers import (
     teacher,
     threads,
 )
+from .routers import (
+    settings as settings_router,
+)
 from .security import assert_production_secrets
 from .usage import persist_usage
 
@@ -74,6 +78,7 @@ async def lifespan(app: FastAPI):
         settings,
         usage_sink=persist_usage,
         budget_guard=create_billing_guard(app.state.redis, settings),
+        credential_resolver=lambda req: resolve_user_credential(req, settings),
     )
     app.state.storage = create_storage(settings)
     # 两级语义缓存 (包B): L1 Redis 精确 + L2 Qdrant answer_cache
@@ -193,6 +198,7 @@ def create_app() -> FastAPI:
     app.include_router(profile.router)
     app.include_router(public_config.router)
     app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)
+    app.include_router(settings_router.router)
     app.include_router(reports.router)
     app.include_router(resources.router)
     app.include_router(resources.questions_router)

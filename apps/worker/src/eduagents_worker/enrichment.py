@@ -28,6 +28,7 @@ def get_worker_gateway(settings: Settings | None = None):
     """worker 进程级 OpenAIGateway 单例工厂 (线程内 arq 单事件循环, 无锁足够)。"""
     global _worker_gateway
     if _worker_gateway is None:
+        from eduagents_api.model_credentials import resolve_user_credential
         from eduagents_api.usage import persist_usage
         from eduagents_api.wallet import create_billing_guard
         from eduagents_core.gateway import OpenAIGateway
@@ -39,6 +40,7 @@ def get_worker_gateway(settings: Settings | None = None):
             settings,
             usage_sink=persist_usage,
             budget_guard=create_billing_guard(redis, settings),
+            credential_resolver=lambda req: resolve_user_credential(req, settings),
         )
     return _worker_gateway
 
@@ -80,7 +82,11 @@ async def _gen_context_prefix(
 
 
 async def enrich_document(
-    ctx: dict, tenant_id: str, doc_id: str, gateway: ModelGateway | None = None
+    ctx: dict,
+    tenant_id: str,
+    doc_id: str,
+    gateway: ModelGateway | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Stage 2 (F2 两阶段摄取): ready → enriching → enriched。
 
@@ -119,6 +125,9 @@ async def enrich_document(
         if doc is None or doc.status not in ("ready", "enriched"):
             return "not_ready"
         kb_id = str(doc.kb_id)
+        # Personal jobs can use the owner credential; org jobs without a
+        # request user deliberately remain platform-only.
+        effective_user_id = user_id or (str(doc.uploaded_by) if doc.uploaded_by else "")
         await session.execute(
             update(Document).where(Document.id == doc.id).values(status="enriching")
         )
@@ -185,7 +194,7 @@ async def enrich_document(
             try:
                 # P0-2a: tenant/user 透传, 词表构建 (strong 档) 计量入 usage_log
                 vocab, new_edges = await build_vocabulary(
-                    gateway, summary, tenant_id=tenant_id, user_id=tenant_id
+                    gateway, summary, tenant_id=tenant_id, user_id=effective_user_id
                 )
             except KcExtractionError as exc:
                 log.warning("kc_vocab_build_failed", doc_id=doc_id, error=str(exc))
@@ -207,7 +216,7 @@ async def enrich_document(
                         child["text"],
                         vocab_names,
                         tenant_id=tenant_id,
-                        user_id=tenant_id,
+                        user_id=effective_user_id,
                     )
                     for name in names[:3]:
                         kc_id, _created = await normalizer.match_or_create(name)
@@ -223,7 +232,7 @@ async def enrich_document(
                         section_context=parent.text if parent else "",
                         chunk_text=child["text"],
                         tenant_id=tenant_id,
-                        user_id=tenant_id,
+                        user_id=effective_user_id,
                     )
                 except Exception:  # noqa: BLE001 — 前缀失败降级为无前缀
                     log.warning("prefix_gen_failed", chunk_id=child["id"])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import secrets
 import uuid
@@ -32,6 +34,19 @@ def assert_production_secrets(settings: Settings) -> None:
             f"{_MIN_JWT_SECRET_LEN} 字符 — 拒绝启动。请生成强随机 secret "
             "(例如 `openssl rand -base64 48`) 并通过 secrets 注入。"
         )
+    if settings.user_model_credentials_enabled:
+        try:
+            key = base64.urlsafe_b64decode(
+                settings.user_model_credentials_encryption_key.encode("ascii")
+            )
+        except (ValueError, UnicodeError, binascii.Error) as exc:
+            raise RuntimeError(
+                "FATAL: BYOK 已启用但 USER_MODEL_CREDENTIALS_ENCRYPTION_KEY 不是合法 base64"
+            ) from exc
+        if len(key) != 32:
+            raise RuntimeError(
+                "FATAL: BYOK 已启用但 USER_MODEL_CREDENTIALS_ENCRYPTION_KEY 不是 32 字节"
+            )
 
 
 def hash_password(password: str, rounds: int = 12) -> str:

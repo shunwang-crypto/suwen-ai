@@ -43,6 +43,46 @@ export interface AdminUserOut {
   created_at: string;
 }
 
+export interface AdminUserListItemOut extends AdminUserOut {
+  email_verified: boolean;
+  last_login_at: string | null;
+  last_active_at: string | null;
+  today_platform_cost_cny: string;
+  total_platform_cost_cny: string;
+  platform_call_count: number;
+  byok_call_count: number;
+  knowledge_base_count: number;
+  error_count: number;
+  plan_count: number;
+}
+
+export interface AdminUserPageOut {
+  items: AdminUserListItemOut[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}
+
+export interface AdminUserDetailOut extends AdminUserListItemOut {
+  model_credential: {
+    configured: boolean;
+    provider: string | null;
+    enabled: boolean | null;
+    fallback_to_platform: boolean | null;
+    key_last_four: string | null;
+    normal_model: string | null;
+    reasoning_model: string | null;
+  };
+  recent_admin_adjustments: {
+    delta: string;
+    balance_after: string;
+    note: string | null;
+    reference: string | null;
+    created_at: string;
+  }[];
+}
+
 export interface AdminWalletAdjustOut {
   user_id: string;
   previous_balance: string;

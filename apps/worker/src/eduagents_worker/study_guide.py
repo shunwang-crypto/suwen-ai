@@ -180,6 +180,7 @@ async def _generate(
     kc_names: list[str],
     sample: str,
     tenant_id: str,
+    user_id: str = "",
 ) -> dict | None:
     template = (_PROMPTS_DIR / "study_guide.md").read_text(encoding="utf-8")
     prompt = (
@@ -199,7 +200,7 @@ async def _generate(
                 json_mode=True,
                 feature="study_guide",
                 tenant_id=tenant_id,
-                user_id=tenant_id,
+                user_id=user_id,
                 max_tokens=2000,
             )
         )
@@ -259,6 +260,12 @@ async def build_study_guide(
                     select(Document.id).where(Document.kb_id == uuid.UUID(kb_id))
                 )
             ).all()
+            uploader = await session.scalar(
+                select(Document.uploaded_by)
+                .where(Document.kb_id == uuid.UUID(kb_id), Document.uploaded_by.isnot(None))
+                .limit(1)
+            )
+            effective_user_id = str(uploader) if uploader else ""
             if not doc_ids:
                 log.info("study_guide_no_documents", kb_id=kb_id)
                 await _set_generation_status(
@@ -307,6 +314,7 @@ async def build_study_guide(
             kc_names=kc_names,
             sample=sample,
             tenant_id=tenant_id,
+            user_id=effective_user_id,
         )
         if guide is None:
             log.warning("study_guide_unparseable", kb_id=kb_id)

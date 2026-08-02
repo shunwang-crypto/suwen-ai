@@ -12,22 +12,38 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import Tier, get_fault_injector
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 
 from .. import timectl
-from ..db import plain_session
+from ..db import plain_session, tenant_session
 from ..deps import AuthContext, account_status_key, require_admin
 from ..email_utils import normalize_email
-from ..models import RefreshToken, RegistrationInvite, User, WalletAccount
+from ..models import (
+    ErrorItem,
+    KnowledgeBase,
+    Plan,
+    RefreshToken,
+    RegistrationInvite,
+    UsageLog,
+    User,
+    UserModelCredential,
+    WalletAccount,
+    WalletLedger,
+)
 from ..registration_invites import generate_invite_code, hash_invite_code
 from ..schemas import (
+    AdminModelCredentialSummaryOut,
+    AdminUserDetailOut,
+    AdminUserListItemOut,
     AdminUserOut,
+    AdminUserPageOut,
     AdminWalletAdjustIn,
     AdminWalletAdjustOut,
     RegistrationInviteBatchCreate,
@@ -41,39 +57,66 @@ log = get_logger("admin")
 
 
 def _money4(value) -> str:
-    return format(q4(value or 0), "f")
+    return format(q4(Decimal(str(value or 0))), "f")
 
 
-@router.get("/users", response_model=list[AdminUserOut])
+@router.get(
+    "/users",
+    response_model=list[AdminUserOut] | AdminUserPageOut,
+)
 async def search_users(
-    query: str = Query(..., min_length=3, max_length=320),
+    query: str | None = Query(default=None, min_length=3, max_length=320),
     limit: int = Query(default=20, ge=1, le=100),
+    page: int = Query(default=1, ge=1, le=100_000),
+    page_size: int = Query(default=20, ge=1, le=100),
+    role: str | None = Query(default=None, pattern="^(student|teacher|admin)$"),
+    email_verified: bool | None = None,
+    status: str | None = Query(default=None, pattern="^(active|disabled)$"),
     ctx: AuthContext = Depends(require_admin),
 ):
-    """管理员按邮箱精确或安全前缀查询用户，不返回任何认证秘密。"""
-    normalized = normalize_email(query)
-    if len(normalized) < 3:
+    """分页用户列表；带 query 的旧客户端继续收到旧数组契约。"""
+    normalized = normalize_email(query) if query else None
+    if normalized is not None and len(normalized) < 3:
         raise HTTPException(status_code=422, detail="USER_QUERY_TOO_SHORT")
-    escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    prefix = f"{escaped}%"
-    exact = func.lower(User.email) == normalized
+    escaped = (
+        normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if normalized
+        else None
+    )
+    prefix = f"{escaped}%" if escaped else None
+    exact = func.lower(User.email) == normalized if normalized else None
+    filters = []
+    if normalized:
+        filters.append(or_(exact, func.lower(User.email).like(prefix, escape="\\")))
+    if role:
+        filters.append(User.role == role)
+    if status:
+        filters.append(User.status == status)
+    if email_verified is True:
+        filters.append(User.email_verified_at.is_not(None))
+    elif email_verified is False:
+        filters.append(User.email_verified_at.is_(None))
     async with service_session() as session:
+        total = await session.scalar(select(func.count()).select_from(User).where(*filters))
         rows = (
             await session.execute(
                 select(User, WalletAccount.balance)
                 .outerjoin(WalletAccount, WalletAccount.user_id == User.id)
-                .where(or_(exact, func.lower(User.email).like(prefix, escape="\\")))
-                .order_by(exact.desc(), func.lower(User.email))
-                .limit(limit)
+                .where(*filters)
+                .order_by(User.created_at.desc(), User.id)
+                .offset((page - 1) * page_size if not normalized else 0)
+                .limit(limit if normalized else page_size)
             )
         ).all()
+    user_ids = [user.id for user, _balance in rows]
+    metrics = await _admin_user_metrics(ctx, user_ids)
     log.info(
         "admin_user_search",
         admin_user_id=str(ctx.user_id),
-        query_hash=hashlib.sha256(normalized.encode()).hexdigest()[:16],
+        query_hash=(hashlib.sha256(normalized.encode()).hexdigest()[:16] if normalized else None),
         result_count=len(rows),
     )
-    return [
+    old_items = [
         AdminUserOut(
             user_id=user.id,
             email=user.email,
@@ -84,6 +127,163 @@ async def search_users(
         )
         for user, balance in rows
     ]
+    if normalized:
+        return old_items
+    items = [
+        AdminUserListItemOut(
+            **item.model_dump(),
+            email_verified=user.email_verified_at is not None,
+            **metrics.get(user.id, {}),
+        )
+        for (user, _balance), item in zip(rows, old_items, strict=True)
+    ]
+    return AdminUserPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=int(total or 0),
+        has_more=page * page_size < int(total or 0),
+    )
+
+
+async def _admin_user_metrics(ctx: AuthContext, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    """Fixed-query aggregate metrics for a page, never one query per user."""
+    if not user_ids:
+        return {}
+    now = datetime.now(UTC)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    async with tenant_session(ctx.tenant_id, is_admin=True) as session:
+        usage_rows = (
+            await session.execute(
+                select(
+                    UsageLog.user_id,
+                    func.count().filter(UsageLog.credential_source == "platform"),
+                    func.count().filter(UsageLog.credential_source == "user"),
+                    func.coalesce(func.sum(UsageLog.platform_billed_cost_cny), 0.0),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (UsageLog.at >= start, UsageLog.platform_billed_cost_cny),
+                                else_=0.0,
+                            )
+                        ),
+                        0.0,
+                    ),
+                )
+                .where(UsageLog.user_id.in_(user_ids))
+                .group_by(UsageLog.user_id)
+            )
+        ).all()
+        kb_rows = (
+            await session.execute(
+                select(KnowledgeBase.tenant_id, func.count())
+                .where(KnowledgeBase.tenant_id.in_(user_ids))
+                .group_by(KnowledgeBase.tenant_id)
+            )
+        ).all()
+        error_rows = (
+            await session.execute(
+                select(ErrorItem.tenant_id, func.count())
+                .where(ErrorItem.tenant_id.in_(user_ids))
+                .group_by(ErrorItem.tenant_id)
+            )
+        ).all()
+        plan_rows = (
+            await session.execute(
+                select(Plan.tenant_id, func.count())
+                .where(Plan.tenant_id.in_(user_ids))
+                .group_by(Plan.tenant_id)
+            )
+        ).all()
+    result = {
+        uid: {
+            "today_platform_cost_cny": f"{float(today):.6f}",
+            "total_platform_cost_cny": f"{float(total):.6f}",
+            "platform_call_count": int(platform_calls or 0),
+            "byok_call_count": int(byok_calls or 0),
+            "knowledge_base_count": 0,
+            "error_count": 0,
+            "plan_count": 0,
+        }
+        for uid, platform_calls, byok_calls, total, today in usage_rows
+    }
+    for uid, count in kb_rows:
+        result.setdefault(uid, {})["knowledge_base_count"] = int(count)
+    for uid, count in error_rows:
+        result.setdefault(uid, {})["error_count"] = int(count)
+    for uid, count in plan_rows:
+        result.setdefault(uid, {})["plan_count"] = int(count)
+    return result
+
+
+@router.get("/users/{user_id}", response_model=AdminUserDetailOut)
+async def user_detail(user_id: uuid.UUID, ctx: AuthContext = Depends(require_admin)):
+    """Safe aggregate detail; encrypted credential material is never selected."""
+    async with service_session() as session:
+        row = (
+            await session.execute(
+                select(User, WalletAccount.balance)
+                .outerjoin(WalletAccount, WalletAccount.user_id == User.id)
+                .where(User.id == user_id)
+            )
+        ).first()
+        adjustments = (
+            await session.scalars(
+                select(WalletLedger)
+                .where(WalletLedger.user_id == user_id, WalletLedger.kind == "admin_adjust")
+                .order_by(WalletLedger.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+    if row is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    user, balance = row
+    metrics = (await _admin_user_metrics(ctx, [user_id])).get(user_id, {})
+    async with tenant_session(ctx.tenant_id, is_admin=True) as session:
+        credential = await session.execute(
+            select(
+                UserModelCredential.provider,
+                UserModelCredential.enabled,
+                UserModelCredential.fallback_to_platform,
+                UserModelCredential.key_last_four,
+                UserModelCredential.normal_model,
+                UserModelCredential.reasoning_model,
+            ).where(UserModelCredential.user_id == user_id)
+        )
+        credential_row = credential.first()
+    return AdminUserDetailOut(
+        user_id=user.id,
+        email=user.email,
+        role=user.role,
+        status=user.status,
+        wallet_balance=_money4(balance),
+        created_at=user.created_at,
+        email_verified=user.email_verified_at is not None,
+        **metrics,
+        model_credential=(
+            AdminModelCredentialSummaryOut(
+                configured=True,
+                provider=credential_row.provider,
+                enabled=credential_row.enabled,
+                fallback_to_platform=credential_row.fallback_to_platform,
+                key_last_four=credential_row.key_last_four,
+                normal_model=credential_row.normal_model,
+                reasoning_model=credential_row.reasoning_model,
+            )
+            if credential_row
+            else AdminModelCredentialSummaryOut(configured=False)
+        ),
+        recent_admin_adjustments=[
+            {
+                "delta": _money4(adjustment.delta),
+                "balance_after": _money4(adjustment.balance_after),
+                "note": adjustment.note,
+                "reference": adjustment.ref,
+                "created_at": adjustment.created_at,
+            }
+            for adjustment in adjustments
+        ],
+    )
 
 
 @router.post(

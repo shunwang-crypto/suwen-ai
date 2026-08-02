@@ -156,10 +156,13 @@ erDiagram
 | `UserPreference` | 用户学习偏好和个性化开关 |
 | `LearningReportSnapshot` | 报告快照与刷新状态 |
 | `UsageLog` | 模型/功能/用户维度 token、成本、延迟和模式 |
+| `UserModelCredential` | 0017 用户 DeepSeek 凭据的 AES-256-GCM 密文、nonce、版本和脱敏配置；不保存明文 |
 | `EvalRun` | 评估配置、语料/黄金集版本和指标 |
 | `WalletAccount / WalletLedger / PaymentOrder` | 钱包、不可变流水和支付订单骨架 |
 
 ## 文件与外部状态
+
+`user_model_credentials`（0017）按 `(user_id, provider)` 唯一。服务端环境变量提供 32 字节 AES-256-GCM 主密钥，AAD 绑定 `user_id/provider/key_version`；数据库仅保存密文、12 字节 nonce、版本、后四位和模型选择。用户删除时凭据按 FK CASCADE 删除；管理员只能通过安全聚合 API 看到 provider、启用状态和后四位。`UsageLog` 同时记录 `credential_source`、`provider` 和 `platform_billed_cost_cny`，用户 Key 成功调用的平台成本为 0，平台回退和视觉调用仍按平台规则计费。
 
 对象存储保存知识库原件、题目资料、错题来源、聊天附件和导出包。数据库只保存对象 key 和
 元数据。下载必须经过授权 API，不向客户端暴露任意对象 key。

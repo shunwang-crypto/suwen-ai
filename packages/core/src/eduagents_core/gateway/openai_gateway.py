@@ -7,8 +7,10 @@ from time import perf_counter
 
 from openai import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
     AsyncOpenAI,
+    AuthenticationError,
     InternalServerError,
     RateLimitError,
 )
@@ -27,7 +29,10 @@ from .base import (
     BudgetGuard,
     ChatRequest,
     ChatResult,
+    CredentialResolver,
+    CredentialSource,
     GatewayError,
+    ResolvedCredential,
     StreamDelta,
     Tier,
     UsageEvent,
@@ -108,10 +113,12 @@ class OpenAIGateway:
         usage_sink: UsageSink | None = None,
         budget_guard: BudgetGuard | None = None,
         faults: FaultInjector | None = None,
+        credential_resolver: CredentialResolver | None = None,
     ):
         self._s = settings
         self._sink = usage_sink
         self._guard = budget_guard
+        self._credential_resolver = credential_resolver
         # 故障注入 (M5-D2): 默认取进程内单例 -> admin 端点改开关立刻作用于本网关。
         self._faults = faults or get_fault_injector()
         self._cassette = Cassette(settings.gateway_cassette_dir)
@@ -136,9 +143,12 @@ class OpenAIGateway:
         elif mode == "replay":
             result = self._replay_result(req, started)
         else:  # live / record
-            req, reserved_tier = await self._budget_precheck(req)
+            credential = await self._resolve_credential(req)
+            req, reserved_tier = await self._budget_precheck(
+                req, skip=credential is not None and credential.source == CredentialSource.user
+            )
             try:
-                result = await self._live_chat(req, started)
+                result = await self._live_chat(req, started, credential=credential)
             except BaseException:
                 # 全链失败/取消: 返还预算预扣 (P1-12), 否则失败请求也占额度
                 await self._refund_reservation(req, reserved_tier)
@@ -153,7 +163,11 @@ class OpenAIGateway:
                         "completion_tokens": result.completion_tokens,
                     },
                 )
-            await self._emit_usage(req, result, reserved_tier=reserved_tier)
+            await self._emit_usage(
+                req,
+                result,
+                reserved_tier=reserved_tier or result.reserved_tier,
+            )
             return result
         await self._emit_usage(req, result)
         return result
@@ -178,6 +192,11 @@ class OpenAIGateway:
             yield result
             return
 
+        credential = await self._resolve_credential(req)
+        if credential is not None and credential.source == CredentialSource.user:
+            async for item in self._live_user_stream(req, credential):
+                yield item
+            return
         req, reserved_tier = await self._budget_precheck(req)
         inner = self._live_stream(req, reserved_tier)
         try:
@@ -210,9 +229,16 @@ class OpenAIGateway:
     def faults(self) -> FaultInjector:
         return self._faults
 
+    async def _resolve_credential(self, req: ChatRequest) -> ResolvedCredential | None:
+        if self._credential_resolver is None or req.credential_policy != "text":
+            return None
+        return await self._credential_resolver(req)
+
     # ---------- internals ----------
 
-    async def _budget_precheck(self, req: ChatRequest) -> tuple[ChatRequest, str | None]:
+    async def _budget_precheck(
+        self, req: ChatRequest, *, skip: bool = False
+    ) -> tuple[ChatRequest, str | None]:
         """live/record 入口预检 (预算强制唯一 choke point; stub/replay 零成本不预检)。
 
         返回 (req, reserved_tier): reserved_tier 非 None 表示 guard 已按该档位原子
@@ -223,7 +249,7 @@ class OpenAIGateway:
         - BudgetExceeded: 直接向上传播 (API 层转 429 + Retry-After)
         - guard 自身故障 (如 Redis 抖动) fail-open (无预扣), 预算功能不放大不可用性
         """
-        if self._guard is None:
+        if skip or self._guard is None:
             return req, None
         reserved_tier = req.tier.value
         try:
@@ -335,6 +361,15 @@ class OpenAIGateway:
             )
         return self._clients[tier]
 
+    async def _user_client(self, credential: ResolvedCredential) -> AsyncOpenAI:
+        """Create a request-scoped client; never cache plaintext user keys."""
+        return AsyncOpenAI(
+            api_key=credential.api_key,
+            base_url=credential.base_url,
+            timeout=self._s.gateway_timeout_seconds,
+            max_retries=0,
+        )
+
     def _completion_kwargs(self, req: ChatRequest, cfg: TierConfig) -> dict:
         kwargs: dict = {
             "model": req.model_override or cfg.model,
@@ -372,19 +407,114 @@ class OpenAIGateway:
         usage = resp.usage
         p_tok = usage.prompt_tokens if usage else 0
         c_tok = usage.completion_tokens if usage else 0
+        cost = self._cost(cfg, p_tok, c_tok)
         return ChatResult(
             text=resp.choices[0].message.content or "",
             model=resp.model or req.model_override or cfg.model,
             tier=tier.value,
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
-            cost_cny=self._cost(cfg, p_tok, c_tok),
+            cost_cny=cost,
             latency_ms=int((perf_counter() - started) * 1000),
             mode="live",
             degraded=tier != req.tier,
+            credential_source=CredentialSource.platform.value,
+            provider="platform",
+            platform_billed_cost_cny=cost,
         )
 
-    async def _live_chat(self, req: ChatRequest, started: float) -> ChatResult:
+    async def _call_user_tier(
+        self, req: ChatRequest, tier: Tier, credential: ResolvedCredential, *, model: str | None = None
+    ) -> ChatResult:
+        """Call a user's provider without ever entering the platform chain."""
+        from openai import AuthenticationError
+
+        cfg = TierConfig(
+            api_key=credential.api_key,
+            base_url=credential.base_url,
+            model=model or credential.model,
+            enable_thinking=None,
+        )
+        client = await self._user_client(credential)
+        started = perf_counter()
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self._s.gateway_max_retries),
+                wait=wait_exponential(multiplier=0.5, max=8),
+                retry=retry_if_exception_type(_RETRYABLE),
+                reraise=True,
+            ):
+                with attempt:
+                    await self._faults.apply(tier.value, credential.base_url)
+                    resp = await client.chat.completions.create(
+                        **self._completion_kwargs(req, cfg)
+                    )
+            usage = resp.usage
+            p_tok = usage.prompt_tokens if usage else 0
+            c_tok = usage.completion_tokens if usage else 0
+            return ChatResult(
+                text=resp.choices[0].message.content or "",
+                model=resp.model or cfg.model,
+                tier=tier.value,
+                prompt_tokens=p_tok,
+                completion_tokens=c_tok,
+                cost_cny=0.0,
+                latency_ms=int((perf_counter() - started) * 1000),
+                mode="live",
+                credential_source=CredentialSource.user.value,
+                provider=credential.provider,
+                platform_billed_cost_cny=0.0,
+            )
+        except AuthenticationError as exc:
+            raise GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效") from exc
+        except RateLimitError as exc:
+            raise GatewayError("BYOK_RATE_LIMITED", "自带 DeepSeek 请求过于频繁") from exc
+        except APIStatusError as exc:
+            if exc.status_code in (401, 403):
+                raise GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效") from exc
+            if exc.status_code == 402:
+                raise GatewayError("BYOK_BALANCE_INSUFFICIENT", "自带 DeepSeek 账户余额不足") from exc
+            raise GatewayError("BYOK_PROVIDER_UNAVAILABLE", "自带 DeepSeek 服务暂时不可用") from exc
+        except (APITimeoutError, APIConnectionError, InternalServerError) as exc:
+            raise GatewayError("BYOK_PROVIDER_UNAVAILABLE", "自带 DeepSeek 服务暂时不可用") from exc
+        finally:
+            await client.close()
+
+    async def _live_user_chat(
+        self, req: ChatRequest, started: float, credential: ResolvedCredential
+    ) -> ChatResult:
+        try:
+            return await self._call_user_tier(req, req.tier, credential)
+        except GatewayError:
+            # A reasoning request may use the user's normal model as an
+            # intra-user fallback. It still never touches a platform key.
+            if req.tier == Tier.strong and credential.fallback_model:
+                try:
+                    return await self._call_user_tier(
+                        req, req.tier, credential, model=credential.fallback_model
+                    )
+                except GatewayError:
+                    pass
+            if not credential.fallback_to_platform:
+                raise
+            # Only an explicit opt-in reaches the original platform chain.
+            req, reserved = await self._budget_precheck(req)
+            try:
+                result = await self._live_chat(req, started, credential=None)
+            except BaseException:
+                await self._refund_reservation(req, reserved)
+                raise
+            result.reserved_tier = reserved
+            return result
+
+    async def _live_chat(
+        self,
+        req: ChatRequest,
+        started: float,
+        credential: ResolvedCredential | None = None,
+    ) -> ChatResult:
+        if credential is not None and credential.source == CredentialSource.user:
+            return await self._live_user_chat(req, started, credential)
         last_error: Exception | None = None
         tiers = _DEGRADE[req.tier] if req.allow_tier_fallback else (req.tier,)
         for tier in tiers:
@@ -416,6 +546,131 @@ class OpenAIGateway:
             result.degraded = True
             return result
         raise GatewayError("ALL_PROVIDERS_FAILED", f"全部模型通道失败: {last_error}")
+
+    async def _live_user_stream(
+        self, req: ChatRequest, credential: ResolvedCredential
+    ) -> AsyncIterator[StreamDelta | ChatResult]:
+        """Streaming BYOK path with the same source and fallback semantics."""
+        started = perf_counter()
+        # A strong request may first try the user's reasoning model and then
+        # the user's normal model.  The second attempt is still BYOK; platform
+        # credentials are considered only after this list and explicit opt-in.
+        models = [credential.model]
+        if req.tier == Tier.strong and credential.fallback_model:
+            models.append(credential.fallback_model)
+
+        for model_index, model in enumerate(models):
+            client = await self._user_client(credential)
+            cfg = TierConfig(
+                api_key=credential.api_key,
+                base_url=credential.base_url,
+                model=model,
+                enable_thinking=None,
+            )
+            parts: list[str] = []
+            try:
+                async for attempt in AsyncRetrying(
+                    stop=stop_after_attempt(self._s.gateway_max_retries),
+                    wait=wait_exponential(multiplier=0.5, max=8),
+                    retry=retry_if_exception_type(_RETRYABLE),
+                    reraise=True,
+                ):
+                    with attempt:
+                        await self._faults.apply(req.tier.value, credential.base_url)
+                        stream = await client.chat.completions.create(
+                            stream=True,
+                            stream_options={"include_usage": True},
+                            **self._completion_kwargs(req, cfg),
+                        )
+                p_tok = c_tok = 0
+                async for chunk in stream:
+                    if chunk.usage:
+                        p_tok = chunk.usage.prompt_tokens
+                        c_tok = chunk.usage.completion_tokens
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        delta = chunk.choices[0].delta.content
+                        parts.append(delta)
+                        yield StreamDelta(delta)
+                if not p_tok:
+                    p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
+                    c_tok = estimate_tokens("".join(parts))
+                result = ChatResult(
+                    text="".join(parts),
+                    model=model,
+                    tier=req.tier.value,
+                    prompt_tokens=p_tok,
+                    completion_tokens=c_tok,
+                    cost_cny=0.0,
+                    latency_ms=int((perf_counter() - started) * 1000),
+                    mode="live",
+                    degraded=model_index > 0,
+                    credential_source=CredentialSource.user.value,
+                    provider=credential.provider,
+                    platform_billed_cost_cny=0.0,
+                )
+                await self._emit_usage(req, result)
+                yield result
+                return
+            except (AuthenticationError, RateLimitError, APIStatusError, APITimeoutError, APIConnectionError, InternalServerError, GatewayError) as exc:
+                error = self._byok_error(exc)
+                if parts:
+                    await self._emit_user_partial(req, credential, model, parts, started)
+                    raise error from exc
+                if model_index + 1 < len(models):
+                    continue
+                if not credential.fallback_to_platform:
+                    raise error from exc
+                req, reserved = await self._budget_precheck(req)
+                async for item in self._live_stream(req, reserved):
+                    yield item
+                return
+            finally:
+                await client.close()
+
+        # The loop always returns or raises.  Keep a defensive error in case a
+        # future change makes the model list empty.
+        raise GatewayError("BYOK_PROVIDER_UNAVAILABLE", "自带 DeepSeek 服务暂时不可用")
+
+    @staticmethod
+    def _byok_error(exc: BaseException) -> GatewayError:
+        """Map provider failures without exposing provider response details."""
+        if isinstance(exc, GatewayError):
+            return exc
+        if isinstance(exc, AuthenticationError):
+            return GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效")
+        if isinstance(exc, RateLimitError):
+            return GatewayError("BYOK_RATE_LIMITED", "自带 DeepSeek 请求过于频繁")
+        if isinstance(exc, APIStatusError):
+            if exc.status_code in (401, 403):
+                return GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效")
+            if exc.status_code == 402:
+                return GatewayError("BYOK_BALANCE_INSUFFICIENT", "自带 DeepSeek 账户余额不足")
+        return GatewayError("BYOK_PROVIDER_UNAVAILABLE", "自带 DeepSeek 服务暂时不可用")
+
+    async def _emit_user_partial(
+        self,
+        req: ChatRequest,
+        credential: ResolvedCredential,
+        model: str,
+        parts: list[str],
+        started: float,
+    ) -> None:
+        """Account a partially received user-provider stream without charging platform."""
+        partial = ChatResult(
+            text="".join(parts),
+            model=model,
+            tier=req.tier.value,
+            prompt_tokens=sum(estimate_tokens(message_text(m.content)) for m in req.messages),
+            completion_tokens=estimate_tokens("".join(parts)),
+            cost_cny=0.0,
+            latency_ms=int((perf_counter() - started) * 1000),
+            mode="live",
+            degraded=True,
+            credential_source=CredentialSource.user.value,
+            provider=credential.provider,
+            platform_billed_cost_cny=0.0,
+        )
+        await self._emit_usage(req, partial)
 
     async def _live_stream(
         self, req: ChatRequest, reserved_tier: str | None = None
@@ -461,16 +716,20 @@ class OpenAIGateway:
                     if not p_tok:
                         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
                         c_tok = estimate_tokens(text)
+                    cost = self._cost(cfg, p_tok, c_tok)
                     result = ChatResult(
                         text=text,
                         model=req.model_override or cfg.model,
                         tier=tier.value,
                         prompt_tokens=p_tok,
                         completion_tokens=c_tok,
-                        cost_cny=self._cost(cfg, p_tok, c_tok),
+                        cost_cny=cost,
                         latency_ms=int((perf_counter() - started) * 1000),
                         mode="live",
                         degraded=tier != req.tier,
+                        credential_source=CredentialSource.platform.value,
+                        provider="platform",
+                        platform_billed_cost_cny=cost,
                     )
                     if self._s.gateway_mode == "record":
                         self._cassette.put(
@@ -534,16 +793,20 @@ class OpenAIGateway:
         cfg = self._s.tier(tier.value)
         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
         c_tok = estimate_tokens(text)
+        cost = self._cost(cfg, p_tok, c_tok)
         partial = ChatResult(
             text=text,
             model=req.model_override or cfg.model,
             tier=tier.value,
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
-            cost_cny=self._cost(cfg, p_tok, c_tok),
+            cost_cny=cost,
             latency_ms=int((perf_counter() - started) * 1000),
             mode="live",
             degraded=True,  # partial: 客户端中断, token 为估算值
+            credential_source=CredentialSource.platform.value,
+            provider="platform",
+            platform_billed_cost_cny=cost,
         )
         log.warning(
             "stream_partial_settled",
@@ -572,6 +835,13 @@ class OpenAIGateway:
             cost_cny=result.cost_cny,
             latency_ms=result.latency_ms,
             mode=result.mode,
+            credential_source=result.credential_source,
+            provider=result.provider,
+            platform_billed_cost_cny=(
+                result.cost_cny
+                if result.credential_source == CredentialSource.platform.value
+                else result.platform_billed_cost_cny
+            ),
         )
         # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
         # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。
