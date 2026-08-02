@@ -223,7 +223,7 @@ def install_error_handlers(app: FastAPI) -> None:
             status_code=402,
             content={
                 "code": "INSUFFICIENT_CREDITS",
-                "message": exc.message or "钱包额度已用完，请充值后继续使用 AI 功能",
+                "message": exc.message or "苏问 AI 额度已用完，请充值后继续使用 AI 功能",
                 "request_id": getattr(request.state, "request_id", ""),
                 "balance": format(exc.balance, "f"),
             },

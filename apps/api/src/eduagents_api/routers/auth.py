@@ -231,10 +231,10 @@ async def send_register_email_code(
         sender = create_email_sender(settings, redis)
         await sender.send(
             to=email,
-            subject="EduAgents 注册验证码",
+            subject="苏问 注册验证码",
             body=(
                 "你好，\n\n"
-                "你的 EduAgents 注册验证码是："
+                "你的苏问注册验证码是："
                 f"{code}\n\n"
                 f"验证码 {settings.email_code_ttl_seconds // 60} 分钟内有效。\n"
                 "如果不是本人操作请忽略本邮件。\n"
@@ -535,10 +535,10 @@ async def forgot_password(
             sender = create_email_sender(settings, redis)
             await sender.send(
                 to=body.email,
-                subject="EduAgents 密码重置",
+                subject="苏问 AI课堂 密码重置",
                 body=(
                     "你好,\n\n"
-                    "我们收到了你的密码重置申请。请在 30 分钟内打开以下链接设置新密码:\n\n"
+                    "苏问 AI课堂收到了你的密码重置申请。请在 30 分钟内打开以下链接设置新密码:\n\n"
                     f"{reset_link}\n\n"
                     "如果这不是你本人的操作, 请忽略本邮件, 你的密码不会被更改。\n"
                 ),

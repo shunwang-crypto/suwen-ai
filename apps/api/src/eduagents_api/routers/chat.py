@@ -769,7 +769,7 @@ async def chat(
                         "data": _sse(
                             {
                                 "code": "INSUFFICIENT_CREDITS",
-                                "message": "钱包额度已用完，请充值后继续使用 AI 功能",
+                                "message": "苏问 AI 额度已用完，请充值后继续使用 AI 功能",
                                 "balance": format(exc.balance, "f"),
                             }
                         ),

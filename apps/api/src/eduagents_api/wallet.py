@@ -91,7 +91,7 @@ class InsufficientCredits(BudgetExceeded):
     def __init__(self, balance: Decimal):
         # 绕过 BudgetExceeded.__init__ 的硬编码 code, 直接落 GatewayError
         GatewayError.__init__(
-            self, "INSUFFICIENT_CREDITS", "钱包额度已用完，请充值后继续使用 AI 功能"
+            self, "INSUFFICIENT_CREDITS", "苏问 AI 额度已用完，请充值后继续使用 AI 功能"
         )
         self.retry_after_seconds: int | None = None
         self.balance = q4(balance)

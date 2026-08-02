@@ -63,7 +63,7 @@ export function BalanceBadge() {
   return (
     <Link
       href="/billing"
-      title={low ? "余额不足，点击充值" : "账户额度，点击进入钱包"}
+      title={low ? "额度不足，点击查看苏问 AI 额度" : "账户额度，点击查看苏问 AI 额度"}
       className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
         low
           ? "border-amber-300 bg-amber-50 text-amber-700 hover:border-amber-400"

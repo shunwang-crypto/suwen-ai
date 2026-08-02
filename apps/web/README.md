@@ -1,6 +1,6 @@
-# EduAgents Web
+# 苏问 AI课堂 Web
 
-这是 EduAgents 的 Next.js 前端，包含学生学习界面以及教师、管理员专项页面。项目级说明见
+这是苏问 AI课堂的 Next.js 前端，包含学生学习界面以及教师、管理员专项页面。项目级说明见
 [根 README](../../README.md)，本地开发、测试和环境要求见
 [开发手册](../../docs/development.md)。
 

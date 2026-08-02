@@ -76,8 +76,14 @@ erDiagram
 | `PasswordResetToken` | 找回密码的一次性、限时凭据 |
 | `Org` | 机构、邀请码、创建者和存储配额 |
 | `OrgMember` | 用户与机构关系，角色为机构 `admin/member` |
+| `WalletAccount` | 每个用户一行的苏问 AI 额度余额，服务层事务更新 |
+| `WalletLedger` | 追加式额度流水；`signup_grant`、消费和充值等变动均保留审计记录 |
 
 平台管理员和机构管理员是不同权限域。
+
+管理员额度调整使用 `WalletLedger.kind='admin_adjust'`，业务凭证写入 `ref`。0015 migration
+增加 `(user_id, ref)` 条件唯一索引，仅覆盖 `admin_adjust` 且非空的凭证；调额时锁定账户行，
+在同一事务内写流水并更新余额，同一用户同一凭证的重试不会重复入账。
 
 0013 为 `users.email_verified_at` 增加邮箱所有权事实，并在迁移时先检查
 `lower(btrim(email))` 的历史碰撞；碰撞会使迁移明确失败，不覆盖或删除账号。无碰撞时历史

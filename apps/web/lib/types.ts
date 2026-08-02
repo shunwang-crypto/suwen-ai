@@ -34,6 +34,24 @@ export interface RegistrationInviteOut {
   used_by_email: string | null;
 }
 
+export interface AdminUserOut {
+  user_id: string;
+  email: string;
+  role: string;
+  status: string;
+  wallet_balance: string;
+  created_at: string;
+}
+
+export interface AdminWalletAdjustOut {
+  user_id: string;
+  previous_balance: string;
+  delta: string;
+  balance: string;
+  note: string;
+  reference: string;
+}
+
 export interface SessionOut {
   id: string;
   title: string;

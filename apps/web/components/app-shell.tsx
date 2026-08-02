@@ -152,7 +152,7 @@ const UTILITY_ITEMS: NavItem[] = [
   },
   {
     href: "/billing",
-    label: "钱包",
+    label: "苏问 AI 额度",
     icon: <FigmaNavIcon name="billing" />,
   },
 ];
@@ -171,7 +171,7 @@ const TITLE_MAP: Record<string, string> = {
   "/reports": "学情报告",
   "/settings": "账户设置",
   "/orgs": "机构",
-  "/billing": "钱包",
+  "/billing": "苏问 AI 额度",
   "/teacher": "教师组卷",
   "/admin": "运营管理",
   "/evals": "评估看板",

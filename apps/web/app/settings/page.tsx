@@ -368,7 +368,7 @@ export default function SettingsPage() {
               <SettingRow label="登录邮箱" value={user?.email ?? "—"} />
               <SettingRow label="创建时间" value={dateLabel(user?.created_at)} />
               <SettingRow label="密码" value="已设置" note="重置密码会通过已验证邮箱完成。" action={<Link href="/forgot" className="text-xs font-medium text-brand-600">重置密码</Link>} />
-              <SettingRow label="钱包与额度" value="单独管理" note="查看当前余额、套餐与消费记录。" action={<Link href="/billing" className="text-xs font-medium text-brand-600">前往钱包 →</Link>} />
+              <SettingRow label="苏问 AI 额度" value="单独管理" note="查看当前额度、套餐与消费记录。" action={<Link href="/billing" className="text-xs font-medium text-brand-600">查看额度 →</Link>} />
               <div className="pt-8"><button type="button" onClick={async () => { await logout(); router.replace("/login"); }} className="rounded-control border border-danger-500 px-4 py-2 text-xs font-medium text-danger-600 hover:bg-danger-50">退出当前账号</button></div>
             </section>
           )}

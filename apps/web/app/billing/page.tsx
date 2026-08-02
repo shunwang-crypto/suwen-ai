@@ -266,8 +266,8 @@ export default function BillingPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
       <PageHeader
-        title="钱包"
-        subtitle="额度用于对话、出题、辅导等 AI 功能，1 额度 = 1 元人民币"
+        title="苏问 AI 额度"
+        subtitle="苏问 AI 额度用于对话、出题、辅导等 AI 功能，1 额度 = 1 元人民币"
       />
 
       <div className="grid gap-4 lg:grid-cols-5">
@@ -489,7 +489,7 @@ export default function BillingPage() {
                 >
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
-                支付成功，+{order?.amount ?? "—"} 额度已到账
+                支付成功，+{order?.amount ?? "—"} 苏问 AI 额度已到账
               </p>
               {paidBalance && (
                 <p className="mt-0.5 text-xs">
