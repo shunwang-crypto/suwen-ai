@@ -461,6 +461,9 @@ function ChatView() {
       ]);
       if (viewEpochRef.current !== epoch) return;
       const restoredMessages = historyToMessages(history);
+      // 回答方式是会话上下文的一部分；切换或刷新后从最后一条历史消息恢复，
+      // 避免深度思考/联网模式在界面上错误回落为“极速”。
+      setChatMode(restoredMessages.at(-1)?.chatMode ?? "fast");
       if (run.status !== "running" || !run.run_id) {
         setMessages(restoredMessages);
         setSessionIndicators((prev) => {
