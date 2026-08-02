@@ -1,7 +1,7 @@
 "use client";
 
 // 文档表格（F2）：文件名/大小/两阶段状态机徽章/失败原因/操作（分块预览、重建索引、删除）。
-// 状态机: pending→parsing→chunking→embedding→ready→enriching→enriched | failed。
+// 状态机: pending→parsing→recognizing?→chunking→embedding→ready/partial_ready→enriching→enriched。
 
 import { FxStyles, fmtBytes, fmtDateTime } from "@/components/common";
 import type { DocumentOut } from "@/lib/types";
@@ -14,10 +14,16 @@ interface StatusMeta {
 
 const STATUS_META: Record<string, StatusMeta> = {
   pending: { label: "等待处理", className: "bg-slate-100 text-slate-600", active: true },
-  parsing: { label: "解析中", className: "bg-indigo-50 text-indigo-600", active: true },
-  chunking: { label: "切块中", className: "bg-indigo-50 text-indigo-600", active: true },
-  embedding: { label: "向量化中", className: "bg-indigo-50 text-indigo-600", active: true },
-  ready: { label: "已就绪", className: "bg-emerald-50 text-emerald-700" },
+  parsing: { label: "正在提取文本", className: "bg-indigo-50 text-indigo-600", active: true },
+  recognizing: {
+    label: "正在识别扫描页面",
+    className: "bg-amber-50 text-amber-700",
+    active: true,
+  },
+  chunking: { label: "正在分块", className: "bg-indigo-50 text-indigo-600", active: true },
+  embedding: { label: "正在建立索引", className: "bg-indigo-50 text-indigo-600", active: true },
+  ready: { label: "已完成", className: "bg-emerald-50 text-emerald-700" },
+  partial_ready: { label: "部分页面失败", className: "bg-amber-50 text-amber-700" },
   enriching: { label: "知识增强中", className: "bg-violet-50 text-violet-600", active: true },
   enriched: { label: "已增强", className: "bg-emerald-100 text-emerald-800" },
   failed: { label: "失败", className: "bg-red-50 text-red-700" },
@@ -47,17 +53,19 @@ export function DocStatusBadge({ status }: { status: string }) {
   );
 }
 
-/** 摄取分段步骤条：解析 → 分块 → 向量化 → 就绪 → 增强（当前步高亮呼吸）。 */
-const INGEST_STEPS = ["解析", "分块", "向量化", "就绪", "增强"];
-/** status → 当前所处步骤下标；5 表示全部完成（enriched）。failed 不渲染步骤条。 */
+/** 摄取分段步骤条只表达真实阶段，不伪造百分比。 */
+const INGEST_STEPS = ["文本提取", "扫描页识别", "分块", "索引", "完成", "增强"];
+/** status → 当前真实阶段；6 表示基础摄取和增强全部完成。failed 不渲染步骤条。 */
 const STATUS_STEP: Record<string, number> = {
   pending: 0,
   parsing: 0,
-  chunking: 1,
-  embedding: 2,
-  ready: 3,
-  enriching: 4,
-  enriched: 5,
+  recognizing: 1,
+  chunking: 2,
+  embedding: 3,
+  ready: 4,
+  partial_ready: 4,
+  enriching: 5,
+  enriched: 6,
 };
 
 export function IngestSteps({ status }: { status: string }) {
@@ -117,6 +125,9 @@ export function DocumentTable({
         <tbody>
           {documents.map((doc) => {
             const busy = busyDocId === doc.id;
+            const failedPages = (doc.recognition_meta_json?.pages ?? []).filter(
+              (page) => page.recognition_status === "failed",
+            );
             return (
               <tr
                 key={doc.id}
@@ -135,9 +146,21 @@ export function DocumentTable({
                         网页
                       </span>
                     )}
+                    {doc.parse_backend === "pdf-vision" && (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                        扫描识别
+                      </span>
+                    )}
+                    {doc.parse_backend === "pdf-mixed" && (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                        混合 PDF
+                      </span>
+                    )}
                   </p>
-                  {doc.status === "failed" && doc.error_msg && (
-                    <p className="mt-0.5 break-words text-xs text-red-600">
+                  {doc.error_msg && (doc.status === "failed" || failedPages.length > 0) && (
+                    <p
+                      className={`mt-0.5 break-words text-xs ${doc.status === "failed" ? "text-red-600" : "text-amber-700"}`}
+                    >
                       {doc.error_msg}
                     </p>
                   )}
@@ -146,7 +169,13 @@ export function DocumentTable({
                   {fmtBytes(doc.size_bytes)}
                 </td>
                 <td className="whitespace-nowrap py-2.5 pr-3">
-                  <DocStatusBadge status={doc.status} />
+                  <DocStatusBadge
+                    status={
+                      failedPages.length > 0 && ["ready", "enriched"].includes(doc.status)
+                        ? "partial_ready"
+                        : doc.status
+                    }
+                  />
                   <IngestSteps status={doc.status} />
                 </td>
                 <td className="whitespace-nowrap py-2.5 pr-3 text-xs text-slate-400">

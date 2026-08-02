@@ -136,6 +136,14 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 
 `/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
 
+PDF 摄取逐页分类为 `native_text/scanned/mixed/failed`。完整可信文本页直接进入现有 chunker；
+扫描页和“少量标题文本 + 图片主体”的 mixed 页整页有界渲染并使用平台视觉模型忠实转写。
+`Document.recognition_meta_json` 只保存页码、分类、状态、字符/图片计数、是否使用视觉及有界
+错误码，不保存全文、渲染图片或模型原始响应。文档状态新增 `recognizing` 和
+`partial_ready`；单页失败时其余页继续分块、索引并显示失败页码，全部页面失败则不生成
+Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向量写入前后重新确认 Document
+仍存在。引用继续使用 Chunk 的真实 `page_start/page_end`。
+
 Wave3 机构库（D14）：
 - `GET /api/kb` 每项新增 `owner_type/org_id/org_name/writable`；机构库写端点
   （上传/删文档/重建索引/删库/检索调试）member 一律 `403 ORG_READONLY`。
@@ -317,3 +325,38 @@ MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt�
 `uploads/resources/{resource_id}/{safe_filename}`，旧错题导入文件写入
 `uploads/error_imports/{import_id}/{safe_filename}`。缺失对象记录
 `available=false,error=SOURCE_NOT_FOUND`，不阻断其他数据导出。
+
+### 分级辅导附件与题目草稿
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/tutor/drafts/capabilities` | 格式、文件/PDF/单次识别页限制及平台视觉计费提示 |
+| POST | `/api/tutor/drafts` | multipart 上传 PNG/JPG/JPEG/WebP/PDF/DOCX/PPTX；PDF 先返回真实页数，不自动识别 |
+| POST | `/api/tutor/drafts/manual` | 创建手工题目草稿，不产生学习证据 |
+| GET/PATCH | `/api/tutor/drafts/{id}` | 查询状态、多题列表，选择并编辑题干、选项、已知条件、当前思路 |
+| POST | `/api/tutor/drafts/{id}/recognize` | 按 PDF 页码幂等入队；运行中重复请求不重复入队 |
+| POST | `/api/tutor/drafts/{id}/confirm` | 保存不可变题目快照并分配新的 `thread_local_id` |
+| GET | `/api/tutor/drafts/{id}/source` | 鉴权预览/下载原件；非本人和跨租户均返回 404 |
+| DELETE | `/api/tutor/drafts/{id}` | 删除未确认草稿并事务写对象清理 outbox；已确认返回 `TUTOR_DRAFT_LOCKED` |
+
+状态为 `uploaded -> recognizing -> review -> confirmed`，任何解析/模型错误进入 `failed`，
+但原件、选页和手工草稿均保留。`POST /api/tutor` 带 `tutor_draft_id` 时忽略客户端
+`problem`，只使用服务端确认快照，并校验快照绑定的 thread。未确认草稿和单纯确认操作不会
+写 `Attempt/ErrorItem/MasteryLog/LearnerInsight/Report`；只有原有 tutor graph 完成
+`tutor_summary` 后才沿用 mastery/画像链路。
+
+辅导 PDF 只处理用户选择页，并综合文字质量、正文覆盖、图片面积/数量和图形对象判断页面；
+完整文本页直接提取，扫描或 mixed 选择页渲染 PNG 并逐页调用视觉模型，真实页码由服务端保留。
+默认选择 3 页，单次最多 8 页，总页数 50，144 DPI，单图 4MB，
+并发 2，单页视觉 45 秒，整项 120 秒，最多重试 3 次。Word/PPT 沿用本地解析器；检测到
+嵌入图片时返回 `EMBEDDED_IMAGES_NOT_RECOGNIZED`，不得臆造图片内容。
+
+worker job 只携带 `tenant_id/draft_id`；图像 Base64 只在一次平台视觉请求的进程内存中构造，
+不进入 Redis、checkpoint、日志或 trace。Graph state 只保存草稿/资源 ID、确认文本和必要页码。
+视觉请求固定 `credential_policy=platform`，不会把用户 DeepSeek Key 发送给视觉模型；文本辅导
+仍按 BYOK 配置调用用户 DeepSeek。视觉识别可能消耗平台额度，前端在识别前明确展示此边界。
+
+共享网关拒绝任何未显式声明 `credential_policy=platform` 的 `image_url`/视觉模型请求。
+视觉/OCR 请求完全不读写共享 cassette；解析到用户 BYOK 的文本请求在 record/live fallback/
+replay 各路径也不读写共享 cassette，即使用户允许失败后回退平台。cassette key 不包含 Key、
+Key 哈希、密文或 nonce。

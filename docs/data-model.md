@@ -95,13 +95,15 @@ erDiagram
 | 实体 | 语义 |
 |---|---|
 | `KnowledgeBase` | 个人/机构 owner、名称、科目、版本、学习指南配置 |
-| `Document` | 上传文件或网页来源、状态、哈希、大小、解析后端和上传者 |
+| `Document` | 上传文件或网页来源、状态、哈希、大小、解析后端、上传者和 0019 有界逐页识别元数据 |
 | `Chunk` | 父子分块、页码、标题路径、文本、上下文前缀、知识点和嵌入状态 |
 | `KnowledgeComponent` | 知识库受控知识点词表和别名 |
 | `KcEdge` | 知识点先修 DAG；应用层拒绝成环 |
 
-文档状态由上传进入解析、分块、嵌入、增强或失败。Qdrant 只存可重建的向量投影，关系库是
-文档元数据和状态的权威来源。
+文档状态由上传进入文本提取、可选扫描页识别、分块、索引、增强或失败；`partial_ready`
+表示至少一页成功且部分页明确失败。`recognition_meta_json` 只保存逐页方法、状态、计数和
+有界错误码，不保存全文、图片/Base64 或模型原始响应。Qdrant 只存可重建的向量投影，关系库
+是文档元数据和状态的权威来源。
 
 ## 普通测验与学习状态
 
@@ -157,6 +159,7 @@ erDiagram
 | `LearningReportSnapshot` | 报告快照与刷新状态 |
 | `UsageLog` | 模型/功能/用户维度 token、成本、延迟和模式 |
 | `UserModelCredential` | 0017 用户 DeepSeek 凭据的 AES-256-GCM 密文、nonce、版本和脱敏配置；不保存明文 |
+| `TutorProblemDraft` | 0018 分级辅导的选页、待校对字段、确认快照、资源/题目安全 ID 与绑定 thread；不保存文件二进制/Base64/API Key |
 | `EvalRun` | 评估配置、语料/黄金集版本和指标 |
 | `WalletAccount / WalletLedger / PaymentOrder` | 钱包、不可变流水和支付订单骨架 |
 
@@ -169,6 +172,18 @@ erDiagram
 
 `PendingCleanup` 是删除 outbox：数据库删除和清理任务同事务提交，Worker 重试删除 Qdrant、
 对象存储、Redis 和 checkpoint 外部状态。对象删除失败不得先删除数据库事实并伪装成功。
+
+`TutorProblemDraft.resource_id` 复用 `LearningResource` 原件和对象存储；识别候选仅保存在
+`recognized_questions_json`，用 `selected_question_index` 选中一道，不创建 `Question`、
+`ResourceQuestion`、Quiz、Attempt 或错题。`confirmed` 后题干、选项、
+已知条件、当前思路合成为 `confirmed_problem_text`，并绑定唯一 tutor thread；后续轮次不再读取
+识别草稿或客户端题干。未确认草稿 24 小时后由内部清理任务删除，原件通过
+`PendingCleanup(kind=object_prefix)` 幂等清理。草稿表随用户和资源级联删除，进入用户导出。
+
+`eduagents_core.document_recognition` 是业务无关的 PDF 检查、逐页分类、渲染、平台视觉转写与
+Markdown 规范化层。知识库把成功页转成带真实页码的 `Element/Chunk`；辅导再独立执行多题
+结构化抽取和人工确认。共享层本身不创建 KnowledgeBase、TutorProblemDraft、Question、
+ResourceQuestion、Quiz、Attempt、ErrorItem 或学习证据。
 
 ## 用户导出与注销
 

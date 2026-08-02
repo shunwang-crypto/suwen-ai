@@ -42,6 +42,11 @@
 - PDF、Office、图片等检查内容签名；文本要求可解码；不能只相信客户端 MIME。
 - 文件名去除路径、换行和控制字符；对象 key 由服务端生成。
 - Word/PPT 等不安全 inline 的类型使用 attachment；响应带 `X-Content-Type-Options: nosniff`。
+- DOCX/PPTX 额外检查容器结构、成员数、解压总量、压缩比和加密成员；扫描 PDF 只渲染业务
+  请求范围内的页面（辅导为用户选页，知识库为受限整份摄取），并限制总页数、视觉页数、
+  DPI、像素、单图大小、并发和单页/整份超时。
+- 分级辅导的图片 Base64 只存在于 worker 到平台视觉模型的一次内存请求中，不写 Redis job、
+  LangGraph checkpoint、日志或 trace；用户 DeepSeek Key 不参与任何视觉请求。
 
 ### 删除
 
@@ -92,6 +97,7 @@ key 越权。
 - 不把学生答案、错题原文件或完整画像自动写入普通知识库。
 - Langfuse 等观测系统默认不记录正文，生产必须复核 `LANGFUSE_LOG_CONTENT`。
 - record 磁带、故障日志和导出包可能包含敏感内容；磁带不得进入仓库，提交或共享前必须人工审查。
+  用户 BYOK 和视觉/OCR 请求在网关层禁止读取或写入共享磁带；BYOK 即使显式回退平台也不例外。
 - 生产密钥只来自环境/密钥系统，不能进入仓库、镜像层、日志或客户端 bundle。
 - 0017 用户 DeepSeek Key 使用 AES-256-GCM 加密，AAD 绑定用户、provider 和 key version；明文只存在当前网关请求作用域，不进入 `ChatRequest`、LangGraph state、Redis job、cassette、Langfuse、usage_log、导出 ZIP 或管理员响应。生产开启 BYOK 前必须注入由随机数生成的 32 字节主密钥，缺失或非法时启动失败。
 - 成功使用用户 Key 的文本调用不扣平台钱包，但仍记录 token；平台回退、视觉、Embedding、Rerank、搜索、解析和存储继续按平台额度与限流规则执行。
