@@ -7,6 +7,8 @@ DOCKERFILE = (ROOT / "deploy/api.Dockerfile").read_text()
 DEPLOY = (ROOT / "scripts/deploy_prod.sh").read_text()
 DEPLOY_DOC = (ROOT / "deploy/README-deploy.md").read_text()
 VERIFY = (ROOT / "scripts/verify_prod.sh").read_text()
+GRAPH_RUNTIME = (ROOT / "apps/api/src/eduagents_api/graph_runtime.py").read_text()
+HEALTH = (ROOT / "apps/api/src/eduagents_api/routers/health.py").read_text()
 
 
 def _service_block(name: str, next_name: str) -> str:
@@ -69,3 +71,12 @@ def test_external_verifier_checks_page_and_private_docs():
     assert "/api/docs" in VERIFY and "/api/openapi.json" in VERIFY
     assert '[[ "$status" == 404 ]]' in VERIFY
     assert 'openssl x509 -checkhost "$host"' in VERIFY
+
+
+def test_checkpoint_schema_is_initialized_by_migration_not_api():
+    assert "setup_langgraph_checkpoint.py" in DOCKERFILE
+    migrate = _service_block("migrate", "api")
+    assert "alembic upgrade head && python /app/scripts/setup_langgraph_checkpoint.py" in migrate
+    assert "await self._checkpointer.setup()" not in GRAPH_RUNTIME
+    assert "migration_database_url" not in GRAPH_RUNTIME
+    assert 'checks["graph"]' in HEALTH

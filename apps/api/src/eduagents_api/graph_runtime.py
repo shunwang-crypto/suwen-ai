@@ -37,10 +37,9 @@ class GraphRuntime:
         self._compiled: dict[str, Any] = {}
 
     async def start(self) -> None:
-        # checkpointer 表由 migration 账户建 (owner=edu), edu_app 走默认授权 DML
-        conninfo = _pg_conninfo(
-            self._settings.migration_database_url or self._settings.database_url
-        )
+        # checkpoint tables are created by the migration job. The API role only
+        # has DML grants and must never run setup() or receive migration creds.
+        conninfo = _pg_conninfo(self._settings.database_url)
         self._pool = AsyncConnectionPool(
             conninfo,
             open=False,
@@ -49,7 +48,6 @@ class GraphRuntime:
         )
         await self._pool.open()
         self._checkpointer = AsyncPostgresSaver(self._pool)
-        await self._checkpointer.setup()
         log.info("graph_runtime_started")
 
     async def stop(self) -> None:

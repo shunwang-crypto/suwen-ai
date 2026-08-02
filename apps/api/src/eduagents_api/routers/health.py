@@ -1,7 +1,7 @@
 """健康检查 (P1-2): liveness / readiness 拆分。
 
 - /api/health/live  — 进程存活探针: 恒 200, 不探任何依赖 (供重启判定)。
-- /api/health/ready — 就绪探针: PG / Redis / Qdrant 任一挂 → 503 (供反代摘流量,
+- /api/health/ready — 就绪探针: PG / Redis / Qdrant / 生产图运行时任一挂 → 503 (供反代摘流量,
   compose healthcheck 打这里)。worker 心跳缺失只降级 (degraded, 仍 200):
   worker 挂不影响同步 API 流量, 不应让反代摘掉 api 实例。
 - /api/health       — 旧路径兼容: 响应体形状不变, 但 PG/Redis 挂时返 503
@@ -63,6 +63,10 @@ async def _check_worker(request: Request) -> str:
         return f"error: {type(exc).__name__}"
 
 
+def _check_graph(request: Request) -> str:
+    return "ok" if getattr(request.app.state, "graphs", None) is not None else "unavailable"
+
+
 @router.get("/api/health/live")
 async def live():
     """Liveness: 进程能应答即 200, 永不探依赖。"""
@@ -78,7 +82,14 @@ async def ready(request: Request):
         "qdrant": await _check_qdrant(request),
         "worker": await _check_worker(request),
     }
-    hard_ok = all(checks[k] == "ok" for k in ("postgres", "redis", "qdrant"))
+    if request.app.state.settings.app_env == "prod":
+        checks["graph"] = _check_graph(request)
+    hard_keys = ("postgres", "redis", "qdrant", "graph") if "graph" in checks else (
+        "postgres",
+        "redis",
+        "qdrant",
+    )
+    hard_ok = all(checks[k] == "ok" for k in hard_keys)
     status = "ok" if hard_ok and checks["worker"] == "ok" else (
         "degraded" if hard_ok else "down"
     )

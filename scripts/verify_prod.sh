@@ -37,7 +37,9 @@ with open(sys.argv[2], encoding="utf-8") as handle:
 if live.get("status") != "ok":
     raise SystemExit(f"live probe failed: {live!r}")
 checks = ready.get("checks", {})
-if ready.get("status") != "ok" or any(checks.get(k) != "ok" for k in ("postgres", "redis", "qdrant", "worker")):
+if ready.get("status") != "ok" or any(
+    checks.get(k) != "ok" for k in ("postgres", "redis", "qdrant", "worker", "graph")
+):
     raise SystemExit(f"readiness probe failed: {ready!r}")
 print("HTTPS live/readiness: PASS")
 print("readiness:", json.dumps(ready, ensure_ascii=False, sort_keys=True))

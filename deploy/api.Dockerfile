@@ -15,6 +15,7 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/worker/ apps/worker/
 COPY scripts/create_first_admin.py scripts/create_first_admin.py
+COPY scripts/setup_langgraph_checkpoint.py scripts/setup_langgraph_checkpoint.py
 COPY alembic.ini ./
 COPY alembic/ alembic/
 

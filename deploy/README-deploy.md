@@ -83,6 +83,8 @@ openssl rand -hex 32  # 为数据库应用密码、迁移密码、Redis、MinIO�
 生产 Compose 使用 `edu_migration`（仅 migration job）和 `edu_app`（`NOSUPERUSER`
 `NOBYPASSRLS`）两个角色。API/Worker 的 `MIGRATION_DATABASE_URL` 和迁移密码会被明确置空；
 迁移不会在 API/Worker 启动命令中执行。
+同一个一次性 migration job 还会用 `edu_migration` 创建 LangGraph checkpoint schema；
+API/Worker 只使用 `edu_app` 的表级 DML 权限，不会在启动时执行 DDL。
 
 ## 发布命令
 

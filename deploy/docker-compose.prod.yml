@@ -121,7 +121,7 @@ services:
       postgres:
         condition: service_healthy
     networks: [backend]
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && python /app/scripts/setup_langgraph_checkpoint.py"]
     logging: *default-logging
 
   api:
