@@ -14,10 +14,20 @@ RUN grep -v 'file:///' requirements.lock > /tmp/req.lock \
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/worker/ apps/worker/
+# Runtime prompt templates are loaded from /app/prompts by the API graphs,
+# moderation layer and worker jobs. Keep the whole directory in the shared
+# API/worker image so newly added templates are not omitted one by one.
+COPY prompts/ prompts/
 COPY scripts/create_first_admin.py scripts/create_first_admin.py
 COPY scripts/setup_langgraph_checkpoint.py scripts/setup_langgraph_checkpoint.py
 COPY alembic.ini ./
 COPY alembic/ alembic/
+
+# Fail during image construction instead of at the first production request.
+RUN test -f /app/prompts/qa_web_query_plan.md \
+    && test -f /app/prompts/plan_draft.md \
+    && test -f /app/prompts/chat_reflect.md \
+    && test -f /app/prompts/minor_safety_guard.md
 
 RUN pip install --no-cache-dir --no-deps -e packages/core -e apps/api -e apps/worker
 
