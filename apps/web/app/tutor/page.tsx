@@ -13,6 +13,7 @@ import {
   MasteryDelta,
   Spinner,
 } from "@/components/common";
+import { MarkdownAnswer } from "@/components/chat/markdown-answer";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
@@ -533,7 +534,7 @@ export default function TutorPage() {
           ) : (
             <div key={index} className="flex items-start gap-3 py-2">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MathText text={message.content} /></div></div>
+              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MarkdownAnswer text={message.content} /></div></div>
             </div>
           ))}
 
