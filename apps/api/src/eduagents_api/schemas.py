@@ -34,6 +34,7 @@ class RegisterRequest(BaseModel):
     # 图形验证码 (captcha_required_register 开启时必填; 测试通道见 config.py 注释)
     captcha_id: str | None = Field(default=None, max_length=64)
     captcha_answer: str | None = Field(default=None, max_length=8)
+    invite_code: str | None = Field(default=None, max_length=128)
 
     _password_bytes = field_validator("password")(_validate_bcrypt_password_bytes)
     _display_name = field_validator("display_name")(_normalize_display_name)
@@ -56,6 +57,32 @@ class RegisterEmailCodeRequest(BaseModel):
     captcha_answer: str = Field(min_length=1, max_length=8)
 
     _email = field_validator("email", mode="before")(normalize_email)
+
+
+class RegistrationInviteCreate(BaseModel):
+    expires_in_hours: int | None = Field(default=None, ge=1, le=24 * 365)
+    max_uses: int = Field(default=1, ge=1, le=100)
+
+
+class RegistrationInviteBatchCreate(RegistrationInviteCreate):
+    count: int = Field(default=10, ge=1, le=100)
+
+
+class RegistrationInviteOut(BaseModel):
+    id: uuid.UUID
+    code: str | None = None
+    status: Literal["active", "used", "revoked", "expired"]
+    expires_at: datetime | None
+    max_uses: int
+    used_count: int
+    created_at: datetime
+    used_by: uuid.UUID | None = None
+    used_by_email: str | None = None
+
+
+class PublicRegistrationConfigOut(BaseModel):
+    registration_mode: Literal["closed", "invite", "open"]
+    email_verification_required: bool
 
 
 class ForgotPasswordIn(BaseModel):

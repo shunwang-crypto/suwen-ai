@@ -20,4 +20,4 @@ def generate_invite_code() -> str:
 
 
 def hash_invite_code(value: str) -> str:
-    return hashlib.sha256(normalize_invite_code(value).encode("ascii")).hexdigest()
+    return hashlib.sha256(normalize_invite_code(value).encode("utf-8")).hexdigest()

@@ -40,6 +40,7 @@ from .routers import (
     plans,
     preferences,
     profile,
+    public_config,
     quiz,
     reports,
     resources,
@@ -190,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(plans.router)
     app.include_router(plans.tutor_router)
     app.include_router(profile.router)
+    app.include_router(public_config.router)
     app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)
     app.include_router(reports.router)
     app.include_router(resources.router)

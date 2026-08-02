@@ -27,7 +27,8 @@ from ..email_verification import (
     store_email_code,
 )
 from ..emailer import create_email_sender
-from ..models import PasswordResetToken, RefreshToken, User
+from ..models import PasswordResetToken, RefreshToken, RegistrationInvite, User
+from ..registration_invites import hash_invite_code
 from ..schemas import (
     AccountProfileUpdateIn,
     ForgotPasswordIn,
@@ -171,7 +172,7 @@ async def send_register_email_code(
     enumeration oracle.
     """
 
-    if not settings.public_registration:
+    if settings.registration_mode == "closed":
         raise HTTPException(status_code=403, detail="REGISTRATION_CLOSED")
     redis = request.app.state.redis
     if not await verify_captcha(redis, body.captcha_id, body.captcha_answer):
@@ -257,9 +258,17 @@ async def register(
     request: Request,
     settings: Settings = Depends(get_app_settings),
 ):
-    if not settings.public_registration:
+    mode = settings.registration_mode or "closed"
+    if mode == "closed":
         raise HTTPException(status_code=403, detail="REGISTRATION_CLOSED")
-    await _auth_rate_limit(request, settings)
+    invite_hash = hash_invite_code(body.invite_code) if body.invite_code else None
+    await _auth_rate_limit(
+        request,
+        settings,
+        extra_keys=((f"invite:{invite_hash[:16]}",) if invite_hash else ()),
+    )
+    if mode == "invite" and invite_hash is None:
+        raise HTTPException(status_code=400, detail="INVITE_CODE_INVALID")
     normalized_email = normalize_email(str(body.email))
     requires_email_code = _registration_requires_email_verification(settings)
     if requires_email_code:
@@ -276,6 +285,21 @@ async def register(
             raise HTTPException(status_code=400, detail="CAPTCHA_INVALID")
     try:
         async with plain_session() as session:
+            invite = None
+            if mode == "invite":
+                invite = await session.scalar(
+                    select(RegistrationInvite)
+                    .where(RegistrationInvite.code_hash == invite_hash)
+                    .with_for_update()
+                )
+                now = datetime.now(UTC)
+                if (
+                    invite is None
+                    or invite.status != "active"
+                    or invite.used_count >= invite.max_uses
+                    or (invite.expires_at is not None and invite.expires_at <= now)
+                ):
+                    raise HTTPException(status_code=400, detail="INVITE_CODE_INVALID")
             existing = await session.scalar(
                 select(User).where(func.lower(User.email) == normalized_email)
             )
@@ -290,6 +314,12 @@ async def register(
             )
             session.add(user)
             await session.flush()
+            if invite is not None:
+                invite.used_count += 1
+                invite.used_by = user.id
+                invite.used_at = datetime.now(UTC)
+                if invite.used_count >= invite.max_uses:
+                    invite.status = "used"
             # 0006 预付额度: 注册赠送与建号及验证时间同事务提交。
             await get_wallet_service().grant_signup(session, user.id)
             log.info("user_registered", user_id=str(user.id))

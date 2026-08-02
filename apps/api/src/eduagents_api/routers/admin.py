@@ -10,21 +10,148 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import Tier, get_fault_injector
 from eduagents_core.logging import get_logger
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from .. import timectl
 from ..db import plain_session
 from ..deps import AuthContext, account_status_key, require_admin
-from ..models import RefreshToken, User
+from ..models import RefreshToken, RegistrationInvite, User
+from ..registration_invites import generate_invite_code, hash_invite_code
+from ..schemas import (
+    RegistrationInviteBatchCreate,
+    RegistrationInviteCreate,
+    RegistrationInviteOut,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 log = get_logger("admin")
+
+
+def _invite_status(row: RegistrationInvite, now: datetime) -> str:
+    if row.status == "active" and row.expires_at is not None and row.expires_at <= now:
+        return "expired"
+    return row.status
+
+
+def _invite_out(
+    row: RegistrationInvite,
+    now: datetime,
+    *,
+    code: str | None = None,
+    used_by_email: str | None = None,
+) -> RegistrationInviteOut:
+    return RegistrationInviteOut(
+        id=row.id,
+        code=code,
+        status=_invite_status(row, now),
+        expires_at=row.expires_at,
+        max_uses=row.max_uses,
+        used_count=row.used_count,
+        created_at=row.created_at,
+        used_by=row.used_by,
+        used_by_email=used_by_email,
+    )
+
+
+async def _create_invites(
+    count: int,
+    max_uses: int,
+    expires_in_hours: int | None,
+    ctx: AuthContext,
+) -> tuple[list[RegistrationInviteOut], list[str]]:
+    now = datetime.now(UTC)
+    expires_at = (
+        now + timedelta(hours=expires_in_hours) if expires_in_hours is not None else None
+    )
+    rows: list[RegistrationInvite] = []
+    codes: list[str] = []
+    async with plain_session() as session:
+        for _ in range(count):
+            code = generate_invite_code()
+            row = RegistrationInvite(
+                code_hash=hash_invite_code(code),
+                max_uses=max_uses,
+                expires_at=expires_at,
+                created_by=ctx.user_id,
+            )
+            session.add(row)
+            rows.append(row)
+            codes.append(code)
+        await session.flush()
+    log.warning(
+        "admin_registration_invites_created",
+        by=str(ctx.user_id),
+        invite_ids=[str(row.id) for row in rows],
+        count=count,
+        max_uses=max_uses,
+        expires_at=expires_at.isoformat() if expires_at else None,
+    )
+    return [_invite_out(row, now, code=code) for row, code in zip(rows, codes, strict=True)], codes
+
+
+@router.post("/registration-invites", response_model=RegistrationInviteOut, status_code=201)
+async def create_registration_invite(
+    body: RegistrationInviteCreate, ctx: AuthContext = Depends(require_admin)
+):
+    invites, _ = await _create_invites(1, body.max_uses, body.expires_in_hours, ctx)
+    return invites[0]
+
+
+@router.post(
+    "/registration-invites/batch",
+    response_model=list[RegistrationInviteOut],
+    status_code=201,
+)
+async def create_registration_invites_batch(
+    body: RegistrationInviteBatchCreate, ctx: AuthContext = Depends(require_admin)
+):
+    invites, _ = await _create_invites(body.count, body.max_uses, body.expires_in_hours, ctx)
+    return invites
+
+
+@router.get("/registration-invites", response_model=list[RegistrationInviteOut])
+async def list_registration_invites(
+    limit: int = Query(default=100, ge=1, le=200), ctx: AuthContext = Depends(require_admin)
+):
+    now = datetime.now(UTC)
+    async with plain_session() as session:
+        rows = (
+            await session.execute(
+                select(RegistrationInvite, User.email)
+                .outerjoin(User, User.id == RegistrationInvite.used_by)
+                .order_by(RegistrationInvite.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    return [_invite_out(row, now, used_by_email=email) for row, email in rows]
+
+
+@router.post("/registration-invites/{invite_id}/revoke", response_model=RegistrationInviteOut)
+async def revoke_registration_invite(
+    invite_id: uuid.UUID, ctx: AuthContext = Depends(require_admin)
+):
+    now = datetime.now(UTC)
+    async with plain_session() as session:
+        row = await session.scalar(
+            select(RegistrationInvite).where(RegistrationInvite.id == invite_id).with_for_update()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if _invite_status(row, now) != "active":
+            raise HTTPException(status_code=409, detail="INVITE_NOT_ACTIVE")
+        row.status = "revoked"
+        row.revoked_at = now
+    log.warning(
+        "admin_registration_invite_revoked", by=str(ctx.user_id), invite_id=str(invite_id)
+    )
+    return _invite_out(row, now)
 
 
 class TimeTravelIn(BaseModel):

@@ -139,7 +139,7 @@ def assert_public_registration_email_config(settings: Settings) -> None:
     origin = urlparse(settings.web_origin)
     if origin.scheme != "https" or not origin.netloc:
         raise RuntimeError("FATAL: WEB_ORIGIN must be a public HTTPS origin in production")
-    if not settings.public_registration:
+    if settings.registration_mode == "closed":
         return
     if not smtp_configured(settings):
         raise RuntimeError("FATAL: public registration requires complete SMTP configuration")
