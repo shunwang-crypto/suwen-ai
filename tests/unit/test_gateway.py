@@ -32,6 +32,32 @@ def req(text: str = "什么是泰勒公式?", tier: Tier = Tier.standard) -> Cha
     )
 
 
+def test_thinking_switch_is_sent_only_when_explicitly_configured(tmp_path):
+    settings = make_settings(
+        tmp_path,
+        cheap_enable_thinking=False,
+        standard_enable_thinking=False,
+        strong_enable_thinking=True,
+        plan_enable_thinking=None,
+    )
+    gw = OpenAIGateway(settings)
+
+    cheap_kwargs = gw._completion_kwargs(req(tier=Tier.cheap), settings.tier("cheap"))
+    strong_kwargs = gw._completion_kwargs(req(tier=Tier.strong), settings.tier("strong"))
+    plan_kwargs = gw._completion_kwargs(req(tier=Tier.plan), settings.tier("plan"))
+
+    assert cheap_kwargs["extra_body"] == {"enable_thinking": False}
+    assert strong_kwargs["extra_body"] == {"enable_thinking": True}
+    assert "extra_body" not in plan_kwargs
+
+
+def test_cassette_key_distinguishes_thinking_mode(tmp_path):
+    plain = OpenAIGateway(make_settings(tmp_path, standard_enable_thinking=False))
+    thinking = OpenAIGateway(make_settings(tmp_path, standard_enable_thinking=True))
+
+    assert plain._cassette_key(req()) != thinking._cassette_key(req())
+
+
 async def test_stub_mode_is_deterministic_and_banner_marked(tmp_path):
     gw = OpenAIGateway(make_settings(tmp_path, gateway_mode="stub"))
     r1 = await gw.chat(req())

@@ -278,6 +278,7 @@ class OpenAIGateway:
                 "json_mode": req.json_mode,
                 "temperature": req.temperature,
                 "max_tokens": req.max_tokens,
+                "enable_thinking": self._s.tier(req.tier.value).enable_thinking,
             }
         )
 
@@ -344,6 +345,10 @@ class OpenAIGateway:
             kwargs["max_tokens"] = req.max_tokens
         if req.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if cfg.enable_thinking is not None:
+            # SiliconFlow exposes Qwen's dual-mode switch as an extension to
+            # the OpenAI-compatible request body. Omit it for other providers.
+            kwargs["extra_body"] = {"enable_thinking": cfg.enable_thinking}
         return kwargs
 
     async def _call_tier(self, req: ChatRequest, tier: Tier) -> ChatResult:

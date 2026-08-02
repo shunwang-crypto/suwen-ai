@@ -18,6 +18,9 @@ class TierConfig(BaseModel):
     # CNY per 1M tokens; used for usage_log cost attribution
     input_price_per_m: float = 0.0
     output_price_per_m: float = 0.0
+    # Provider-specific Qwen switch. None omits the extension entirely so
+    # non-SiliconFlow OpenAI-compatible providers remain compatible.
+    enable_thinking: bool | None = None
 
 
 class Settings(BaseSettings):
@@ -166,12 +169,14 @@ class Settings(BaseSettings):
     cheap_model: str = "Qwen/Qwen2.5-7B-Instruct"
     cheap_input_price_per_m: float = 0.35
     cheap_output_price_per_m: float = 0.35
+    cheap_enable_thinking: bool | None = None
 
     standard_api_key: str = ""
     standard_base_url: str = "https://api.deepseek.com"
     standard_model: str = "deepseek-chat"
     standard_input_price_per_m: float = 2.0
     standard_output_price_per_m: float = 8.0
+    standard_enable_thinking: bool | None = None
 
     # Multimodal chat attachments use the standard provider credentials and an
     # explicit VL model on that same OpenAI-compatible endpoint.
@@ -182,6 +187,7 @@ class Settings(BaseSettings):
     strong_model: str = "deepseek-reasoner"
     strong_input_price_per_m: float = 4.0
     strong_output_price_per_m: float = 16.0
+    strong_enable_thinking: bool | None = None
 
     # Learning plans use a dedicated provider instead of sharing the generic
     # strong tier with thinking chat and other complex tasks.
@@ -190,6 +196,7 @@ class Settings(BaseSettings):
     plan_model: str = "deepseek-chat"
     plan_input_price_per_m: float = 1.0
     plan_output_price_per_m: float = 2.0
+    plan_enable_thinking: bool | None = None
 
     # --- observability: Langfuse (M3-D1) ---
     # 三项齐全才启用; 未启用时不 import langfuse, 热路径零额外开销
@@ -267,6 +274,7 @@ class Settings(BaseSettings):
             model=getattr(self, f"{name}_model"),
             input_price_per_m=getattr(self, f"{name}_input_price_per_m"),
             output_price_per_m=getattr(self, f"{name}_output_price_per_m"),
+            enable_thinking=getattr(self, f"{name}_enable_thinking"),
         )
 
 

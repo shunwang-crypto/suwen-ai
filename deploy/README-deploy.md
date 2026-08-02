@@ -98,6 +98,11 @@ API/Worker 只使用 `edu_app` 的表级 DML 权限，不会在启动时执行 D
 降级到硅基流动的 `strong`、`standard` 和 `cheap`，保证上游短暂故障不会直接阻断
 计划功能；降级后的实际模型仍会如实写入用量记录。
 
+Qwen 双模式由每档的 `*_ENABLE_THINKING` 显式控制。内测基线中 `cheap` 与
+`standard` 设为 `false`，保证分类、普通对话和网页搜索的生成阶段不额外思考；
+`strong` 设为 `true`，仅供“深度思考/深度搜索”。`plan` 使用 DeepSeek 时留空，
+网关不会向非硅基流动供应商发送该扩展字段。视觉模型复用 `standard=false`。
+
 模型账户中的赠送余额不是模型单价。`*_INPUT_PRICE_PER_M` 与
 `*_OUTPUT_PRICE_PER_M` 必须填写所选模型的真实人民币价格，单位均为“元/百万
 tokens”；不得因为供应商赠送了账户余额而填写 `0`。当前网关不区分供应商输入缓存
