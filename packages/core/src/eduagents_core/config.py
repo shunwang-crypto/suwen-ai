@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     signup_grant_cny: float = 10.0
     # 支付通道: mock = 演示通道 (confirm 即到账, 仅非 prod); 真实通道留接口未实现
     payment_provider: str = "mock"
+    # 人工核验的硅基流动邀请活动。点击只跳转，绝不自动发放站内额度。
+    referral_campaign_enabled: bool = False
+    siliconflow_referral_url: str = ""
+    referral_reward_credits: float = 30.0
 
     # --- model gateway ---
     # live: real API calls; record: live + save cassette; replay: cassette only;
@@ -139,6 +143,15 @@ class Settings(BaseSettings):
                 "REGISTRATION_MODE conflicts with legacy PUBLIC_REGISTRATION; remove the legacy setting"
             )
         self.public_registration = self.registration_mode == "open"
+        if self.referral_campaign_enabled:
+            if not self.siliconflow_referral_url.startswith(
+                "https://cloud.siliconflow.cn/"
+            ):
+                raise ValueError(
+                    "enabled referral campaign requires an HTTPS cloud.siliconflow.cn URL"
+                )
+            if not 0 < self.referral_reward_credits <= 1000:
+                raise ValueError("REFERRAL_REWARD_CREDITS must be within (0, 1000]")
         return self
 
     # circuit breaker

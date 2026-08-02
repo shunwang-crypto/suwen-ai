@@ -2,7 +2,7 @@
 
 - GET  /wallet                     {"balance": "10.0000", "currency": "CNY"}
 - GET  /ledger?limit=50            {"data": [{id,delta,balance_after,kind,ref,note,created_at}]}
-- GET  /pricing                    {"markup": 3.0, "signup_grant": "10.00", "recharge_enabled": false, "note": ...}
+- GET  /pricing                    计费、充值和人工核验邀请活动配置
 - POST /orders {"amount_cny": 10}  {"id","amount_cny","credits","status":"pending","provider":"mock"}
 - POST /orders/{id}/mock-pay       {"status": "paid", "balance": "20.0000"}  (仅 mock + 非 prod)
 
@@ -25,7 +25,7 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..models import PaymentOrder, WalletLedger
 from ..payments import create_payment_provider
-from ..wallet import get_wallet_service, q4, service_session
+from ..wallet import as_decimal, get_wallet_service, q4, service_session
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -97,6 +97,15 @@ async def get_pricing(
         "markup": markup,
         "signup_grant": _money2(wallet.grant_cny),
         "recharge_enabled": settings.app_env != "prod" and settings.payment_provider == "mock",
+        "referral_campaign": {
+            "enabled": settings.referral_campaign_enabled,
+            "url": (
+                settings.siliconflow_referral_url
+                if settings.referral_campaign_enabled
+                else None
+            ),
+            "reward_credits": _money4(as_decimal(settings.referral_reward_credits)),
+        },
         "note": f"按模型真实成本×{markup:g} 透明计费, 缓存命中免费",
     }
 

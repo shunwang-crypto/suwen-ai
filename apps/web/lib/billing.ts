@@ -2,7 +2,7 @@
 // 后端契约已冻结，字段形状勿改：
 //   GET  /api/billing/wallet             -> { balance: "10.0000", currency: "CNY" }
 //   GET  /api/billing/ledger?limit=50    -> { data: LedgerEntryOut[] }
-//   GET  /api/billing/pricing            -> { markup, signup_grant, recharge_enabled, note }
+//   GET  /api/billing/pricing            -> 计费、充值与邀请活动配置
 //   POST /api/billing/orders             -> { id, ..., status: "pending", provider: "mock" }
 //   POST /api/billing/orders/{id}/mock-pay -> { status: "paid", balance }
 
@@ -36,6 +36,11 @@ export interface PricingOut {
   markup: number;
   signup_grant: string;
   recharge_enabled: boolean;
+  referral_campaign: {
+    enabled: boolean;
+    url: string | null;
+    reward_credits: string;
+  };
   note: string;
 }
 

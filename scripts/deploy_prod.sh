@@ -27,6 +27,7 @@ required=(
   CHEAP_API_KEY CHEAP_BASE_URL CHEAP_MODEL STANDARD_API_KEY STANDARD_BASE_URL STANDARD_MODEL
   STRONG_API_KEY STRONG_BASE_URL STRONG_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL
   EMBEDDING_MODEL RERANK_MODEL SMTP_HOST SMTP_USER SMTP_PASSWORD SMTP_FROM SMTP_REPLY_TO
+  REFERRAL_CAMPAIGN_ENABLED
 )
 for name in "${required[@]}"; do
   value="$(grep -E "^${name}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
@@ -54,6 +55,17 @@ grep -q '^ENABLE_TIME_TRAVEL=0$' "$ENV_FILE" || die "time travel must be disable
 grep -q '^PAYMENT_PROVIDER=disabled$' "$ENV_FILE" || die "mock payment must be disabled"
 grep -q '^ENABLE_FAULT_INJECTION=0$' "$ENV_FILE" || die "fault injection must be disabled"
 grep -q '^LANGFUSE_LOG_CONTENT=0$' "$ENV_FILE" || die "model/user content logging must be disabled"
+referral_enabled="$(grep -E '^REFERRAL_CAMPAIGN_ENABLED=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+case "$referral_enabled" in
+  true)
+    referral_url="$(grep -E '^SILICONFLOW_REFERRAL_URL=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+    [[ "$referral_url" == https://cloud.siliconflow.cn/* ]] || die "enabled referral campaign requires an HTTPS cloud.siliconflow.cn URL"
+    referral_reward="$(grep -E '^REFERRAL_REWARD_CREDITS=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+    [[ "$referral_reward" =~ ^[0-9]+([.][0-9]{1,4})?$ ]] || die "REFERRAL_REWARD_CREDITS must be a positive decimal with at most 4 places"
+    ;;
+  false) ;;
+  *) die "REFERRAL_CAMPAIGN_ENABLED must be true or false" ;;
+esac
 
 compose=(env "PRODUCTION_ENV_FILE=$ENV_FILE" "EDUAGENTS_IMAGE_TAG=$image_tag" docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 "${compose[@]}" config >/dev/null

@@ -105,6 +105,12 @@ async def test_signup_grant_and_frozen_contract_shapes(client):
     assert r.json() == {
         "markup": 3.0,
         "signup_grant": "10.00",
+        "recharge_enabled": True,
+        "referral_campaign": {
+            "enabled": False,
+            "url": None,
+            "reward_credits": "30.0000",
+        },
         "note": "按模型真实成本×3 透明计费, 缓存命中免费",
     }
 

@@ -373,6 +373,32 @@ export default function BillingPage() {
         </Card>
       </div>
 
+      {pricing?.referral_campaign.enabled &&
+        pricing.referral_campaign.url && (
+          <Card title="邀请活动">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-sm font-medium text-slate-800">
+                  完成硅基流动有效注册，可申请{" "}
+                  {fmtAmount(pricing.referral_campaign.reward_credits)} 元苏问 AI 额度
+                </p>
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                  请通过指定邀请链接注册。完成后联系平台管理员，经硅基流动后台确认属于有效邀请后人工发放；点击链接不会自动到账。活动额度仅限站内 AI 功能使用，不可提现或转让。
+                </p>
+              </div>
+              <a
+                href={pricing.referral_campaign.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-brand inline-flex shrink-0 items-center justify-center rounded-control px-5 py-2.5 text-sm font-semibold text-white shadow-card hover:shadow-floating"
+              >
+                前往硅基流动注册
+                <span className="ml-1.5" aria-hidden>↗</span>
+              </a>
+            </div>
+          </Card>
+        )}
+
       {pricing?.recharge_enabled ? (
         <Card title="充值">
         {phase === "pick" && (
