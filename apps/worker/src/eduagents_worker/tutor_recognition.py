@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import tempfile
 import uuid
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
-import pymupdf
 from eduagents_api.db import tenant_session
 from eduagents_api.models import LearningResource, TutorProblemDraft
 from eduagents_api.resource_utils import normalize_extracted_question, parse_json_payload
 from eduagents_core.config import Settings, get_settings
+from eduagents_core.document_recognition import (
+    PdfRecognitionPolicy,
+    inspect_pdf,
+    recognize_page_image,
+    recognize_pdf,
+)
 from eduagents_core.gateway import ChatMessage, ChatRequest, Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.parsing.registry import get_parser
@@ -31,7 +36,6 @@ _PROMPT = """你是分级辅导的题目识别助手。忠实识别输入中出�
 每题字段：question_no, page_no, type, stem, options, confidence。
 type 只能是 single、multi、blank、short。不清楚的内容留空，绝不能补造题干、选项或答案。
 保留给出的真实页码。只输出 JSON 数组。"""
-_LOW_TEXT_CHARS = 40
 
 
 def _payload_questions(text: str) -> list[dict]:
@@ -71,40 +75,24 @@ async def _model_questions(
     return _payload_questions(result.text)
 
 
-def _pdf_selected_pages(
-    data: bytes, selected_pages: list[int], settings: Settings
-) -> tuple[dict[int, str], dict[int, bytes], int]:
-    text_pages: dict[int, str] = {}
-    image_pages: dict[int, bytes] = {}
-    try:
-        with pymupdf.open(stream=data, filetype="pdf") as document:
-            if document.needs_pass:
-                raise ValueError("TUTOR_PDF_PASSWORD_PROTECTED")
-            page_count = document.page_count
-            if settings.max_tutor_attachment_pages > 0 and page_count > settings.max_tutor_attachment_pages:
-                raise ValueError("TUTOR_PDF_PAGE_LIMIT_EXCEEDED")
-            for page_no in selected_pages:
-                if page_no < 1 or page_no > page_count:
-                    raise ValueError("TUTOR_INVALID_PAGE_SELECTION")
-                page = document.load_page(page_no - 1)
-                text = page.get_text("text").strip()
-                if len("".join(text.split())) >= _LOW_TEXT_CHARS:
-                    text_pages[page_no] = text
-                    continue
-                dpi = max(72, min(settings.max_tutor_ocr_dpi, 200))
-                pixmap = page.get_pixmap(dpi=dpi, alpha=False)
-                png = pixmap.tobytes("png")
-                maximum = settings.max_tutor_ocr_image_mb * 1024 * 1024
-                if maximum > 0 and len(png) > maximum and dpi > 96:
-                    png = page.get_pixmap(dpi=96, alpha=False).tobytes("png")
-                if maximum > 0 and len(png) > maximum:
-                    raise ValueError("TUTOR_OCR_IMAGE_TOO_LARGE")
-                image_pages[page_no] = png
-            return text_pages, image_pages, page_count
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError("TUTOR_ATTACHMENT_PARSE_FAILED") from exc
+def _tutor_pdf_policy(settings: Settings) -> PdfRecognitionPolicy:
+    render_limits = [
+        value
+        for value in (settings.pdf_max_render_mb, settings.max_tutor_ocr_image_mb)
+        if value > 0
+    ]
+    render_mb = min(render_limits) if render_limits else 0
+    return replace(
+        PdfRecognitionPolicy.from_settings(
+            settings, max_pages=settings.max_tutor_attachment_pages
+        ),
+        render_dpi=min(settings.pdf_render_dpi, settings.max_tutor_ocr_dpi),
+        max_render_bytes=render_mb * 1024 * 1024,
+        max_vision_pages=settings.max_tutor_recognition_pages,
+        vision_concurrency=settings.max_tutor_ocr_concurrency,
+        page_timeout_seconds=settings.tutor_ocr_timeout_seconds,
+        document_timeout_seconds=settings.tutor_recognition_timeout_seconds,
+    )
 
 
 async def _document_text(filename: str, data: bytes) -> tuple[str, int, list[str]]:
@@ -147,87 +135,71 @@ async def _recognize_source(
         if suffix in _IMAGE_MIMES:
             return [], 1, ["VISION_MODEL_STUB_MANUAL_ENTRY_REQUIRED"]
         if suffix == ".pdf":
-            text_pages, image_pages, page_count = await asyncio.to_thread(
-                _pdf_selected_pages, data, selected_pages, settings
+            inspected = await asyncio.to_thread(
+                inspect_pdf,
+                data,
+                _tutor_pdf_policy(settings),
+                selected_pages=selected_pages,
             )
-            text = "\n\n".join(f"[第 {page} 页]\n{value}" for page, value in text_pages.items())
-            warnings = ["SCANNED_PAGES_REQUIRE_VISION"] if image_pages else []
-            return _numbered_blocks(text, 50) if text else [], page_count, warnings
+            text = "\n\n".join(
+                f"[第 {page.page_number} 页]\n{page.native_text}"
+                for page in inspected.pages
+                if page.extraction_method == "native_text" and page.native_text
+            )
+            requires_vision = any(
+                page.extraction_method in {"scanned", "mixed"} for page in inspected.pages
+            )
+            warnings = ["SCANNED_PAGES_REQUIRE_VISION"] if requires_vision else []
+            return _numbered_blocks(text, 50) if text else [], inspected.page_count, warnings
         text, page_count, warnings = await _document_text(filename, data)
         return _numbered_blocks(text, 50) if text else [], page_count, warnings
 
     if suffix in _IMAGE_MIMES:
-        if not settings.vision_model:
-            raise ValueError("VISION_MODEL_UNAVAILABLE")
-        content = [
-            {"type": "text", "text": f"{_PROMPT}\n该图片页码为 1。"},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{_IMAGE_MIMES[suffix]};base64,{base64.b64encode(data).decode('ascii')}"
-                },
-            },
-        ]
+        markdown = await recognize_page_image(
+            gateway,
+            data,
+            page_number=1,
+            extraction_method="scanned",
+            vision_model=settings.vision_model,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            timeout_seconds=settings.tutor_ocr_timeout_seconds,
+            mime_type=_IMAGE_MIMES[suffix],
+        )
         raw = await _model_questions(
-            settings, gateway, content, tenant_id=tenant_id, user_id=user_id, vision=True
+            settings,
+            gateway,
+            f"{_PROMPT}\n\n识别稿：\n{markdown[:80000]}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            vision=False,
         )
         for item in raw:
             item["page_no"] = 1
         return raw, 1, []
 
     if suffix == ".pdf":
-        text_pages, image_pages, page_count = await asyncio.to_thread(
-            _pdf_selected_pages, data, selected_pages, settings
+        recognized = await recognize_pdf(
+            data,
+            policy=_tutor_pdf_policy(settings),
+            gateway=gateway,
+            vision_model=settings.vision_model,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            selected_pages=selected_pages,
         )
-        questions: list[dict] = []
-        if text_pages:
-            text = "\n\n".join(
-                f"[第 {page_no} 页]\n{value}" for page_no, value in text_pages.items()
-            )
-            questions.extend(
-                await _model_questions(
-                    settings,
-                    gateway,
-                    f"{_PROMPT}\n\n{text[:80000]}",
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    vision=False,
-                )
-            )
-        if image_pages:
-            if not settings.vision_model:
-                raise ValueError("VISION_MODEL_UNAVAILABLE")
-            semaphore = asyncio.Semaphore(max(1, settings.max_tutor_ocr_concurrency))
-
-            async def recognize_page(page_no: int, image: bytes) -> list[dict]:
-                async with semaphore:
-                    content = [
-                        {"type": "text", "text": f"{_PROMPT}\n该扫描页真实页码为 {page_no}。"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64.b64encode(image).decode('ascii')}"
-                            },
-                        },
-                    ]
-                    values = await _model_questions(
-                        settings,
-                        gateway,
-                        content,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        vision=True,
-                    )
-                    for value in values:
-                        value["page_no"] = page_no
-                    return values
-
-            page_results = await asyncio.gather(
-                *(recognize_page(page_no, image) for page_no, image in image_pages.items())
-            )
-            for values in page_results:
-                questions.extend(values)
-        return questions, page_count, []
+        if not recognized.successful_pages:
+            raise ValueError("TUTOR_PDF_ALL_PAGES_FAILED")
+        questions = await _model_questions(
+            settings,
+            gateway,
+            f"{_PROMPT}\n\n识别稿：\n{recognized.markdown[:80000]}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            vision=False,
+        )
+        warnings = list(recognized.warnings)
+        return questions, recognized.page_count, warnings
 
     text, page_count, warnings = await _document_text(filename, data)
     if not text.strip():

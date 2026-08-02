@@ -278,6 +278,23 @@ class Settings(BaseSettings):
 
     # --- upload constraints ---
     max_upload_mb: int = 50
+    # Business-neutral PDF inspection/rendering limits.  Tutor may apply
+    # tighter page-selection limits, but all PDF consumers share these safety
+    # and classification thresholds.
+    max_pdf_pages: int = 100
+    pdf_native_min_chars: int = 180
+    pdf_native_min_printable_ratio: float = 0.80
+    pdf_native_min_text_coverage: float = 0.015
+    pdf_body_min_char_ratio: float = 0.55
+    pdf_mixed_image_area_ratio: float = 0.18
+    pdf_mixed_image_count: int = 3
+    pdf_render_dpi: int = 144
+    pdf_max_render_pixels: int = 12_000_000
+    pdf_max_render_mb: int = 6
+    pdf_vision_max_pages: int = 12
+    pdf_vision_concurrency: int = 2
+    pdf_page_timeout_seconds: float = 45.0
+    pdf_document_timeout_seconds: float = 300.0
     max_chat_attachment_mb: int = 20
     max_chat_attachments_per_message: int = 4
     max_chat_attachment_text_chars: int = 2_000_000
