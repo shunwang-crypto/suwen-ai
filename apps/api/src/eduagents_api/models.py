@@ -595,8 +595,44 @@ class Plan(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     budget_hours: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    kb_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", name="fk_plans_kb_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     structure_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class PlanResource(Base):
+    """A resource snapshot used by a plan.
+
+    Retrieval results are transient, so task objects store this row's id rather
+    than a position in the retrieval result list.  The textual title survives
+    deletion of the source KB/document; nullable foreign keys intentionally
+    make the old plan readable after that deletion.
+    """
+
+    __tablename__ = "plan_resources"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    kb_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    doc_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chunks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
 
