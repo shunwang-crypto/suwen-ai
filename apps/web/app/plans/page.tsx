@@ -24,7 +24,7 @@ import {
   fmtDateTime,
   fmtPct,
 } from "@/components/common";
-import type { FlowItem } from "@/components/flow-timeline";
+import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
@@ -177,6 +177,7 @@ function PlanCalendar({
   pendingKeys?: Set<string>;
   highlightKeys?: Set<string>;
 }) {
+  const [showFull, setShowFull] = useState(false);
   const days = flattenDays(structure);
   if (days.length === 0) {
     return <EmptyState title="该计划暂无日程" illustration="map" />;
@@ -185,8 +186,9 @@ function PlanCalendar({
   const currentDay = days[currentIndex] ?? days[0];
   const upcoming = days.slice(currentIndex, currentIndex + 7);
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
-      <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
+        <section className="overflow-hidden rounded-[12px] border border-line bg-white">
         <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-[10px] text-ink-muted">{currentDay.tasks.filter((task) => task.done).length}/{currentDay.tasks.length} 完成</span></header>
         <ul className="divide-y divide-line">
           {currentDay.tasks.map((task, index) => {
@@ -198,12 +200,64 @@ function PlanCalendar({
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
-      </section>
+        </section>
 
-      <section className="overflow-hidden rounded-[12px] border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><span className="text-[10px] font-medium text-brand-700">查看完整计划</span></header>
+        <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-[10px] font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
         <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => task.done).length; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-[9px] font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-[12px] font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-[10px] text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟</p></div><span className={`text-[10px] ${done === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{done === day.tasks.length ? `✓ ${done}/${day.tasks.length}` : day.day === currentDay.day ? `${done}/${day.tasks.length} 进行中` : "待开始"}</span></li>; })}</ol>
-      </section>
+        </section>
+      </div>
+
+      {showFull && (
+        <section className="rounded-[12px] border border-line bg-surface-muted/40 p-4" aria-label="完整学习计划">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-[13px] font-semibold text-ink">完整计划</h3>
+              <p className="mt-0.5 text-[10px] text-ink-muted">共 {structure.stages.length} 个阶段、{days.length} 天；可直接勾选任意一天的任务</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {structure.stages.map((stage, index) => {
+                const color = STAGE_COLORS[index % STAGE_COLORS.length];
+                return <span key={`${stage.name}-${index}`} className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${color.chip}`}><span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${color.bar}`} />{stage.name} · {stage.days?.length ?? 0} 天</span>;
+              })}
+            </div>
+          </div>
+          <div className="space-y-5">
+            {structure.stages.map((stage, stageIndex) => {
+              const color = STAGE_COLORS[stageIndex % STAGE_COLORS.length];
+              return (
+                <div key={`${stage.name}-${stageIndex}`}>
+                  <h4 className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-ink"><span className={`h-2 w-2 rounded-full ${color.bar}`} />{stage.name}</h4>
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {(stage.days ?? []).map((day) => {
+                      const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0);
+                      return (
+                        <article key={day.day} className={`overflow-hidden rounded-[10px] border bg-white ${day.day === currentDay.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
+                          <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-[11px] text-ink">第 {day.day} 天</strong><span className="text-[9px] text-ink-muted">{totalMinutes} 分钟</span></header>
+                          <ul className="divide-y divide-line/70">
+                            {day.tasks.map((task, taskIndex) => {
+                              const key = task.task_key;
+                              const done = Boolean(task.done);
+                              const busy = Boolean(key && pendingKeys?.has(key));
+                              const isNew = Boolean(key && highlightKeys?.has(key));
+                              return (
+                                <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
+                                  <input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-brand-600" />
+                                  <div className="min-w-0 flex-1"><p className={`text-[11px] leading-relaxed ${done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={task.title} /></p><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -962,6 +1016,10 @@ export default function PlansPage() {
 
         {/* 右：流程 / 日历 */}
         <div className="min-w-0 flex-1 space-y-4">
+          {(timeline.length > 0 || busy) && (
+            <FlowTimeline items={timeline} streaming={busy} />
+          )}
+
           {phase === "await_confirm" && interruptData?.plan && (
             <PlanConfirmCard
               plan={interruptData.plan}
@@ -1112,6 +1170,7 @@ export default function PlansPage() {
 
                 {detail ? (
                   <PlanCalendar
+                    key={detail.id}
                     structure={detail.structure}
                     onToggle={(key, done) => void toggleTask(key, done)}
                     pendingKeys={pendingKeys}
