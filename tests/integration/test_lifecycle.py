@@ -606,7 +606,8 @@ async def test_export_user_data(client):
     names = set(zf.namelist())
     assert {"profile.json", "chunks.json", "uploads_manifest.json"} <= names
     tables = {n for n in names if n.startswith("tables/")}
-    assert len(tables) == 21  # 0012 新增资源/测评四张结构化表
+    assert "tables/model_credentials.json" in tables
+    assert len(tables) >= 22  # 0017 新增脱敏凭据导出；后续迁移可继续增加表
     assert {
         "tables/learner_insights.json",
         "tables/user_preferences.json",
