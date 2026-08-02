@@ -1,6 +1,6 @@
 "use client";
 
-// 钱包页（P3 计费）：余额大卡 / 计费说明 / 演示充值（mock 通道）/ 额度流水。
+// 钱包页（P3 计费）：余额大卡 / 计费说明 / 可用时充值 / 额度流水。
 // 后端契约已冻结（见 lib/billing.ts 头注释），四块数据各自独立加载：
 // 后端未就绪时对应卡片展示骨架 -> 错误态（可重试），绝不写死或编造余额。
 
@@ -306,7 +306,7 @@ export default function BillingPage() {
                   >
                     <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4m0 4h.01" />
                   </svg>
-                  余额不足 1 额度，AI 功能可能无法使用，请先充值
+                  余额不足 1 额度，AI 功能可能无法使用，请联系平台管理员
                 </p>
               )}
             </div>
@@ -373,15 +373,8 @@ export default function BillingPage() {
         </Card>
       </div>
 
-      {/* 充值卡（演示 mock 通道） */}
-      <Card
-        title="充值"
-        extra={
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200/80">
-            演示环境
-          </span>
-        }
-      >
+      {pricing?.recharge_enabled ? (
+        <Card title="充值">
         {phase === "pick" && (
           <div>
             {payError && (
@@ -432,7 +425,7 @@ export default function BillingPage() {
 
         {phase === "pending" && order && (
           <div className="space-y-3">
-            {/* 醒目琥珀横幅：演示支付通道 */}
+            {/* 非生产环境的模拟支付通道 */}
             <div className="flex items-start gap-3 rounded-card border-2 border-amber-400/70 bg-amber-50 px-4 py-3">
               <svg
                 viewBox="0 0 24 24"
@@ -513,7 +506,14 @@ export default function BillingPage() {
             </button>
           </div>
         )}
-      </Card>
+        </Card>
+      ) : (
+        <Card title="在线充值暂未开放">
+          <p className="text-sm leading-relaxed text-slate-500">
+            当前暂不提供在线充值。注册赠送额度和每笔 AI 用量仍会如实记录；如需补充额度，请联系平台管理员。
+          </p>
+        </Card>
+      )}
 
       {/* 额度流水 */}
       <Card

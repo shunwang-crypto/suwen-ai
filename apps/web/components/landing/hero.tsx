@@ -63,7 +63,7 @@ function ProductMock() {
           <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
           <span className="ml-2 truncate text-xs text-slate-400">
-            苏问 · 引用溯源问答
+            苏问 · 可溯源学习辅导
           </span>
         </div>
         <div className="space-y-3 p-4">
@@ -115,6 +115,18 @@ function ProductMock() {
             </div>
             <p className="mt-1 line-clamp-2 border-l-2 border-indigo-200 pl-2 text-[10px] leading-relaxed text-slate-500">
               条件概率公式 P(A|B) = P(AB)/P(B)，结合全概率公式即可推出贝叶斯定理……
+            </p>
+          </div>
+          {/* 苏格拉底式追问：展示“给出依据后继续引导思考”的产品差异 */}
+          <div className="rounded-xl border border-violet-200/80 bg-violet-50/70 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-violet-700">
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-violet-600 text-[9px] text-white">
+                问
+              </span>
+              苏格拉底式辅导
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-violet-700/80">
+              先别急着套公式：当证据 B 出现时，哪些先验信息会影响你对 A 的判断？
             </p>
           </div>
           {/* 掌握度小徽章 */}
@@ -198,7 +210,7 @@ export function Hero() {
               href="/login"
               className="rounded-xl border border-slate-300 bg-white/80 px-6 py-3 text-sm font-semibold text-slate-700 backdrop-blur transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-700"
             >
-              查看演示
+              登录体验
             </Link>
           </div>
         </div>

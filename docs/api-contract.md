@@ -58,6 +58,17 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | GET | /api/health | {status, gateway_mode, checks:{postgres, redis}} |
 | GET | /api/docs | OpenAPI 文档 |
 
+### 钱包与额度（用户）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/billing/wallet | 当前额度余额 |
+| GET | /api/billing/ledger | 额度变动流水 |
+| GET | /api/billing/pricing | `{markup, signup_grant, recharge_enabled, note}`；生产环境 `recharge_enabled=false` |
+| POST | /api/billing/orders | 仅非生产 mock 通道可用；生产返回 `403 PAYMENT_DISABLED` |
+
+生产环境未接入真实支付时，前端不得展示模拟充值入口，只展示“在线充值暂未开放”。
+模拟支付只属于非生产开发能力，不能向线上用户呈现为可用支付方式。
+
 ## SSE 事件协议（九类）
 
 ```json

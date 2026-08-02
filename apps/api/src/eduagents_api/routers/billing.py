@@ -2,7 +2,7 @@
 
 - GET  /wallet                     {"balance": "10.0000", "currency": "CNY"}
 - GET  /ledger?limit=50            {"data": [{id,delta,balance_after,kind,ref,note,created_at}]}
-- GET  /pricing                    {"markup": 3.0, "signup_grant": "10.00", "note": ...}
+- GET  /pricing                    {"markup": 3.0, "signup_grant": "10.00", "recharge_enabled": false, "note": ...}
 - POST /orders {"amount_cny": 10}  {"id","amount_cny","credits","status":"pending","provider":"mock"}
 - POST /orders/{id}/mock-pay       {"status": "paid", "balance": "20.0000"}  (仅 mock + 非 prod)
 
@@ -96,6 +96,7 @@ async def get_pricing(
     return {
         "markup": markup,
         "signup_grant": _money2(wallet.grant_cny),
+        "recharge_enabled": settings.app_env != "prod" and settings.payment_provider == "mock",
         "note": f"按模型真实成本×{markup:g} 透明计费, 缓存命中免费",
     }
 

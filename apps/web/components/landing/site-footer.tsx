@@ -1,4 +1,4 @@
-// 落地页页脚：品牌 + 演示项目声明。
+// 落地页页脚：品牌定位 + 用户入口。
 
 import Link from "next/link";
 
@@ -13,7 +13,7 @@ export function SiteFooter() {
             <BrandMark withWordmark />
           </span>
           <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-400">
-            演示项目：本站为多智能体学习平台的竞赛演示，页面数据来自仿真实验与示例内容，不代表真实用户数据。
+            可溯源问答、苏格拉底式辅导与个性化复习，让每次学习都有依据、每次进步都有记录。
           </p>
         </div>
         <div className="flex items-center gap-4 text-sm text-slate-500">
@@ -25,6 +25,18 @@ export function SiteFooter() {
             className="transition-colors hover:text-indigo-600"
           >
             注册
+          </Link>
+          <Link
+            href="/terms"
+            className="transition-colors hover:text-indigo-600"
+          >
+            用户协议
+          </Link>
+          <Link
+            href="/privacy"
+            className="transition-colors hover:text-indigo-600"
+          >
+            隐私政策
           </Link>
         </div>
       </div>
