@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import uuid
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -55,6 +57,33 @@ MAGIC = {
     ".webp": (b"RIFF",),
 }
 
+_OFFICE_MAX_MEMBERS = 5000
+_OFFICE_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+_OFFICE_MAX_COMPRESSION_RATIO = 100
+
+
+def _validate_office_archive(suffix: str, data: bytes) -> None:
+    """Reject disguised, encrypted, or zip-bomb-like Office containers."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            names = {item.filename for item in members}
+            if len(members) > _OFFICE_MAX_MEMBERS:
+                raise ValueError("too many members")
+            total = sum(item.file_size for item in members)
+            compressed = sum(max(1, item.compress_size) for item in members)
+            if total > _OFFICE_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("expanded archive too large")
+            if total > len(data) * _OFFICE_MAX_COMPRESSION_RATIO or total > compressed * _OFFICE_MAX_COMPRESSION_RATIO:
+                raise ValueError("suspicious compression ratio")
+            if any(item.flag_bits & 0x1 for item in members):
+                raise ValueError("encrypted member")
+            required = "word/document.xml" if suffix == ".docx" else "ppt/presentation.xml"
+            if "[Content_Types].xml" not in names or required not in names:
+                raise ValueError("wrong office container")
+    except (ValueError, zipfile.BadZipFile, OSError):
+        raise HTTPException(status_code=400, detail="UNSAFE_OFFICE_ARCHIVE") from None
+
 
 def safe_filename(value: str | None) -> str:
     name = Path((value or "source").replace("\\", "/")).name
@@ -83,6 +112,8 @@ def validate_resource_file(filename: str, data: bytes) -> tuple[str, str]:
         raise HTTPException(status_code=400, detail="FILE_SIGNATURE_MISMATCH")
     if suffix == ".webp" and data[8:12] != b"WEBP":
         raise HTTPException(status_code=400, detail="FILE_SIGNATURE_MISMATCH")
+    if suffix in {".docx", ".pptx"}:
+        _validate_office_archive(suffix, data)
     if suffix in {".md", ".txt"}:
         try:
             data.decode("utf-8")

@@ -26,6 +26,7 @@ from ..models import (
     MasteryLog,
     Question,
     ResourceQuestion,
+    TutorProblemDraft,
 )
 from ..resource_utils import (
     DIFFICULTIES,
@@ -693,6 +694,12 @@ async def delete_resource(
 ):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await _owned_resource(session, resource_id, ctx, lock=True)
+        if await session.scalar(
+            select(TutorProblemDraft.id)
+            .where(TutorProblemDraft.resource_id == row.id)
+            .limit(1)
+        ):
+            raise HTTPException(status_code=409, detail="TUTOR_RESOURCE_MANAGED")
         linked = await session.scalar(
             select(func.count()).select_from(ErrorItem).where(ErrorItem.resource_question_id.in_(
                 select(ResourceQuestion.id).where(ResourceQuestion.resource_id == row.id)

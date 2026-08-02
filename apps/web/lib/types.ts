@@ -594,6 +594,47 @@ export interface TutorTurnResult {
   mastery_changes: MasteryChange[];
 }
 
+export type TutorDraftStatus = "uploaded" | "recognizing" | "review" | "confirmed" | "failed";
+
+export interface TutorRecognizedQuestion {
+  index: number;
+  question_no: string;
+  page_no: number | null;
+  type: "single" | "multi" | "blank" | "short";
+  stem: string;
+  options: string[];
+  confidence: number | null;
+}
+
+export interface TutorProblemDraft {
+  id: string;
+  status: TutorDraftStatus;
+  selected_pages: number[];
+  selected_question_index: number | null;
+  stem: string;
+  options: string[];
+  known_conditions: string;
+  current_thought: string;
+  confirmed_problem_text: string;
+  confirmed_page_no: number | null;
+  thread_local_id: string | null;
+  warnings: string[];
+  error_code: string | null;
+  recognition_attempts: number;
+  questions: TutorRecognizedQuestion[];
+  attachment: {
+    resource_id: string;
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    page_count: number | null;
+    preview_url: string;
+  } | null;
+  vision_uses_platform_quota: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TutorSessionState {
   thread_local_id: string;
   problem: string;

@@ -48,6 +48,7 @@ from .routers import (
     reviews,
     teacher,
     threads,
+    tutor_attachments,
 )
 from .routers import (
     settings as settings_router,
@@ -195,6 +196,7 @@ def create_app() -> FastAPI:
     app.include_router(quiz.router)
     app.include_router(plans.router)
     app.include_router(plans.tutor_router)
+    app.include_router(tutor_attachments.router)
     app.include_router(profile.router)
     app.include_router(public_config.router)
     app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)

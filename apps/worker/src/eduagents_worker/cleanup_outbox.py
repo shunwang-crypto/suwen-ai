@@ -69,6 +69,12 @@ async def process_pending_cleanup(ctx: dict) -> int:
                 await cleanup_kb(ctx, payload["tenant_id"], payload["kb_id"])
             elif kind == "tenant":
                 await purge_tenant(ctx, payload["tenant_id"], payload.get("session_ids"))
+            elif kind == "object_prefix":
+                from eduagents_core.config import get_settings
+                from eduagents_core.storage import create_storage
+
+                settings = ctx.get("settings") or get_settings()
+                await create_storage(settings).delete_prefix(payload["prefix"])
             else:
                 raise ValueError(f"unknown cleanup kind: {kind}")
         except Exception:  # noqa: BLE001 — 单行失败不阻塞其余行, 下轮重试

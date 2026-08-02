@@ -24,6 +24,8 @@ from .reports import refresh_learning_report
 from .resources import extract_learning_resource
 from .retention import purge_retention
 from .study_guide import build_study_guide
+from .tutor_cleanup import reap_stale_tutor_drafts
+from .tutor_recognition import recognize_tutor_problem
 
 log = get_logger("worker")
 
@@ -62,6 +64,7 @@ class WorkerSettings:
         reflect_session,
         refresh_learning_report,
         extract_learning_resource,
+        recognize_tutor_problem,
         build_study_guide,
         export_user_data,
         purge_tenant,
@@ -69,6 +72,7 @@ class WorkerSettings:
         process_pending_cleanup,
         purge_retention,
         reap_stale_error_imports,
+        reap_stale_tutor_drafts,
     ]
     cron_jobs = [
         # 语义缓存 L2 无原生 TTL: 每日凌晨清 7 天前点位 (L1 Redis 自带 24h TTL)
@@ -80,6 +84,7 @@ class WorkerSettings:
         # P2-9 留存: usage_log 180d / mastery_log 730d / checkpoint 30d / closed feedback 90d
         cron(purge_retention, hour=4, minute=50, name="purge_retention_daily"),
         cron(reap_stale_error_imports, minute={0, 20, 40}, name="reap_stale_error_imports"),
+        cron(reap_stale_tutor_drafts, minute={10, 30, 50}, name="reap_stale_tutor_drafts"),
     ]
     on_startup = startup
     on_shutdown = shutdown

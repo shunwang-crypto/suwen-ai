@@ -281,6 +281,18 @@ class Settings(BaseSettings):
     max_chat_attachment_mb: int = 20
     max_chat_attachments_per_message: int = 4
     max_chat_attachment_text_chars: int = 2_000_000
+    # Tutor attachment extraction is intentionally bounded independently from
+    # general learning resources because scanned pages consume vision quota.
+    max_tutor_attachment_pages: int = 50
+    max_tutor_default_pages: int = 3
+    max_tutor_recognition_pages: int = 8
+    max_tutor_ocr_dpi: int = 144
+    max_tutor_ocr_image_mb: int = 4
+    max_tutor_ocr_concurrency: int = 2
+    tutor_ocr_timeout_seconds: float = 45.0
+    tutor_recognition_timeout_seconds: float = 120.0
+    tutor_draft_ttl_hours: int = 24
+    max_tutor_recognition_attempts: int = 3
     max_error_import_drafts: int = 20
     error_import_draft_ttl_hours: int = 24
     max_learning_resource_mb: int = 50

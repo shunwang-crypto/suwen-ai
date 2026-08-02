@@ -561,6 +561,56 @@ class ResourceQuestion(Base):
     )
 
 
+class TutorProblemDraft(Base):
+    """User-reviewed tutor problem snapshot linked to an existing resource.
+
+    Source bytes remain in object storage through ``LearningResource``.  This
+    row intentionally contains only safe identifiers, selected page numbers,
+    editable text, and the immutable snapshot used by the tutor graph.
+    """
+
+    __tablename__ = "tutor_problem_drafts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "thread_local_id", name="uq_tutor_drafts_user_thread"),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("learning_resources.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    selected_question_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="uploaded", server_default="uploaded"
+    )
+    selected_pages_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    recognized_questions_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    draft_stem: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    draft_options_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    known_conditions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    current_thought: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confirmed_stem: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confirmed_options_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    confirmed_problem_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confirmed_page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_local_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    warnings_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recognition_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AssessmentAttempt(Base):
     """一次真实考试、作业或练习记录；同一资源可以有多次 attempt。"""
 

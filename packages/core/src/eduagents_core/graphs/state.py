@@ -102,6 +102,10 @@ class TutorState(TypedDict, total=False):
     user_id: str
     request_id: str
     problem: str
+    # Safe identifiers only. Source bytes and image data never enter checkpoints.
+    tutor_draft_id: str
+    attachment_id: str
+    problem_page_no: int | None
     hint_level: int  # 0=开场提问 1=方向性 2=关键步骤 3=展开讲解(完整解答)
     answer_requests: int  # 学生索要答案次数: 第1次温和坚持, 第2次给答案
     stuck_type: str  # concept | calculation | misread | unknown

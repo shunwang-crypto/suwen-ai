@@ -66,6 +66,7 @@ class TutorTurn(BaseModel):
     problem: str = Field(default="", max_length=4000)
     message: str = Field(min_length=1, max_length=4000)
     thread_local_id: uuid.UUID | None = None
+    tutor_draft_id: uuid.UUID | None = None
 
 
 def _diagnosis_from_rows(rows: list[tuple[str, float, str]], kb_id: str) -> dict[str, float]:
@@ -395,6 +396,31 @@ async def tutor_turn(
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     local_id = str(body.thread_local_id or uuid.uuid4())
+    problem = body.problem
+    draft_id = ""
+    attachment_id = ""
+    problem_page_no = None
+    if body.tutor_draft_id is not None:
+        from ..models import TutorProblemDraft
+
+        async with tenant_session(ctx.tenant_id) as session:
+            draft = await session.scalar(
+                select(TutorProblemDraft).where(
+                    TutorProblemDraft.id == body.tutor_draft_id,
+                    TutorProblemDraft.user_id == ctx.user_id,
+                    TutorProblemDraft.tenant_id == ctx.tenant_id,
+                )
+            )
+            if draft is None:
+                raise HTTPException(status_code=404, detail="TUTOR_DRAFT_NOT_FOUND")
+            if draft.status != "confirmed" or not draft.confirmed_problem_text:
+                raise HTTPException(status_code=409, detail="TUTOR_DRAFT_NOT_READY")
+            if draft.thread_local_id != local_id:
+                raise HTTPException(status_code=409, detail="TUTOR_THREAD_MISMATCH")
+            problem = draft.confirmed_problem_text
+            draft_id = str(draft.id)
+            attachment_id = str(draft.resource_id or "")
+            problem_page_no = draft.confirmed_page_no
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
     # 画像注入 (G9, P2-7 脱敏口径同问答): 读画像失败一律降级为"无画像"继续辅导
     profile = ProfileContext()
@@ -408,7 +434,10 @@ async def tutor_turn(
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
         "request_id": getattr(request.state, "request_id", ""),
-        "problem": body.problem,
+        "problem": problem,
+        "tutor_draft_id": draft_id,
+        "attachment_id": attachment_id,
+        "problem_page_no": problem_page_no,
         "messages": [{"role": "user", "content": body.message}],
         # 画像摘要进 respond 的 system prompt; 薄弱 KC 名供开场关联卡点 (仅 KC 名, 无数值)
         "profile_summary": profile.summary,

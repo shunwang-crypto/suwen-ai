@@ -14,6 +14,7 @@ import {
   Spinner,
 } from "@/components/common";
 import { MarkdownAnswer } from "@/components/chat/markdown-answer";
+import { TutorProblemInput } from "@/components/tutor/tutor-problem-input";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
@@ -22,6 +23,7 @@ import type {
   MasteryChange,
   TutorSessionState,
   TutorSessionSummary,
+  TutorProblemDraft,
   TutorTurnResult,
 } from "@/lib/types";
 
@@ -55,24 +57,22 @@ interface TutorMessage {
   hintLevel?: number;
 }
 
-interface SavedTutorSession {
-  threadId: string;
-  problem: string;
-  pendingMessage?: string;
-  masteryChanges?: MasteryChange[];
+export interface SavedTutorSession {
+  draftId: string;
+  threadId?: string;
 }
 
-function tutorSessionKey(userId: string): string {
+export function tutorSessionKey(userId: string): string {
   return `${TUTOR_SESSION_KEY}:${userId}`;
 }
 
-function readTutorSession(userId: string): SavedTutorSession | null {
+export function readTutorSession(userId: string): SavedTutorSession | null {
   try {
     const key = tutorSessionKey(userId);
     const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<SavedTutorSession>;
-    if (!value.threadId || !value.problem) {
+    if (!value.draftId) {
       window.localStorage.removeItem(key);
       return null;
     }
@@ -83,7 +83,7 @@ function readTutorSession(userId: string): SavedTutorSession | null {
   }
 }
 
-function writeTutorSession(userId: string, value: SavedTutorSession): void {
+export function writeTutorSession(userId: string, value: SavedTutorSession): void {
   window.localStorage.setItem(tutorSessionKey(userId), JSON.stringify(value));
 }
 
@@ -315,6 +315,8 @@ export default function TutorPage() {
   const [problemTouched, setProblemTouched] = useState(false);
   const [sourceKb, setSourceKb] = useState<KbOut | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [inputVersion, setInputVersion] = useState(0);
   const [messages, setMessages] = useState<TutorMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -346,9 +348,18 @@ export default function TutorPage() {
 
   useEffect(() => {
     const saved = readTutorSession(userId);
-    if (!saved || (prefilledProblem && prefilledProblem !== saved.problem)) return;
+    if (!saved || prefilledProblem) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    if (!saved.threadId) {
+      timer = setTimeout(() => {
+        if (alive) setDraftId(saved.draftId);
+      }, 0);
+      return () => {
+        alive = false;
+        if (timer) clearTimeout(timer);
+      };
+    }
     let attempts = 0;
 
     const restore = async () => {
@@ -356,9 +367,9 @@ export default function TutorPage() {
       try {
         const state = await apiJson<TutorSessionState>(`/api/tutor/${saved.threadId}`);
         if (!alive) return;
-        setProblem(saved.problem || state.problem);
+        setProblem(state.problem);
         setProblemTouched(true);
-        setThreadId(saved.threadId);
+        setThreadId(saved.threadId ?? null);
         setMessages(
           state.messages.map((message) => ({
             role: message.role,
@@ -369,29 +380,17 @@ export default function TutorPage() {
         setHintLevel(state.hint_level);
         setStuckType(state.stuck_type);
         setSummary(parseTutorSummary(state.session_summary));
-        setMasteryChanges(saved.masteryChanges ?? []);
         setSending(state.pending);
         if (state.pending && attempts < 60) {
           timer = setTimeout(() => void restore(), 1500);
         } else if (!state.pending) {
-          writeTutorSession(userId, {
-            threadId: saved.threadId,
-            problem: saved.problem,
-            masteryChanges: saved.masteryChanges,
-          });
+          writeTutorSession(userId, { threadId: saved.threadId, draftId: saved.draftId });
         }
       } catch (err) {
         if (!alive) return;
         if (err instanceof ApiError && err.status === 404 && attempts < 60) {
-          setProblem(saved.problem);
-          setProblemTouched(true);
-          setThreadId(saved.threadId);
-          setMessages(
-            saved.pendingMessage
-              ? [{ role: "user", content: saved.pendingMessage }]
-              : [],
-          );
-          setSending(Boolean(saved.pendingMessage));
+          setThreadId(saved.threadId ?? null);
+          setSending(true);
           timer = setTimeout(() => void restore(), 1500);
           return;
         }
@@ -400,7 +399,11 @@ export default function TutorPage() {
       }
     };
 
-    void restore();
+    timer = setTimeout(() => {
+      if (!alive) return;
+      setDraftId(saved.draftId);
+      void restore();
+    }, 0);
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
@@ -413,18 +416,16 @@ export default function TutorPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, sending, summary]);
 
-  const send = async (text: string) => {
+  const send = async (text: string, confirmedDraft?: TutorProblemDraft) => {
     const message = text.trim();
-    const prob = effectiveProblem.trim();
+    const prob = (confirmedDraft?.confirmed_problem_text ?? effectiveProblem).trim();
     if (!message || !prob || sending || ended) return;
-    const activeThreadId = threadId ?? crypto.randomUUID();
+    const activeThreadId = confirmedDraft?.thread_local_id ?? threadId;
+    const activeDraftId = confirmedDraft?.id ?? draftId;
+    if (!activeThreadId || !activeDraftId) return;
     if (!threadId) setThreadId(activeThreadId);
-    writeTutorSession(userId, {
-      threadId: activeThreadId,
-      problem: prob,
-      pendingMessage: message,
-      masteryChanges,
-    });
+    setDraftId(activeDraftId);
+    writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
     setSending(true);
     setError(null);
     setMessages((prev) => [...prev, { role: "user", content: message }]);
@@ -434,6 +435,7 @@ export default function TutorPage() {
           problem: prob,
           message,
           thread_local_id: activeThreadId,
+          tutor_draft_id: activeDraftId,
         },
       });
       setThreadId(res.thread_local_id);
@@ -449,20 +451,12 @@ export default function TutorPage() {
         setSummary(parseTutorSummary(res.session_summary));
         setMasteryChanges(res.mastery_changes ?? []);
       }
-      writeTutorSession(userId, {
-        threadId: activeThreadId,
-        problem: prob,
-        masteryChanges: res.mastery_changes ?? masteryChanges,
-      });
+      writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "辅导请求失败，请重试");
       // 回滚本轮未送达的学生消息，避免与服务端 thread 状态不一致
       setMessages((prev) => prev.slice(0, -1));
-      writeTutorSession(userId, {
-        threadId: activeThreadId,
-        problem: prob,
-        masteryChanges,
-      });
+      writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
     } finally {
       setSending(false);
     }
@@ -479,6 +473,10 @@ export default function TutorPage() {
   const reset = () => {
     window.localStorage.removeItem(tutorSessionKey(userId));
     setThreadId(null);
+    setDraftId(null);
+    setInputVersion((value) => value + 1);
+    setProblem("");
+    setProblemTouched(false);
     setMessages([]);
     setInput("");
     setError(null);
@@ -494,7 +492,7 @@ export default function TutorPage() {
         <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">题目</span><span className="rounded-full bg-danger-50 px-1.5 py-0.5 font-medium text-danger-600">必填</span><span className="text-ink-muted">根据题目建立本次辅导上下文</span></div>
-          {started && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
+          {(started || (draftId && threadId)) && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
         {sourceKbId && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-[10px] text-brand-700">
@@ -506,20 +504,31 @@ export default function TutorPage() {
             </Link>
           </div>
         )}
-        {started ? (
-          <div className="mt-3"><MathText text={effectiveProblem} className="text-[14px] font-medium leading-6 text-ink" /><p className="mt-2 text-[10px] text-ink-muted">引导强度 · {HINT_LEVELS[hintLevel]} · {hintLevel + 1}/4</p></div>
-        ) : (
-          <div className="mt-3">
-            <textarea value={effectiveProblem} onChange={(e) => { setProblemTouched(true); setProblem(e.target.value); }} rows={3} maxLength={4000} placeholder={"粘贴让你卡住的题目，支持 $x^2$ 和 $$\\int_0^1 x\\,dx$$"} className="w-full resize-y rounded-[9px] border border-line-strong bg-[#fafaf9] px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted focus:border-brand-400 focus:ring-2 focus:ring-brand-50" />
-            <p className="mt-2 text-[10px] text-ink-muted">开始辅导后题目将锁定；如需更换题目，会建立新的辅导对话。</p>
-          </div>
-        )}
+        <TutorProblemInput
+          key={inputVersion}
+          initialProblem={effectiveProblem}
+          initialDraftId={draftId}
+          locked={Boolean(draftId && threadId)}
+          onDraftChange={(nextDraftId) => {
+            setDraftId(nextDraftId);
+            if (nextDraftId) writeTutorSession(userId, { draftId: nextDraftId, ...(threadId ? { threadId } : {}) });
+            else window.localStorage.removeItem(tutorSessionKey(userId));
+          }}
+          onConfirmed={(confirmed) => {
+            setProblem(confirmed.confirmed_problem_text);
+            setProblemTouched(true);
+            setDraftId(confirmed.id);
+            setThreadId(confirmed.thread_local_id);
+            void send(START_PHRASE, confirmed);
+          }}
+        />
+        <p className="mt-2 text-[10px] text-ink-muted">确认后题目与附件锁定；换题会建立新的辅导对话。</p>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_266px] lg:items-start">
         <main ref={listRef} className="min-w-0 space-y-3">
           {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-          {!started && (
+          {!started && !draftId && (
             <div className="flex items-start gap-3 py-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
               <div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]">输入题目后，可以直接开始，也可以写下已经想到哪一步。我会判断你的卡点，再逐层给出提示。</div></div>
@@ -546,7 +555,7 @@ export default function TutorPage() {
 
           {ended && summary && <ReviewCard summary={summary} changes={masteryChanges} onReset={reset} />}
 
-          {!ended && (
+          {!ended && Boolean(draftId && threadId) && (
             <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-[12px] border border-line bg-white p-3 shadow-subtle sm:ml-10">
               <div className="mb-2 flex items-center gap-1.5 px-1 text-[10px]"><span className="font-semibold text-ink-secondary">你的思路</span>{!started && <span className="text-ink-muted">选填</span>}</div>
               <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!effectiveProblem.trim() || sending} placeholder={effectiveProblem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "可以先写下思路或卡点，也可以直接开始解题……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
