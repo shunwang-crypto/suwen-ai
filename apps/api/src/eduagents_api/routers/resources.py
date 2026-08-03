@@ -814,7 +814,14 @@ async def extract_resource(
         if row.status in {"extracting", "ready"} or (row.status == "reviewing" and not retryable_partial):
             return {"resource_id": str(row.id), "status": row.status}
         row.status = "extracting"
-        row.metadata_json = {k: v for k, v in (row.metadata_json or {}).items() if k not in {"error", "delete_pending"}}
+        row.metadata_json = {
+            **{
+                k: v
+                for k, v in (row.metadata_json or {}).items()
+                if k not in {"error", "delete_pending", "extraction_stage"}
+            },
+            "extraction_stage": "queued",
+        }
     job_id = f"resource-extract:{resource_id}:{uuid.uuid4().hex}"
     try:
         await request.app.state.arq.enqueue_job(

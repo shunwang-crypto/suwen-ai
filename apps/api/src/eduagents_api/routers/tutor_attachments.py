@@ -336,7 +336,11 @@ async def retry_tutor_recognition(
         draft.error_code = None
         draft.recognition_attempts += 1
         resource.status = "extracting"
-        resource.metadata_json = {**(resource.metadata_json or {}), "selected_pages": pages}
+        resource.metadata_json = {
+            **(resource.metadata_json or {}),
+            "selected_pages": pages,
+            "extraction_stage": "queued",
+        }
         attempt = draft.recognition_attempts
         await session.flush()
         output = await _draft_out(session, draft)

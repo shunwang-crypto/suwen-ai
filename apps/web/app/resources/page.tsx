@@ -35,6 +35,10 @@ export function isTutorManagedResource(resource: LearningResourceOut): boolean {
   return typeof draftId === "string" && draftId.length > 0;
 }
 
+export function tutorDraftHref(draftId: string): string {
+  return `/tutor?draft=${encodeURIComponent(draftId)}`;
+}
+
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
   textbook: "教材",
   lecture: "讲义",
@@ -148,7 +152,7 @@ function ResourceCard({
         </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 rounded-[9px] bg-surface-muted px-3 py-2.5 text-[10px]"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>
-      <div className="mt-3"><ResourceExtractionSteps resource={resource} /></div>
+      {(resource.status === "uploaded" || resource.status === "extracting") && <div className="mt-3"><ResourceExtractionSteps resource={resource} /></div>}
       {resource.status === "failed" && <p className="mt-3 rounded-[8px] bg-danger-50 px-3 py-2 text-[10px] leading-4 text-danger-700">识别未完成，原文件已经保留。{failedPages.length > 0 ? `失败页：${failedPages.join("、")}` : ""}</p>}
       {failedPages.length > 0 && resource.status !== "failed" && <p className="mt-3 rounded-[8px] bg-warning-50 px-3 py-2 text-[10px] leading-4 text-warning-700">部分页面未能识别，已保留成功题目；失败页：{failedPages.join("、")}</p>}
       <footer className="mt-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={onOpen} className="rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white">{questionResource && resource.status === "extracting" ? "查看识别进度" : "查看资料"}</button><div className="flex flex-wrap gap-1.5">{questionResource && canRetry && <button type="button" onClick={onExtract} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">{busy ? "提交中…" : resource.status === "uploaded" ? "开始识别" : "重试识别"}</button>}{resource.status === "archived" ? <button type="button" onClick={onRestore} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">恢复</button> : <button type="button" onClick={onArchive} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">归档</button>}{(resource.status === "uploaded" || resource.status === "failed" || resource.status === "archived") && <button type="button" onClick={onDelete} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-danger-600 disabled:opacity-40">删除</button>}</div></footer>
@@ -198,7 +202,7 @@ function TutorManagedResourceView({
         <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted">辅导附件</p>
         <h1 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-ink">{resource.title}</h1>
         <p className="mt-2 text-[11px] leading-5 text-ink-secondary">这份资料由辅导附件管理，资源页不提供删除、归档或重新识别操作。</p>
-        <Link href="/tutor" className="mt-3 inline-flex rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white">前往辅导</Link>
+        <Link href={tutorDraftHref(String(resource.metadata.tutor_draft_id))} className="mt-3 inline-flex rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white">前往辅导</Link>
       </header>
       <SourcePreview resource={resource} />
     </div>

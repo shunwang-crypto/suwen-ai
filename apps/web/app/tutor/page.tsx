@@ -311,6 +311,7 @@ export default function TutorPage() {
   const urlParams = new URLSearchParams(search);
   const prefilledProblem = urlParams.get("problem") ?? "";
   const sourceKbId = urlParams.get("kb") ?? "";
+  const requestedDraftId = urlParams.get("draft") ?? "";
   const [problem, setProblem] = useState("");
   const [problemTouched, setProblemTouched] = useState(false);
   const [sourceKb, setSourceKb] = useState<KbOut | null>(null);
@@ -348,8 +349,41 @@ export default function TutorPage() {
   }, [sourceKbId]);
 
   useEffect(() => {
+    if (!requestedDraftId) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      if (!alive) return;
+      setDraftId(requestedDraftId);
+      setThreadId(null);
+      setMessages([]);
+      setSummary(null);
+      setProblem("");
+      setProblemTouched(false);
+      setError(null);
+      setInputVersion((value) => value + 1);
+      void apiJson<TutorProblemDraft>(`/api/tutor/drafts/${requestedDraftId}`)
+        .then((draft) => {
+          if (!alive) return;
+          const draftProblem = draft.confirmed_problem_text || draft.stem || "";
+          if (draftProblem) {
+            setProblem(draftProblem);
+            setProblemTouched(true);
+          }
+          if (draft.thread_local_id) setThreadId(draft.thread_local_id);
+        })
+        .catch((caught) => {
+          if (alive) setError(caught instanceof ApiError ? caught.message : "辅导附件加载失败");
+        });
+    }, 0);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [requestedDraftId]);
+
+  useEffect(() => {
     const saved = readTutorSession(userId);
-    if (!saved || prefilledProblem) return;
+    if (requestedDraftId || !saved || prefilledProblem) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (!saved.threadId) {
@@ -409,7 +443,7 @@ export default function TutorPage() {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [prefilledProblem, userId]);
+  }, [prefilledProblem, requestedDraftId, userId]);
 
   // 新消息自动滚到底部
   useEffect(() => {
