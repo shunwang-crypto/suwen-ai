@@ -193,6 +193,9 @@ export function ResourceReview({
   const pendingCount = questions.filter((question) => question.verification_status === "pending").length;
   const verifiedCount = questions.filter((question) => question.verification_status === "verified").length;
   const selectedCount = useMemo(() => selectedErrors.size, [selectedErrors]);
+  const failedPages = Array.isArray(resource.metadata.failed_pages)
+    ? resource.metadata.failed_pages
+    : [];
 
   const retryExtraction = async () => {
     if (!resource.source_url) return;
@@ -452,10 +455,10 @@ export function ResourceReview({
       {message && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-[11px] text-ink-secondary">{message}</div>}
       {!linkedKbId && <div className="rounded-[9px] border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[11px] leading-5 text-warning-700">未关联知识库时，错题仍可进入 FSRS；知识点掌握度和章节画像可能无法完整归类。</div>}
 
-      {(resource.status === "failed" || questions.length === 0) && (
+      {(resource.status === "failed" || failedPages.length > 0 || questions.length === 0) && (
         <div className={`rounded-[10px] border px-4 py-3 text-[11px] leading-5 ${resource.status === "failed" ? "border-danger-200 bg-danger-50 text-danger-700" : "border-warning-200 bg-warning-50 text-warning-700"}`}>
-          <p className="font-medium">{resource.status === "failed" ? "识别未完成，原文件已经保留。" : "没有识别出可校对题目。"}</p>
-          {Array.isArray(resource.metadata.failed_pages) && resource.metadata.failed_pages.length > 0 && <p className="mt-1">失败页：{resource.metadata.failed_pages.join("、")}</p>}
+          <p className="font-medium">{resource.status === "failed" ? "识别未完成，原文件已经保留。" : failedPages.length > 0 ? "部分页面未能识别，已保留成功题目。" : "没有识别出可校对题目。"}</p>
+          {failedPages.length > 0 && <p className="mt-1">失败页：{failedPages.join("、")}</p>}
           <div className="mt-2 flex flex-wrap gap-2">
             {resource.source_url && <button type="button" onClick={() => void retryExtraction()} disabled={busy !== null} className="border border-current bg-white px-2.5 py-1.5 disabled:opacity-40">{busy === "extract" ? "提交中…" : "重新识别"}</button>}
             <button type="button" onClick={() => setShowManual(true)} className="border border-current bg-white px-2.5 py-1.5">手动添加题目</button>

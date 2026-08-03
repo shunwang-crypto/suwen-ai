@@ -15,6 +15,7 @@ from eduagents_api.models import (
     Attempt,
     ErrorItem,
     LearningResource,
+    MasteryLog,
     Question,
     ResourceQuestion,
 )
@@ -25,7 +26,7 @@ from eduagents_core.document_recognition import PdfRecognitionPolicy, recognize_
 from eduagents_core.gateway import ChatMessage, ChatRequest, Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.parsing.registry import get_parser
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .enrichment import get_worker_gateway
 
@@ -308,15 +309,46 @@ async def _extract_pdf_questions(
 async def _has_question_evidence(session, question_id: uuid.UUID, resource_question_id: uuid.UUID) -> bool:
     return any(
         (
-            await session.scalar(select(ErrorItem.id).where(ErrorItem.question_id == question_id).limit(1)),
+            await session.scalar(
+                select(ErrorItem.id)
+                .where(
+                    or_(
+                        ErrorItem.question_id == question_id,
+                        ErrorItem.resource_question_id == resource_question_id,
+                    )
+                )
+                .limit(1)
+            ),
             await session.scalar(select(Attempt.id).where(Attempt.question_id == question_id).limit(1)),
             await session.scalar(
                 select(AssessmentAnswer.id)
                 .where(AssessmentAnswer.resource_question_id == resource_question_id)
                 .limit(1)
             ),
+            await session.scalar(
+                select(MasteryLog.id)
+                .where(MasteryLog.evidence_id.in_((question_id, resource_question_id)))
+                .limit(1)
+            ),
         )
     )
+
+
+def _pending_question_is_replaceable(
+    resource_question,
+    *,
+    has_evidence: bool,
+    retry_pages: set[int],
+) -> bool:
+    """Limit destructive replacement to the current recognition scope.
+
+    An empty ``retry_pages`` set means an intentional full recognition run.
+    A non-empty set is a partial retry, so pending questions from every other
+    page remain part of the review draft even when they have no evidence yet.
+    """
+    if resource_question.verification_status != "pending" or has_evidence:
+        return False
+    return not retry_pages or resource_question.page_no in retry_pages
 
 
 async def extract_learning_resource(
@@ -414,6 +446,9 @@ async def extract_learning_resource(
             raw_questions = raw_questions[: settings.max_learning_resource_questions]
         questions = [normalize_extracted_question(raw, i + 1) for i, raw in enumerate(raw_questions)]
         questions = [question for question in questions if question["stem"]]
+        if retry_pages:
+            retry_scope = set(retry_pages)
+            questions = [question for question in questions if question["page_no"] in retry_scope]
         if not questions:
             async with tenant_session(tenant_id) as session:
                 resource = await session.get(LearningResource, rid, with_for_update=True)
@@ -458,28 +493,32 @@ async def extract_learning_resource(
             ).all()
             protected = []
             replaceable = []
+            retry_scope = set(retry_pages)
             for resource_question, question in existing_rows:
-                if resource_question.verification_status != "pending" or await _has_question_evidence(
+                has_evidence = await _has_question_evidence(
                     session, question.id, resource_question.id
+                )
+                if _pending_question_is_replaceable(
+                    resource_question,
+                    has_evidence=has_evidence,
+                    retry_pages=retry_scope,
                 ):
-                    protected.append((resource_question, question))
-                else:
                     replaceable.append((resource_question, question))
-            if not protected:
-                for resource_question, question in replaceable:
-                    await session.delete(resource_question)
-                    await session.flush()
-                    await session.delete(question)
-            else:
-                existing_signatures = {
-                    (question.stem.strip(), resource_question.page_no)
-                    for resource_question, question in protected
-                }
-                questions = [
-                    question
-                    for question in questions
-                    if (question["stem"].strip(), question["page_no"]) not in existing_signatures
-                ]
+                else:
+                    protected.append((resource_question, question))
+            for resource_question, question in replaceable:
+                await session.delete(resource_question)
+                await session.flush()
+                await session.delete(question)
+            existing_signatures = {
+                (question.stem.strip(), resource_question.page_no)
+                for resource_question, question in protected
+            }
+            questions = [
+                question
+                for question in questions
+                if (question["stem"].strip(), question["page_no"]) not in existing_signatures
+            ]
             ordinal_start = max((row.ordinal for row, _question in protected), default=-1) + 1
             for ordinal, question_data in enumerate(questions, start=ordinal_start):
                 kc_ids = await _resolve_kc_ids(

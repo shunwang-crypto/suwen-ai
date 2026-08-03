@@ -3,8 +3,10 @@ from __future__ import annotations
 import pymupdf
 import pytest
 from eduagents_core.config import Settings
+from eduagents_core.document_recognition import PdfPageResult, PdfRecognitionResult
 from eduagents_core.gateway import ChatResult
-from eduagents_worker.resources import _extract_pdf_questions
+from eduagents_worker import resources as resource_worker
+from eduagents_worker.resources import _extract_pdf_questions, _pending_question_is_replaceable
 
 
 def _native_pdf(page_count: int = 4) -> bytes:
@@ -77,3 +79,68 @@ async def test_pdf_resource_extracts_small_ordered_batches_and_deduplicates():
     assert len({request.request_id for request in gateway.requests}) == 2
     assert metadata["pages"][0]["vision_used"] is False
     assert all("image_url" not in str(request.messages[0].content) for request in gateway.requests)
+
+
+def test_partial_retry_only_replaces_pending_questions_on_failed_pages():
+    page_one = type("ResourceQuestion", (), {"verification_status": "pending", "page_no": 1})()
+    page_two = type("ResourceQuestion", (), {"verification_status": "pending", "page_no": 2})()
+    verified = type("ResourceQuestion", (), {"verification_status": "verified", "page_no": 2})()
+
+    assert not _pending_question_is_replaceable(page_one, has_evidence=False, retry_pages={2})
+    assert _pending_question_is_replaceable(page_two, has_evidence=False, retry_pages={2})
+    assert not _pending_question_is_replaceable(page_two, has_evidence=True, retry_pages={2})
+    assert not _pending_question_is_replaceable(verified, has_evidence=False, retry_pages={2})
+
+
+def test_full_retry_can_replace_all_pending_questions_without_evidence():
+    page_one = type("ResourceQuestion", (), {"verification_status": "pending", "page_no": 1})()
+    page_two = type("ResourceQuestion", (), {"verification_status": "pending", "page_no": 2})()
+
+    assert _pending_question_is_replaceable(page_one, has_evidence=False, retry_pages=set())
+    assert _pending_question_is_replaceable(page_two, has_evidence=False, retry_pages=set())
+    assert not _pending_question_is_replaceable(page_one, has_evidence=True, retry_pages=set())
+
+
+@pytest.mark.asyncio
+async def test_successful_partial_retry_clears_failed_pages(monkeypatch):
+    async def recognize_retry(*_args, selected_pages=None, **_kwargs):
+        assert selected_pages == [2]
+        return PdfRecognitionResult(
+            page_count=2,
+            pages=(
+                PdfPageResult(
+                    page_number=2,
+                    extraction_method="native_text",
+                    recognition_status="ready",
+                    markdown="<!-- page: 2 -->\n2. Retry question",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(resource_worker, "recognize_pdf", recognize_retry)
+    settings = Settings(
+        _env_file=None,
+        gateway_mode="live",
+        vision_model="fake-vision",
+        max_pdf_pages=10,
+        pdf_native_min_chars=100,
+        pdf_native_no_visual_min_chars=40,
+    )
+    gateway = FakeTextGateway(
+        ['[{"question_no":"2","page_no":2,"type":"short","stem":"Retry question"}]']
+    )
+
+    questions, _page_count, failed_pages, metadata = await _extract_pdf_questions(
+        settings,
+        gateway,
+        _native_pdf(2),
+        tenant_id="tenant",
+        user_id="owner",
+        resource_namespace="resource:retry",
+        max_questions=20,
+        selected_pages=[2],
+    )
+
+    assert [question["page_no"] for question in questions] == [2]
+    assert failed_pages == []
+    assert metadata["failed_pages"] == []
