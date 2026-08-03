@@ -351,6 +351,21 @@ def _pending_question_is_replaceable(
     return not retry_pages or resource_question.page_no in retry_pages
 
 
+def _filter_questions_to_retry_pages(questions: list[dict], retry_pages: list[int]) -> list[dict]:
+    if not retry_pages:
+        return questions
+    retry_scope = set(retry_pages)
+    return [question for question in questions if question.get("page_no") in retry_scope]
+
+
+def _failed_pages_after_empty_retry(
+    failed_pages: list[int], retry_pages: list[int], questions: list[dict]
+) -> list[int]:
+    if retry_pages and not questions:
+        return sorted(set(failed_pages).union(retry_pages))
+    return failed_pages
+
+
 async def extract_learning_resource(
     ctx: dict,
     tenant_id: str,
@@ -422,6 +437,8 @@ async def extract_learning_resource(
         ):
             raise ValueError("RESOURCE_PAGE_LIMIT_EXCEEDED")
         if not raw_questions:
+            failed_pages = _failed_pages_after_empty_retry(failed_pages, retry_pages, [])
+            recognition_meta["failed_pages"] = failed_pages
             async with tenant_session(tenant_id) as session:
                 resource = await session.get(LearningResource, rid, with_for_update=True)
                 existing = await session.scalar(
@@ -446,10 +463,10 @@ async def extract_learning_resource(
             raw_questions = raw_questions[: settings.max_learning_resource_questions]
         questions = [normalize_extracted_question(raw, i + 1) for i, raw in enumerate(raw_questions)]
         questions = [question for question in questions if question["stem"]]
-        if retry_pages:
-            retry_scope = set(retry_pages)
-            questions = [question for question in questions if question["page_no"] in retry_scope]
+        questions = _filter_questions_to_retry_pages(questions, retry_pages)
         if not questions:
+            failed_pages = _failed_pages_after_empty_retry(failed_pages, retry_pages, questions)
+            recognition_meta["failed_pages"] = failed_pages
             async with tenant_session(tenant_id) as session:
                 resource = await session.get(LearningResource, rid, with_for_update=True)
                 existing = await session.scalar(

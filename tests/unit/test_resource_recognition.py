@@ -6,7 +6,12 @@ from eduagents_core.config import Settings
 from eduagents_core.document_recognition import PdfPageResult, PdfRecognitionResult
 from eduagents_core.gateway import ChatResult
 from eduagents_worker import resources as resource_worker
-from eduagents_worker.resources import _extract_pdf_questions, _pending_question_is_replaceable
+from eduagents_worker.resources import (
+    _extract_pdf_questions,
+    _failed_pages_after_empty_retry,
+    _filter_questions_to_retry_pages,
+    _pending_question_is_replaceable,
+)
 
 
 def _native_pdf(page_count: int = 4) -> bytes:
@@ -144,3 +149,9 @@ async def test_successful_partial_retry_clears_failed_pages(monkeypatch):
     assert [question["page_no"] for question in questions] == [2]
     assert failed_pages == []
     assert metadata["failed_pages"] == []
+
+
+def test_partial_retry_with_only_out_of_scope_questions_keeps_failed_pages():
+    wrong_page = [{"page_no": 1, "stem": "Wrong page"}]
+    assert _filter_questions_to_retry_pages(wrong_page, [2]) == []
+    assert _failed_pages_after_empty_retry([], [2], []) == [2]
