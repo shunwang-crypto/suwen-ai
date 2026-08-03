@@ -325,6 +325,7 @@ export default function TutorPage() {
   const [stuckType, setStuckType] = useState("");
   const [summary, setSummary] = useState<TutorSessionSummary | null>(null);
   const [masteryChanges, setMasteryChanges] = useState<MasteryChange[]>([]);
+  const [hintsExpanded, setHintsExpanded] = useState(false);
 
   const started = messages.length > 0;
   const ended = summary !== null;
@@ -481,6 +482,7 @@ export default function TutorPage() {
     setInput("");
     setError(null);
     setHintLevel(0);
+    setHintsExpanded(false);
     setStuckType("");
     setSummary(null);
     setMasteryChanges([]);
@@ -528,13 +530,6 @@ export default function TutorPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_266px] lg:items-start">
         <main ref={listRef} className="min-w-0 space-y-3">
           {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-          {!started && !draftId && (
-            <div className="flex items-start gap-3 py-3">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]">输入题目后，可以直接开始，也可以写下已经想到哪一步。我会判断你的卡点，再逐层给出提示。</div></div>
-            </div>
-          )}
-
           {messages.map((message, index) => message.role === "user" ? (
             <article key={index} className="ml-10 overflow-hidden rounded-[10px] border border-line bg-white">
               <div className="px-4 py-3"><p className="text-[10px] font-medium text-ink-muted">你的第 {Math.floor(index / 2) + 1} 步</p><div className="mt-2 text-[13px] leading-6 text-ink"><MathText text={message.content} /></div></div>
@@ -564,13 +559,17 @@ export default function TutorPage() {
           )}
         </main>
 
-        <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
+        {started && <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
           <div className="flex items-center justify-between"><h2 className="text-[12px] font-semibold text-ink">提示支持</h2><span className="text-[10px] text-ink-muted">卡了再用</span></div>
-          <div className="mt-4"><HintLadder level={hintLevel} active={started} /></div>
+          <button type="button" aria-expanded={hintsExpanded} onClick={() => setHintsExpanded((value) => !value)} className="mt-4 flex w-full items-center justify-between rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-left text-[11px] font-medium text-brand-700">
+            <span>当前提示：第 {hintLevel + 1} 层 · {HINT_LEVELS[Math.min(hintLevel, HINT_LEVELS.length - 1)]}</span>
+            <span aria-hidden>{hintsExpanded ? "收起" : "展开"}</span>
+          </button>
+          {hintsExpanded && <div className="mt-3"><HintLadder level={hintLevel} active={started} /></div>}
           <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
           {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-[11px] font-medium text-success-700">我认为已解出，进入理解确认</button>}
           <p className="mt-3 text-[10px] leading-5 text-ink-muted">提示会根据你的回答逐层加深，尽量帮助你自己找到下一步，而不是直接给出答案。</p>
-        </aside>
+        </aside>}
       </div>
     </div>
   );

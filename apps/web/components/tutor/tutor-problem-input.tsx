@@ -29,7 +29,17 @@ interface Props {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "附件处理失败，请稍后重试";
+  if (!(error instanceof ApiError)) return "附件处理失败，请稍后重试";
+  const messages: Record<string, string> = {
+    MODEL_REQUEST_INVALID: "当前模型无法处理该文件，请重试或稍后再试。",
+    VISION_ROUTE_UNAVAILABLE: "图片识别服务暂时不可用。",
+    PDF_PASSWORD_PROTECTED: "PDF 已加密，请解除密码后重新上传。",
+    PDF_PAGE_LIMIT_EXCEEDED: "PDF 页数超过限制。",
+    PDF_PARTIAL_PAGE_FAILURE: "部分页面未能识别，请检查失败页。",
+    NO_QUESTIONS_RECOGNIZED: "没有识别出题目，可手动输入题目。",
+    TUTOR_ATTACHMENT_NOT_FOUND: "原文件暂时不可用，请重新选择附件。",
+  };
+  return messages[error.code] ?? "附件处理失败，请稍后重试";
 }
 
 export function TutorProblemInput({
@@ -194,9 +204,11 @@ export function TutorProblemInput({
     setBusy(true);
     setError(null);
     try {
-      applyDraft(await apiJson<TutorProblemDraft>(`/api/tutor/drafts/${draft.id}/recognize`, {
+      const recognized = await apiJson<TutorProblemDraft>(`/api/tutor/drafts/${draft.id}/recognize`, {
         body: { pages: selectedPages },
-      }));
+      });
+      applyDraft(recognized);
+      if (recognized.status === "review") setReviewOpen(true);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -329,8 +341,9 @@ export function TutorProblemInput({
           )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-medium text-ink">{draft.attachment.filename}</p>
-            <p className="mt-1 text-[10px] text-ink-muted">
-              {STATUS_LABEL[draft.status]}
+            <p className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-muted">
+              {draft.status === "recognizing" && <Spinner className="h-3 w-3" />}
+              <span>{STATUS_LABEL[draft.status]}</span>
               {draft.confirmed_page_no ? ` · 第 ${draft.confirmed_page_no} 页` : ""}
               {draft.attachment.page_count ? ` · 共 ${draft.attachment.page_count} 页` : ""}
             </p>
@@ -354,25 +367,27 @@ export function TutorProblemInput({
       )}
 
       {!locked && isPdf && draft?.status !== "recognizing" && draft?.status !== "confirmed" && (
-        <div className="mx-3 mb-3 border-t border-line pt-3">
-          <p className="text-[11px] font-medium text-ink-secondary">选择本次识别页</p>
-          <div className="mt-2 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
-            {pages.map((page) => (
-              <label key={page} className="flex items-center gap-1 border border-line bg-white px-2 py-1 text-[10px] text-ink-secondary">
-                <input type="checkbox" checked={selectedPages.includes(page)} onChange={(event) => setSelectedPages((current) => event.target.checked ? [...current, page].sort((a, b) => a - b) : current.filter((value) => value !== page))} />
-                {page}
-              </label>
-            ))}
-          </div>
-          <button type="button" disabled={busy || selectedPages.length === 0} onClick={() => void recognize()} className="mt-3 bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:opacity-40">{draft.status === "uploaded" ? "识别所选页面" : "按所选页重新识别"}</button>
+        <div className="mx-3 mb-3 flex items-center justify-between border-t border-line pt-3 text-[10px] text-ink-secondary">
+          <span>{selectedPages.length ? `已选择 ${selectedPages.length} 页` : "PDF 页面将在校对时选择"}</span>
+          <button type="button" onClick={() => setReviewOpen(true)} className="border border-line-strong px-2.5 py-1.5">选择页面</button>
         </div>
       )}
 
       {draft?.vision_uses_platform_quota && !locked && (
         <p className="mx-3 mb-2 text-[10px] leading-5 text-warning-700">图片和扫描 PDF 的视觉识别使用平台模型，可能消耗平台额度；不会使用你的 DeepSeek Key。</p>
       )}
-      {draft?.warnings.map((warning) => <p key={warning} className="mx-3 mb-2 text-[10px] text-warning-700">{WARNING_LABEL[warning] ?? warning}</p>)}
-      {error && <p role="alert" className="mx-3 mb-2 text-[11px] text-danger-600">{error}</p>}
+      {draft?.warnings.map((warning) => <p key={warning} className="mx-3 mb-2 text-[10px] text-warning-700">{WARNING_LABEL[warning] ?? "部分内容需要人工检查，请对照原文件校对。"}</p>)}
+      {draft?.status === "failed" && (
+        <div className="mx-3 mb-2 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-700">
+          <p>暂时无法识别该文件，原文件已经保留。</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" disabled={busy} onClick={() => void recognize()} className="border border-danger-300 bg-white px-2.5 py-1.5">重新识别</button>
+            {isPdf && <button type="button" onClick={() => setReviewOpen(true)} className="border border-danger-300 bg-white px-2.5 py-1.5">重新选择页面</button>}
+            <button type="button" onClick={() => { setDraft(null); setStem(""); }} className="border border-danger-300 bg-white px-2.5 py-1.5">手动输入题目</button>
+          </div>
+        </div>
+      )}
+      {error && draft?.status !== "failed" && <p role="alert" className="mx-3 mb-2 text-[11px] text-danger-600">{error}</p>}
 
       {!locked && (
         <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2.5">
@@ -393,6 +408,20 @@ export function TutorProblemInput({
               <h2 id="tutor-review-title" className="text-sm font-semibold text-ink">校对并选择本次辅导题目</h2>
               <button ref={closeRef} type="button" onClick={() => setReviewOpen(false)} className="h-8 w-8 text-lg text-ink-secondary" aria-label="关闭校对">×</button>
             </div>
+            {isPdf && draft?.status !== "confirmed" && (
+              <fieldset className="mt-4 rounded-[8px] border border-line bg-surface-muted p-3">
+                <legend className="px-1 text-xs font-medium text-ink-secondary">选择本次识别页</legend>
+                <div className="mt-2 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
+                  {pages.map((page) => (
+                    <label key={page} className="flex items-center gap-1 border border-line bg-white px-2 py-1 text-[10px] text-ink-secondary">
+                      <input type="checkbox" checked={selectedPages.includes(page)} onChange={(event) => setSelectedPages((current) => event.target.checked ? [...current, page].sort((a, b) => a - b) : current.filter((value) => value !== page))} />
+                      第 {page} 页
+                    </label>
+                  ))}
+                </div>
+                {draft.status !== "review" && <button type="button" disabled={busy || selectedPages.length === 0} onClick={() => void recognize()} className="mt-3 bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:opacity-40">识别所选页面</button>}
+              </fieldset>
+            )}
             {draft && draft.questions.length > 1 && (
               <fieldset className="mt-4">
                 <legend className="text-xs font-medium text-ink-secondary">文件中识别到 {draft.questions.length} 道题</legend>
