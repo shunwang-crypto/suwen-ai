@@ -78,10 +78,17 @@ function friendlyError(reason: unknown, fallback: string): string {
       RESOURCE_ARCHIVED: "资料已经归档，请先恢复后再操作。",
       EXTRACTION_QUEUE_FAILED: "识别任务入队失败，可以稍后重试。",
       RESOURCE_SOURCE_REQUIRED: "手动资料没有原文件，请直接添加题目。",
+      MODEL_REQUEST_INVALID: "当前模型无法处理该文件，请重试或稍后再试。",
+      VISION_ROUTE_UNAVAILABLE: "图片识别服务暂时不可用。",
+      PDF_PASSWORD_PROTECTED: "PDF 已加密，请解除密码后重新上传。",
+      PDF_PAGE_LIMIT_EXCEEDED: "PDF 页数超过限制。",
+      PDF_PARTIAL_PAGE_FAILURE: "部分页面未能识别，请检查失败页。",
+      NO_QUESTIONS_RECOGNIZED: "没有识别出题目，可以手动添加。",
+      RESOURCE_EXTRACTION_FAILED: "资料识别暂时失败，请重试；原文件仍已保留。",
     };
-    return messages[reason.code] ?? reason.message;
+    return messages[reason.code] ?? fallback;
   }
-  return reason instanceof Error ? reason.message : fallback;
+  return fallback;
 }
 
 function ResourceIcon({ resource }: { resource: LearningResourceOut }) {
@@ -108,6 +115,11 @@ function ResourceCard({
   questionResource: boolean;
   busy: boolean;
 }) {
+  const failedPages = Array.isArray(resource.metadata.failed_pages)
+    ? resource.metadata.failed_pages
+    : [];
+  const canRetry = Boolean(resource.source_url) &&
+    (resource.status === "uploaded" || resource.status === "failed" || failedPages.length > 0);
   return (
     <article className="rounded-[13px] border border-line bg-white p-4 transition-shadow hover:shadow-card">
       <div className="flex items-start gap-3">
@@ -118,8 +130,9 @@ function ResourceCard({
         </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 rounded-[9px] bg-surface-muted px-3 py-2.5 text-[10px]"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>
-      {resource.status === "failed" && typeof resource.metadata.error === "string" && <p className="mt-3 rounded-[8px] bg-danger-50 px-3 py-2 text-[10px] leading-4 text-danger-700">识别未完成：{resource.metadata.error}</p>}
-      <footer className="mt-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={onOpen} className="rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white">{questionResource && resource.status === "extracting" ? "查看识别进度" : "查看资料"}</button><div className="flex flex-wrap gap-1.5">{questionResource && (resource.status === "uploaded" || resource.status === "failed") && resource.source_url && <button type="button" onClick={onExtract} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">{busy ? "提交中…" : resource.status === "failed" ? "重试识别" : "开始识别"}</button>}{resource.status === "archived" ? <button type="button" onClick={onRestore} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">恢复</button> : <button type="button" onClick={onArchive} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">归档</button>}{(resource.status === "uploaded" || resource.status === "failed" || resource.status === "archived") && <button type="button" onClick={onDelete} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-danger-600 disabled:opacity-40">删除</button>}</div></footer>
+      {resource.status === "failed" && <p className="mt-3 rounded-[8px] bg-danger-50 px-3 py-2 text-[10px] leading-4 text-danger-700">识别未完成，原文件已经保留。{failedPages.length > 0 ? `失败页：${failedPages.join("、")}` : ""}</p>}
+      {failedPages.length > 0 && resource.status !== "failed" && <p className="mt-3 rounded-[8px] bg-warning-50 px-3 py-2 text-[10px] leading-4 text-warning-700">部分页面未能识别，已保留成功题目；失败页：{failedPages.join("、")}</p>}
+      <footer className="mt-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={onOpen} className="rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white">{questionResource && resource.status === "extracting" ? "查看识别进度" : "查看资料"}</button><div className="flex flex-wrap gap-1.5">{questionResource && canRetry && <button type="button" onClick={onExtract} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">{busy ? "提交中…" : resource.status === "uploaded" ? "开始识别" : "重试识别"}</button>}{resource.status === "archived" ? <button type="button" onClick={onRestore} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">恢复</button> : <button type="button" onClick={onArchive} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-ink-secondary disabled:opacity-40">归档</button>}{(resource.status === "uploaded" || resource.status === "failed" || resource.status === "archived") && <button type="button" onClick={onDelete} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-[10px] text-danger-600 disabled:opacity-40">删除</button>}</div></footer>
     </article>
   );
 }

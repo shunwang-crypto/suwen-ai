@@ -86,10 +86,15 @@ function friendlyError(reason: unknown, fallback: string): string {
       RESOURCE_KB_LOCKED_AFTER_EVIDENCE: "这份资料已有学习证据，不能更换或取消关联知识库。",
       RESOURCE_QUESTION_HAS_ERROR_ITEM: "这道题已经进入错题本，不能删除。",
       RESOURCE_QUESTION_HAS_ASSESSMENT: "这道题已有测评作答记录，不能删除。",
+      MODEL_REQUEST_INVALID: "当前模型无法处理该文件，请重试或稍后再试。",
+      VISION_ROUTE_UNAVAILABLE: "图片识别服务暂时不可用。",
+      PDF_PARTIAL_PAGE_FAILURE: "部分页面未能识别，请检查失败页。",
+      NO_QUESTIONS_RECOGNIZED: "没有识别出题目，可以手动添加。",
+      RESOURCE_EXTRACTION_FAILED: "资料识别暂时失败，请重试；原文件仍已保留。",
     };
-    return messages[reason.code] ?? reason.message;
+    return messages[reason.code] ?? fallback;
   }
-  return reason instanceof Error ? reason.message : fallback;
+  return fallback;
 }
 
 function QuestionStatus({ status }: { status: ResourceQuestionOut["verification_status"] }) {
@@ -188,6 +193,25 @@ export function ResourceReview({
   const pendingCount = questions.filter((question) => question.verification_status === "pending").length;
   const verifiedCount = questions.filter((question) => question.verification_status === "verified").length;
   const selectedCount = useMemo(() => selectedErrors.size, [selectedErrors]);
+
+  const retryExtraction = async () => {
+    if (!resource.source_url) return;
+    setBusy("extract");
+    setMessage(null);
+    try {
+      const updated = await apiJson<LearningResourceOut>(`/api/resources/${resource.id}/extract`, {
+        method: "POST",
+        body: {},
+      });
+      onResourceChanged({ ...resource, ...updated });
+      setMessage("已重新提交识别，原文件仍会保留。");
+      await onReload();
+    } catch (reason) {
+      setMessage(friendlyError(reason, "识别任务提交失败，请稍后重试"));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -427,6 +451,18 @@ export function ResourceReview({
 
       {message && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-[11px] text-ink-secondary">{message}</div>}
       {!linkedKbId && <div className="rounded-[9px] border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[11px] leading-5 text-warning-700">未关联知识库时，错题仍可进入 FSRS；知识点掌握度和章节画像可能无法完整归类。</div>}
+
+      {(resource.status === "failed" || questions.length === 0) && (
+        <div className={`rounded-[10px] border px-4 py-3 text-[11px] leading-5 ${resource.status === "failed" ? "border-danger-200 bg-danger-50 text-danger-700" : "border-warning-200 bg-warning-50 text-warning-700"}`}>
+          <p className="font-medium">{resource.status === "failed" ? "识别未完成，原文件已经保留。" : "没有识别出可校对题目。"}</p>
+          {Array.isArray(resource.metadata.failed_pages) && resource.metadata.failed_pages.length > 0 && <p className="mt-1">失败页：{resource.metadata.failed_pages.join("、")}</p>}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {resource.source_url && <button type="button" onClick={() => void retryExtraction()} disabled={busy !== null} className="border border-current bg-white px-2.5 py-1.5 disabled:opacity-40">{busy === "extract" ? "提交中…" : "重新识别"}</button>}
+            <button type="button" onClick={() => setShowManual(true)} className="border border-current bg-white px-2.5 py-1.5">手动添加题目</button>
+            {resource.source_url && <a href={resource.source_url} target="_blank" rel="noreferrer" className="border border-current bg-white px-2.5 py-1.5">查看原文件</a>}
+          </div>
+        </div>
+      )}
 
       <div className="flex w-fit rounded-[8px] border border-line bg-white p-1 lg:hidden">
         <button type="button" onClick={() => setMobilePane("source")} className={`rounded-[6px] px-3 py-1.5 text-[11px] font-medium ${mobilePane === "source" ? "bg-ink text-white" : "text-ink-secondary"}`}>原件预览</button>
