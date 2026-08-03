@@ -124,6 +124,26 @@ describe("TutorProblemInput attachments", () => {
 });
 
 describe("TutorProblemInput review", () => {
+  it("shows recognized LaTeX as a preview while keeping source editing available", async () => {
+    const recognized = draft({
+      stem: "\\lim_{n \\to \\infty} \\frac{1}{n}",
+      questions: [{
+        index: 0,
+        question_no: "1",
+        page_no: 1,
+        type: "short",
+        stem: "\\lim_{n \\to \\infty} \\frac{1}{n}",
+        options: [],
+        confidence: 0.9,
+      }],
+    });
+    apiJson.mockResolvedValue(recognized);
+    render(<TutorProblemInput initialDraftId={recognized.id} onConfirmed={() => {}} />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "校对题目" }));
+    expect(document.querySelectorAll(".katex").length).toBeGreaterThan(0);
+    expect(screen.getByText("编辑题干/公式源码")).toBeInTheDocument();
+  });
+
   it("selects one of multiple questions, edits fields, and confirms a locked snapshot", async () => {
     const user = userEvent.setup();
     const initial = draft();

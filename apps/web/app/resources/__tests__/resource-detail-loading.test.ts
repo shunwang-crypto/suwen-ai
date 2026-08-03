@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   isTutorManagedResource,
+  isPdfResource,
+  pdfResourceSummary,
   resourceDetailKey,
   shouldShowResourceDetailSkeleton,
   tutorDraftHref,
@@ -28,5 +30,14 @@ describe("resource detail polling state", () => {
 
   it("links to the selected tutor draft instead of the last local session", () => {
     expect(tutorDraftHref("draft/1")).toBe("/tutor?draft=draft%2F1");
+  });
+
+  it("detects PDF resources for the page-count card", () => {
+    expect(isPdfResource({ mime_type: "application/pdf", source_filename: "paper.bin" })).toBe(true);
+    expect(isPdfResource({ mime_type: "text/plain", source_filename: "paper.pdf" })).toBe(true);
+    expect(isPdfResource({ mime_type: "text/plain", source_filename: "notes.txt" })).toBe(false);
+    expect(pdfResourceSummary({ mime_type: "application/pdf", source_filename: "paper.pdf", page_count: 3, question_count: 7 }))
+      .toBe("PDF · 共 3 页 · 已识别 7 题");
+    expect(pdfResourceSummary({ mime_type: "text/plain", source_filename: "notes.txt", page_count: null, question_count: 7 })).toBeNull();
   });
 });

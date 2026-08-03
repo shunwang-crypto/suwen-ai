@@ -37,7 +37,8 @@ _IMAGE_MIMES = {
 _PROMPT = """你是分级辅导的题目识别助手。忠实识别输入中出现的所有题目。
 每题字段：question_no, page_no, type, stem, options, confidence。
 type 只能是 single、multi、blank、short。不清楚的内容留空，绝不能补造题干、选项或答案。
-保留给出的真实页码。只输出一个 JSON 对象，格式严格为：
+保留给出的真实页码。数学公式必须使用展示定界符：行内公式使用 $...$，独立长公式使用 $$...$$；不要裸输出 \\frac、\\lim、\\sum、\\int、\\sqrt、\\left 等未包定界符的完整公式。
+不要把 PDF 标题、知识点讲义、页眉页脚或说明文字当成题目。只输出一个 JSON 对象，格式严格为：
 {"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。"""
 
 

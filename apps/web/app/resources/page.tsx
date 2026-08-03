@@ -35,6 +35,15 @@ export function isTutorManagedResource(resource: LearningResourceOut): boolean {
   return typeof draftId === "string" && draftId.length > 0;
 }
 
+export function isPdfResource(resource: Pick<LearningResourceOut, "mime_type" | "source_filename">): boolean {
+  return resource.mime_type === "application/pdf" || /\.pdf$/i.test(resource.source_filename ?? "");
+}
+
+export function pdfResourceSummary(resource: Pick<LearningResourceOut, "mime_type" | "source_filename" | "page_count" | "question_count">): string | null {
+  if (!isPdfResource(resource)) return null;
+  return `PDF · 共 ${resource.page_count ?? "—"} 页 · 已识别 ${resource.question_count} 题`;
+}
+
 export function tutorDraftHref(draftId: string): string {
   return `/tutor?draft=${encodeURIComponent(draftId)}`;
 }
@@ -151,7 +160,7 @@ function ResourceCard({
           <p className="mt-1 text-[10px] text-ink-muted">{typeLabel(resource.resource_type)} · {resource.subject || "通用"} · {formatDate(resource.created_at)}</p>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-2 rounded-[9px] bg-surface-muted px-3 py-2.5 text-[10px]"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>
+      {pdfResourceSummary(resource) ? <div className="mt-4 rounded-[9px] bg-surface-muted px-3 py-2.5 text-[10px]"><p className="font-medium text-ink">{pdfResourceSummary(resource)}</p><p className="mt-1 truncate text-ink-muted" title={resource.source_filename ?? undefined}>待校对 {resource.pending_question_count} 题 · {resource.source_filename ?? "原文件"}</p></div> : <div className="mt-4 grid grid-cols-3 gap-2 rounded-[9px] bg-surface-muted px-3 py-2.5 text-[10px]"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>}
       {(resource.status === "uploaded" || resource.status === "extracting") && <div className="mt-3"><ResourceExtractionSteps resource={resource} /></div>}
       {resource.status === "failed" && <p className="mt-3 rounded-[8px] bg-danger-50 px-3 py-2 text-[10px] leading-4 text-danger-700">识别未完成，原文件已经保留。{failedPages.length > 0 ? `失败页：${failedPages.join("、")}` : ""}</p>}
       {failedPages.length > 0 && resource.status !== "failed" && <p className="mt-3 rounded-[8px] bg-warning-50 px-3 py-2 text-[10px] leading-4 text-warning-700">部分页面未能识别，已保留成功题目；失败页：{failedPages.join("、")}</p>}

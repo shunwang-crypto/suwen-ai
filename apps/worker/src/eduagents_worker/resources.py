@@ -39,7 +39,9 @@ detected_reference_answer, explanation, points, kc_names, difficulty, confidence
 不清楚的字段必须是空字符串、空数组或 null，绝不能猜答案、补造题干或知识点。
 type 只能是 single、multi、blank、short；difficulty 只能是 easy、mid、hard；
 confidence 是 0 到 1。只输出一个 JSON 对象，格式严格为：
-{"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。"""
+{"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。
+数学公式必须使用展示定界符：行内公式使用 $...$，独立长公式使用 $$...$$；不要裸输出 \\frac、\\lim、\\sum、\\int、\\sqrt、\\left 等未包定界符的完整公式。
+不要把 PDF 标题、知识点讲义、页眉页脚或说明文字当成题目。"""
 
 _IMAGE_MIMES = {
     ".png": "image/png",

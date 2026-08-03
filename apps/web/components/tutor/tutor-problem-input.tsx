@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Spinner } from "@/components/common";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import type { TutorProblemDraft } from "@/lib/types";
 
 const ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.docx,.pptx";
@@ -58,6 +59,7 @@ export function TutorProblemInput({
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [sourceEditing, setSourceEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -303,7 +305,7 @@ export function TutorProblemInput({
         if (!locked && event.dataTransfer.files[0]) void upload(event.dataTransfer.files[0]);
       }}
     >
-      {!locked && (
+      {!locked && !draft && (
         <textarea
           aria-label="题目题干"
           value={stem}
@@ -322,9 +324,26 @@ export function TutorProblemInput({
           className="w-full resize-y border-0 bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted"
         />
       )}
+      {!locked && draft && (
+        <div className="px-3 py-2.5">
+          <p className="text-[10px] font-medium text-ink-muted">题目预览</p>
+          <MathText text={stem || "（尚未填写题干）"} className="mt-1 block text-[13px] leading-6 text-ink" />
+          <details className="mt-2 rounded-[7px] border border-line bg-white" open={sourceEditing} onToggle={(event) => setSourceEditing(event.currentTarget.open)}>
+            <summary className="cursor-pointer px-2.5 py-1.5 text-[10px] text-ink-muted">编辑识别文本/公式源码</summary>
+            <textarea
+              aria-label="题目题干"
+              value={stem}
+              onChange={(event) => setStem(event.target.value)}
+              rows={4}
+              maxLength={12000}
+              className="w-full resize-y rounded-b-[7px] border-0 border-t border-line bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none"
+            />
+          </details>
+        </div>
+      )}
       {locked && (
-        <div className="whitespace-pre-wrap px-3 py-2.5 text-[13px] font-medium leading-6 text-ink">
-          {draft?.confirmed_problem_text || stem}
+        <div className="px-3 py-2.5 text-[13px] font-medium leading-6 text-ink">
+          <MathText text={draft?.confirmed_problem_text || stem} />
         </div>
       )}
 
@@ -422,21 +441,27 @@ export function TutorProblemInput({
                 {draft.status !== "review" && <button type="button" disabled={busy || selectedPages.length === 0} onClick={() => void recognize()} className="mt-3 bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:opacity-40">识别所选页面</button>}
               </fieldset>
             )}
-            {draft && draft.questions.length > 1 && (
+            {draft && isPdf && (
+              <p className="mt-4 rounded-[8px] bg-surface-muted px-3 py-2 text-[10px] text-ink-secondary">
+                PDF 共 {draft.attachment?.page_count ?? 0} 页 · 本次选择 {selectedPages.length} 页 · 已识别 {draft.questions.length} 道题
+              </p>
+            )}
+            {draft && draft.questions.length > 0 && (
               <fieldset className="mt-4">
-                <legend className="text-xs font-medium text-ink-secondary">文件中识别到 {draft.questions.length} 道题</legend>
+                <legend className="text-xs font-medium text-ink-secondary">候选题目（按页对照原文件）</legend>
                 <div className="mt-2 max-h-44 space-y-2 overflow-y-auto">
                   {draft.questions.map((question) => (
                     <label key={question.index} className="flex cursor-pointer items-start gap-2 border border-line p-3 text-xs text-ink">
                       <input type="radio" name="tutor-question" checked={draft.selected_question_index === question.index} onChange={() => void chooseQuestion(question.index)} />
-                      <span className="min-w-0"><span className="font-medium">第 {question.question_no} 题{question.page_no ? ` · 第 ${question.page_no} 页` : ""}</span><span className="mt-1 block line-clamp-2 text-ink-secondary">{question.stem}</span></span>
+                      <span className="min-w-0"><span className="font-medium">第 {question.question_no} 题{question.page_no ? ` · 第 ${question.page_no} 页` : ""}</span><MathText text={question.stem} className="mt-1 block line-clamp-2 text-ink-secondary" /></span>
                     </label>
                   ))}
                 </div>
               </fieldset>
             )}
-            <label className="mt-4 block text-xs font-medium text-ink-secondary">题干<textarea value={stem} onChange={(event) => setStem(event.target.value)} rows={5} maxLength={12000} className="mt-2 w-full resize-y border border-line-strong p-3 text-sm font-normal leading-6 text-ink outline-none focus:border-brand-400" /></label>
-            <fieldset className="mt-4"><legend className="text-xs font-medium text-ink-secondary">选项</legend><div className="mt-2 space-y-2">{options.map((option, index) => <div key={index} className="flex gap-2"><span className="w-5 pt-2 text-xs text-ink-muted">{String.fromCharCode(65 + index)}</span><input value={option} onChange={(event) => setOptions((current) => current.map((value, item) => item === index ? event.target.value : value))} maxLength={1000} className="min-w-0 flex-1 border border-line-strong px-3 py-2 text-sm" /><button type="button" onClick={() => setOptions((current) => current.filter((_, item) => item !== index))} className="h-9 w-9 text-danger-600" aria-label={`删除选项 ${String.fromCharCode(65 + index)}`}>×</button></div>)}</div>{options.length < 8 && <button type="button" onClick={() => setOptions((current) => [...current, ""])} className="mt-2 border border-line-strong px-3 py-1.5 text-xs text-ink-secondary">添加选项</button>}</fieldset>
+            <div className="mt-4 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-xs leading-6 text-ink"><p className="text-[10px] font-medium text-ink-muted">题目预览</p><MathText text={stem || "（尚未填写题干）"} className="mt-1 block" /></div>
+            <details className="mt-1.5 rounded-[7px] border border-line"><summary className="cursor-pointer px-2.5 py-1.5 text-[10px] text-ink-muted">编辑题干/公式源码</summary><textarea aria-label="题干" value={stem} onChange={(event) => setStem(event.target.value)} rows={5} maxLength={12000} className="mt-0 w-full resize-y border-0 border-t border-line p-3 text-sm font-normal leading-6 text-ink outline-none focus:border-brand-400" /></details>
+            <fieldset className="mt-4"><legend className="text-xs font-medium text-ink-secondary">选项</legend><div className="mt-2 space-y-2">{options.map((option, index) => <div key={index} className="rounded-[7px] border border-line bg-[#fafaf9] px-3 py-2 text-sm"><div className="flex gap-2"><span className="w-5 text-xs text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div><details className="mt-1"><summary className="cursor-pointer text-[10px] text-ink-muted">编辑选项/公式源码</summary><div className="mt-1 flex gap-2"><input aria-label={`选项 ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setOptions((current) => current.map((value, item) => item === index ? event.target.value : value))} maxLength={1000} className="min-w-0 flex-1 border border-line-strong px-3 py-2 text-sm" /><button type="button" onClick={() => setOptions((current) => current.filter((_, item) => item !== index))} className="h-9 w-9 text-danger-600" aria-label={`删除选项 ${String.fromCharCode(65 + index)}`}>×</button></div></details></div>)}</div>{options.length < 8 && <button type="button" onClick={() => setOptions((current) => [...current, ""])} className="mt-2 border border-line-strong px-3 py-1.5 text-xs text-ink-secondary">添加选项</button>}</fieldset>
             <label className="mt-4 block text-xs font-medium text-ink-secondary">已知条件<textarea value={knownConditions} onChange={(event) => setKnownConditions(event.target.value)} rows={2} maxLength={8000} className="mt-2 w-full resize-y border border-line-strong p-3 text-sm font-normal" /></label>
             <label className="mt-4 block text-xs font-medium text-ink-secondary">你当前的思路或卡点<textarea value={currentThought} onChange={(event) => setCurrentThought(event.target.value)} rows={3} maxLength={8000} className="mt-2 w-full resize-y border border-line-strong p-3 text-sm font-normal" /></label>
             <div className="mt-5 flex justify-end gap-2 border-t border-line pt-4"><button type="button" onClick={() => setReviewOpen(false)} className="border border-line-strong px-4 py-2 text-xs text-ink-secondary">返回修改</button><button type="button" disabled={busy || !stem.trim()} onClick={() => void confirm()} className="bg-brand-600 px-4 py-2 text-xs font-medium text-white disabled:opacity-40">确认并开始辅导</button></div>

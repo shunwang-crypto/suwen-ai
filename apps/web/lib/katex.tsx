@@ -12,6 +12,32 @@ export type MathSegment =
   /** 流式未闭合的公式尾巴（含起始定界符），等待后续 token 补全 */
   | { type: "pending"; content: string };
 
+const BARE_MATH_COMMAND_RE = /\\(?:lim|frac|sum|int|sqrt|left|right|sin|cos|tan|log|ln|infty|pi|cdot|times|leq|geq|neq|pm|to)\b/;
+const CJK_RE = /[\u3400-\u9fff]/;
+
+/**
+ * 仅用于展示的兼容层：把常见的 TeX 定界符统一成 MathText 能识别的形式，
+ * 并对明显是单个公式、但历史数据漏掉定界符的字段做保守的块级包装。
+ * 这里绝不改写 API payload 或数据库字段。
+ */
+export function normalizeMathDisplayText(text: string): string {
+  const value = String(text ?? "");
+  const delimited = value
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `$$${expr}$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `$${expr}$`);
+  const trimmed = delimited.trim();
+  if (!trimmed || /\$\$|(?<!\\)\$/.test(trimmed) || !BARE_MATH_COMMAND_RE.test(trimmed)) {
+    return delimited;
+  }
+  // 中文题干、自然语言句子和说明文字不能整体包成公式。
+  if (CJK_RE.test(trimmed) || /\b(?:the|this|find|calculate|solve|answer|where|let)\b/i.test(trimmed)) {
+    return delimited;
+  }
+  // 要求字段从 TeX/数学 token 开始，避免把“说明文字 + 公式”误判为单一公式。
+  if (!/^(?:\\[a-zA-Z]+|[A-Za-z0-9({[|+\-])/.test(trimmed)) return delimited;
+  return `$$${trimmed}$$`;
+}
+
 /**
  * 把文本切成 文本/公式/未闭合尾巴 三类片段。
  * - `$$...$$` 块级；`$...$` 行内（内部不允许换行，视作普通美元符）。
@@ -117,7 +143,7 @@ function escapeHtml(s: string): string {
  * 无效公式带定界符原样输出，绝不抛异常。
  */
 export function renderMathInText(text: string): string {
-  return tokenizeMath(text)
+  return tokenizeMath(normalizeMathDisplayText(text))
     .map((seg) => {
       if (seg.type === "text" || seg.type === "pending") {
         return escapeHtml(seg.content);
@@ -192,7 +218,7 @@ export function MathText({
   activeCitation,
   className,
 }: MathTextProps) {
-  const segments = tokenizeMath(text);
+  const segments = tokenizeMath(normalizeMathDisplayText(text));
   return (
     <span className={`whitespace-pre-wrap break-words ${className ?? ""}`}>
       {segments.map((seg, i) => {
