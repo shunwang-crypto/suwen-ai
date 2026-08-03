@@ -42,6 +42,8 @@ export function DocStatusBadge({ status }: { status: string }) {
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
+      role="status"
+      aria-label={meta.label}
     >
       <FxStyles />
       {/* 8px 状态圆点：处理中呼吸动画（reduced-motion 静态），终态常亮 */}
@@ -62,10 +64,6 @@ const STATUS_STEP: Record<string, number> = {
   recognizing: 1,
   chunking: 2,
   embedding: 3,
-  ready: 4,
-  partial_ready: 4,
-  enriching: 5,
-  enriched: 6,
 };
 
 export function IngestSteps({ status }: { status: string }) {
@@ -75,7 +73,7 @@ export function IngestSteps({ status }: { status: string }) {
     <span
       className="mt-1 flex items-center gap-0.5"
       role="img"
-      aria-label={`摄取进度：${INGEST_STEPS.map((s, i) => (i === step ? `${s}（进行中）` : s)).join(" → ")}`}
+      aria-label={`摄取进度：${INGEST_STEPS.map((s, i) => (i === step ? `${s}（处理中）` : s)).join(" → ")}`}
     >
       {INGEST_STEPS.map((label, i) => (
         <span
