@@ -11,6 +11,7 @@ from eduagents_worker.resources import (
     _failed_pages_after_empty_retry,
     _filter_questions_to_retry_pages,
     _pending_question_is_replaceable,
+    _request_id,
 )
 
 
@@ -47,6 +48,13 @@ class FakeTextGateway:
         )
 
 
+def test_resource_request_id_is_bounded_stable_and_page_batch_specific():
+    first = _request_id("resource:one:sha256", [1, 2])
+    assert len(first) <= 64
+    assert first == _request_id("resource:one:sha256", [1, 2])
+    assert first != _request_id("resource:one:sha256", [2, 3])
+
+
 @pytest.mark.asyncio
 async def test_pdf_resource_extracts_small_ordered_batches_and_deduplicates():
     gateway = FakeTextGateway(
@@ -80,7 +88,7 @@ async def test_pdf_resource_extracts_small_ordered_batches_and_deduplicates():
     assert failed_pages == []
     assert [question["page_no"] for question in questions] == [1, 4]
     assert [request.credential_policy for request in gateway.requests] == ["text", "text"]
-    assert all(request.request_id.startswith("resource-extract-") for request in gateway.requests)
+    assert all(request.request_id.startswith("resx-") for request in gateway.requests)
     assert len({request.request_id for request in gateway.requests}) == 2
     assert metadata["pages"][0]["vision_used"] is False
     assert all("image_url" not in str(request.messages[0].content) for request in gateway.requests)

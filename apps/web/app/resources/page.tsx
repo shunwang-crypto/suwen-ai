@@ -17,6 +17,17 @@ import type {
 
 type ResourceFilter = "all" | "questions" | "reference" | "archived";
 
+export function shouldShowResourceDetailSkeleton(
+  selectedLoading: boolean,
+  selectedDetailsLoaded: boolean,
+): boolean {
+  return selectedLoading && !selectedDetailsLoaded;
+}
+
+export function resourceDetailKey(resourceId: string): string {
+  return resourceId;
+}
+
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
   textbook: "教材",
   lecture: "讲义",
@@ -172,6 +183,7 @@ function ResourcesPageContent() {
   const [selectedResource, setSelectedResource] = useState<LearningResourceOut | null>(null);
   const [questions, setQuestions] = useState<ResourceQuestionOut[]>([]);
   const [selectedLoading, setSelectedLoading] = useState(false);
+  const [selectedDetailsLoaded, setSelectedDetailsLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [filter, setFilter] = useState<ResourceFilter>("all");
@@ -210,6 +222,7 @@ function ResourcesPageContent() {
         : [];
       setSelectedResource(resource);
       setQuestions(resourceQuestions);
+      setSelectedDetailsLoaded(true);
       setResources((previous) => previous?.map((item) => item.id === resource.id ? resource : item) ?? previous);
     } catch (reason) {
       setBanner(friendlyError(reason, "题目资料详情加载失败"));
@@ -219,6 +232,7 @@ function ResourcesPageContent() {
   }, []);
 
   const openResource = useCallback((resource: LearningResourceOut) => {
+    setSelectedDetailsLoaded(false);
     setSelectedResource(resource);
     setQuestions([]);
     void loadResource(resource.id);
@@ -320,6 +334,7 @@ function ResourcesPageContent() {
     setUploadOpen(false);
     setBanner(resource.source_url ? "原文件已保存，正在启动异步识别…" : "资料已创建，可以手动添加题目。");
     setSelectedResource(resource);
+    setSelectedDetailsLoaded(false);
     setQuestions([]);
     if (resource.source_url && isQuestionResource(resource)) {
       try {
@@ -343,19 +358,20 @@ function ResourcesPageContent() {
   const backToResourceList = () => {
     setSelectedResource(null);
     setQuestions([]);
+    setSelectedDetailsLoaded(false);
     setAssessmentOpen(false);
     router.replace("/resources", { scroll: false });
     void loadResources();
   };
 
   if (selectedResource) {
-    if (selectedLoading && questions.length === 0) {
+    if (shouldShowResourceDetailSkeleton(selectedLoading, selectedDetailsLoaded)) {
       return <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={6} /></div></div>;
     }
     if (isReferenceResource(selectedResource)) {
       return <ReferenceResourceView resource={selectedResource} onBack={backToResourceList} />;
     }
-    return <><ResourceReview key={`${selectedResource.id}:${questions.map((question) => `${question.id}:${question.verification_status}`).join("|")}`} resource={selectedResource} questions={questions} initialQuestionId={deepQuestionId} onBack={backToResourceList} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={selectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
+    return <>{selectedLoading && <div role="status" className="mx-auto w-full max-w-[1480px] px-5 pt-4 text-[10px] text-ink-muted sm:px-8 lg:px-12">正在刷新资料识别状态…</div>}<ResourceReview key={resourceDetailKey(selectedResource.id)} resource={selectedResource} questions={questions} initialQuestionId={deepQuestionId} onBack={backToResourceList} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={selectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
   }
 
   return (

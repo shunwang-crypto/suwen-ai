@@ -197,6 +197,20 @@ export function ResourceReview({
     ? resource.metadata.failed_pages
     : [];
 
+  useEffect(() => {
+    if (currentId && questions.some((question) => question.id === currentId)) return;
+    const initialQuestion = initialQuestionId
+      ? questions.find((question) => question.id === initialQuestionId)
+      : undefined;
+    const next = initialQuestion ?? questions[0];
+    const timer = window.setTimeout(() => {
+      setCurrentId(next?.id ?? null);
+      setDraft(next ? draftFromQuestion(next) : null);
+      setDirty(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [currentId, initialQuestionId, questions]);
+
   const retryExtraction = async () => {
     if (!resource.source_url) return;
     setBusy("extract");

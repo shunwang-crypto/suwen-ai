@@ -60,7 +60,7 @@ def _safe_error_code(exc: BaseException) -> str:
 
 def _request_id(namespace: str, pages: list[int]) -> str:
     digest = hashlib.sha256(f"{namespace}\0{','.join(map(str, pages))}".encode()).hexdigest()
-    return f"resource-extract-{digest[:56]}"
+    return f"resx-{digest[:56]}"
 
 
 def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
