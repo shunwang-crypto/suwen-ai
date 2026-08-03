@@ -13,6 +13,7 @@ import type {
 } from "@/lib/types";
 
 import { SourcePreview } from "./source-preview";
+import { ResourceExtractionSteps } from "./resource-extraction-steps";
 
 const QUESTION_TYPES: Array<[string, string]> = [
   ["single", "单选题"],
@@ -465,6 +466,8 @@ export function ResourceReview({
           <button type="button" onClick={() => void confirmErrors()} disabled={busy !== null || questions.length === 0} className="rounded-[8px] bg-ink px-3.5 py-2 text-[11px] font-medium text-white disabled:opacity-40">{busy === "confirm" ? "正在保存…" : selectedCount > 0 ? `确认并加入 ${selectedCount} 道错题` : "保存校对进度"}</button>
         </div>
       </header>
+
+      <ResourceExtractionSteps resource={resource} />
 
       {message && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-[11px] text-ink-secondary">{message}</div>}
       {!linkedKbId && <div className="rounded-[9px] border border-warning-200 bg-warning-50 px-3.5 py-2.5 text-[11px] leading-5 text-warning-700">未关联知识库时，错题仍可进入 FSRS；知识点掌握度和章节画像可能无法完整归类。</div>}
