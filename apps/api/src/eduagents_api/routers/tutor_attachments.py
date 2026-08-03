@@ -233,6 +233,7 @@ async def upload_tutor_attachment(
                     "source_kind": kind,
                     "tutor_draft_id": str(draft_id),
                     "selected_pages": selected_pages,
+                    "extraction_stage": "queued",
                 },
                 status="uploaded" if suffix == ".pdf" else "extracting",
                 retrieval_policy="questions_only",

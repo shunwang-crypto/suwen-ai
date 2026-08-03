@@ -640,6 +640,7 @@ class OpenAIGateway:
             provider=candidate.provider,
             route=candidate.route.value,
             platform_billed_cost_cny=cost,
+            finish_reason=getattr(resp.choices[0], "finish_reason", None),
         )
 
     async def _create_candidate_stream(self, req: ChatRequest, candidate: ProviderCandidate):

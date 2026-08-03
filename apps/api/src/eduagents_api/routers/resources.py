@@ -131,6 +131,10 @@ def _resource_dict(row: LearningResource, *, question_count: int = 0, pending_co
     }
 
 
+def _is_tutor_managed(row: LearningResource) -> bool:
+    return bool((row.metadata_json or {}).get("tutor_draft_id"))
+
+
 def _question_dict(
     question: Question,
     row: ResourceQuestion,
@@ -496,7 +500,12 @@ async def create_resource(
             size_bytes=len(data or b""),
             storage_key=storage_key,
             sha256=sha256_hex(data) if data is not None else None,
-            metadata_json={"source_kind": "image" if uploaded and Path(filename).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} else "document"},
+            metadata_json={
+                "source_kind": "image"
+                if uploaded and Path(filename).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                else "document",
+                "extraction_stage": "queued",
+            },
             status="uploaded",
             retrieval_policy="reference" if resource_type in {"textbook", "lecture", "notes"} else "questions_only",
             linked_kb_id=linked_kb_id,
@@ -590,6 +599,8 @@ async def update_resource(
         raise HTTPException(status_code=422, detail="INVALID_RETRIEVAL_POLICY")
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await _owned_resource(session, resource_id, ctx, lock=True)
+        if _is_tutor_managed(row):
+            raise HTTPException(status_code=409, detail="TUTOR_RESOURCE_MANAGED")
         if row.status == "archived":
             raise HTTPException(status_code=409, detail="RESOURCE_ARCHIVED")
         if "linked_kb_id" in values:
@@ -639,6 +650,8 @@ async def update_resource(
 async def archive_resource(resource_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await _owned_resource(session, resource_id, ctx, lock=True)
+        if _is_tutor_managed(row):
+            raise HTTPException(status_code=409, detail="TUTOR_RESOURCE_MANAGED")
         if row.status != "archived":
             row.status = "archived"
         return _resource_dict(row)
@@ -648,6 +661,8 @@ async def archive_resource(resource_id: uuid.UUID, ctx: AuthContext = Depends(ap
 async def restore_resource(resource_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await _owned_resource(session, resource_id, ctx, lock=True)
+        if _is_tutor_managed(row):
+            raise HTTPException(status_code=409, detail="TUTOR_RESOURCE_MANAGED")
         if row.status == "archived":
             pending = await session.scalar(
                 select(ResourceQuestion.id)
@@ -787,6 +802,8 @@ async def extract_resource(
 ):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await _owned_resource(session, resource_id, ctx, lock=True)
+        if _is_tutor_managed(row):
+            raise HTTPException(status_code=409, detail="TUTOR_RESOURCE_MANAGED")
         if row.status == "archived":
             raise HTTPException(status_code=409, detail="RESOURCE_ARCHIVED")
         if row.resource_type in {"textbook", "lecture", "notes"} or row.retrieval_policy == "reference":

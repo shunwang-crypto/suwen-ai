@@ -118,6 +118,9 @@ class ChatResult:
     # Internal hand-off when a BYOK request explicitly falls back to platform
     # after the initial gateway precheck was intentionally skipped.
     reserved_tier: str | None = None
+    # Provider completion reason when the compatible API exposes it.  This is
+    # diagnostic metadata only; response bodies are never persisted here.
+    finish_reason: str | None = None
 
 
 @dataclass

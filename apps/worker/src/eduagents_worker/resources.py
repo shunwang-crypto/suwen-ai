@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import tempfile
 import uuid
 from pathlib import Path
@@ -22,7 +23,7 @@ from eduagents_api.models import (
 from eduagents_api.resource_utils import normalize_extracted_question, parse_json_payload
 from eduagents_api.services import _resolve_kc_ids
 from eduagents_core.config import Settings, get_settings
-from eduagents_core.document_recognition import PdfRecognitionPolicy, recognize_pdf
+from eduagents_core.document_recognition import PdfRecognitionPolicy, inspect_pdf, recognize_pdf
 from eduagents_core.gateway import ChatMessage, ChatRequest, Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.parsing.registry import get_parser
@@ -32,12 +33,13 @@ from .enrichment import get_worker_gateway
 
 log = get_logger("worker.resources")
 
-_PROMPT = """你是试题资料识别助手。请忠实识别原文件中的所有题目，返回 JSON 数组，不要只返回一道题。
+_PROMPT = """你是试题资料识别助手。请忠实识别原文件中的所有题目。
 每个元素必须包含：question_no, page_no, type, stem, options, detected_student_answer,
 detected_reference_answer, explanation, points, kc_names, difficulty, confidence。
 不清楚的字段必须是空字符串、空数组或 null，绝不能猜答案、补造题干或知识点。
 type 只能是 single、multi、blank、short；difficulty 只能是 easy、mid、hard；
-confidence 是 0 到 1。只输出 JSON 数组。"""
+confidence 是 0 到 1。只输出一个 JSON 对象，格式严格为：
+{"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。"""
 
 _IMAGE_MIMES = {
     ".png": "image/png",
@@ -50,17 +52,67 @@ _IMAGE_MIMES = {
 def _safe_error_code(exc: BaseException) -> str:
     """Persist only stable, user-safe identifiers, never provider details."""
     code = getattr(exc, "code", None)
-    if isinstance(code, str) and code:
+    if isinstance(code, str) and code and code.replace("_", "").replace("-", "").isalnum():
         return code[:64]
-    value = str(exc)
-    if value and len(value) <= 80 and value.replace("_", "").replace("-", "").isalnum():
-        return value[:64]
     return "RESOURCE_EXTRACTION_FAILED"
 
 
 def _request_id(namespace: str, pages: list[int]) -> str:
     digest = hashlib.sha256(f"{namespace}\0{','.join(map(str, pages))}".encode()).hexdigest()
     return f"resx-{digest[:56]}"
+
+
+def _question_response_diagnostics(response, *, page: int, json_parse_success: bool) -> dict:
+    text = str(getattr(response, "text", "") or "")
+    return {
+        "page": page,
+        "completion_tokens": int(getattr(response, "completion_tokens", 0) or 0),
+        "response_length": len(text),
+        "json_parse_success": json_parse_success,
+        "finish_reason": getattr(response, "finish_reason", None),
+        "response_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+    }
+
+
+def _parse_question_response(response) -> tuple[list[dict], bool]:
+    raw_text = str(response.text or "").strip()
+    if raw_text.startswith("```"):
+        lines = raw_text.splitlines()
+        raw_text = "\n".join(
+            lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+        )
+    try:
+        payload = json.loads(raw_text)
+        json_parse_success = True
+    except (TypeError, json.JSONDecodeError):
+        payload = parse_json_payload(response.text)
+        json_parse_success = isinstance(payload, (dict, list))
+    if isinstance(payload, dict):
+        payload = payload.get("questions") or []
+    return (
+        [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, list)
+        else [],
+        json_parse_success,
+    )
+
+
+def _response_is_truncated(response) -> bool:
+    reason = str(getattr(response, "finish_reason", "") or "").lower()
+    return reason in {"length", "max_tokens", "max_output_tokens"}
+
+
+async def _set_resource_extraction_stage(
+    tenant_id: str, resource_id: uuid.UUID | str, stage: str
+) -> None:
+    """Persist only the currently started extraction stage."""
+    async with tenant_session(tenant_id) as session:
+        resource = await session.get(LearningResource, uuid.UUID(str(resource_id)), with_for_update=True)
+        if resource is not None:
+            resource.metadata_json = {
+                **(resource.metadata_json or {}),
+                "extraction_stage": stage,
+            }
 
 
 def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
@@ -184,12 +236,21 @@ async def _recognize(
             credential_policy="platform" if suffix in _IMAGE_MIMES else "text",
         )
     )
-    payload = parse_json_payload(result.text)
-    if isinstance(payload, dict):
-        payload = payload.get("questions") or []
-    if not isinstance(payload, list):
+    if _response_is_truncated(result):
+        log.warning(
+            "resource_question_response_failed",
+            failure_code="STRUCTURING_OUTPUT_TRUNCATED",
+            **_question_response_diagnostics(result, page=1, json_parse_success=False),
+        )
         return []
-    return [item for item in payload if isinstance(item, dict)]
+    questions, json_parse_success = _parse_question_response(result)
+    if not json_parse_success:
+        log.warning(
+            "resource_question_response_failed",
+            failure_code="JSON_PARSE_FAILED",
+            **_question_response_diagnostics(result, page=1, json_parse_success=False),
+        )
+    return questions
 
 
 async def _extract_pdf_questions(
@@ -202,6 +263,7 @@ async def _extract_pdf_questions(
     resource_namespace: str,
     max_questions: int,
     selected_pages: list[int] | None = None,
+    stage_callback=None,
 ) -> tuple[list[dict], int, list[int], dict]:
     """Run shared PDF OCR first, then bounded text extraction batches.
 
@@ -213,6 +275,15 @@ async def _extract_pdf_questions(
         settings,
         max_pages=settings.max_learning_resource_pages if settings.max_learning_resource_pages > 0 else None,
     )
+    if stage_callback is not None:
+        await stage_callback("inspecting")
+    inspection = await asyncio.to_thread(
+        inspect_pdf, data, policy, selected_pages=selected_pages
+    )
+    if stage_callback is not None and any(
+        page.extraction_method in {"scanned", "mixed"} for page in inspection.pages
+    ):
+        await stage_callback("transcribing")
     recognized = await recognize_pdf(
         data,
         policy=policy,
@@ -226,7 +297,10 @@ async def _extract_pdf_questions(
         user_id=user_id,
         selected_pages=selected_pages,
         request_namespace=resource_namespace,
+        inspection=inspection,
     )
+    if stage_callback is not None:
+        await stage_callback("structuring")
     successful = list(recognized.successful_pages)
     failed_pages = [page.page_number for page in recognized.failed_pages]
     if not successful:
@@ -234,21 +308,22 @@ async def _extract_pdf_questions(
         metadata["failed_pages"] = failed_pages
         return [], recognized.page_count, failed_pages, metadata
 
-    batches = [successful[index : index + 3] for index in range(0, len(successful), 3)]
+    batches = [[page] for page in successful]
     batch_failures: list[int] = []
     batch_results: list[list[dict]] = [[] for _ in batches]
     semaphore = asyncio.Semaphore(2)
 
     async def extract_batch(index: int, batch) -> None:
-        pages = [page.page_number for page in batch]
-        body = "\n\n".join(page.markdown for page in batch if page.markdown)
+        page = batch[0]
+        page_number = page.page_number
+        body = page.markdown
         if not body.strip():
-            batch_failures.extend(pages)
+            batch_failures.append(page_number)
             return
         if settings.gateway_mode == "stub":
             raw = _numbered_blocks(body, 0)
         else:
-            prompt = f"{_PROMPT}\n\n原文按页分隔如下：\n{body[:24000]}"
+            prompt = f"{_PROMPT}\n\n当前真实 PDF 页码：{page_number}\n原文：\n{body[:24000]}"
             try:
                 async with semaphore:
                     response = await gateway.chat(
@@ -256,26 +331,86 @@ async def _extract_pdf_questions(
                             messages=(ChatMessage(role="user", content=prompt),),
                             tier=Tier.standard,
                             temperature=0.0,
-                            max_tokens=8000,
+                            max_tokens=settings.pdf_question_structuring_max_tokens,
                             json_mode=True,
                             feature="resource_extract",
-                            request_id=_request_id(resource_namespace, pages),
+                            request_id=_request_id(resource_namespace, [page_number]),
                             tenant_id=tenant_id,
                             user_id=user_id,
                             allow_tier_fallback=True,
                             credential_policy="text",
                         )
                     )
-                payload = parse_json_payload(response.text)
-                if isinstance(payload, dict):
-                    payload = payload.get("questions") or []
-                raw = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-            except Exception:  # noqa: BLE001 - preserve the other page batches
-                batch_failures.extend(pages)
+                raw, json_parse_success = _parse_question_response(response)
+                if _response_is_truncated(response):
+                    diagnostics = _question_response_diagnostics(
+                        response, page=page_number, json_parse_success=json_parse_success
+                    )
+                    log.warning(
+                        "resource_pdf_question_page_failed",
+                        **diagnostics,
+                        failure_code="STRUCTURING_OUTPUT_TRUNCATED",
+                    )
+                    batch_failures.append(page_number)
+                    return
+                valid_raw = [item for item in raw if str(item.get("stem") or "").strip()]
+                if not valid_raw:
+                    diagnostics = _question_response_diagnostics(
+                        response, page=page_number, json_parse_success=json_parse_success
+                    )
+                    log.warning(
+                        "resource_pdf_question_page_empty",
+                        **diagnostics,
+                        failure_code="JSON_PARSE_FAILED" if not json_parse_success else "NO_VALID_QUESTIONS",
+                    )
+                    batch_failures.append(page_number)
+                    return
+                raw = valid_raw
+            except Exception as exc:  # noqa: BLE001 - preserve the other pages
+                batch_failures.append(page_number)
+                log.warning(
+                    "resource_pdf_question_page_failed",
+                    page=page_number,
+                    failure_code=_safe_error_code(exc),
+                )
                 return
+        page_has_error = False
         for item in raw:
-            if not item.get("page_no"):
-                item["page_no"] = pages[0]
+            page_value = item.get("page_no")
+            if page_value is None or not str(page_value).strip():
+                item["page_no"] = page_number
+                continue
+            try:
+                normalized_page = int(page_value)
+            except (TypeError, ValueError):
+                page_has_error = True
+                continue
+            if normalized_page != page_number:
+                page_has_error = True
+                continue
+            item["page_no"] = normalized_page
+        if page_has_error:
+            batch_failures.append(page_number)
+            log.warning(
+                "resource_pdf_question_page_failed",
+                page=page_number,
+                failure_code="QUESTION_PAGE_MISMATCH",
+            )
+            return
+        for item in raw:
+            if item.get("page_no") != page_number:
+                item["_wrong_page"] = True
+        raw = [item for item in raw if not item.get("_wrong_page")]
+        for item in raw:
+            item.pop("_wrong_page", None)
+        if not raw:
+            batch_failures.append(page_number)
+            log.warning(
+                "resource_pdf_question_page_empty",
+                page=page_number,
+                failure_code="NO_CURRENT_PAGE_QUESTIONS",
+            )
+            return
         batch_results[index] = raw
 
     await asyncio.gather(*(extract_batch(index, batch) for index, batch in enumerate(batches)))
@@ -413,11 +548,14 @@ async def extract_learning_resource(
                 resource_namespace=f"resource:{rid}:{resource.sha256 or hashlib.sha256(data).hexdigest()}",
                 max_questions=settings.max_learning_resource_questions,
                 selected_pages=retry_pages or None,
+                stage_callback=lambda stage: _set_resource_extraction_stage(tenant_id, rid, stage),
             )
             text = ""
             pages = {}
         else:
+            await _set_resource_extraction_stage(tenant_id, rid, "inspecting")
             text, pages, page_count = await _parse_source(filename, data)
+            await _set_resource_extraction_stage(tenant_id, rid, "structuring")
             raw_questions = await _recognize(
                 settings,
                 gateway or get_worker_gateway(settings),
@@ -445,6 +583,10 @@ async def extract_learning_resource(
                     select(ResourceQuestion.id).where(ResourceQuestion.resource_id == rid).limit(1)
                 )
                 if resource is not None and existing is not None:
+                    resource.metadata_json = {
+                        **(resource.metadata_json or {}),
+                        "extraction_stage": "reviewing",
+                    }
                     resource.status = "reviewing"
                     resource.page_count = page_count
                     resource.metadata_json = {
@@ -483,6 +625,7 @@ async def extract_learning_resource(
                     }
                     return "reviewing"
             raise ValueError("NO_QUESTIONS_RECOGNIZED")
+        await _set_resource_extraction_stage(tenant_id, rid, "reviewing")
         async with tenant_session(tenant_id) as session:
             resource = await session.get(LearningResource, rid, with_for_update=True)
             if resource is None:

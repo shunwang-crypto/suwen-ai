@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import tempfile
 import uuid
 import zipfile
@@ -23,7 +24,7 @@ from eduagents_core.logging import get_logger
 from eduagents_core.parsing.registry import get_parser
 
 from .enrichment import get_worker_gateway
-from .resources import _numbered_blocks
+from .resources import _numbered_blocks, _response_is_truncated, _set_resource_extraction_stage
 
 log = get_logger("worker.tutor_recognition")
 
@@ -33,19 +34,26 @@ _IMAGE_MIMES = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
 }
-_PROMPT = """你是分级辅导的题目识别助手。忠实识别输入中出现的所有题目，返回 JSON 数组。
+_PROMPT = """你是分级辅导的题目识别助手。忠实识别输入中出现的所有题目。
 每题字段：question_no, page_no, type, stem, options, confidence。
 type 只能是 single、multi、blank、short。不清楚的内容留空，绝不能补造题干、选项或答案。
-保留给出的真实页码。只输出 JSON 数组。"""
+保留给出的真实页码。只输出一个 JSON 对象，格式严格为：
+{"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。"""
 
 
 def _tutor_page_request_id(
-    request_namespace: str, *, tenant_id: str, user_id: str, page_number: int
+    request_namespace: str,
+    *,
+    tenant_id: str,
+    user_id: str,
+    page_number: int,
+    stage: str = "ocr",
 ) -> str:
     digest = hashlib.sha256(
-        f"{tenant_id}\0{user_id}\0{request_namespace}\0{page_number}".encode()
+        f"{tenant_id}\0{user_id}\0{request_namespace}\0{stage}\0{page_number}".encode()
     ).hexdigest()
-    return f"tutorocr-{digest[:56]}"
+    prefix = f"tutor-{stage}-"
+    return f"{prefix}{digest[: 64 - len(prefix)]}"
 
 
 def _payload_questions(text: str) -> list[dict]:
@@ -53,6 +61,65 @@ def _payload_questions(text: str) -> list[dict]:
     if isinstance(payload, dict):
         payload = payload.get("questions") or []
     return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def _parse_question_response(text: str) -> tuple[list[dict], bool]:
+    raw_text = text.strip()
+    if raw_text.startswith("```"):
+        lines = raw_text.splitlines()
+        raw_text = "\n".join(
+            lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+        )
+    try:
+        payload = json.loads(raw_text)
+        json_parse_success = True
+    except (TypeError, json.JSONDecodeError):
+        payload = parse_json_payload(text)
+        json_parse_success = isinstance(payload, (dict, list))
+    if isinstance(payload, dict):
+        payload = payload.get("questions") or []
+    return (
+        [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, list)
+        else [],
+        json_parse_success,
+    )
+
+
+def _question_response_diagnostics(response, *, page: int, json_parse_success: bool) -> dict:
+    text = str(getattr(response, "text", "") or "")
+    return {
+        "page": page,
+        "completion_tokens": int(getattr(response, "completion_tokens", 0) or 0),
+        "response_length": len(text),
+        "json_parse_success": json_parse_success,
+        "finish_reason": getattr(response, "finish_reason", None),
+        "response_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+    }
+
+
+def _tutor_safe_error_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    value = code if isinstance(code, str) else str(exc)
+    if (
+        value.startswith(("TUTOR_", "VISION_"))
+        and value.replace("_", "").isalnum()
+    ):
+        return value[:64]
+    return "TUTOR_RECOGNITION_FAILED"
+
+
+def _failed_pages_from_warnings(warnings: list[str]) -> list[int]:
+    pages: list[int] = []
+    for warning in warnings:
+        if ":" not in warning:
+            continue
+        _, raw_pages = warning.split(":", 1)
+        try:
+            pages.extend(int(page) for page in raw_pages.split(",") if page)
+        except ValueError:
+            continue
+    return sorted(set(pages))
 
 
 async def _model_questions(
@@ -63,6 +130,8 @@ async def _model_questions(
     tenant_id: str,
     user_id: str,
     vision: bool,
+    request_id: str = "",
+    page_number: int | None = None,
 ) -> list[dict]:
     result = await asyncio.wait_for(
         gateway.chat(
@@ -70,9 +139,10 @@ async def _model_questions(
                 messages=(ChatMessage(role="user", content=content),),
                 tier=Tier.standard,
                 temperature=0.0,
-                max_tokens=5000,
+                max_tokens=settings.pdf_question_structuring_max_tokens,
                 json_mode=True,
                 feature="tutor_problem_recognition",
+                request_id=request_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 model_override=(
@@ -84,9 +154,31 @@ async def _model_questions(
                 credential_policy="platform" if vision else "text",
             )
         ),
-        timeout=(settings.tutor_ocr_timeout_seconds if vision else settings.tutor_recognition_timeout_seconds),
+        timeout=(
+            settings.tutor_ocr_timeout_seconds
+            if vision
+            else settings.tutor_recognition_timeout_seconds
+        ),
     )
-    return _payload_questions(result.text)
+    if _response_is_truncated(result):
+        log.warning(
+            "tutor_question_response_failed",
+            **_question_response_diagnostics(
+                result, page=page_number or 0, json_parse_success=False
+            ),
+            failure_code="STRUCTURING_OUTPUT_TRUNCATED",
+        )
+        raise ValueError("TUTOR_STRUCTURING_OUTPUT_TRUNCATED")
+    questions, json_parse_success = _parse_question_response(result.text)
+    if page_number is not None and not any(str(item.get("stem") or "").strip() for item in questions):
+        log.warning(
+            "tutor_pdf_question_page_empty",
+            **_question_response_diagnostics(
+                result, page=page_number, json_parse_success=json_parse_success
+            ),
+            failure_code="JSON_PARSE_FAILED" if not json_parse_success else "NO_VALID_QUESTIONS",
+        )
+    return questions
 
 
 def _tutor_pdf_policy(settings: Settings) -> PdfRecognitionPolicy:
@@ -144,6 +236,7 @@ async def _recognize_source(
     tenant_id: str,
     user_id: str,
     request_namespace: str = "",
+    stage_callback=None,
 ) -> tuple[list[dict], int, list[str]]:
     suffix = Path(filename).suffix.lower()
     if settings.gateway_mode == "stub":
@@ -170,16 +263,18 @@ async def _recognize_source(
         return _numbered_blocks(text, 50) if text else [], page_count, warnings
 
     if suffix in _IMAGE_MIMES:
+        if stage_callback is not None:
+            await stage_callback("transcribing")
         markdown = await recognize_page_image(
             gateway,
             data,
             page_number=1,
             extraction_method="scanned",
-                vision_model=(
-                    settings.vision_model
-                    if not settings.model_routing_enabled
-                    else settings.opencode_vision_model
-                ),
+            vision_model=(
+                settings.vision_model
+                if not settings.model_routing_enabled
+                else settings.opencode_vision_model
+            ),
             tenant_id=tenant_id,
             user_id=user_id,
             timeout_seconds=settings.tutor_ocr_timeout_seconds,
@@ -192,6 +287,8 @@ async def _recognize_source(
                 else ""
             ),
         )
+        if stage_callback is not None:
+            await stage_callback("structuring")
         raw = await _model_questions(
             settings,
             gateway,
@@ -205,31 +302,115 @@ async def _recognize_source(
         return raw, 1, []
 
     if suffix == ".pdf":
+        policy = _tutor_pdf_policy(settings)
+        if stage_callback is not None:
+            await stage_callback("inspecting")
+        inspection = await asyncio.to_thread(
+            inspect_pdf, data, policy, selected_pages=selected_pages or None
+        )
+        if stage_callback is not None and any(
+            page.extraction_method in {"scanned", "mixed"} for page in inspection.pages
+        ):
+            await stage_callback("transcribing")
         recognized = await recognize_pdf(
             data,
-            policy=_tutor_pdf_policy(settings),
+            policy=policy,
             gateway=gateway,
-                vision_model=(
-                    settings.vision_model
-                    if not settings.model_routing_enabled
-                    else settings.opencode_vision_model
-                ),
+            vision_model=(
+                settings.vision_model
+                if not settings.model_routing_enabled
+                else settings.opencode_vision_model
+            ),
             tenant_id=tenant_id,
             user_id=user_id,
-            selected_pages=selected_pages,
+            selected_pages=selected_pages or None,
             request_namespace=request_namespace,
+            inspection=inspection,
         )
         if not recognized.successful_pages:
             raise ValueError("TUTOR_PDF_ALL_PAGES_FAILED")
-        questions = await _model_questions(
-            settings,
-            gateway,
-            f"{_PROMPT}\n\n识别稿：\n{recognized.markdown[:80000]}",
-            tenant_id=tenant_id,
-            user_id=user_id,
-            vision=False,
-        )
         warnings = list(recognized.warnings)
+        if stage_callback is not None:
+            await stage_callback("structuring")
+        questions: list[dict] = []
+        failed_text_pages: list[int] = []
+        for page in recognized.successful_pages:
+            if not page.markdown.strip():
+                failed_text_pages.append(page.page_number)
+                continue
+            try:
+                page_questions = await _model_questions(
+                    settings,
+                    gateway,
+                    f"{_PROMPT}\n\n当前真实 PDF 页码：{page.page_number}\n原文：\n{page.markdown[:24000]}",
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    vision=False,
+                    page_number=page.page_number,
+                    request_id=(
+                        _tutor_page_request_id(
+                            request_namespace,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            page_number=page.page_number,
+                            stage="structure",
+                        )
+                        if request_namespace
+                        else ""
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve other successful pages
+                failed_text_pages.append(page.page_number)
+                log.warning(
+                    "tutor_pdf_question_page_failed",
+                    page=page.page_number,
+                    failure_code=_tutor_safe_error_code(exc),
+                )
+                continue
+            valid_page_questions = []
+            for item in page_questions:
+                if not str(item.get("stem") or "").strip():
+                    continue
+                page_value = item.get("page_no")
+                if page_value is None or not str(page_value).strip():
+                    item["page_no"] = page.page_number
+                else:
+                    try:
+                        normalized_page = int(page_value)
+                    except (TypeError, ValueError):
+                        continue
+                    if normalized_page != page.page_number:
+                        continue
+                    item["page_no"] = normalized_page
+                valid_page_questions.append(item)
+            if not valid_page_questions:
+                failed_text_pages.append(page.page_number)
+                continue
+            for item in valid_page_questions:
+                if item.get("page_no") is None or not str(item.get("page_no")).strip():
+                    item["page_no"] = page.page_number
+            questions.extend(valid_page_questions)
+        if failed_text_pages:
+            failed_text_pages = sorted(set(failed_text_pages))
+            warnings.append(
+                f"TUTOR_PDF_TEXT_PAGE_FAILURE:{','.join(map(str, failed_text_pages))}"
+            )
+        unique_questions: list[dict] = []
+        seen: set[tuple[str, int | None]] = set()
+        for item in questions:
+            stem = str(item.get("stem") or "").strip()
+            page_no = item.get("page_no")
+            try:
+                page_no = int(page_no) if page_no is not None else None
+            except (TypeError, ValueError):
+                page_no = None
+            signature = (stem, page_no)
+            if stem and signature in seen:
+                continue
+            if stem:
+                seen.add(signature)
+            unique_questions.append(item)
+        questions = unique_questions
         return questions, recognized.page_count, warnings
 
     text, page_count, warnings = await _document_text(filename, data)
@@ -260,7 +441,12 @@ async def _mark_failed(
                 resource = await session.get(LearningResource, draft.resource_id)
                 if resource is not None:
                     resource.status = "failed"
-                    resource.metadata_json = {**(resource.metadata_json or {}), "error": code[:64]}
+                    failed_pages = _failed_pages_from_warnings(warnings or [])
+                    resource.metadata_json = {
+                        **(resource.metadata_json or {}),
+                        "error": code[:64],
+                        **({"failed_pages": sorted(set(failed_pages))} if failed_pages else {}),
+                    }
 
 
 async def recognize_tutor_problem(
@@ -314,11 +500,15 @@ async def recognize_tutor_problem(
                 tenant_id,
                 user_id,
                 request_namespace=f"{draft_id}:attempt:{recognition_attempt}",
+                stage_callback=lambda stage: _set_resource_extraction_stage(
+                    tenant_id, draft.resource_id, stage
+                ),
             ),
             timeout=settings.tutor_recognition_timeout_seconds,
         )
         questions = [normalize_extracted_question(item, index + 1) for index, item in enumerate(raw)]
         questions = [item for item in questions if item["stem"]]
+        failed_pages = _failed_pages_from_warnings(warnings)
         if not questions:
             await _mark_failed(
                 tenant_id, did, "TUTOR_NO_QUESTIONS_RECOGNIZED", warnings
@@ -354,6 +544,11 @@ async def recognize_tutor_problem(
             draft.warnings_json = warnings
             draft.error_code = None
             resource.status = "reviewing"
+            resource.metadata_json = {
+                **(resource.metadata_json or {}),
+                "extraction_stage": "reviewing",
+                "failed_pages": failed_pages,
+            }
             resource.page_count = page_count or resource.page_count
             resource.metadata_json = {
                 **(resource.metadata_json or {}),
@@ -368,10 +563,19 @@ async def recognize_tutor_problem(
         await _mark_failed(tenant_id, did, "TUTOR_ATTACHMENT_NOT_FOUND")
         return "failed"
     except ValueError as exc:
-        code = str(exc) if str(exc).startswith(("TUTOR_", "VISION_")) else "TUTOR_RECOGNITION_FAILED"
+        code = _tutor_safe_error_code(exc)
         await _mark_failed(tenant_id, did, code)
         return "failed"
-    except Exception:
-        log.exception("tutor_recognition_failed", tenant_id=tenant_id, draft_id=draft_id)
+    except Exception as exc:
+        log.error(
+            "tutor_recognition_failed",
+            tenant_id=tenant_id,
+            draft_id=draft_id,
+            failure_code=(
+                str(getattr(exc, "code", ""))[:64]
+                if getattr(exc, "code", "")
+                else "TUTOR_RECOGNITION_FAILED"
+            ),
+        )
         await _mark_failed(tenant_id, did, "TUTOR_RECOGNITION_FAILED")
         return "failed"

@@ -9,7 +9,12 @@ import pytest
 from docx import Document
 from eduagents_core.config import Settings
 from eduagents_core.gateway import ChatResult
-from eduagents_worker.tutor_recognition import _document_text, _recognize_source
+from eduagents_worker.tutor_recognition import (
+    _PROMPT,
+    _document_text,
+    _parse_question_response,
+    _recognize_source,
+)
 
 
 class FakeGateway:
@@ -89,6 +94,55 @@ async def test_normal_pdf_uses_selected_text_layer_without_vision():
     assert request.model_override is None
     assert "Page two exercise" in request.messages[0].content
     assert "Page one exercise" not in request.messages[0].content
+    assert request.json_mode is True
+    assert '"questions"' in _PROMPT
+    assert "JSON 数组" not in _PROMPT
+
+
+def test_tutor_object_payload_parses_questions_and_historical_array_remains_compatible():
+    questions, parsed = _parse_question_response('{"questions":[{"stem":"对象题"}]}')
+    assert parsed is True
+    assert questions == [{"stem": "对象题"}]
+    historical, parsed_historical = _parse_question_response('[{"stem":"旧数组题"}]')
+    assert parsed_historical is True
+    assert historical == [{"stem": "旧数组题"}]
+
+
+@pytest.mark.asyncio
+async def test_tutor_pdf_structures_each_page_and_keeps_successful_pages_on_failure():
+    gateway = FakeGateway(
+        [
+            '{"questions":[{"question_no":"1","page_no":1,"type":"short","stem":"第一页题目","options":[],"confidence":0.9}]}',
+            '[{"question_no":"2","type":"short","stem":"截断',
+            '{"questions":[{"question_no":"3","type":"short","stem":"第三页题目","options":[],"confidence":0.9}]}',
+        ]
+    )
+    questions, page_count, warnings = await _recognize_source(
+        _settings(),
+        gateway,
+        "paper.pdf",
+        _pdf(["Page one exercise. " * 30, "Page two exercise. " * 30, "Page three exercise. " * 30]),
+        [],
+        "tenant",
+        "user",
+        request_namespace="draft:attempt:1",
+    )
+
+    assert page_count == 3
+    assert [question["page_no"] for question in questions] == [1, 3]
+    assert "TUTOR_PDF_TEXT_PAGE_FAILURE:2" in warnings
+    assert len(gateway.requests) == 3
+    assert all(request.max_tokens == 8000 for request in gateway.requests)
+    labels = ["Page one", "Page two", "Page three"]
+    for index, request in enumerate(gateway.requests, start=1):
+        content = request.messages[0].content
+        assert f"当前真实 PDF 页码：{index}" in content
+        assert f"{labels[index - 1]} exercise" in content
+        assert all(
+            f"{label} exercise" not in content
+            for other, label in enumerate(labels, start=1)
+            if other != index
+        )
 
 
 @pytest.mark.asyncio
