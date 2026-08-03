@@ -793,7 +793,8 @@ async def extract_resource(
             raise HTTPException(status_code=409, detail="REFERENCE_RESOURCE_NOT_EXTRACTABLE")
         if not row.storage_key:
             raise HTTPException(status_code=422, detail="RESOURCE_SOURCE_REQUIRED")
-        if row.status in {"extracting", "reviewing", "ready"}:
+        retryable_partial = bool((row.metadata_json or {}).get("failed_pages"))
+        if row.status in {"extracting", "ready"} or (row.status == "reviewing" and not retryable_partial):
             return {"resource_id": str(row.id), "status": row.status}
         row.status = "extracting"
         row.metadata_json = {k: v for k, v in (row.metadata_json or {}).items() if k not in {"error", "delete_pending"}}

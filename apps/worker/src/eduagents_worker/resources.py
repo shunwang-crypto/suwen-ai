@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import tempfile
 import uuid
 from pathlib import Path
 
 from eduagents_api.db import tenant_session
-from eduagents_api.models import LearningResource, Question, ResourceQuestion
+from eduagents_api.models import (
+    AssessmentAnswer,
+    Attempt,
+    ErrorItem,
+    LearningResource,
+    Question,
+    ResourceQuestion,
+)
 from eduagents_api.resource_utils import normalize_extracted_question, parse_json_payload
 from eduagents_api.services import _resolve_kc_ids
 from eduagents_core.config import Settings, get_settings
+from eduagents_core.document_recognition import PdfRecognitionPolicy, recognize_pdf
 from eduagents_core.gateway import ChatMessage, ChatRequest, Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.parsing.registry import get_parser
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .enrichment import get_worker_gateway
 
@@ -35,6 +44,22 @@ _IMAGE_MIMES = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
 }
+
+
+def _safe_error_code(exc: BaseException) -> str:
+    """Persist only stable, user-safe identifiers, never provider details."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code[:64]
+    value = str(exc)
+    if value and len(value) <= 80 and value.replace("_", "").replace("-", "").isalnum():
+        return value[:64]
+    return "RESOURCE_EXTRACTION_FAILED"
+
+
+def _request_id(namespace: str, pages: list[int]) -> str:
+    digest = hashlib.sha256(f"{namespace}\0{','.join(map(str, pages))}".encode()).hexdigest()
+    return f"resource-extract-{digest[:56]}"
 
 
 def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
@@ -166,6 +191,134 @@ async def _recognize(
     return [item for item in payload if isinstance(item, dict)]
 
 
+async def _extract_pdf_questions(
+    settings: Settings,
+    gateway,
+    data: bytes,
+    *,
+    tenant_id: str,
+    user_id: str,
+    resource_namespace: str,
+    max_questions: int,
+    selected_pages: list[int] | None = None,
+) -> tuple[list[dict], int, list[int], dict]:
+    """Run shared PDF OCR first, then bounded text extraction batches.
+
+    The visual route only transcribes pages. Structured question extraction is
+    always a text request, so a vision provider/model is never sent to the text
+    fallback by accident.
+    """
+    policy = PdfRecognitionPolicy.from_settings(
+        settings,
+        max_pages=settings.max_learning_resource_pages if settings.max_learning_resource_pages > 0 else None,
+    )
+    recognized = await recognize_pdf(
+        data,
+        policy=policy,
+        gateway=gateway,
+        vision_model=(
+            settings.opencode_vision_model
+            if settings.model_routing_enabled
+            else settings.vision_model
+        ),
+        tenant_id=tenant_id,
+        user_id=user_id,
+        selected_pages=selected_pages,
+        request_namespace=resource_namespace,
+    )
+    successful = list(recognized.successful_pages)
+    failed_pages = [page.page_number for page in recognized.failed_pages]
+    if not successful:
+        metadata = recognized.bounded_metadata()
+        metadata["failed_pages"] = failed_pages
+        return [], recognized.page_count, failed_pages, metadata
+
+    batches = [successful[index : index + 3] for index in range(0, len(successful), 3)]
+    batch_failures: list[int] = []
+    batch_results: list[list[dict]] = [[] for _ in batches]
+    semaphore = asyncio.Semaphore(2)
+
+    async def extract_batch(index: int, batch) -> None:
+        pages = [page.page_number for page in batch]
+        body = "\n\n".join(page.markdown for page in batch if page.markdown)
+        if not body.strip():
+            batch_failures.extend(pages)
+            return
+        if settings.gateway_mode == "stub":
+            raw = _numbered_blocks(body, 0)
+        else:
+            prompt = f"{_PROMPT}\n\n原文按页分隔如下：\n{body[:24000]}"
+            try:
+                async with semaphore:
+                    response = await gateway.chat(
+                        ChatRequest(
+                            messages=(ChatMessage(role="user", content=prompt),),
+                            tier=Tier.standard,
+                            temperature=0.0,
+                            max_tokens=8000,
+                            json_mode=True,
+                            feature="resource_extract",
+                            request_id=_request_id(resource_namespace, pages),
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            allow_tier_fallback=True,
+                            credential_policy="text",
+                        )
+                    )
+                payload = parse_json_payload(response.text)
+                if isinstance(payload, dict):
+                    payload = payload.get("questions") or []
+                raw = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+            except Exception:  # noqa: BLE001 - preserve the other page batches
+                batch_failures.extend(pages)
+                return
+        for item in raw:
+            if not item.get("page_no"):
+                item["page_no"] = pages[0]
+        batch_results[index] = raw
+
+    await asyncio.gather(*(extract_batch(index, batch) for index, batch in enumerate(batches)))
+    raw_questions = [item for batch in batch_results for item in batch]
+    unique_questions: list[dict] = []
+    seen: set[tuple[str, int | None]] = set()
+    for item in raw_questions:
+        stem = str(item.get("stem") or "").strip()
+        page = item.get("page_no")
+        try:
+            page = int(page) if page is not None else None
+        except (TypeError, ValueError):
+            page = None
+        signature = (stem, page)
+        if stem and signature in seen:
+            continue
+        if stem:
+            seen.add(signature)
+        unique_questions.append(item)
+    raw_questions = unique_questions
+    warnings = list(recognized.warnings)
+    failed_pages = sorted(set(failed_pages + batch_failures))
+    if failed_pages:
+        warnings.append(f"PDF_PARTIAL_PAGE_FAILURE:{','.join(map(str, failed_pages))}")
+    metadata = recognized.bounded_metadata()
+    metadata["failed_pages"] = failed_pages
+    metadata["warnings"] = warnings[:20]
+    return raw_questions, recognized.page_count, failed_pages, metadata
+
+
+async def _has_question_evidence(session, question_id: uuid.UUID, resource_question_id: uuid.UUID) -> bool:
+    return any(
+        (
+            await session.scalar(select(ErrorItem.id).where(ErrorItem.question_id == question_id).limit(1)),
+            await session.scalar(select(Attempt.id).where(Attempt.question_id == question_id).limit(1)),
+            await session.scalar(
+                select(AssessmentAnswer.id)
+                .where(AssessmentAnswer.resource_question_id == resource_question_id)
+                .limit(1)
+            ),
+        )
+    )
+
+
 async def extract_learning_resource(
     ctx: dict,
     tenant_id: str,
@@ -184,38 +337,74 @@ async def extract_learning_resource(
             resource.storage_key,
             resource.owner_id,
         )
-        existing = int(
-            await session.scalar(
-                select(func.count()).select_from(ResourceQuestion).where(ResourceQuestion.resource_id == rid)
-            )
-            or 0
-        )
-        if existing:
-            resource.status = "reviewing"
-            return "already-extracted"
+        retry_pages = [int(page) for page in (resource.metadata_json or {}).get("failed_pages", [])]
     from eduagents_core.storage import create_storage
 
+    recognition_meta: dict = {}
+    failed_pages: list[int] = []
     try:
         data = await create_storage(settings).load(storage_key)
-        text, pages, page_count = await _parse_source(filename, data)
+        suffix = Path(filename).suffix.lower()
+        if (
+            settings.max_learning_resource_pages > 0
+            and suffix != ".pdf"
+        ):
+            _text, _pages, page_count = await _parse_source(filename, data)
+            if page_count > settings.max_learning_resource_pages:
+                raise ValueError("RESOURCE_PAGE_LIMIT_EXCEEDED")
+        elif suffix == ".pdf":
+            page_count = 0
+        else:
+            page_count = 1
+        if suffix == ".pdf":
+            raw_questions, page_count, failed_pages, recognition_meta = await _extract_pdf_questions(
+                settings,
+                gateway or get_worker_gateway(settings),
+                data,
+                tenant_id=tenant_id,
+                user_id=str(owner_id),
+                resource_namespace=f"resource:{rid}:{resource.sha256 or hashlib.sha256(data).hexdigest()}",
+                max_questions=settings.max_learning_resource_questions,
+                selected_pages=retry_pages or None,
+            )
+            text = ""
+            pages = {}
+        else:
+            text, pages, page_count = await _parse_source(filename, data)
+            raw_questions = await _recognize(
+                settings,
+                gateway or get_worker_gateway(settings),
+                filename,
+                data,
+                text,
+                pages,
+                settings.max_learning_resource_questions,
+                tenant_id,
+                str(owner_id),
+            )
+            failed_pages = []
+            recognition_meta = {"page_count": page_count, "failed_pages": [], "warnings": []}
         if (
             settings.max_learning_resource_pages > 0
             and page_count > settings.max_learning_resource_pages
         ):
             raise ValueError("RESOURCE_PAGE_LIMIT_EXCEEDED")
-        gateway = gateway or get_worker_gateway(settings)
-        raw_questions = await _recognize(
-            settings,
-            gateway,
-            filename,
-            data,
-            text,
-            pages,
-            settings.max_learning_resource_questions,
-            tenant_id,
-            str(owner_id),
-        )
         if not raw_questions:
+            async with tenant_session(tenant_id) as session:
+                resource = await session.get(LearningResource, rid, with_for_update=True)
+                existing = await session.scalar(
+                    select(ResourceQuestion.id).where(ResourceQuestion.resource_id == rid).limit(1)
+                )
+                if resource is not None and existing is not None:
+                    resource.status = "reviewing"
+                    resource.page_count = page_count
+                    resource.metadata_json = {
+                        **(resource.metadata_json or {}),
+                        "recognition": recognition_meta,
+                        "failed_pages": failed_pages,
+                        "error": "NO_QUESTIONS_RECOGNIZED",
+                    }
+                    return "reviewing"
             raise ValueError("NO_QUESTIONS_RECOGNIZED")
         truncated = (
             settings.max_learning_resource_questions > 0
@@ -226,6 +415,21 @@ async def extract_learning_resource(
         questions = [normalize_extracted_question(raw, i + 1) for i, raw in enumerate(raw_questions)]
         questions = [question for question in questions if question["stem"]]
         if not questions:
+            async with tenant_session(tenant_id) as session:
+                resource = await session.get(LearningResource, rid, with_for_update=True)
+                existing = await session.scalar(
+                    select(ResourceQuestion.id).where(ResourceQuestion.resource_id == rid).limit(1)
+                )
+                if resource is not None and existing is not None:
+                    resource.status = "reviewing"
+                    resource.page_count = page_count
+                    resource.metadata_json = {
+                        **(resource.metadata_json or {}),
+                        "recognition": recognition_meta,
+                        "failed_pages": failed_pages,
+                        "error": "NO_QUESTIONS_RECOGNIZED",
+                    }
+                    return "reviewing"
             raise ValueError("NO_QUESTIONS_RECOGNIZED")
         async with tenant_session(tenant_id) as session:
             resource = await session.get(LearningResource, rid, with_for_update=True)
@@ -237,13 +441,47 @@ async def extract_learning_resource(
                 **(resource.metadata_json or {}),
                 "extraction_text_pages": sorted(pages),
                 "question_count": len(questions),
-                **(
-                    {"warnings": ["RESOURCE_QUESTION_LIMIT_EXCEEDED"]}
-                    if truncated
-                    else {}
-                ),
+                "recognition": recognition_meta,
+                "failed_pages": failed_pages,
+                "warnings": [
+                    *(recognition_meta.get("warnings") or []),
+                    *( ["RESOURCE_QUESTION_LIMIT_EXCEEDED"] if truncated else []),
+                ][:20],
             }
-            for ordinal, question_data in enumerate(questions):
+            existing_rows = (
+                await session.execute(
+                    select(ResourceQuestion, Question)
+                    .join(Question, Question.id == ResourceQuestion.question_id)
+                    .where(ResourceQuestion.resource_id == rid)
+                    .with_for_update()
+                )
+            ).all()
+            protected = []
+            replaceable = []
+            for resource_question, question in existing_rows:
+                if resource_question.verification_status != "pending" or await _has_question_evidence(
+                    session, question.id, resource_question.id
+                ):
+                    protected.append((resource_question, question))
+                else:
+                    replaceable.append((resource_question, question))
+            if not protected:
+                for resource_question, question in replaceable:
+                    await session.delete(resource_question)
+                    await session.flush()
+                    await session.delete(question)
+            else:
+                existing_signatures = {
+                    (question.stem.strip(), resource_question.page_no)
+                    for resource_question, question in protected
+                }
+                questions = [
+                    question
+                    for question in questions
+                    if (question["stem"].strip(), question["page_no"]) not in existing_signatures
+                ]
+            ordinal_start = max((row.ordinal for row, _question in protected), default=-1) + 1
+            for ordinal, question_data in enumerate(questions, start=ordinal_start):
                 kc_ids = await _resolve_kc_ids(
                     session,
                     str(resource.linked_kb_id) if resource.linked_kb_id else None,
@@ -294,6 +532,17 @@ async def extract_learning_resource(
             resource = await session.get(LearningResource, rid)
             if resource is not None:
                 resource.status = "failed"
-                resource.metadata_json = {**(resource.metadata_json or {}), "error": str(exc)[:500]}
-        log.exception("resource_extraction_failed", resource_id=resource_id)
+                if recognition_meta.get("page_count"):
+                    resource.page_count = int(recognition_meta["page_count"])
+                resource.metadata_json = {
+                    **(resource.metadata_json or {}),
+                    "error": _safe_error_code(exc),
+                    **({"recognition": recognition_meta} if recognition_meta else {}),
+                    **({"failed_pages": failed_pages} if failed_pages else {}),
+                }
+        log.error(
+            "resource_extraction_failed",
+            resource_id=resource_id,
+            error_code=_safe_error_code(exc),
+        )
         return "failed"
