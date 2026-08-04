@@ -46,10 +46,158 @@ function looksLikeDelimitedMath(value: string): boolean {
   if (!candidate || candidate.length > 4000) return false;
   const withoutText = candidate.replace(TEXT_COMMAND_CONTENT_RE, "");
   if (CJK_RE.test(withoutText)) return false;
-  const withoutCommands = withoutText.replace(/\\[A-Za-z]+\*?/g, "");
+  const withoutCommands = withoutText
+    .replace(/\\(?:begin|end)\{[^{}]+\}/g, "")
+    .replace(/\\operatorname\*?\{[^{}]*\}/g, "")
+    .replace(/\\[A-Za-z]+\*?/g, "");
   if (/[A-Za-z]{4,}/.test(withoutCommands)) return false;
-  if (!TEX_COMMAND_RE.test(candidate) && !/[=^_{}<>+*/]/.test(candidate)) return false;
+  if (
+    !TEX_COMMAND_RE.test(candidate)
+    && !/[=^_{}<>+*/]/.test(candidate)
+    && !/^[\dA-Za-z.,()[\]|!?:;\s+-]+$/.test(candidate)
+  ) {
+    return false;
+  }
   return tryRenderKatex(candidate, true) !== null || tryRenderKatex(candidate, false) !== null;
+}
+
+function unescapedDoubleDollarPositions(text: string): number[] {
+  const positions: number[] = [];
+  for (let i = 0; i < text.length - 1; i += 1) {
+    if (text[i] !== "$" || text[i + 1] !== "$" || text[i - 1] === "\\") continue;
+    if (text[i - 1] === "$" || text[i + 2] === "$") continue;
+    positions.push(i);
+    i += 1;
+  }
+  return positions;
+}
+
+/**
+ * 逐个判断 `$$` 边界，不让无效的 `$$中文$$` 消耗后面真公式的起始边界。
+ * 无法组成有效公式的孤立 `$$` 视为模型格式噪声并移除。
+ */
+function normalizeDoubleDollarDelimiters(text: string): string {
+  const positions = unescapedDoubleDollarPositions(text);
+  if (positions.length === 0) return text;
+  const pairs = new Map<number, number>();
+  const orphans = new Set<number>();
+  let appendBlockClosingAtEnd = false;
+  let token = 0;
+  while (token < positions.length) {
+    if (token + 1 < positions.length) {
+      const expr = text.slice(positions[token] + 2, positions[token + 1]);
+      if (looksLikeDelimitedMath(expr)) {
+        pairs.set(token, token + 1);
+        token += 2;
+        continue;
+      }
+    } else if (positions.length === 1) {
+      const tail = text.slice(positions[token] + 2);
+      if (looksLikeDelimitedMath(tail)) {
+        appendBlockClosingAtEnd = true;
+        break;
+      }
+    }
+    orphans.add(token);
+    token += 1;
+  }
+
+  let result = "";
+  let cursor = 0;
+  for (let index = 0; index < positions.length; index += 1) {
+    const start = positions[index];
+    const closingIndex = pairs.get(index);
+    if (closingIndex !== undefined) {
+      const end = positions[closingIndex];
+      const rawExpr = text.slice(start + 2, end);
+      const expr = rawExpr.trim();
+      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+      const nextLineBreak = text.indexOf("\n", end + 2);
+      const lineEnd = nextLineBreak === -1 ? text.length : nextLineBreak;
+      const before = text.slice(lineStart, start);
+      const after = text.slice(end + 2, lineEnd);
+      result += text.slice(cursor, start);
+      if (rawExpr.includes("\n")) {
+        result += before.trim() || after.trim()
+          ? `\n\n$$\n${expr}\n$$\n\n`
+          : `$$\n${expr}\n$$`;
+      } else {
+        result += before.trim() || after.trim()
+          ? `${/^\s/.test(rawExpr) && !/\s$/.test(before) ? " " : ""}$${expr}$`
+          : `$$\n${expr}\n$$`;
+      }
+      cursor = end + 2;
+      index = closingIndex;
+    } else if (appendBlockClosingAtEnd && index === positions.length - 1) {
+      const expr = text.slice(start + 2).trim();
+      result += text.slice(cursor, start);
+      result += `\n\n$$\n${expr}\n$$\n`;
+      cursor = text.length;
+    } else if (orphans.has(index)) {
+      result += text.slice(cursor, start);
+      cursor = start + 2;
+    }
+  }
+  return result + text.slice(cursor);
+}
+
+function normalizeSingleDollarLine(line: string): string {
+  const positions: number[] = [];
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] !== "$" || line[i - 1] === "\\" || line[i - 1] === "$" || line[i + 1] === "$") {
+      continue;
+    }
+    positions.push(i);
+  }
+  if (positions.length === 0) return line;
+
+  const pairs = new Map<number, number>();
+  const orphans = new Set<number>();
+  let appendClosingAtEnd = false;
+  let token = 0;
+  while (token < positions.length) {
+    if (token + 1 < positions.length) {
+      const expr = line.slice(positions[token] + 1, positions[token + 1]);
+      if (looksLikeDelimitedMath(expr)) {
+        pairs.set(token, token + 1);
+        token += 2;
+        continue;
+      }
+    } else {
+      const tail = line.slice(positions[token] + 1);
+      if (looksLikeDelimitedMath(tail) && !/^\s*\d+(?:\.\d+)?\s*$/.test(tail)) {
+        appendClosingAtEnd = true;
+        break;
+      }
+    }
+    orphans.add(token);
+    token += 1;
+  }
+
+  let result = "";
+  let cursor = 0;
+  for (let index = 0; index < positions.length; index += 1) {
+    const start = positions[index];
+    const closingIndex = pairs.get(index);
+    result += line.slice(cursor, start);
+    if (closingIndex !== undefined) {
+      const end = positions[closingIndex];
+      result += `$${line.slice(start + 1, end).trim()}$`;
+      cursor = end + 1;
+      index = closingIndex;
+    } else if (appendClosingAtEnd && index === positions.length - 1) {
+      result += `$${line.slice(start + 1).trim()}$`;
+      cursor = line.length;
+    } else if (orphans.has(index)) {
+      result += "\\$";
+      cursor = start + 1;
+    }
+  }
+  return result + line.slice(cursor);
+}
+
+function normalizeSingleDollarDelimiters(text: string): string {
+  return text.split("\n").map(normalizeSingleDollarLine).join("\n");
 }
 
 function normalizeStandaloneMathEnvironments(text: string): string {
@@ -105,27 +253,13 @@ export function normalizeMarkdownMath(text: string): string {
       looksLikeDelimitedMath(expr) ? `$${expr.trim()}$` : match
     ));
 
-  // `$$...$$` 与正文同行时按行内公式处理；独占一行的块公式保留 display 语义。
-  normalized = normalized.replace(
-    /(?<!\$)\$\$([^$\n]{1,2000}?)\$\$(?!\$)/g,
-    (match, expr: string, offset: number, whole: string) => {
-      if (!looksLikeDelimitedMath(expr)) return match;
-      const lineStart = whole.lastIndexOf("\n", offset - 1) + 1;
-      const nextLineBreak = whole.indexOf("\n", offset + match.length);
-      const lineEnd = nextLineBreak === -1 ? whole.length : nextLineBreak;
-      const before = whole.slice(lineStart, offset);
-      const after = whole.slice(offset + match.length, lineEnd);
-      return before.trim() || after.trim()
-        ? `$${expr.trim()}$`
-        : `$$\n${expr.trim()}\n$$`;
-    },
-  );
-
   // 金额不是公式；保留 `$5$` 这类明确闭合的数学表达式，只转义普通货币写法。
   normalized = normalized.replace(
     /(?<![\\$])\$(\d+(?:\.\d{1,2})?)(?!\$)(?=\s|[，。,.!?；;：:]|$)/g,
     (_match, amount: string) => `\\$${amount}`,
   );
+  normalized = normalizeDoubleDollarDelimiters(normalized);
+  normalized = normalizeSingleDollarDelimiters(normalized);
 
   return normalized.replace(PROTECTED_MARKDOWN_TOKEN_RE, (_match, index: string) => (
     protectedSyntax.protectedParts[Number(index)] ?? ""

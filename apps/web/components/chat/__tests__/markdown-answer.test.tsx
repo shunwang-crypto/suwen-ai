@@ -139,4 +139,40 @@ describe("MarkdownAnswer math compatibility", () => {
     expect(container.querySelector("table")).toHaveTextContent("面积");
     expect(container).toHaveTextContent("$5");
   });
+
+  it("recovers the exact Chinese double-dollar delimiter collision", () => {
+    const { container } = render(
+      <MarkdownAnswer
+        text={[
+          "$ = \\lim_{x \\to 0} \\frac{(\\sin x)'}{x'} = 1$",
+          "$$ 这就是两个重要极限之一，洛必达法则给出了验证 [1]。另一个例子：$$ \\lim_{x \\to 0} \\frac{2\\sin x-\\sin 2x}{x-\\sin x}$$ 代入 $x=0$。",
+        ].join("\n")}
+        citationIndexes={[1]}
+        onCitationClick={() => {}}
+      />,
+    );
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(3);
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+    expect(container).toHaveTextContent("这就是两个重要极限之一");
+    expect(container).toHaveTextContent("另一个例子");
+    expect(container.querySelector('button[aria-label="查看引用 1"]')).toBeInTheDocument();
+  });
+
+  it("renders a valid formula that is still unclosed at the end of the final response", () => {
+    const { container } = render(<MarkdownAnswer text={"最终结果是 $\\frac{1}{2}"} />);
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+  });
+
+  it("renders an unambiguous unclosed final display formula", () => {
+    const { container } = render(
+      <MarkdownAnswer text={"最终推导：$$\\sum_{n=1}^{\\infty}\\frac{1}{n^2}"} />,
+    );
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+  });
 });

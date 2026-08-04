@@ -200,6 +200,9 @@ async def test_rule_route_direct_without_kb_skips_router_llm():
     assert router_ev["rule_hit"] is True
     # direct 路径用普通助教 system prompt, 不含 <source>
     assert "<source" not in gw.calls("qa_generate")[0].messages[0].content
+    direct_prompt = gw.calls("qa_generate")[0].messages[0].content
+    assert "两个 `$$` 各自独占一行" in direct_prompt
+    assert "不要省略闭合定界符" in direct_prompt
 
 
 async def test_rule_route_kb_and_llm_call_metadata():

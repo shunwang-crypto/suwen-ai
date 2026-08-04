@@ -107,4 +107,22 @@ describe("Markdown math delimiter normalization", () => {
     expect(normalizeMarkdownMath("价格是 $5，会员价 $3.50。公式 $5$ 保持。"))
       .toBe("价格是 \\$5，会员价 \\$3.50。公式 $5$ 保持。");
   });
+
+  it("does not let Chinese double-dollar noise consume the following real formula", () => {
+    const text = "$$ 就是两个重要极限之一 [1]。另一个例子：$$ \\lim_{x \\to 0} \\frac{\\sin x}{x}$$ 代入";
+    expect(normalizeMarkdownMath(text))
+      .toBe(" 就是两个重要极限之一 [1]。另一个例子： $\\lim_{x \\to 0} \\frac{\\sin x}{x}$ 代入");
+  });
+
+  it("auto-closes a valid final inline formula and escapes an invalid orphan dollar", () => {
+    expect(normalizeMarkdownMath("最终是 $\\frac{1}{2}"))
+      .toBe("最终是 $\\frac{1}{2}$");
+    expect(normalizeMarkdownMath("普通 $中文内容不会进公式"))
+      .toBe("普通 \\$中文内容不会进公式");
+  });
+
+  it("auto-closes one unambiguous final display formula", () => {
+    expect(normalizeMarkdownMath("最终推导：$$\\frac{1}{2}"))
+      .toBe("最终推导：\n\n$$\n\\frac{1}{2}\n$$\n");
+  });
 });

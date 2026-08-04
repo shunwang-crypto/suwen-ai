@@ -40,6 +40,8 @@ def test_direct_system_prompt_appends_profile_section():
 
 def test_direct_system_prompt_empty_profile_stays_bare():
     assert _direct_system_prompt(ProfileContext()) == _SYSTEM_PROMPT
+    assert "两个 `$$` 各自独占一行" in _SYSTEM_PROMPT
+    assert "不要省略闭合定界符" in _SYSTEM_PROMPT
 
 
 # --- 答案缓存准入 (缓存 × 个性化互斥) ---
