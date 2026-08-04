@@ -12,39 +12,55 @@ export type MathSegment =
   /** 流式未闭合的公式尾巴（含起始定界符），等待后续 token 补全 */
   | { type: "pending"; content: string };
 
-const BARE_MATH_COMMAND_RE = /\\(?:lim|frac|sum|int|sqrt|left|right|sin|cos|tan|log|ln|infty|pi|cdot|times|leq|geq|neq|pm|to)\b/;
+const TEX_COMMAND_RE = /\\[A-Za-z]+\*?/;
 const CJK_RE = /[\u3400-\u9fff]/;
 const PROTECTED_MARKDOWN_TOKEN_RE = /\u0000MATH-PROTECTED-(\d+)\u0000/g;
+const TEXT_COMMAND_CONTENT_RE = /\\(?:text|textrm|textsf|texttt|textbf|textit)\{[^{}]*\}/g;
 
 export type BareInlineMathSegment =
   | { type: "text"; content: string }
-  | { type: "math"; content: string };
+  | { type: "math"; content: string; display?: boolean };
 
 function isBareInlineMathCandidate(value: string): boolean {
   const candidate = value.trim();
   if (
     !candidate
-    || candidate.length > 300
+    || candidate.length > 1000
     || candidate.includes("\n")
     || candidate.includes("$")
     || candidate.includes("`")
     || CJK_RE.test(candidate)
-    || !BARE_MATH_COMMAND_RE.test(candidate)
+    || !TEX_COMMAND_RE.test(candidate)
   ) {
     return false;
   }
 
   // 去掉 TeX 命令后若仍有较长英文单词，通常是自然语言说明，不自动转公式。
   const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
-  return !/[A-Za-z]{3,}/.test(withoutCommands);
+  if (/[A-Za-z]{4,}/.test(withoutCommands)) return false;
+  return tryRenderKatex(candidate, /\\begin\{(?:align|equation|gather|multline)\*?\}/.test(candidate)) !== null;
 }
 
 function looksLikeDelimitedMath(value: string): boolean {
   const candidate = value.trim();
-  if (!candidate || candidate.length > 2000 || CJK_RE.test(candidate)) return false;
-  const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
+  if (!candidate || candidate.length > 4000) return false;
+  const withoutText = candidate.replace(TEXT_COMMAND_CONTENT_RE, "");
+  if (CJK_RE.test(withoutText)) return false;
+  const withoutCommands = withoutText.replace(/\\[A-Za-z]+\*?/g, "");
   if (/[A-Za-z]{4,}/.test(withoutCommands)) return false;
-  return BARE_MATH_COMMAND_RE.test(candidate) || /[=^_{}<>+*/]/.test(candidate);
+  if (!TEX_COMMAND_RE.test(candidate) && !/[=^_{}<>+*/]/.test(candidate)) return false;
+  return tryRenderKatex(candidate, true) !== null || tryRenderKatex(candidate, false) !== null;
+}
+
+function normalizeStandaloneMathEnvironments(text: string): string {
+  return text.replace(
+    /(^|\n)([ \t]*)(\\begin\{(equation\*?|align\*?|gather\*?|multline\*?|aligned|gathered|split|cases|array|matrix|smallmatrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix)\}[\s\S]*?\\end\{\4\})(?=[ \t]*(?:\n|$))/g,
+    (match, lineStart: string, indent: string, expr: string, _environment: string, offset: number, whole: string) => {
+      const delimitersBefore = whole.slice(0, offset).match(/(?<!\$)\$\$(?!\$)/g)?.length ?? 0;
+      if (delimitersBefore % 2 === 1) return match;
+      return `${lineStart}${indent}$$\n${expr.trim()}\n$$`;
+    },
+  );
 }
 
 function protectMarkdownSyntax(text: string): { text: string; protectedParts: string[] } {
@@ -75,7 +91,7 @@ function protectMarkdownSyntax(text: string): { text: string; protectedParts: st
 export function normalizeMarkdownMath(text: string): string {
   const source = String(text ?? "");
   const protectedSyntax = protectMarkdownSyntax(source);
-  let normalized = protectedSyntax.text
+  let normalized = normalizeStandaloneMathEnvironments(protectedSyntax.text)
     // CommonMark 会先吃掉反斜杠，因此必须在 Markdown parse 之前转换 TeX 定界符。
     .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `\n\n$$\n${expr.trim()}\n$$\n\n`)
     .replace(/\\\(([^\n]*?)\\\)/g, (_match, expr: string) => `$${expr.trim()}$`);
@@ -103,6 +119,12 @@ export function normalizeMarkdownMath(text: string): string {
         ? `$${expr.trim()}$`
         : `$$\n${expr.trim()}\n$$`;
     },
+  );
+
+  // 金额不是公式；保留 `$5$` 这类明确闭合的数学表达式，只转义普通货币写法。
+  normalized = normalized.replace(
+    /(?<![\\$])\$(\d+(?:\.\d{1,2})?)(?!\$)(?=\s|[，。,.!?；;：:]|$)/g,
+    (_match, amount: string) => `\\$${amount}`,
   );
 
   return normalized.replace(PROTECTED_MARKDOWN_TOKEN_RE, (_match, index: string) => (
@@ -165,7 +187,39 @@ export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
   if (plainStart < text.length) {
     segments.push({ type: "text", content: text.slice(plainStart) });
   }
-  return segments.length > 0 ? segments : [{ type: "text", content: text }];
+  const parenthesized = segments.length > 0 ? segments : [{ type: "text" as const, content: text }];
+  const expanded: BareInlineMathSegment[] = [];
+  const appendText = (content: string) => {
+    if (!content) return;
+    const previous = expanded[expanded.length - 1];
+    if (previous?.type === "text") previous.content += content;
+    else expanded.push({ type: "text", content });
+  };
+  for (const segment of parenthesized) {
+    if (segment.type === "math") {
+      expanded.push(segment);
+      continue;
+    }
+    let cursor = 0;
+    while (cursor < segment.content.length) {
+      const newline = segment.content.indexOf("\n", cursor);
+      const end = newline === -1 ? segment.content.length : newline;
+      const line = segment.content.slice(cursor, end);
+      const trimmed = line.trim();
+      if (isBareInlineMathCandidate(trimmed)) {
+        const leading = line.slice(0, line.indexOf(trimmed));
+        const trailing = line.slice(line.indexOf(trimmed) + trimmed.length);
+        appendText(leading);
+        expanded.push({ type: "math", content: trimmed, display: true });
+        appendText(trailing);
+      } else {
+        appendText(line);
+      }
+      if (newline !== -1) appendText("\n");
+      cursor = newline === -1 ? segment.content.length : newline + 1;
+    }
+  }
+  return expanded.length > 0 ? expanded : [{ type: "text", content: text }];
 }
 
 /**
@@ -179,7 +233,7 @@ export function normalizeMathDisplayText(text: string): string {
     .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `$$${expr}$$`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `$${expr}$`);
   const trimmed = delimited.trim();
-  if (!trimmed || /\$\$|(?<!\\)\$/.test(trimmed) || !BARE_MATH_COMMAND_RE.test(trimmed)) {
+  if (!trimmed || /\$\$|(?<!\\)\$/.test(trimmed) || !TEX_COMMAND_RE.test(trimmed)) {
     return delimited;
   }
   // 中文题干、自然语言句子和说明文字不能整体包成公式。
@@ -187,7 +241,10 @@ export function normalizeMathDisplayText(text: string): string {
     return delimited;
   }
   // 要求字段从 TeX/数学 token 开始，避免把“说明文字 + 公式”误判为单一公式。
-  if (!/^(?:\\[a-zA-Z]+|[A-Za-z0-9({[|+\-])/.test(trimmed)) return delimited;
+  if (!/^(?:\\[a-zA-Z]+|[A-Za-z0-9=({[|+\-])/.test(trimmed)) return delimited;
+  if (tryRenderKatex(trimmed, true) === null && tryRenderKatex(trimmed, false) === null) {
+    return delimited;
+  }
   return `$$${trimmed}$$`;
 }
 

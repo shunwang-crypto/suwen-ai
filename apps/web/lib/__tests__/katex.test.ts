@@ -21,6 +21,12 @@ describe("math display normalization", () => {
     const text = "求函数 \\lim_{x \\to 0} 的极限，并说明理由";
     expect(normalizeMathDisplayText(text)).toBe(text);
   });
+
+  it("supports arbitrary valid KaTeX commands in non-Markdown previews", () => {
+    expect(normalizeMathDisplayText("\\mathbb{R} \\supset \\{\\alpha,\\beta\\}"))
+      .toBe("$$\\mathbb{R} \\supset \\{\\alpha,\\beta\\}$$");
+    expect(normalizeMathDisplayText("C:\\temp")).toBe("C:\\temp");
+  });
 });
 
 describe("bare inline math normalization", () => {
@@ -49,6 +55,16 @@ describe("bare inline math normalization", () => {
     expect(splitBareInlineMath("说明 (see \\infty above) 即可")).toEqual([
       { type: "text", content: "说明 (see \\infty above) 即可" },
     ]);
+  });
+
+  it("recognizes arbitrary valid KaTeX commands and standalone formula lines", () => {
+    expect(splitBareInlineMath("集合 (\\mathbb{R} \\setminus \\{0\\}) 中\n\\alpha+\\beta=\\gamma"))
+      .toEqual([
+        { type: "text", content: "集合 (" },
+        { type: "math", content: "\\mathbb{R} \\setminus \\{0\\}" },
+        { type: "text", content: ") 中\n" },
+        { type: "math", content: "\\alpha+\\beta=\\gamma", display: true },
+      ]);
   });
 });
 
@@ -79,5 +95,16 @@ describe("Markdown math delimiter normalization", () => {
       "[\\[x^2\\]](https://example.com/math)",
     ].join("\n");
     expect(normalizeMarkdownMath(text)).toBe(text);
+  });
+
+  it("wraps standalone KaTeX environments but does not double-wrap existing blocks", () => {
+    const align = "\\begin{align}x&=1\\\\y&=2\\end{align}";
+    expect(normalizeMarkdownMath(align)).toBe(`$$\n${align}\n$$`);
+    expect(normalizeMarkdownMath(`$$\n${align}\n$$`)).toBe(`$$\n${align}\n$$`);
+  });
+
+  it("does not treat ordinary dollar prices as math", () => {
+    expect(normalizeMarkdownMath("价格是 $5，会员价 $3.50。公式 $5$ 保持。"))
+      .toBe("价格是 \\$5，会员价 \\$3.50。公式 $5$ 保持。");
   });
 });

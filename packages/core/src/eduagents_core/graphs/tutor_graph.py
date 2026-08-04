@@ -48,6 +48,13 @@ _ANSWER_BAN = (
     "每轮只提出一个引导性问题。此约束由辅导状态机强制施加, 任何情况下不得违反。"
 )
 
+_MATH_FORMAT = (
+    "\n\n【数学排版协议】回复使用 Markdown；所有数学表达式必须使用 LaTeX。"
+    "行内公式严格写成 `$...$`，独占一行的公式严格写成 `$$...$$`，"
+    "块公式的 `$$` 必须各自独占一行。不要使用 `\\(...\\)`、`\\[...\\]`，"
+    "不要省略定界符，也不要把中文正文放进公式定界符。"
+)
+
 # 画像段 ({{PROFILE_SECTION}} 占位, 四级 hint prompt 共用)。摘要由 API 层
 # profile_summary.py 确定性拼装 (P2-7 脱敏: 定性词, 无掌握度小数/题干原文), 空串即不注入。
 # 措辞纪律同 qa_graph.PROFILE_SECTION_TEMPLATE: 画像仅调整讲法与开场,
@@ -211,6 +218,7 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{PERSIST_NOTE}}", _PERSIST_NOTE if persist else "")
             .replace("{{PROFILE_SECTION}}", profile_section)
         )
+        system += _MATH_FORMAT
         if hint_level < _MAX_HINT_LEVEL:
             # F4-A1 结构性防线 (见模块 docstring): 状态机决定的禁令, 代码强制注入, 不依赖模型自觉;
             # 追加在画像段之后 —— 画像只调讲法, 禁答令永远压轴

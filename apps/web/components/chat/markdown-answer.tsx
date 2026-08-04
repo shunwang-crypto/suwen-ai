@@ -51,7 +51,12 @@ function remarkBareInlineMath() {
               // This node is created after parsing, so provide the same HAST bridge explicitly.
               data: {
                 hName: "code",
-                hProperties: { className: ["language-math", "math-inline"] },
+                hProperties: {
+                  className: [
+                    "language-math",
+                    segment.display ? "math-display" : "math-inline",
+                  ],
+                },
                 hChildren: [{ type: "text", value: segment.content }],
               },
             });
@@ -213,7 +218,7 @@ export function MarkdownAnswer({
     <div className="markdown-answer break-words">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkBareInlineMath, remarkCitations]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, errorColor: "inherit" }]]}
         components={components}
       >
         {normalizeMarkdownMath(text)}

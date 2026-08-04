@@ -92,6 +92,7 @@ async def test_hint_level_progresses_0_1_2_with_ban_in_every_prompt():
     assert levels == [0, 1, 2]  # 首轮开场 0, 之后逐轮递进
     systems = respond_systems(gateway)
     assert len(systems) == 3
+    assert all("数学排版协议" in s and "`$...$`" in s and "`$$...$$`" in s for s in systems)
     # F4-A1: hint_level < 3 的每一轮, system prompt 都被强制注入禁答令
     assert all(BAN in s for s in systems)
 

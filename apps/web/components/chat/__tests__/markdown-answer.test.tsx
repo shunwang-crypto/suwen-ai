@@ -89,4 +89,54 @@ describe("MarkdownAnswer math compatibility", () => {
     expect(container.querySelectorAll('button[aria-label^="查看引用"]')).toHaveLength(3);
     expect(container).toHaveTextContent("这是第一个重要极限");
   });
+
+  it("renders standalone bare formulas and common KaTeX environments", () => {
+    const { container } = render(
+      <MarkdownAnswer
+        text={[
+          "希腊字母：",
+          "\\alpha+\\beta=\\gamma",
+          "",
+          "\\begin{align}",
+          "f(x)&=x^2\\\\",
+          "f'(x)&=2x",
+          "\\end{align}",
+          "",
+          "分段函数 $f(x)=\\begin{cases}x,&x>0\\\\-x,&x\\leq0\\end{cases}$。",
+          "矩阵 $A=\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}$。",
+        ].join("\n")}
+      />,
+    );
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(4);
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+  });
+
+  it("keeps invalid TeX readable without a red error node", () => {
+    const { container } = render(<MarkdownAnswer text={"无效公式 $\\notARealCommand{x}$ 后文"} />);
+
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+    expect(container).toHaveTextContent("\\notARealCommand{x}");
+    expect(container).toHaveTextContent("后文");
+  });
+
+  it("keeps currency, code, tables, and formulas distinct", () => {
+    const { container } = render(
+      <MarkdownAnswer
+        text={[
+          "价格是 $5，不是公式；`$x$` 是代码。",
+          "",
+          "| 名称 | 表达式 |",
+          "| --- | --- |",
+          "| 面积 | $S=\\pi r^2$ |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    expect(container.querySelector("code")).toHaveTextContent("$x$");
+    expect(container.querySelector("table")).toHaveTextContent("面积");
+    expect(container).toHaveTextContent("$5");
+  });
 });
