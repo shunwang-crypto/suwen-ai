@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeMathDisplayText, splitBareInlineMath } from "@/lib/katex";
+import {
+  normalizeMarkdownMath,
+  normalizeMathDisplayText,
+  splitBareInlineMath,
+} from "@/lib/katex";
 
 describe("math display normalization", () => {
   it("wraps an obvious bare LaTeX expression for display only", () => {
@@ -45,5 +49,35 @@ describe("bare inline math normalization", () => {
     expect(splitBareInlineMath("说明 (see \\infty above) 即可")).toEqual([
       { type: "text", content: "说明 (see \\infty above) 即可" },
     ]);
+  });
+});
+
+describe("Markdown math delimiter normalization", () => {
+  it("normalizes TeX paren and bracket delimiters before Markdown parsing", () => {
+    expect(normalizeMarkdownMath("行内 \\(x^2\\)\n\\[\\lim_{x \\to 0} x\\]"))
+      .toBe("行内 $x^2$\n\n\n$$\n\\lim_{x \\to 0} x\n$$\n\n");
+  });
+
+  it("normalizes inline double dollars while preserving standalone display math", () => {
+    expect(normalizeMarkdownMath("结论 $$x^2=1$$ 成立\n$$\\frac{1}{2}$$"))
+      .toBe("结论 $x^2=1$ 成立\n$$\n\\frac{1}{2}\n$$");
+  });
+
+  it("repairs common mismatched single and double dollar delimiters", () => {
+    expect(normalizeMarkdownMath("$\\lim_{x \\to 0}x$$ 后文 $$x^2=1$ 结束"))
+      .toBe("$\\lim_{x \\to 0}x$ 后文 $x^2=1$ 结束");
+  });
+
+  it("does not rewrite fenced code, inline code, or links", () => {
+    const text = [
+      "`\\[x^2\\]`",
+      "",
+      "```tex",
+      "\\[x^2\\]",
+      "```",
+      "",
+      "[\\[x^2\\]](https://example.com/math)",
+    ].join("\n");
+    expect(normalizeMarkdownMath(text)).toBe(text);
   });
 });

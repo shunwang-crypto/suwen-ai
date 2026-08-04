@@ -6,7 +6,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
-import { splitBareInlineMath } from "@/lib/katex";
+import { normalizeMarkdownMath, splitBareInlineMath } from "@/lib/katex";
 
 interface MarkdownNode {
   type: string;
@@ -216,7 +216,7 @@ export function MarkdownAnswer({
         rehypePlugins={[rehypeKatex]}
         components={components}
       >
-        {text}
+        {normalizeMarkdownMath(text)}
       </ReactMarkdown>
     </div>
   );

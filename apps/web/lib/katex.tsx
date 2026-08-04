@@ -14,6 +14,7 @@ export type MathSegment =
 
 const BARE_MATH_COMMAND_RE = /\\(?:lim|frac|sum|int|sqrt|left|right|sin|cos|tan|log|ln|infty|pi|cdot|times|leq|geq|neq|pm|to)\b/;
 const CJK_RE = /[\u3400-\u9fff]/;
+const PROTECTED_MARKDOWN_TOKEN_RE = /\u0000MATH-PROTECTED-(\d+)\u0000/g;
 
 export type BareInlineMathSegment =
   | { type: "text"; content: string }
@@ -36,6 +37,77 @@ function isBareInlineMathCandidate(value: string): boolean {
   // 去掉 TeX 命令后若仍有较长英文单词，通常是自然语言说明，不自动转公式。
   const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
   return !/[A-Za-z]{3,}/.test(withoutCommands);
+}
+
+function looksLikeDelimitedMath(value: string): boolean {
+  const candidate = value.trim();
+  if (!candidate || candidate.length > 2000 || CJK_RE.test(candidate)) return false;
+  const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
+  if (/[A-Za-z]{4,}/.test(withoutCommands)) return false;
+  return BARE_MATH_COMMAND_RE.test(candidate) || /[=^_{}<>+*/]/.test(candidate);
+}
+
+function protectMarkdownSyntax(text: string): { text: string; protectedParts: string[] } {
+  const protectedParts: string[] = [];
+  const save = (value: string) => {
+    const token = `\u0000MATH-PROTECTED-${protectedParts.length}\u0000`;
+    protectedParts.push(value);
+    return token;
+  };
+
+  // 公式兼容只处理普通正文。代码块、行内代码和链接整体保持原始 Markdown。
+  let protectedText = text.replace(
+    /^( {0,3})(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?^\1\2[ \t]*(?=\n|$)|$)/gm,
+    (match) => save(match),
+  );
+  protectedText = protectedText.replace(/(`+)([^`]*?)\1/g, (match) => save(match));
+  protectedText = protectedText.replace(
+    /!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g,
+    (match) => save(match),
+  );
+  return { text: protectedText, protectedParts };
+}
+
+/**
+ * 在 Markdown 解析前修正常见的模型公式定界符漂移。
+ * 只改变展示字符串，不回写消息；受保护的代码和链接不会被改写。
+ */
+export function normalizeMarkdownMath(text: string): string {
+  const source = String(text ?? "");
+  const protectedSyntax = protectMarkdownSyntax(source);
+  let normalized = protectedSyntax.text
+    // CommonMark 会先吃掉反斜杠，因此必须在 Markdown parse 之前转换 TeX 定界符。
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `\n\n$$\n${expr.trim()}\n$$\n\n`)
+    .replace(/\\\(([^\n]*?)\\\)/g, (_match, expr: string) => `$${expr.trim()}$`);
+
+  // 修复模型偶发的 `$公式$$` / `$$公式$`，避免后面的中文被吞进一个红色 KaTeX error。
+  normalized = normalized
+    .replace(/(?<!\$)\$([^$\n]{1,2000}?)\$\$(?!\$)/g, (match, expr: string) => (
+      looksLikeDelimitedMath(expr) ? `$${expr.trim()}$` : match
+    ))
+    .replace(/(?<!\$)\$\$([^$\n]{1,2000}?)\$(?!\$)/g, (match, expr: string) => (
+      looksLikeDelimitedMath(expr) ? `$${expr.trim()}$` : match
+    ));
+
+  // `$$...$$` 与正文同行时按行内公式处理；独占一行的块公式保留 display 语义。
+  normalized = normalized.replace(
+    /(?<!\$)\$\$([^$\n]{1,2000}?)\$\$(?!\$)/g,
+    (match, expr: string, offset: number, whole: string) => {
+      if (!looksLikeDelimitedMath(expr)) return match;
+      const lineStart = whole.lastIndexOf("\n", offset - 1) + 1;
+      const nextLineBreak = whole.indexOf("\n", offset + match.length);
+      const lineEnd = nextLineBreak === -1 ? whole.length : nextLineBreak;
+      const before = whole.slice(lineStart, offset);
+      const after = whole.slice(offset + match.length, lineEnd);
+      return before.trim() || after.trim()
+        ? `$${expr.trim()}$`
+        : `$$\n${expr.trim()}\n$$`;
+    },
+  );
+
+  return normalized.replace(PROTECTED_MARKDOWN_TOKEN_RE, (_match, index: string) => (
+    protectedSyntax.protectedParts[Number(index)] ?? ""
+  ));
 }
 
 /**
