@@ -6,16 +6,63 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
+import { splitBareInlineMath } from "@/lib/katex";
+
 interface MarkdownNode {
   type: string;
   value?: string;
   url?: string;
   children?: MarkdownNode[];
+  data?: Record<string, unknown>;
 }
 
 const CITATION_RE = /\[(\d{1,3})\]/g;
 const CITATION_HREF_RE = /^#citation-(\d{1,3})$/;
 const SKIP_CITATION_NODES = new Set(["code", "inlineCode", "link", "math", "inlineMath"]);
+const SKIP_BARE_MATH_NODES = new Set([
+  "code",
+  "inlineCode",
+  "link",
+  "linkReference",
+  "math",
+  "inlineMath",
+]);
+
+/** 把正文中 `(\\infty/\\infty)` 这类漏写定界符的局部 TeX 交给现有 KaTeX 链路。 */
+function remarkBareInlineMath() {
+  return (tree: MarkdownNode) => {
+    const walk = (node: MarkdownNode) => {
+      if (!node.children || SKIP_BARE_MATH_NODES.has(node.type)) return;
+      const children: MarkdownNode[] = [];
+      for (const child of node.children) {
+        if (child.type !== "text" || !child.value) {
+          walk(child);
+          children.push(child);
+          continue;
+        }
+        for (const segment of splitBareInlineMath(child.value)) {
+          if (segment.type === "text") {
+            children.push({ type: "text", value: segment.content });
+          } else {
+            children.push({
+              type: "inlineMath",
+              value: segment.content,
+              // mdast-util-math normally attaches this while parsing `$...$`.
+              // This node is created after parsing, so provide the same HAST bridge explicitly.
+              data: {
+                hName: "code",
+                hProperties: { className: ["language-math", "math-inline"] },
+                hChildren: [{ type: "text", value: segment.content }],
+              },
+            });
+          }
+        }
+      }
+      node.children = children;
+    };
+    walk(tree);
+  };
+}
 
 /** 把正文里的 [N] 转为内部链接节点，代码、公式和普通链接中的文本保持原样。 */
 function remarkCitations() {
@@ -165,7 +212,7 @@ export function MarkdownAnswer({
   return (
     <div className="markdown-answer break-words">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkCitations]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkBareInlineMath, remarkCitations]}
         rehypePlugins={[rehypeKatex]}
         components={components}
       >

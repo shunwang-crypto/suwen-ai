@@ -15,6 +15,87 @@ export type MathSegment =
 const BARE_MATH_COMMAND_RE = /\\(?:lim|frac|sum|int|sqrt|left|right|sin|cos|tan|log|ln|infty|pi|cdot|times|leq|geq|neq|pm|to)\b/;
 const CJK_RE = /[\u3400-\u9fff]/;
 
+export type BareInlineMathSegment =
+  | { type: "text"; content: string }
+  | { type: "math"; content: string };
+
+function isBareInlineMathCandidate(value: string): boolean {
+  const candidate = value.trim();
+  if (
+    !candidate
+    || candidate.length > 300
+    || candidate.includes("\n")
+    || candidate.includes("$")
+    || candidate.includes("`")
+    || CJK_RE.test(candidate)
+    || !BARE_MATH_COMMAND_RE.test(candidate)
+  ) {
+    return false;
+  }
+
+  // 去掉 TeX 命令后若仍有较长英文单词，通常是自然语言说明，不自动转公式。
+  const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
+  return !/[A-Za-z]{3,}/.test(withoutCommands);
+}
+
+/**
+ * 识别 Markdown 普通文本节点里括号包裹、但漏写 `$` 定界符的 TeX。
+ * 调用方应只把普通 text 节点传入；代码、链接和已解析公式由 Markdown AST 跳过。
+ */
+export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
+  const segments: BareInlineMathSegment[] = [];
+  let plainStart = 0;
+  let i = 0;
+  let mathDelimiter: 0 | 1 | 2 = 0;
+
+  while (i < text.length) {
+    if (text[i] === "$" && text[i - 1] !== "\\") {
+      const delimiter = text[i + 1] === "$" ? 2 : 1;
+      if (mathDelimiter === 0) mathDelimiter = delimiter;
+      else if (mathDelimiter === delimiter) mathDelimiter = 0;
+      i += delimiter;
+      continue;
+    }
+    const opening = text[i];
+    if (mathDelimiter !== 0 || (opening !== "(" && opening !== "（")) {
+      i += 1;
+      continue;
+    }
+    const closing = opening === "(" ? ")" : "）";
+    let depth = 1;
+    let end = i + 1;
+    while (end < text.length && text[end] !== "\n") {
+      if (text[end] === opening) depth += 1;
+      if (text[end] === closing) {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      end += 1;
+    }
+    if (depth !== 0) {
+      i += 1;
+      continue;
+    }
+
+    const candidate = text.slice(i + 1, end);
+    if (!isBareInlineMathCandidate(candidate)) {
+      i += 1;
+      continue;
+    }
+    if (i + 1 > plainStart) {
+      segments.push({ type: "text", content: text.slice(plainStart, i + 1) });
+    }
+    segments.push({ type: "math", content: candidate.trim() });
+    plainStart = end;
+    i = end + 1;
+  }
+
+  if (plainStart < text.length) {
+    segments.push({ type: "text", content: text.slice(plainStart) });
+  }
+  return segments.length > 0 ? segments : [{ type: "text", content: text }];
+}
+
 /**
  * 仅用于展示的兼容层：把常见的 TeX 定界符统一成 MathText 能识别的形式，
  * 并对明显是单个公式、但历史数据漏掉定界符的字段做保守的块级包装。
