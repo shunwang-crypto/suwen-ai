@@ -720,7 +720,7 @@ function DiagnosisBody({ narrative }: { narrative: string }) {
                 SECTION_BADGE_STYLE[s.title] ?? "bg-slate-100 text-slate-600"
               }`}
             >
-              {s.title}
+              <MathText text={s.title} />
             </span>
           </h3>
           <p className="mt-1.5 text-sm leading-relaxed text-slate-700">

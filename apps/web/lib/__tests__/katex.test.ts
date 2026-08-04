@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeMarkdownMath,
   normalizeMathDisplayText,
+  renderMathInText,
   splitBareInlineMath,
+  tokenizeMathDisplay,
 } from "@/lib/katex";
 
 describe("math display normalization", () => {
@@ -14,7 +16,7 @@ describe("math display normalization", () => {
 
   it("supports TeX paren and bracket delimiters", () => {
     expect(normalizeMathDisplayText("答案是 \\(x^2\\)\n\\[x+y=1\\]"))
-      .toBe("答案是 $x^2$\n$$x+y=1$$");
+      .toBe("答案是 $x^2$\n\n\n$$\nx+y=1\n$$\n\n");
   });
 
   it("does not wrap ordinary Chinese question text", () => {
@@ -26,6 +28,45 @@ describe("math display normalization", () => {
     expect(normalizeMathDisplayText("\\mathbb{R} \\supset \\{\\alpha,\\beta\\}"))
       .toBe("$$\\mathbb{R} \\supset \\{\\alpha,\\beta\\}$$");
     expect(normalizeMathDisplayText("C:\\temp")).toBe("C:\\temp");
+  });
+
+  it("uses the strict delimiter repair in every non-Markdown preview", () => {
+    const text = "$$ 就是两个重要极限之一。例子：$$ \\lim_{x \\to 0} \\frac{\\sin x}{x}$$ 代入";
+    expect(tokenizeMathDisplay(text)).toEqual([
+      { type: "text", content: " 就是两个重要极限之一。例子： " },
+      { type: "math", content: "\\lim_{x \\to 0} \\frac{\\sin x}{x}", display: false },
+      { type: "text", content: " 代入" },
+    ]);
+  });
+
+  it("renders bare TeX in mixed prose without swallowing Chinese text", () => {
+    const segments = tokenizeMathDisplay("当 (\\infty/\\infty) 时\n\\sum_{n=1}^{\\infty} \\frac1{n^2}");
+    expect(segments).toEqual([
+      { type: "text", content: "当 (" },
+      { type: "math", content: "\\infty/\\infty", display: false },
+      { type: "text", content: ") 时\n" },
+      { type: "math", content: "\\sum_{n=1}^{\\infty} \\frac1{n^2}", display: true },
+    ]);
+  });
+
+  it("keeps code, links, prices and invalid formulas as safe literal text", () => {
+    const text = "`$x$` [公式 $y$](https://example.com/$5) 价格 $5，无效 $\\notARealCommand{x}$";
+    const rendered = renderMathInText(text);
+    expect(rendered).toContain("`$x$`");
+    expect(rendered).toContain("[公式 $y$](https://example.com/$5)");
+    expect(rendered).toContain("价格 $5");
+    expect(rendered).toContain("无效 $\\notARealCommand{x}$");
+    expect(rendered).not.toContain("katex-error");
+  });
+
+  it("produces safe native MathML for the teacher print view", () => {
+    const rendered = renderMathInText("<script>alert(1)</script> 答案 $x^2$", {
+      output: "mathml",
+    });
+    expect(rendered).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(rendered).toContain("<math");
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).not.toContain("katex-error");
   });
 });
 
@@ -64,6 +105,45 @@ describe("bare inline math normalization", () => {
         { type: "math", content: "\\mathbb{R} \\setminus \\{0\\}" },
         { type: "text", content: ") 中\n" },
         { type: "math", content: "\\alpha+\\beta=\\gamma", display: true },
+      ]);
+  });
+
+  it("renders a bare TeX suffix after Chinese prose and preserves punctuation", () => {
+    expect(splitBareInlineMath("选项：\\sum_{n=1}^{\\infty} \\frac{1}{n^2}"))
+      .toEqual([
+        { type: "text", content: "选项：" },
+        { type: "math", content: "\\sum_{n=1}^{\\infty} \\frac{1}{n^2}" },
+      ]);
+    expect(splitBareInlineMath("结果为 \\frac{1}{2}。"))
+      .toEqual([
+        { type: "text", content: "结果为 " },
+        { type: "math", content: "\\frac{1}{2}" },
+        { type: "text", content: "。" },
+      ]);
+  });
+
+  it("does not mistake Windows paths for bare trailing formulas", () => {
+    expect(splitBareInlineMath("路径 C:\\temp")).toEqual([
+      { type: "text", content: "路径 C:\\temp" },
+    ]);
+    expect(splitBareInlineMath("路径 C:\\alpha")).toEqual([
+      { type: "text", content: "路径 C:\\alpha" },
+    ]);
+    expect(splitBareInlineMath("路径 /tmp/\\alpha")).toEqual([
+      { type: "text", content: "路径 /tmp/\\alpha" },
+    ]);
+  });
+
+  it("allows Chinese inside an explicit TeX text command", () => {
+    expect(splitBareInlineMath("结果：\\text{速度}=\\frac{s}{t}"))
+      .toEqual([
+        { type: "text", content: "结果：" },
+        { type: "math", content: "\\text{速度}=\\frac{s}{t}" },
+      ]);
+    expect(tokenizeMathDisplay("函数 $\\operatorname{正弦}(x)$"))
+      .toEqual([
+        { type: "text", content: "函数 " },
+        { type: "math", content: "\\operatorname{正弦}(x)", display: false },
       ]);
   });
 });

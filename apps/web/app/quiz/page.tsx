@@ -601,7 +601,7 @@ export default function QuizPage() {
         /* ---- 作答 / 结果视图 ---- */
         <div className="space-y-4">
           <PageHeader
-            title={quiz.title}
+            title={<MathText text={quiz.title} />}
             subtitle={
               <>
                 共 {quiz.questions.length} 题
@@ -630,8 +630,8 @@ export default function QuizPage() {
                 <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{attempt.correct}/{attempt.total}</strong><span className="text-[9px] text-ink-muted">答对</span></div>
                 <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span></div><p className="mt-1 text-[11px] leading-5 text-ink-muted">结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。</p></div>
               </div>
-              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-[10px] font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-[10px] font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · {result.scored_reason || "查看解析后再次练习"}</li>)}</ul></div></div>
-              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-[11px] font-semibold text-warning-700">学习计划已更新</p><p className="mt-0.5 text-[10px] text-warning-600">{attempt.plan_adjustment.reason}</p></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-[10px] font-medium text-warning-700">前往学习计划 →</Link></div>}
+              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-[10px] font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-[10px] font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><MathText text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
+              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-[11px] font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-[10px] text-warning-600"><MathText text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-[10px] font-medium text-warning-700">前往学习计划 →</Link></div>}
               <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-4">
                 <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setAttempt(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
                 <Link href={wrongQuestions[0] ? `/tutor?problem=${encodeURIComponent(wrongQuestions[0].stem)}` : "/tutor"} className="rounded-[8px] border border-brand-200 bg-brand-50 px-3 py-2 text-center text-[11px] font-medium text-brand-700">进入分级辅导</Link>
@@ -729,7 +729,8 @@ export default function QuizPage() {
                         </p>
                         {result.scored_reason && (
                           <p className="mt-1 text-xs text-slate-600">
-                            评分理由：{result.scored_reason}
+                            <span className="font-medium text-slate-500">评分理由：</span>
+                            <MathText text={result.scored_reason} />
                           </p>
                         )}
                         <p className="mt-1.5 text-xs text-slate-600">
@@ -921,7 +922,7 @@ export default function QuizPage() {
                                 {wp.zone}
                               </span>
                             )}
-                            {wp.reason}
+                            <MathText text={wp.reason ?? ""} />
                           </li>
                         ))}
                     </ul>
@@ -958,7 +959,7 @@ export default function QuizPage() {
                           <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
                             {r.zone}
                           </span>
-                          {r.reason}
+                          <MathText text={r.reason} />
                         </li>
                       ))}
                     </ul>
@@ -1004,7 +1005,7 @@ export default function QuizPage() {
                         className="w-full rounded-[10px] border border-line bg-[#fafaf9] px-4 py-3 text-left text-[12px] text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/40 disabled:opacity-50"
                       >
                         <span className="block truncate font-medium">
-                          {qz.title || "未命名练习"}
+                          <MathText text={qz.title || "未命名练习"} singleLine />
                         </span>
                         <span className="block text-xs text-slate-400">
                           {fmtDateTime(qz.created_at)}

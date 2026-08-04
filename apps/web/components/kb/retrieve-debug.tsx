@@ -106,9 +106,9 @@ function StageColumn({
                     {e.score != null ? e.score.toFixed(4) : "—"}
                   </span>
                 </div>
-                <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-600">
-                  {meta?.text || e.chunk_id.slice(0, 8)}
-                </p>
+                <div className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-600">
+                  <MathText text={meta?.text || e.chunk_id.slice(0, 8)} />
+                </div>
               </div>
             );
           })

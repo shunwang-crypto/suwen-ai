@@ -121,6 +121,18 @@ describe("MarkdownAnswer math compatibility", () => {
     expect(container).toHaveTextContent("后文");
   });
 
+  it("prevalidates TeX bracket delimiters and standalone environments", () => {
+    const { container } = render(
+      <MarkdownAnswer
+        text={"无效 \\[\\notARealCommand{x}\\] 与 \\begin{align}\\bad{x}\\end{align} 后文"}
+      />,
+    );
+
+    expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
+    expect(container.querySelector(".katex")).not.toBeInTheDocument();
+    expect(container).toHaveTextContent("后文");
+  });
+
   it("keeps currency, code, tables, and formulas distinct", () => {
     const { container } = render(
       <MarkdownAnswer

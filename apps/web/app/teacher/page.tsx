@@ -17,6 +17,7 @@ import {
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { MathText, renderMathInText } from "@/lib/katex";
 import type {
   TeacherExportJson,
   TeacherExportPrint,
@@ -37,6 +38,11 @@ function escapeHtml(raw: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** 打印窗口不加载应用 CSS，使用浏览器原生 MathML 输出并转义全部非公式文本。 */
+function printMath(raw: unknown): string {
+  return renderMathInText(String(raw ?? ""), { output: "mathml" });
 }
 
 /** 选项编号：后端已自带 "A ..." 前缀时不重复编号。 */
@@ -68,11 +74,11 @@ function buildPrintHtml(data: TeacherExportPrint): string {
       const opts =
         it.options && it.options.length > 0
           ? `<ol class="opts">${it.options
-              .map((o, i) => `<li>${escapeHtml(optionLabel(o, i))}</li>`)
+              .map((o, i) => `<li>${printMath(optionLabel(o, i))}</li>`)
               .join("")}</ol>`
           : `<div class="blank">答：______________________________________________</div>`;
       return `<section class="q">
-  <p class="stem"><span class="no">${escapeHtml(it.index)}.</span> ${escapeHtml(it.stem)}
+  <p class="stem"><span class="no">${escapeHtml(it.index)}.</span> ${printMath(it.stem)}
     <span class="meta">（${escapeHtml(it.type_label)} · ${escapeHtml(
       it.difficulty_label,
     )} · ${escapeHtml(it.points)} 分）</span></p>
@@ -84,10 +90,10 @@ function buildPrintHtml(data: TeacherExportPrint): string {
   const answersHtml = answers
     .map(
       (a) => `<section class="a">
-  <p class="ans"><span class="no">${escapeHtml(a.index)}.</span> 答案：${escapeHtml(
+  <p class="ans"><span class="no">${escapeHtml(a.index)}.</span> 答案：${printMath(
     a.answer,
   )}</p>
-  <p class="exp">解析：${escapeHtml(a.explanation) || "—"}</p>
+  <p class="exp">解析：${printMath(a.explanation) || "—"}</p>
 </section>`,
     )
     .join("\n");
@@ -122,6 +128,8 @@ function buildPrintHtml(data: TeacherExportPrint): string {
   .stem .meta { font-size: 9.5pt; color: #6b7280; font-weight: 400; }
   .opts { list-style: none; margin: 3pt 0 0; padding-left: 22pt; }
   .opts li { margin: 1pt 0; }
+  .overflow-x-auto { display: block; max-width: 100%; overflow-x: auto; }
+  math[display="block"] { margin: 3pt 0; }
   .blank { padding-left: 22pt; margin-top: 6pt; color: #6b7280; }
   .answers { page-break-before: always; break-before: page; }
   .a { margin: 0 0 10pt; page-break-inside: avoid; break-inside: avoid; }
@@ -140,16 +148,16 @@ function buildPrintHtml(data: TeacherExportPrint): string {
 </style>
 </head>
 <body>
-  <h1>${escapeHtml(paper.title)}</h1>
+  <h1>${printMath(paper.title)}</h1>
   <p class="sub">共 ${escapeHtml(data.quiz.total)} 题 · 生成于 ${escapeHtml(
     fmtDateTime(data.quiz.created_at),
   )}</p>
-  <div class="instructions">${escapeHtml(paper.instructions)}</div>
+  <div class="instructions">${printMath(paper.instructions)}</div>
   ${questionsHtml || '<p class="sub">（本卷暂无题目）</p>'}
   <div class="footer">苏问 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
 
   <div class="answers">
-    <h1>${escapeHtml(data.answer_key?.title ?? "参考答案与解析")}</h1>
+    <h1>${printMath(data.answer_key?.title ?? "参考答案与解析")}</h1>
     ${answersHtml || '<p class="sub">（本卷暂无答案）</p>'}
     <div class="footer">苏问 组卷导出 · 导出时间 ${escapeHtml(exportedAt)}</div>
   </div>
@@ -394,7 +402,7 @@ export default function TeacherPage() {
                 {quizzes.map((q) => (
                   <tr key={q.id} className="border-b border-slate-50 align-middle">
                     <td className="py-2.5 pr-3">
-                      <span className="font-medium text-slate-800">{q.title}</span>
+                      <span className="font-medium text-slate-800"><MathText text={q.title} /></span>
                       <span
                         className="ml-2 font-mono text-xs text-slate-400"
                         title={q.id}

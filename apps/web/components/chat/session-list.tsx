@@ -11,6 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { MathText } from "@/lib/katex";
 import type { SessionOut } from "@/lib/types";
 
 const PINNED_SESSIONS_KEY = "eduagents:pinned-chat-sessions";
@@ -322,7 +323,7 @@ export function SessionList({
                             title={s.title || "未命名会话"}
                             className="min-w-0 flex-1 truncate"
                           >
-                            {s.title || "未命名会话"}
+                            <MathText text={s.title || "未命名会话"} singleLine />
                           </span>
                           <span className="flex shrink-0 items-center gap-1.5 group-hover:hidden">
                             {indicator === "running" && (
@@ -475,7 +476,7 @@ export function SessionList({
               <p className="mt-5 text-[15px] leading-6 text-ink-secondary">
                 这将永久删除“
                 <strong className="font-semibold text-ink">
-                  {deleteTarget.title || "未命名会话"}
+                  <MathText text={deleteTarget.title || "未命名会话"} />
                 </strong>
                 ”以及其中的所有消息和附件。
               </p>

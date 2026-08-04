@@ -40,7 +40,7 @@ detected_reference_answer, explanation, points, kc_names, difficulty, confidence
 type 只能是 single、multi、blank、short；difficulty 只能是 easy、mid、hard；
 confidence 是 0 到 1。只输出一个 JSON 对象，格式严格为：
 {"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。
-数学公式必须使用展示定界符：行内公式使用 $...$，独立长公式使用 $$...$$；不要裸输出 \\frac、\\lim、\\sum、\\int、\\sqrt、\\left 等未包定界符的完整公式。
+数学公式必须使用展示定界符：行内公式严格使用 $...$；独立长公式使用 $$...$$，开始和结束的 $$ 各自独占一行，并在 JSON 字符串中把换行编码为 \\n。不要省略闭合定界符，不要把中文正文放进公式定界符，不要裸输出 \\frac、\\lim、\\sum、\\int、\\sqrt、\\left 等完整公式。
 不要把 PDF 标题、知识点讲义、页眉页脚或说明文字当成题目。"""
 
 _IMAGE_MIMES = {

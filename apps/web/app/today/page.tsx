@@ -202,7 +202,7 @@ export default function TodayPage() {
               <span>继续上次学习</span><span className="h-1 w-1 rounded-full bg-ink-muted" /><span className="font-normal text-ink-muted">按当前计划继续</span>
             </div>
             <h2 className="mt-4 text-[21px] font-semibold tracking-[-0.025em] text-ink">{view.currentStage}</h2>
-            <p className="mt-1 text-[13px] leading-6 text-ink-secondary">当前任务：{view.nextTask?.title ?? data.plan?.goal ?? "完成今天的学习安排"}</p>
+            <div className="mt-1 text-[13px] leading-6 text-ink-secondary"><span>当前任务：</span><MathText text={view.nextTask?.title ?? data.plan?.goal ?? "完成今天的学习安排"} /></div>
 
             <div className="mt-6 flex items-center gap-3">
               <div className="h-[5px] flex-1 overflow-hidden rounded-full bg-[#eceae6]"><span className="block h-full rounded-full bg-indigo-600" style={{ width: `${view.stagePct}%` }} /></div>
@@ -223,7 +223,7 @@ export default function TodayPage() {
                 {view.stageTasks.map((task, index) => (
                   <li key={task.task_key ?? index} className="flex items-center gap-2.5 text-[12px]">
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${task.done ? "bg-success-600" : task.task_key === view.nextTask?.task_key ? "bg-ink" : "bg-line-strong"}`} />
-                    <span className={`min-w-0 flex-1 truncate ${task.done ? "text-success-600" : task.task_key === view.nextTask?.task_key ? "font-medium text-ink" : "text-ink-muted"}`}>{task.title}</span>
+                    <span className={`min-w-0 flex-1 truncate ${task.done ? "text-success-600" : task.task_key === view.nextTask?.task_key ? "font-medium text-ink" : "text-ink-muted"}`}><MathText text={task.title} singleLine /></span>
                     {task.done && <span className="text-success-600">✓</span>}
                   </li>
                 ))}
@@ -254,11 +254,11 @@ export default function TodayPage() {
                     ) : <Link href={item.href} aria-label={`开始 ${item.title}`} className="h-[18px] w-[18px] shrink-0 rounded-[4px] border border-line-strong bg-white transition-colors hover:border-ink-muted" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        {item.task ? <button type="button" onClick={() => setOpenTask({ task: item.task!, stageName: item.task!.stage, day: item.task!.day, planKbId: data.plan?.kb_id })} className={`min-w-0 truncate text-left text-[13px] font-medium hover:text-brand-700 ${item.done ? "text-ink-muted line-through" : "text-ink"}`}>{item.review ? <MathText text={item.title} /> : item.title}</button> : <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}>{item.review ? <MathText text={item.title} /> : item.title}</p>}
+                        {item.task ? <button type="button" onClick={() => setOpenTask({ task: item.task!, stageName: item.task!.stage, day: item.task!.day, planKbId: data.plan?.kb_id })} className={`min-w-0 truncate text-left text-[13px] font-medium hover:text-brand-700 ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></button> : <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></p>}
                         {item.dueLabel && !item.done && <span className="shrink-0 rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-semibold text-warning-700">{item.dueLabel}</span>}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-[10px] text-ink-muted"><span className="rounded-[3px] bg-[#f1f0ed] px-1.5 py-0.5 font-semibold text-ink-secondary">{item.type === "review" ? "复习" : item.type === "practice" ? "练习" : "学习"}</span><span className="truncate">{item.context}</span></div>
-                      {item.task && <p className="mt-1 truncate text-[10px] leading-4 text-ink-muted">目标：{item.task.objective || item.task.completion_criteria || "完成本任务并检查理解"}</p>}
+                      {item.task && <p className="mt-1 truncate text-[10px] leading-4 text-ink-muted"><span>目标：</span><MathText text={item.task.objective || item.task.completion_criteria || "完成本任务并检查理解"} singleLine /></p>}
                     </div>
                     <span className="shrink-0 text-[11px] text-ink-muted">{item.duration}</span>
                     {!item.done && <Link href={item.href} className="inline-flex shrink-0 rounded-[7px] px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50">开始任务 →</Link>}

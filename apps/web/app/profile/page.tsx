@@ -28,6 +28,7 @@ import {
 import { MasteryRadarPanel } from "@/components/mastery-radar";
 import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
 
 const CAUSE_LABELS: Record<string, string> = {
@@ -865,7 +866,7 @@ export default function ProfilePage() {
                     {kind?.label ?? it.kind}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="break-words text-slate-600">{it.text}</p>
+                    <div className="break-words text-slate-600"><MathText text={it.text} /></div>
                     <p className="mt-0.5 text-[10px] text-slate-400">
                       {it.kc_name && <span className="mr-1.5">{it.kc_name}</span>}
                       {SOURCE_LABELS[it.source] ?? it.source} · {fmtDateTime(it.created_at)}

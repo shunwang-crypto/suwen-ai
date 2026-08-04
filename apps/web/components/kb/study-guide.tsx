@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ErrorBanner, SkeletonList, Spinner, fmtDateTime } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import type { StudyGuide, StudyGuideOut } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 3000;
@@ -187,15 +188,15 @@ export function StudyGuidePanel({
                         {idx + 1}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
-                        {item.title}
+                        <MathText text={item.title} singleLine />
                       </span>
                     </button>
                     {open && (
                       <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5">
                         {item.summary && (
-                          <p className="text-xs leading-relaxed text-slate-600">
-                            {item.summary}
-                          </p>
+                          <div className="text-xs leading-relaxed text-slate-600">
+                            <MathText text={item.summary} />
+                          </div>
                         )}
                         {item.kc_names.length > 0 && (
                           <div className="flex flex-wrap gap-1">
@@ -229,9 +230,9 @@ export function StudyGuidePanel({
                     key={g.term}
                     className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-white hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.16)] motion-reduce:hover:translate-y-0"
                   >
-                    <dt className="text-sm font-medium text-slate-800">{g.term}</dt>
+                    <dt className="text-sm font-medium text-slate-800"><MathText text={g.term} /></dt>
                     <dd className="mt-0.5 text-xs leading-relaxed text-slate-500">
-                      {g.definition}
+                      <MathText text={g.definition} />
                     </dd>
                   </div>
                 ))}
@@ -253,7 +254,7 @@ export function StudyGuidePanel({
                     className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
                     title={`在「${kbName}」中提问`}
                   >
-                    {q}
+                    <MathText text={q} />
                   </Link>
                 ))}
               </div>

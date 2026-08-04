@@ -6,6 +6,7 @@
 import { useState } from "react";
 
 import { Spinner } from "@/components/common";
+import { MathText } from "@/lib/katex";
 import type { Blueprint, BlueprintItem } from "@/lib/types";
 
 const TYPE_OPTIONS = [
@@ -69,9 +70,9 @@ export function BlueprintCard({
       </div>
 
       {blueprint.summary && (
-        <p className="mb-2 rounded-lg bg-white/70 px-3 py-1.5 text-xs text-slate-600">
-          {blueprint.summary}
-        </p>
+        <div className="mb-2 rounded-lg bg-white/70 px-3 py-1.5 text-xs text-slate-600">
+          <MathText text={blueprint.summary} />
+        </div>
       )}
 
       <div className="mb-3 grid gap-3 border-y border-brand-100 py-3 text-[11px] sm:grid-cols-4"><div><span className="block text-ink-muted">总题数</span><strong className="mt-1 block text-[14px] text-ink">{items.length} 题</strong></div><div><span className="block text-ink-muted">简单</span><strong className="mt-1 block text-success-600">{items.filter((item) => item.difficulty === "easy").length} 题</strong></div><div><span className="block text-ink-muted">中等</span><strong className="mt-1 block text-brand-700">{items.filter((item) => item.difficulty === "mid").length} 题</strong></div><div><span className="block text-ink-muted">困难</span><strong className="mt-1 block text-warning-600">{items.filter((item) => item.difficulty === "hard").length} 题</strong></div></div>

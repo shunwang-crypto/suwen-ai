@@ -199,7 +199,7 @@ function PlanCalendar({
             const done = Boolean(task.done);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
@@ -478,7 +478,7 @@ function PlanConfirmCard({
                 <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-500">
                   {r.type === "kb" ? "知识库" : "网页"}
                 </span>
-                {r.title}
+                <MathText text={r.title} />
               </li>
             ))}
           </ul>
@@ -1129,7 +1129,7 @@ export default function PlansPage() {
                     }`}
                   >
                     <p className="flex items-start justify-between gap-2 text-slate-700">
-                      <span className="min-w-0">{adjustResult.reason}</span>
+                      <span className="min-w-0"><MathText text={adjustResult.reason} /></span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1152,7 +1152,7 @@ export default function PlansPage() {
                             <span className="rounded bg-amber-500 px-1.5 py-0.5 font-medium text-white">
                               第 {t.day} 天
                             </span>
-                            <span className="font-medium text-slate-700">{t.title}</span>
+                            <span className="font-medium text-slate-700"><MathText text={t.title} /></span>
                             <span className="text-slate-400">{t.minutes} 分钟</span>
                             <span className="text-slate-400">
                               当前掌握度 {fmtPct(t.p_mastery)}
@@ -1250,9 +1250,9 @@ export default function PlansPage() {
                                 插入 {a.inserted.length} 个任务
                               </span>
                             </p>
-                            <p className="mt-1 text-sm leading-relaxed text-slate-700">
-                              {a.reason}
-                            </p>
+                            <div className="mt-1 text-sm leading-relaxed text-slate-700">
+                              <MathText text={a.reason} />
+                            </div>
                           </div>
                         </li>
                       );

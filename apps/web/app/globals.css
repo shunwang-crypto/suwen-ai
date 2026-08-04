@@ -355,6 +355,21 @@ select:focus-visible {
   overflow-y: hidden;
 }
 
+/* Markdown 行内公式也可能很长；限制在正文宽度内，窄屏局部滚动而非撑宽 body。 */
+.markdown-answer .katex {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+
+/* 最后一层展示兜底：第三方插件未来若产生错误节点，也不得恢复 KaTeX 默认红字。 */
+.katex-error {
+  color: inherit !important;
+  font-family: inherit;
+}
+
 /* ============================================================
    视觉升级·第二路（营销落地页 + 对话页动效）局部样式
    前缀 fx-，与第一路设计 tokens（components/ui/*, .animate-fade-up,

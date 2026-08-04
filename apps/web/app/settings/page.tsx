@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 
 interface Preferences {
   explanation_style: string | null;
@@ -516,7 +517,7 @@ export default function SettingsPage() {
               {insights === null ? <div className="mt-7 h-40 animate-pulse rounded-overlay bg-line/60" /> : insights.length === 0 ? <p className="border-b border-line py-10 text-sm text-ink-muted">目前没有长期记忆条目。</p> : (
                 <div className="divide-y divide-line">{insights.map((item) => (
                   <article key={item.id} className="grid gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span><span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] text-ink-muted">{item.kind}</span></div><p className="mt-2 text-[13px] leading-6 text-ink-secondary">{item.text}</p><p className="mt-2 text-[10px] text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p></div>
+                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span><span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] text-ink-muted">{item.kind}</span></div><div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div><p className="mt-2 text-[10px] text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p></div>
                     <button type="button" disabled={deletingId === item.id} onClick={() => deleteInsight(item.id)} className="self-start text-xs font-medium text-danger-600 disabled:opacity-50">{deletingId === item.id ? "删除中…" : "删除"}</button>
                   </article>
                 ))}</div>

@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type CSSProperties } from "react";
 
 import { apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 
 /** 局部类型：共享 lib/types.ts 冻结不动（P1 先例），组件内自定义响应形状。 */
 interface NextActionItem {
@@ -71,10 +72,10 @@ export function OpeningCard() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[13px] font-medium text-slate-900">
-                {item.title}
+                <MathText text={item.title} singleLine />
               </span>
               <span className="mt-0.5 block truncate text-xs text-slate-400">
-                {item.reason}
+                <MathText text={item.reason} singleLine />
               </span>
             </span>
             <span className="text-sm text-slate-400" aria-hidden>

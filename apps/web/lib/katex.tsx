@@ -15,7 +15,9 @@ export type MathSegment =
 const TEX_COMMAND_RE = /\\[A-Za-z]+\*?/;
 const CJK_RE = /[\u3400-\u9fff]/;
 const PROTECTED_MARKDOWN_TOKEN_RE = /\u0000MATH-PROTECTED-(\d+)\u0000/g;
-const TEXT_COMMAND_CONTENT_RE = /\\(?:text|textrm|textsf|texttt|textbf|textit)\{[^{}]*\}/g;
+const PROTECTED_MATH_TEXT_TOKEN_RE = /\u0000MATH-TEXT-PROTECTED-(\d+)\u0000/g;
+const TEXT_COMMAND_CONTENT_RE = /\\(?:text|textrm|textsf|texttt|textbf|textit|operatorname\*?)\{[^{}]*\}/g;
+const TRAILING_PROSE_PUNCTUATION_RE = /[，。！？；、,.!?;]+$/u;
 
 export type BareInlineMathSegment =
   | { type: "text"; content: string }
@@ -23,20 +25,21 @@ export type BareInlineMathSegment =
 
 function isBareInlineMathCandidate(value: string): boolean {
   const candidate = value.trim();
+  const withoutText = candidate.replace(TEXT_COMMAND_CONTENT_RE, "");
   if (
     !candidate
     || candidate.length > 1000
     || candidate.includes("\n")
     || candidate.includes("$")
     || candidate.includes("`")
-    || CJK_RE.test(candidate)
+    || CJK_RE.test(withoutText)
     || !TEX_COMMAND_RE.test(candidate)
   ) {
     return false;
   }
 
   // 去掉 TeX 命令后若仍有较长英文单词，通常是自然语言说明，不自动转公式。
-  const withoutCommands = candidate.replace(/\\[A-Za-z]+/g, "");
+  const withoutCommands = withoutText.replace(/\\[A-Za-z]+/g, "");
   if (/[A-Za-z]{4,}/.test(withoutCommands)) return false;
   return tryRenderKatex(candidate, /\\begin\{(?:align|equation|gather|multline)\*?\}/.test(candidate)) !== null;
 }
@@ -206,6 +209,7 @@ function normalizeStandaloneMathEnvironments(text: string): string {
     (match, lineStart: string, indent: string, expr: string, _environment: string, offset: number, whole: string) => {
       const delimitersBefore = whole.slice(0, offset).match(/(?<!\$)\$\$(?!\$)/g)?.length ?? 0;
       if (delimitersBefore % 2 === 1) return match;
+      if (!looksLikeDelimitedMath(expr)) return match;
       return `${lineStart}${indent}$$\n${expr.trim()}\n$$`;
     },
   );
@@ -241,8 +245,12 @@ export function normalizeMarkdownMath(text: string): string {
   const protectedSyntax = protectMarkdownSyntax(source);
   let normalized = normalizeStandaloneMathEnvironments(protectedSyntax.text)
     // CommonMark 会先吃掉反斜杠，因此必须在 Markdown parse 之前转换 TeX 定界符。
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `\n\n$$\n${expr.trim()}\n$$\n\n`)
-    .replace(/\\\(([^\n]*?)\\\)/g, (_match, expr: string) => `$${expr.trim()}$`);
+    .replace(/\\\[([\s\S]*?)\\\]/g, (match, expr: string) => (
+      looksLikeDelimitedMath(expr) ? `\n\n$$\n${expr.trim()}\n$$\n\n` : match
+    ))
+    .replace(/\\\(([^\n]*?)\\\)/g, (match, expr: string) => (
+      looksLikeDelimitedMath(expr) ? `$${expr.trim()}$` : match
+    ));
 
   // 修复模型偶发的 `$公式$$` / `$$公式$`，避免后面的中文被吞进一个红色 KaTeX error。
   normalized = normalized
@@ -329,6 +337,29 @@ export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
     if (previous?.type === "text") previous.content += content;
     else expanded.push({ type: "text", content });
   };
+  const appendLineWithBareMathTail = (line: string): boolean => {
+    const commands = line.matchAll(/\\[A-Za-z]+\*?/g);
+    for (const command of commands) {
+      const start = command.index;
+      if (start === undefined) continue;
+      if (start > 0 && /[A-Za-z0-9_\\/]/.test(line[start - 1])) continue;
+      // Do not turn a Windows drive path such as C:\\alpha into a formula even
+      // when the path component happens to be a valid TeX command.
+      if (start >= 2 && line[start - 1] === ":" && /[A-Za-z]/.test(line[start - 2])) continue;
+
+      const rawTail = line.slice(start).trimEnd();
+      const punctuation = rawTail.match(TRAILING_PROSE_PUNCTUATION_RE)?.[0] ?? "";
+      const candidate = punctuation ? rawTail.slice(0, -punctuation.length).trimEnd() : rawTail;
+      if (!isBareInlineMathCandidate(candidate)) continue;
+
+      const candidateEnd = start + candidate.length;
+      appendText(line.slice(0, start));
+      expanded.push({ type: "math", content: candidate });
+      appendText(line.slice(candidateEnd));
+      return true;
+    }
+    return false;
+  };
   for (const segment of parenthesized) {
     if (segment.type === "math") {
       expanded.push(segment);
@@ -346,7 +377,7 @@ export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
         appendText(leading);
         expanded.push({ type: "math", content: trimmed, display: true });
         appendText(trailing);
-      } else {
+      } else if (!appendLineWithBareMathTail(line)) {
         appendText(line);
       }
       if (newline !== -1) appendText("\n");
@@ -362,10 +393,9 @@ export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
  * 这里绝不改写 API payload 或数据库字段。
  */
 export function normalizeMathDisplayText(text: string): string {
-  const value = String(text ?? "");
-  const delimited = value
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `$$${expr}$$`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `$${expr}$`);
+  // MathText 与 MarkdownAnswer 必须共用同一套定界符纠错。否则 remark 链路
+  // 已修复的 `$$中文$$ 真公式$$` 在题库、测验、错题等纯文本界面仍会错配。
+  const delimited = normalizeMarkdownMath(String(text ?? ""));
   const trimmed = delimited.trim();
   if (!trimmed || /\$\$|(?<!\\)\$/.test(trimmed) || !TEX_COMMAND_RE.test(trimmed)) {
     return delimited;
@@ -461,11 +491,74 @@ export function tokenizeMath(text: string): MathSegment[] {
   return segments;
 }
 
+function protectMathTextSyntax(text: string): { text: string; protectedParts: string[] } {
+  const protectedParts: string[] = [];
+  const save = (value: string) => {
+    const token = `\u0000MATH-TEXT-PROTECTED-${protectedParts.length}\u0000`;
+    protectedParts.push(value);
+    return token;
+  };
+
+  // MathText 不解析 Markdown，但界面里仍可能展示 Markdown 源码。代码与链接中的
+  // 美元符必须保持字面量，不能参与正文公式的定界符配对。
+  let protectedText = text.replace(
+    /^( {0,3})(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?^\1\2[ \t]*(?=\n|$)|$)/gm,
+    (match) => save(match),
+  );
+  protectedText = protectedText.replace(/(`+)([^`]*?)\1/g, (match) => save(match));
+  protectedText = protectedText.replace(
+    /!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g,
+    (match) => save(match),
+  );
+  return { text: protectedText, protectedParts };
+}
+
+function restoreMathTextSyntax(content: string, protectedParts: string[]): string {
+  return content.replace(PROTECTED_MATH_TEXT_TOKEN_RE, (_match, index: string) => (
+    protectedParts[Number(index)] ?? ""
+  ));
+}
+
+/**
+ * 所有非 Markdown 教学内容的唯一展示分词入口。
+ * 先复用 Markdown 的定界符纠错，再补全历史数据中的裸 TeX；代码和链接保持字面量。
+ */
+export function tokenizeMathDisplay(text: string): MathSegment[] {
+  const source = protectMathTextSyntax(String(text ?? ""));
+  const delimited = tokenizeMath(normalizeMathDisplayText(source.text));
+  const expanded: MathSegment[] = [];
+
+  for (const segment of delimited) {
+    if (segment.type !== "text") {
+      expanded.push({
+        ...segment,
+        content: restoreMathTextSyntax(segment.content, source.protectedParts),
+      });
+      continue;
+    }
+    for (const bare of splitBareInlineMath(segment.content)) {
+      expanded.push(bare.type === "math"
+        ? { type: "math", content: bare.content, display: Boolean(bare.display) }
+        : {
+            type: "text",
+            content: restoreMathTextSyntax(bare.content, source.protectedParts),
+          });
+    }
+  }
+
+  return expanded;
+}
+
 /** 渲染单个公式为 HTML；解析失败返回 null（调用方原样输出）。 */
-function tryRenderKatex(expr: string, display: boolean): string | null {
+function tryRenderKatex(
+  expr: string,
+  display: boolean,
+  output: "htmlAndMathml" | "mathml" = "htmlAndMathml",
+): string | null {
   try {
     return katex.renderToString(expr, {
       displayMode: display,
+      output,
       throwOnError: true,
       strict: false,
     });
@@ -486,13 +579,16 @@ function escapeHtml(s: string): string {
  * 工具函数：整段文本 -> HTML 字符串（文本部分已转义）。
  * 无效公式带定界符原样输出，绝不抛异常。
  */
-export function renderMathInText(text: string): string {
-  return tokenizeMath(normalizeMathDisplayText(text))
+export function renderMathInText(
+  text: string,
+  { output = "htmlAndMathml" }: { output?: "htmlAndMathml" | "mathml" } = {},
+): string {
+  return tokenizeMathDisplay(text)
     .map((seg) => {
       if (seg.type === "text" || seg.type === "pending") {
         return escapeHtml(seg.content);
       }
-      const html = tryRenderKatex(seg.content, seg.display);
+      const html = tryRenderKatex(seg.content, seg.display, output);
       if (html === null) {
         const delim = seg.display ? "$$" : "$";
         return escapeHtml(`${delim}${seg.content}${delim}`);
@@ -551,6 +647,8 @@ export interface MathTextProps {
   /** 提供后，文本中的 [N] 渲染为可点击引用标记 */
   onCitationClick?: (idx: number) => void;
   activeCitation?: number | null;
+  /** 标题、列表项等单行容器中保留省略号行为，避免默认的 pre-wrap 破坏布局。 */
+  singleLine?: boolean;
   className?: string;
 }
 
@@ -560,11 +658,12 @@ export function MathText({
   streaming = false,
   onCitationClick,
   activeCitation,
+  singleLine = false,
   className,
 }: MathTextProps) {
-  const segments = tokenizeMath(normalizeMathDisplayText(text));
+  const segments = tokenizeMathDisplay(text);
   return (
-    <span className={`whitespace-pre-wrap break-words ${className ?? ""}`}>
+    <span className={`max-w-full ${singleLine ? "inline-block overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : "whitespace-pre-wrap break-words"} ${className ?? ""}`}>
       {segments.map((seg, i) => {
         const key = `s${i}`;
         if (seg.type === "text") {
@@ -599,7 +698,11 @@ export function MathText({
             dangerouslySetInnerHTML={{ __html: html }}
           />
         ) : (
-          <span key={key} dangerouslySetInnerHTML={{ __html: html }} />
+          <span
+            key={key}
+            className="inline-block max-w-full overflow-x-auto overflow-y-hidden align-middle"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
         );
       })}
     </span>

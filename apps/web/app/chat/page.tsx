@@ -23,6 +23,7 @@ import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
 import type { TimelineItem } from "@/components/chat/timeline";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {
   ChatRunStatusOut,
@@ -1295,9 +1296,7 @@ function ChatView() {
                           ))}
                         </div>
                       )}
-                      <span className="whitespace-pre-wrap break-words">
-                        {m.content}
-                      </span>
+                      <MathText text={m.content} />
                     </div>
                   </div>
                 ) : (
@@ -1449,7 +1448,7 @@ function ChatView() {
                                 }
                                 className="fx-chip-in rounded-control border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 transition-colors hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                {q}
+                                <MathText text={q} />
                               </button>
                             ))}
                             {m.kbId && (

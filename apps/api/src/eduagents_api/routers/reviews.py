@@ -167,7 +167,9 @@ async def _grade_short(
                         "你是评分助手。对照参考答案给学生作答打分。\n"
                         f"题目: {question.stem}\n参考答案: {question.answer}\n"
                         f"学生作答: {response}\n"
-                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}'
+                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}。'
+                        "reason 中的数学表达式必须使用成对的 $...$, 不得把中文正文"
+                        "放进公式定界符, 不得裸输出完整 LaTeX 公式。"
                     ),
                 ),
             ),
@@ -357,7 +359,10 @@ async def make_variant(
             "3) single/multi 题 options 恰好 4 项, single 答案为 A-D 单字母, "
             'multi 答案为 "A,C" 式组合; blank/short 题 options 为空数组;\n'
             "4) 只输出一个 JSON 对象, 字段: type, stem, options, answer, explanation, "
-            "kc_names (1-3 个), difficulty (easy/mid/hard)。"
+            "kc_names (1-3 个), difficulty (easy/mid/hard)。\n"
+            "5) 数学表达式必须使用 LaTeX: 行内公式严格写成 $...$; 块公式的开始和结束 "
+            "$$ 各自独占一行, JSON 字符串中的换行编码为 \\n。不得省略闭合定界符, "
+            "不得把中文正文放进公式定界符, 不得裸输出完整公式。"
         )
         model: QuestionModel | None = None
         prompt = base_prompt
@@ -846,7 +851,9 @@ async def appeal_score(
                         f"题目: {stem}\n参考答案: {answer}\n"
                         f"学生作答: {response}\n"
                         f"学生申诉理由: {body.reason}\n"
-                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}'
+                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}。'
+                        "reason 中的数学表达式必须使用成对的 $...$, 不得把中文正文"
+                        "放进公式定界符, 不得裸输出完整 LaTeX 公式。"
                     ),
                 ),
             ),
