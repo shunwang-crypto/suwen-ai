@@ -139,43 +139,113 @@ function flattenDays(structure: PlanStructure | null): FlatDay[] {
   return out.sort((a, b) => a.day - b.day);
 }
 
-/** 乐观更新：就地生成带新 done 的 detail 副本（含进度重算）。 */
-function withTaskDone(
+type PlanTaskStatus = NonNullable<PlanTask["status"]>;
+
+function normalizedTaskStatus(task: PlanTask): PlanTaskStatus {
+  return task.status ?? (task.done ? "done" : "pending");
+}
+
+function taskIsPending(task: PlanTask): boolean {
+  return normalizedTaskStatus(task) === "pending";
+}
+
+/** 乐观更新：生成带新三态的 detail 副本，并完整重算两种进度口径。 */
+function withTaskStatus(
   detail: PlanDetail,
   taskKey: string,
-  done: boolean,
+  status: PlanTaskStatus,
 ): PlanDetail {
-  let delta = 0;
   const stages = detail.structure.stages.map((stage) => ({
     ...stage,
     days: (stage.days ?? []).map((day) => ({
       ...day,
       tasks: (day.tasks ?? []).map((task) => {
         if (task.task_key !== taskKey) return task;
-        if (Boolean(task.done) !== done) delta += done ? 1 : -1;
-        return { ...task, done };
+        return { ...task, status, done: status === "done" };
       }),
     })),
   }));
-  const total = detail.progress.total;
-  const doneCount = Math.max(0, detail.progress.done + delta);
+  const tasks = stages.flatMap((stage) =>
+    (stage.days ?? []).flatMap((day) => day.tasks ?? []),
+  );
+  const total = tasks.length;
+  const done = tasks.filter((task) => normalizedTaskStatus(task) === "done").length;
+  const skipped = tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length;
+  const pending = total - done - skipped;
+  const effectiveTotal = total - skipped;
   return {
     ...detail,
     structure: { stages },
-    progress: { total, done: doneCount, ratio: total ? doneCount / total : 0 },
+    progress: {
+      total,
+      done,
+      skipped,
+      pending,
+      ratio: total ? done / total : 0,
+      effective_ratio: effectiveTotal ? done / effectiveTotal : total ? 1 : 0,
+    },
   };
 }
 
-/** 日历视图：按 7 天一周分组的网格卡片；带 onToggle 时每个任务显示复选框。 */
+function TaskStatusControls({
+  task,
+  taskKey,
+  busy,
+  disabled,
+  compact = false,
+  onStatus,
+}: {
+  task: PlanTask;
+  taskKey?: string;
+  busy: boolean;
+  disabled: boolean;
+  compact?: boolean;
+  onStatus?: (taskKey: string, status: PlanTaskStatus) => void;
+}) {
+  const status = normalizedTaskStatus(task);
+  const unavailable = disabled || !taskKey || busy;
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <input
+        type="checkbox"
+        checked={status === "done"}
+        disabled={unavailable}
+        onChange={() =>
+          taskKey && onStatus?.(taskKey, status === "done" ? "pending" : "done")
+        }
+        aria-label={`${status === "done" ? "取消完成" : "标记完成"}：${task.title}`}
+        className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} accent-brand-600`}
+      />
+      <button
+        type="button"
+        disabled={unavailable}
+        aria-pressed={status === "skipped"}
+        aria-label={`${status === "skipped" ? "取消跳过" : "跳过任务"}：${task.title}`}
+        onClick={() =>
+          taskKey && onStatus?.(taskKey, status === "skipped" ? "pending" : "skipped")
+        }
+        className={`rounded px-1.5 py-0.5 text-[9px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
+          status === "skipped"
+            ? "bg-surface-muted text-ink-secondary"
+            : "text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
+        }`}
+      >
+        {status === "skipped" ? "已跳过" : "跳过"}
+      </button>
+    </div>
+  );
+}
+
+/** 日历视图：按 7 天一周分组的网格卡片；支持完成、跳过和恢复待办。 */
 function PlanCalendar({
   structure,
-  onToggle,
+  onStatus,
   onTaskOpen,
   pendingKeys,
   highlightKeys,
 }: {
   structure: PlanStructure;
-  onToggle?: (taskKey: string, done: boolean) => void;
+  onStatus?: (taskKey: string, status: PlanTaskStatus) => void;
   onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
   pendingKeys?: Set<string>;
   highlightKeys?: Set<string>;
@@ -185,21 +255,22 @@ function PlanCalendar({
   if (days.length === 0) {
     return <EmptyState title="该计划暂无日程" illustration="map" />;
   }
-  const currentIndex = Math.max(0, days.findIndex((day) => day.tasks.some((task) => !task.done)));
+  const firstPendingIndex = days.findIndex((day) => day.tasks.some(taskIsPending));
+  const currentIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
   const currentDay = days[currentIndex] ?? days[0];
   const upcoming = days.slice(currentIndex, currentIndex + 7);
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
         <section className="overflow-hidden rounded-[12px] border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-[10px] text-ink-muted">{currentDay.tasks.filter((task) => task.done).length}/{currentDay.tasks.length} 完成</span></header>
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-[10px] text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
         <ul className="divide-y divide-line">
           {currentDay.tasks.map((task, index) => {
             const key = task.task_key;
-            const done = Boolean(task.done);
+            const status = normalizedTaskStatus(task);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="h-4 w-4 accent-brand-600" /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${done ? "text-ink-muted line-through" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
@@ -207,7 +278,7 @@ function PlanCalendar({
 
         <section className="overflow-hidden rounded-[12px] border border-line bg-white">
         <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-[10px] font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
-        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => task.done).length; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-[9px] font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-[12px] font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-[10px] text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟</p></div><span className={`text-[10px] ${done === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{done === day.tasks.length ? `✓ ${done}/${day.tasks.length}` : day.day === currentDay.day ? `${done}/${day.tasks.length} 进行中` : "待开始"}</span></li>; })}</ol>
+        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-[9px] font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-[12px] font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-[10px] text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-[10px] ${handled === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : day.day === currentDay.day ? `${done}/${day.tasks.length - skipped} 进行中` : "待开始"}</span></li>; })}</ol>
         </section>
       </div>
 
@@ -240,13 +311,13 @@ function PlanCalendar({
                           <ul className="divide-y divide-line/70">
                             {day.tasks.map((task, taskIndex) => {
                               const key = task.task_key;
-                              const done = Boolean(task.done);
+                              const status = normalizedTaskStatus(task);
                               const busy = Boolean(key && pendingKeys?.has(key));
                               const isNew = Boolean(key && highlightKeys?.has(key));
                               return (
                                 <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
-                                  <input type="checkbox" checked={done} disabled={!onToggle || !key || busy} onChange={() => key && onToggle?.(key, !done)} aria-label={`标记完成：${task.title}`} className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-brand-600" />
-                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
+                                  <TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} compact onStatus={onStatus} />
+                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
                                 </li>
                               );
                             })}
@@ -677,24 +748,33 @@ export default function PlansPage() {
     setOpenTask(null);
   };
 
-  /** 任务勾选：乐观更新，失败整体回滚到上一份详情。 */
-  const toggleTask = async (taskKey: string, done: boolean) => {
+  /** 任务三态更新：乐观更新；失败只恢复当前任务，保留其他并发更新。 */
+  const updateTaskStatus = async (taskKey: string, status: PlanTaskStatus) => {
     if (!detail || pendingKeys.has(taskKey)) return;
     const snapshot = detail;
-    setDetail(withTaskDone(detail, taskKey, done));
+    const previousTask = flattenDays(detail.structure)
+      .flatMap((day) => day.tasks)
+      .find((task) => task.task_key === taskKey);
+    if (!previousTask) return;
+    const previousStatus = normalizedTaskStatus(previousTask);
+    setDetail(withTaskStatus(detail, taskKey, status));
     setPendingKeys((prev) => new Set(prev).add(taskKey));
     setTaskBanner(null);
     try {
       const res = await apiJson<PlanToggleResult>(
         `/api/plans/${snapshot.id}/tasks/${taskKey}/toggle`,
-        { body: { done } },
+        { body: { status } },
       );
       // 以服务端进度为准（并发勾选时避免本地计数漂移）
       setDetail((prev) =>
         prev && prev.id === snapshot.id ? { ...prev, progress: res.progress } : prev,
       );
     } catch (err) {
-      setDetail((prev) => (prev && prev.id === snapshot.id ? snapshot : prev));
+      setDetail((prev) =>
+        prev && prev.id === snapshot.id
+          ? withTaskStatus(prev, taskKey, previousStatus)
+          : prev,
+      );
       setTaskBanner(
         err instanceof ApiError ? err.message : "任务状态更新失败，已回滚",
       );
@@ -1061,9 +1141,11 @@ export default function PlansPage() {
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="text-xs font-medium text-slate-500">
                         已完成 {detail?.progress.done ?? 0} / {detail?.progress.total ?? 0} 个任务
+                        {(detail?.progress.skipped ?? 0) > 0 &&
+                          ` · 跳过 ${detail?.progress.skipped ?? 0} 个`}
                       </span>
                       <span className="font-mono text-xs text-slate-500">
-                        {fmtPct(detail?.progress.ratio ?? 0)}
+                        {fmtPct(detail?.progress.effective_ratio ?? detail?.progress.ratio ?? 0)}
                       </span>
                     </div>
                     {detail && detail.structure.stages.length > 0 ? (
@@ -1072,24 +1154,30 @@ export default function PlansPage() {
                           const tasks = (stage.days ?? []).flatMap(
                             (d) => d.tasks ?? [],
                           );
-                          const doneCount = tasks.filter((t) =>
-                            Boolean(t.done),
+                          const doneCount = tasks.filter(
+                            (task) => normalizedTaskStatus(task) === "done",
                           ).length;
+                          const skippedCount = tasks.filter(
+                            (task) => normalizedTaskStatus(task) === "skipped",
+                          ).length;
+                          const effectiveTotal = tasks.length - skippedCount;
                           const color = STAGE_COLORS[si % STAGE_COLORS.length];
                           return (
                             <div
                               key={si}
                               className="h-full min-w-2 bg-slate-100"
                               style={{ flexGrow: Math.max(tasks.length, 1) }}
-                              title={`${stage.name}：${doneCount}/${tasks.length} 个任务`}
+                              title={`${stage.name}：完成 ${doneCount} 个，跳过 ${skippedCount} 个`}
                             >
                               <div
                                 className={`h-full ${color.bar} transition-all duration-300`}
                                 style={{
                                   width: `${
-                                    tasks.length
-                                      ? Math.round((doneCount / tasks.length) * 100)
-                                      : 0
+                                    effectiveTotal
+                                      ? Math.round((doneCount / effectiveTotal) * 100)
+                                      : tasks.length
+                                        ? 100
+                                        : 0
                                   }%`,
                                 }}
                               />
@@ -1102,7 +1190,7 @@ export default function PlansPage() {
                         <div
                           className="h-full rounded-full bg-indigo-500 transition-all duration-300"
                           style={{
-                            width: `${Math.round((detail?.progress.ratio ?? 0) * 100)}%`,
+                            width: `${Math.round((detail?.progress.effective_ratio ?? detail?.progress.ratio ?? 0) * 100)}%`,
                           }}
                         />
                       </div>
@@ -1177,7 +1265,7 @@ export default function PlansPage() {
                   <PlanCalendar
                     key={detail.id}
                     structure={detail.structure}
-                    onToggle={(key, done) => void toggleTask(key, done)}
+                    onStatus={(key, status) => void updateTaskStatus(key, status)}
                     onTaskOpen={(location) => setOpenTask({ ...location, planKbId: detail.kb_id })}
                     pendingKeys={pendingKeys}
                     highlightKeys={highlightKeys}

@@ -484,6 +484,7 @@ export interface PlanTask {
   difficulty?: "easy" | "mid" | "hard" | string | null;
   /** 计划详情接口下发：stages/days/tasks 三层 0 基下标组成的任务键（前端只回传不自造） */
   task_key?: string;
+  status?: "pending" | "done" | "skipped";
   done?: boolean;
   /** "adjust" = 学情调整插入的补强任务 */
   source?: string;
@@ -530,7 +531,10 @@ export interface PlanListItem {
 export interface PlanProgress {
   total: number;
   done: number;
+  skipped?: number;
+  pending?: number;
   ratio: number;
+  effective_ratio?: number;
 }
 
 export interface PlanSchedule {
@@ -557,6 +561,7 @@ export interface PlanDetail {
 
 export interface PlanToggleResult {
   task_key: string;
+  status: "pending" | "done" | "skipped";
   done: boolean;
   progress: PlanProgress;
 }

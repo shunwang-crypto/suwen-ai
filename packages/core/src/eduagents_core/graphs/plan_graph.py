@@ -650,6 +650,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
             # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
             .replace("{{DIAGNOSIS}}", _render_diagnosis(diagnosis, parsed.get("key_topics") or []))
+            .replace("{{PROFILE}}", (state.get("profile_summary") or "(无额外画像)"))
             .replace("{{RESOURCES}}", resources_block)
             .replace("{{KC_ORDER}}", " -> ".join(kc_order) or "(无硬性先后约束)")
         )
@@ -669,7 +670,14 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             n_resources=len(resources),
             fixes=fixes,
         )
-        trace = [{"node": "draft_plan", "event": "drafted", "fix_count": len(fixes)}]
+        trace = [
+            {
+                "node": "draft_plan",
+                "event": "drafted",
+                "fix_count": len(fixes),
+                "profile_injected": bool(state.get("profile_summary")),
+            }
+        ]
         trace.extend({"node": "draft_plan", "event": "fix", **fix} for fix in fixes)
         return {"plan": plan, "trace": trace}
 

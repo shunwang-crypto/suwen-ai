@@ -33,6 +33,7 @@ from .models import KnowledgeComponent, MasteryRecord, Plan, PlanAdjustment
 log = get_logger("plan_adjust")
 
 TASK_KEY_RE = re.compile(r"^stage(\d+)\.day(\d+)\.task(\d+)$")
+TASK_STATUSES: tuple[str, ...] = ("pending", "done", "skipped")
 
 # 薄弱判据 = REINFORCE_THRESHOLD (掌握度阈值唯一来源 eduagents_core.mastery.thresholds)
 _REINFORCE_PCT = round(REINFORCE_THRESHOLD * 100)  # 中文理由里的百分数表述
@@ -70,6 +71,14 @@ def iter_tasks(structure: dict | None):
             for ti, task in enumerate(tasks if isinstance(tasks, list) else []):
                 if isinstance(task, dict):
                     yield si, di, ti, stage, day, task
+
+
+def task_status(task: dict) -> str:
+    """Return a normalized task status, including legacy ``done`` plans."""
+    raw = task.get("status")
+    if isinstance(raw, str) and raw in TASK_STATUSES:
+        return raw
+    return "done" if task.get("done") is True else "pending"
 
 
 def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -> dict:
@@ -114,7 +123,7 @@ def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -
 
 
 def enrich_structure(structure: dict | None, resources: dict[str, dict] | None = None) -> dict:
-    """读取侧加工 task_key/done and a same-plan resource object.
+    """读取侧加工 task_key/status/done and a same-plan resource object.
 
     Missing resource ids are represented as ``resource: None`` so legacy
     plans remain readable without inventing a resource association.
@@ -124,7 +133,9 @@ def enrich_structure(structure: dict | None, resources: dict[str, dict] | None =
         return {"stages": []}
     for si, di, ti, _stage, _day, task in iter_tasks(out):
         task["task_key"] = make_task_key(si, di, ti)
-        task["done"] = bool(task.get("done"))
+        status = task_status(task)
+        task["status"] = status
+        task["done"] = status == "done"
         resource_id = task.get("resource_id")
         task["resource"] = resources.get(str(resource_id)) if resources and resource_id else None
     out.setdefault("stages", [])
@@ -132,14 +143,54 @@ def enrich_structure(structure: dict | None, resources: dict[str, dict] | None =
 
 
 def plan_progress(structure: dict | None) -> dict:
-    """{total, done, ratio}: 任务粒度的完成进度。"""
+    """Return legacy completion and skip-aware effective progress."""
     total = 0
     done = 0
+    skipped = 0
     for *_idx, task in iter_tasks(structure):
         total += 1
-        if task.get("done"):
+        status = task_status(task)
+        if status == "done":
             done += 1
-    return {"total": total, "done": done, "ratio": round(done / total, 4) if total else 0.0}
+        elif status == "skipped":
+            skipped += 1
+    pending = total - done - skipped
+    effective_total = total - skipped
+    effective_ratio = done / effective_total if effective_total else (1.0 if total else 0.0)
+    return {
+        "total": total,
+        "done": done,
+        "skipped": skipped,
+        "pending": pending,
+        "ratio": round(done / total, 4) if total else 0.0,
+        "effective_ratio": round(effective_ratio, 4),
+    }
+
+
+def set_task_status(
+    structure: dict | None, task_key: str, status: str | None
+) -> tuple[dict, str]:
+    """Set a task to pending/done/skipped and return an immutable copy.
+
+    ``None`` preserves the legacy toggle behavior: pending becomes done, while
+    done or skipped returns to pending.  Explicit values are idempotent.
+    """
+    if status is not None and status not in TASK_STATUSES:
+        raise ValueError("invalid task status")
+    parsed = parse_task_key(task_key)
+    if parsed is None:
+        raise KeyError(task_key)
+    si, di, ti = parsed
+    new_structure = copy.deepcopy(structure or {})
+    for csi, cdi, cti, _stage, _day, task in iter_tasks(new_structure):
+        if (csi, cdi, cti) != (si, di, ti):
+            continue
+        current = task_status(task)
+        final = status or ("done" if current == "pending" else "pending")
+        task["status"] = final
+        task["done"] = final == "done"
+        return new_structure, final
+    raise KeyError(task_key)
 
 
 def set_task_done(structure: dict | None, task_key: str, done: bool | None) -> tuple[dict, bool]:
@@ -147,17 +198,9 @@ def set_task_done(structure: dict | None, task_key: str, done: bool | None) -> t
 
     done=None 表示取反 (前端只发切换意图时用)。
     """
-    parsed = parse_task_key(task_key)
-    if parsed is None:
-        raise KeyError(task_key)
-    si, di, ti = parsed
-    new_structure = copy.deepcopy(structure or {})
-    for csi, cdi, cti, _stage, _day, task in iter_tasks(new_structure):
-        if (csi, cdi, cti) == (si, di, ti):
-            final = (not bool(task.get("done"))) if done is None else bool(done)
-            task["done"] = final
-            return new_structure, final
-    raise KeyError(task_key)
+    requested = None if done is None else ("done" if done else "pending")
+    new_structure, final = set_task_status(structure, task_key, requested)
+    return new_structure, final == "done"
 
 
 def _existing_kc_keys(structure: dict | None) -> set[str]:
@@ -187,7 +230,9 @@ def _pending_day_slots(structure: dict | None) -> list[tuple[int, int]]:
             last = (si, di)
             tasks = day.get("tasks")
             tasks = tasks if isinstance(tasks, list) else []
-            if not tasks or any(isinstance(t, dict) and not t.get("done") for t in tasks):
+            if not tasks or any(
+                isinstance(t, dict) and task_status(t) == "pending" for t in tasks
+            ):
                 pending.append((si, di))
     if pending:
         return pending
@@ -289,6 +334,7 @@ async def adjust_plan(
             "practice_count": 3,
             "difficulty": "mid",
             "done": False,
+            "status": "pending",
             "source": "adjust",  # 前端据此高亮"本次插入"
         }
         tasks.append(task)

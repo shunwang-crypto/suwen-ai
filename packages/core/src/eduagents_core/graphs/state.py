@@ -88,6 +88,8 @@ class PlanState(TypedDict, total=False):
     budget_hours_per_day: float
     total_days: int
     diagnosis: dict  # {kc_name: 掌握度初值} (M3 用自报+摸底简版)
+    profile_summary: str  # 脱敏后的 plan 角色画像切片；只含定性标签和偏好
+    profile_weak_points: list[str]
     resources: list[dict]  # 知识库分块 / 安全 web 资源 (确认后持久化为 PlanResource)
     plan: dict  # executable tasks; resource_ref is transient until finalize_plan assigns resource_id
     plan_confirmed: bool

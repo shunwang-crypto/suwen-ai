@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Literal
 
 from eduagents_core.kc.dag import topological_order
 from eduagents_core.kc.types import PrereqEdge
@@ -28,7 +29,7 @@ from ..plan_adjust import (
     enrich_structure,
     plan_progress,
     plan_schedule_snapshot,
-    set_task_done,
+    set_task_status,
 )
 from ..profile_summary import ProfileContext, build_profile_context
 from ..services import _plan_resource_public, apply_tutor_summary
@@ -57,8 +58,9 @@ class PlanCreate(BaseModel):
 
 
 class TaskToggle(BaseModel):
-    """done 缺省 (None) = 取反当前状态; 显式传 true/false 则幂等置位。"""
+    """Three-state update with the old boolean field kept for compatibility."""
 
+    status: Literal["pending", "done", "skipped"] | None = None
     done: bool | None = None
 
 
@@ -185,12 +187,23 @@ async def create_plan(
     # 个性化预查失败一律降级为空 (图内 LLM 摸底兜底), 不让个性化故障拖垮规划主链路
     diagnosis: dict[str, float] = {}
     kc_order: list[str] = []
+    profile = ProfileContext()
     try:
         diagnosis, kc_order = await _load_personalization(
             ctx, str(body.kb_id) if body.kb_id else ""
         )
     except Exception:  # noqa: BLE001
         log.exception("plan_personalization_load_failed")
+    try:
+        profile = await build_profile_context(
+            ctx.tenant_id,
+            ctx.user_id,
+            [str(body.kb_id)] if body.kb_id else [],
+            redis=getattr(request.app.state, "redis", None),
+            role="plan",
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("plan_profile_summary_failed")
     payload = {
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
@@ -203,6 +216,8 @@ async def create_plan(
         "diagnosis": diagnosis,
         # 先修 DAG 拓扑序注入 (G2): draft_plan 的 _fix_kc_order 据此顺延违序任务
         "kc_order": kc_order,
+        "profile_summary": profile.summary,
+        "profile_weak_points": profile.weak_points,
     }
     return await stream_graph_run(runtime, "plan", thread_id, ctx, payload)
 
@@ -294,14 +309,22 @@ async def toggle_task(
     """勾选/取消勾选一个任务 (F3 计划是活的)。task_key 见 plan_adjust 模块文档。"""
     async with tenant_session(ctx.tenant_id) as session:
         plan = await _load_plan(session, plan_id, ctx)
+        requested = body.status if body else None
+        if requested is None and body is not None and body.done is not None:
+            requested = "done" if body.done else "pending"
         try:
-            new_structure, done = set_task_done(
-                plan.structure_json, task_key, body.done if body else None
+            new_structure, final_status = set_task_status(
+                plan.structure_json, task_key, requested
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="TASK_NOT_FOUND") from None
         plan.structure_json = new_structure  # JSONB 未挂 MutableDict, 必须整体重新赋值
-        return {"task_key": task_key, "done": done, "progress": plan_progress(new_structure)}
+        return {
+            "task_key": task_key,
+            "status": final_status,
+            "done": final_status == "done",
+            "progress": plan_progress(new_structure),
+        }
 
 
 @router.post("/{plan_id}/adjust")
@@ -426,7 +449,10 @@ async def tutor_turn(
     profile = ProfileContext()
     try:
         profile = await build_profile_context(
-            ctx.tenant_id, ctx.user_id, redis=getattr(request.app.state, "redis", None)
+            ctx.tenant_id,
+            ctx.user_id,
+            redis=getattr(request.app.state, "redis", None),
+            role="tutor",
         )
     except Exception:  # noqa: BLE001
         log.exception("tutor_profile_summary_failed")

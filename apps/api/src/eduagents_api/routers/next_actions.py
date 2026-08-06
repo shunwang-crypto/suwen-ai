@@ -23,13 +23,13 @@ from datetime import date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import KnowledgeComponent, LearnerInsight
-from ..plan_adjust import iter_tasks, latest_plan, plan_schedule_snapshot
+from ..models import Attempt, KnowledgeComponent, LearnerInsight, MasteryLog
+from ..plan_adjust import iter_tasks, latest_plan, plan_schedule_snapshot, task_status
 from ..profile_summary import weak_point_kcs
 
 # B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
@@ -45,6 +45,7 @@ _RESUME_QUOTE_MAX = 60  # 理由里引用的学生原话截断长度
 _RESUME_Q_MAX = 200  # /chat?q= 续问里带的原话截断长度 (进本人 prompt, 不出境他人)
 _TITLE_LABEL_MAX = 12  # 无 KC 名时标题里原话片段的截断长度
 _GOAL_MAX = 20  # plan_task 理由里计划目标的截断长度
+_ACTIVITY_IDLE_DAYS = 3
 
 
 def _ellipsis(text: str, limit: int) -> str:
@@ -65,7 +66,7 @@ def plan_today_snapshot(
     undone = sum(
         1
         for si, di, ti, _stage, _day, task in iter_tasks(structure)
-        if f"stage{si}.day{di}.task{ti}" in due_keys and not task.get("done")
+        if f"stage{si}.day{di}.task{ti}" in due_keys and task_status(task) == "pending"
     )
     if undone == 0:
         return None
@@ -105,12 +106,15 @@ def compose_next_actions(
     insight: dict | None,
     weak_points: list[dict],
     plan: dict | None,
+    days_since_activity: int | None = None,
 ) -> list[dict]:
     """确定性拼装推荐条目 (纯函数, 单测入口): 优先级排布 + ≤5 条 + 冷启动兜底。
 
     入参均为已加载的快照: due_count 到期错题数; insight 最近卡点条目
     {kc_name, kind, text}; weak_points 为 weak_point_kcs 输出 (理由用其 reason/zone
     定性字段, 不触碰 p_mastery 小数); plan 为 plan_today_snapshot 输出。
+    days_since_activity 仅在存在过真实学习活动时传入；None 表示冷启动，而不是
+    “已经很久没学”。
     """
     items: list[dict] = []
     if due_count > 0:
@@ -147,6 +151,20 @@ def compose_next_actions(
                 "href": "/plans",
             }
         )
+    if (
+        days_since_activity is not None
+        and days_since_activity >= _ACTIVITY_IDLE_DAYS
+        and len(items) < MAX_ITEMS
+    ):
+        shown_days = min(days_since_activity, 99)
+        items.append(
+            {
+                "type": "behavior_reminder",
+                "title": f"已经 {shown_days} 天未继续学习",
+                "reason": "先用 10 分钟恢复节奏；到期复习和薄弱点会继续按当前学情安排",
+                "href": "/today",
+            }
+        )
     if not items:
         # 冷启动: 无任何学习记录时的两条兜底 (话术对齐 reports._build_actions)
         items = [
@@ -168,8 +186,8 @@ def compose_next_actions(
 
 async def _load_snapshots(
     ctx: AuthContext, now_dt: datetime
-) -> tuple[int, dict | None, dict | None]:
-    """一次事务读齐 (due_count, 最近卡点 insight, 活跃计划快照)。"""
+) -> tuple[int, dict | None, dict | None, int | None]:
+    """一次事务读齐推荐快照和最近一次已发生的真实学习活动。"""
     async with tenant_session(ctx.tenant_id) as session:
         # 到期数 = len(全量到期集合), 与 reviews.today 的 total_due 同一函数 (B3)
         due_count = len(await due_error_items(session, ctx.user_id, now_dt))
@@ -202,17 +220,40 @@ async def _load_snapshots(
             if plan_row is not None
             else None
         )
-    return due_count, insight, plan
+        last_attempt = await session.scalar(
+            select(func.max(Attempt.at)).where(Attempt.user_id == ctx.user_id)
+        )
+        last_mastery_log = await session.scalar(
+            select(func.max(MasteryLog.at)).where(MasteryLog.user_id == ctx.user_id)
+        )
+    candidates = [value for value in (last_attempt, last_mastery_log) if value is not None]
+    days_since_activity = (
+        min(_whole_days_since(value, now_dt) for value in candidates) if candidates else None
+    )
+    return due_count, insight, plan, days_since_activity
+
+
+def _whole_days_since(value: datetime, now: datetime) -> int:
+    """Return non-negative completed days while tolerating legacy naive rows."""
+    if value.tzinfo is None and now.tzinfo is not None:
+        value = value.replace(tzinfo=now.tzinfo)
+    elif value.tzinfo is not None and now.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return max(0, (now - value).days)
 
 
 @router.get("")
 async def next_actions(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
     """可解释的"下一步"推荐 (G13): 全部确定性聚合, 逐条自带"为什么"。"""
     now_dt = await timectl.now(request.app.state.redis)
-    due_count, insight, plan = await _load_snapshots(ctx, now_dt)
+    due_count, insight, plan, days_since_activity = await _load_snapshots(ctx, now_dt)
     # 薄弱点走既有共用函数 (自开事务); kb 不限定 —— 开场卡是全局视角
     weak = await weak_point_kcs(ctx.tenant_id, ctx.user_id, [])
     items = compose_next_actions(
-        due_count=due_count, insight=insight, weak_points=weak, plan=plan
+        due_count=due_count,
+        insight=insight,
+        weak_points=weak,
+        plan=plan,
+        days_since_activity=days_since_activity,
     )
     return {"items": items}

@@ -46,6 +46,26 @@ describe("server-owned today plan buckets", () => {
     expect(result.overdueTasks.map((item) => item.task_key)).toEqual(["old", "also-old"]);
     expect(result.todos.map((item) => item.dueLabel)).toEqual(["逾期", "逾期"]);
   });
+
+  it("does not return skipped tasks as today's unfinished work", () => {
+    const skipped = task("skipped", 3, "已跳过任务", {
+      status: "skipped",
+      done: false,
+    });
+    const pending = task("pending", 3, "待完成任务", { status: "pending" });
+    const result = buildTodayItems(
+      [skipped, pending],
+      {
+        current_day: 3,
+        today_tasks: ["skipped", "pending"],
+        overdue_tasks: [],
+        upcoming_tasks: [],
+      },
+      [],
+    );
+    expect(result.todayTasks.map((item) => item.task_key)).toEqual(["pending"]);
+    expect(result.todos.map((item) => item.title)).toEqual(["待完成任务"]);
+  });
 });
 
 describe("task execution links", () => {

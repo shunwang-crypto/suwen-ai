@@ -167,7 +167,14 @@ async def test_plan_alive_and_error_book(client):
     r = await client.get(f"/api/plans/{plan_id}", headers=headers)
     assert r.status_code == 200, r.text
     detail = r.json()
-    assert detail["progress"] == {"total": 5, "done": 0, "ratio": 0.0}
+    assert detail["progress"] == {
+        "total": 5,
+        "done": 0,
+        "skipped": 0,
+        "pending": 5,
+        "ratio": 0.0,
+        "effective_ratio": 0.0,
+    }
     tasks = _all_tasks(detail["structure"])
     assert all(t["done"] is False for t in tasks)
     # task_key = 三层 0 基下标
@@ -199,6 +206,16 @@ async def test_plan_alive_and_error_book(client):
         json={"done": True},
     )
     assert r.json()["done"] is True
+    r = await client.post(
+        f"/api/plans/{plan_id}/tasks/stage0.day2.task0/toggle",
+        headers=headers,
+        json={"status": "skipped"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "skipped"
+    assert r.json()["done"] is False
+    assert r.json()["progress"]["skipped"] == 1
+    assert r.json()["progress"]["pending"] == 3
     r = await client.post(
         f"/api/plans/{plan_id}/tasks/stage0.day1.task0/toggle", headers=headers, json={}
     )

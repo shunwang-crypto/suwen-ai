@@ -150,8 +150,19 @@ export default function TodayPage() {
       ...current,
       plan: current.plan ? {
         ...current.plan,
-        progress: { ...current.plan.progress, done: current.plan.progress.done + (task.done ? -1 : 1), ratio: current.plan.progress.total ? (current.plan.progress.done + (task.done ? -1 : 1)) / current.plan.progress.total : 0 },
-        structure: { stages: current.plan.structure.stages.map((stage) => ({ ...stage, days: stage.days.map((day) => ({ ...day, tasks: day.tasks.map((item) => item.task_key === task.task_key ? { ...item, done: !task.done } : item) })) })) },
+        progress: (() => {
+          const done = current.plan.progress.done + (task.done ? -1 : 1);
+          const skipped = current.plan.progress.skipped ?? 0;
+          const effectiveTotal = current.plan.progress.total - skipped;
+          return {
+            ...current.plan.progress,
+            done,
+            pending: current.plan.progress.total - done - skipped,
+            ratio: current.plan.progress.total ? done / current.plan.progress.total : 0,
+            effective_ratio: effectiveTotal ? done / effectiveTotal : current.plan.progress.total ? 1 : 0,
+          };
+        })(),
+        structure: { stages: current.plan.structure.stages.map((stage) => ({ ...stage, days: stage.days.map((day) => ({ ...day, tasks: day.tasks.map((item) => item.task_key === task.task_key ? { ...item, status: task.done ? "pending" : "done", done: !task.done } : item) })) })) },
       } : null,
     } : current);
     try {
@@ -168,7 +179,7 @@ export default function TodayPage() {
                 ...stage,
                 days: stage.days.map((day) => ({
                   ...day,
-                  tasks: day.tasks.map((item) => item.task_key === task.task_key ? { ...item, done: result.done } : item),
+                  tasks: day.tasks.map((item) => item.task_key === task.task_key ? { ...item, status: result.status, done: result.done } : item),
                 })),
               })),
             },
@@ -188,7 +199,7 @@ export default function TodayPage() {
     return <div className="mx-auto w-full max-w-[1480px] px-5 py-7 sm:px-8 lg:px-12"><EmptyToday /></div>;
   }
 
-  const planPct = Math.round((data.plan?.progress.ratio ?? 0) * 100);
+  const planPct = Math.round((data.plan?.progress.effective_ratio ?? data.plan?.progress.ratio ?? 0) * 100);
   const planDone = data.plan?.progress.done ?? 0;
   const planTotal = data.plan?.progress.total ?? 0;
   const doneTodos = view.todos.filter((item) => item.done).length;

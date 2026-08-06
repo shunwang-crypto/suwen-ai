@@ -2,6 +2,10 @@ import type { PlanResource, PlanSchedule, PlanTask, ReviewItem } from "@/lib/typ
 
 export type FlatPlanTask = PlanTask & { day: number; stage: string };
 
+function isPending(task: PlanTask): boolean {
+  return task.status ? task.status === "pending" : !task.done;
+}
+
 export interface TodayItem {
   id: string;
   type: "study" | "practice" | "review";
@@ -52,8 +56,8 @@ export function buildTodayItems(
 ): TodayItemsResult {
   const todayKeys = new Set(schedule?.today_tasks ?? []);
   const overdueKeys = new Set(schedule?.overdue_tasks ?? []);
-  const todayTasks = tasks.filter((task) => !task.done && task.task_key && todayKeys.has(task.task_key));
-  const overdueTasks = tasks.filter((task) => !task.done && task.task_key && overdueKeys.has(task.task_key));
+  const todayTasks = tasks.filter((task) => isPending(task) && task.task_key && todayKeys.has(task.task_key));
+  const overdueTasks = tasks.filter((task) => isPending(task) && task.task_key && overdueKeys.has(task.task_key));
   const nextTask = todayTasks[0] ?? overdueTasks[0] ?? null;
 
   const reviewItems: TodayItem[] = reviews.slice(0, 2).map((review) => ({

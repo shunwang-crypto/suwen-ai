@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import unquote
 
 from eduagents_api.plan_adjust import plan_schedule_snapshot
 from eduagents_api.routers.next_actions import (
     MAX_ITEMS,
+    _whole_days_since,
     compose_next_actions,
     plan_today_snapshot,
 )
@@ -108,6 +109,45 @@ def test_cold_start_fallback_matches_reports_wording():
 def test_no_fallback_when_any_category_present():
     items = compose_next_actions(due_count=0, insight=None, weak_points=[_weak("极值", 0.4)], plan=None)
     assert [it["type"] for it in items] == ["weak_practice"]
+
+
+def test_idle_user_gets_deterministic_return_reminder():
+    items = compose_next_actions(
+        due_count=0,
+        insight=None,
+        weak_points=[],
+        plan=None,
+        days_since_activity=4,
+    )
+    assert [item["type"] for item in items] == ["behavior_reminder"]
+    assert items[0]["href"] == "/today"
+    assert "4 天" in items[0]["title"]
+    assert "10 分钟" in items[0]["reason"]
+
+
+def test_recent_activity_and_cold_start_do_not_get_idle_reminder():
+    for days_since_activity in (None, 0, 2):
+        items = compose_next_actions(
+            due_count=0,
+            insight=None,
+            weak_points=[],
+            plan=None,
+            days_since_activity=days_since_activity,
+        )
+        assert [item["type"] for item in items] == ["quiz", "plan"]
+
+
+def test_idle_reminder_respects_cap_and_does_not_displace_learning_actions():
+    items = compose_next_actions(**_all_inputs(), days_since_activity=8)
+    assert len(items) == MAX_ITEMS
+    assert all(item["type"] != "behavior_reminder" for item in items)
+
+
+def test_whole_days_since_handles_naive_future_and_aware_values():
+    now = datetime(2026, 8, 6, 12, tzinfo=UTC)
+    assert _whole_days_since(now - timedelta(days=3, hours=1), now) == 3
+    assert _whole_days_since((now - timedelta(days=2)).replace(tzinfo=None), now) == 2
+    assert _whole_days_since(now + timedelta(hours=1), now) == 0
 
 
 # ---- 理由脱敏 (P2-7): 定性词, 无掌握度小数 ----

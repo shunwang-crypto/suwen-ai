@@ -270,6 +270,36 @@ def test_partial_prefs_render_only_present_fields():
     assert ctx.summary == "目标: 考研数学一 120。"
 
 
+def test_profile_roles_only_expose_their_allowlisted_sections():
+    mastery = [
+        ("kc-weak", "导数定义", 0.2),
+        ("kc-mastered", "集合", 0.95),
+    ]
+    causes = Counter({"concept_confusion": 2})
+
+    qa = _compose_summary(mastery, ["极值"], causes, _PREFS, role="qa")
+    assert "已掌握: 集合" in qa.summary
+    assert "薄弱点: 导数定义" in qa.summary
+    assert "近期错题涉及: 极值" in qa.summary
+    assert "近期错因偏向: 概念混淆" in qa.summary
+
+    quiz = _compose_summary(mastery, ["极值"], causes, _PREFS, role="quiz")
+    assert "已掌握" not in quiz.summary
+    assert quiz.mastered == []
+    assert "近期错因偏向: 概念混淆" in quiz.summary
+
+    tutor = _compose_summary(mastery, ["极值"], causes, _PREFS, role="tutor")
+    assert "已掌握" not in tutor.summary
+    assert "近期错因" not in tutor.summary
+    assert "近期错题涉及: 极值" in tutor.summary
+    assert tutor.weak_points == ["导数定义"]
+
+
+def test_profile_role_with_only_excluded_data_is_empty():
+    mastery = [("kc-mastered", "集合", 0.95)]
+    assert _compose_summary(mastery, [], Counter(), None, role="tutor").empty
+
+
 # ---- PUT 后缓存失效 ----
 
 
@@ -279,10 +309,10 @@ class _ScanRedis:
     def __init__(self, uid: str, fail: bool = False):
         self.fail = fail
         self.keys = {
-            f"profile_summary:{uid}",
-            f"profile_summary:{uid}:abcd1234",
-            f"profile_summary:{uid}:ffff0000",
-            "profile_summary:other-user",
+            f"profile_summary:qa:{uid}",
+            f"profile_summary:quiz:{uid}:abcd1234",
+            f"profile_summary:tutor:{uid}:ffff0000",
+            "profile_summary:qa:other-user",
         }
         self.deleted: list[str] = []
         self.patterns: list[str] = []
@@ -307,13 +337,13 @@ async def test_invalidate_deletes_all_buckets_of_this_user_only():
     redis = _ScanRedis(uid)
     n = await invalidate_profile_summary_cache(redis, uid)
     assert n == 3
-    assert redis.patterns == [f"profile_summary:{uid}*"]
+    assert redis.patterns == [f"profile_summary:*:{uid}*"]
     assert set(redis.deleted) == {
-        f"profile_summary:{uid}",
-        f"profile_summary:{uid}:abcd1234",
-        f"profile_summary:{uid}:ffff0000",
+        f"profile_summary:qa:{uid}",
+        f"profile_summary:quiz:{uid}:abcd1234",
+        f"profile_summary:tutor:{uid}:ffff0000",
     }
-    assert "profile_summary:other-user" not in redis.deleted
+    assert "profile_summary:qa:other-user" not in redis.deleted
 
 
 async def test_invalidate_swallows_cache_failure_and_none():
@@ -329,7 +359,7 @@ async def test_put_invalidates_profile_summary_cache(monkeypatch):
     await put_preferences(PreferencesIn(interests=["篮球"]), ctx=ctx, redis=redis)
     # PUT 成功后立即删光该用户全部摘要缓存桶 (60s TTL 等不起演示即时性)
     assert set(redis.deleted) == {
-        f"profile_summary:{ctx.user_id}",
-        f"profile_summary:{ctx.user_id}:abcd1234",
-        f"profile_summary:{ctx.user_id}:ffff0000",
+        f"profile_summary:qa:{ctx.user_id}",
+        f"profile_summary:quiz:{ctx.user_id}:abcd1234",
+        f"profile_summary:tutor:{ctx.user_id}:ffff0000",
     }

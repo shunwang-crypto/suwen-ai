@@ -83,6 +83,17 @@ VERBOSITY_LABELS = {"concise": "简洁", "detailed": "详尽"}
 EXPLANATION_STYLES = tuple(STYLE_LABELS)
 VERBOSITY_LEVELS = tuple(VERBOSITY_LABELS)
 
+# Different model features need different, minimal profile slices.  Keeping the
+# allow-list here makes prompt data flow auditable and prevents a new consumer
+# from silently receiving every profile field.
+ROLE_SECTIONS: dict[str, tuple[str, ...]] = {
+    "qa": ("mastered", "weak", "errors", "causes", "prefs"),
+    "quiz": ("weak", "errors", "causes", "prefs"),
+    "tutor": ("weak", "errors", "prefs"),
+    "plan": ("weak", "errors", "prefs"),
+}
+PROFILE_ROLES = tuple(ROLE_SECTIONS)
+
 
 @dataclass(frozen=True)
 class ProfileContext:
@@ -97,8 +108,8 @@ class ProfileContext:
         return not self.summary
 
 
-def _cache_key(user_id: str, kb_ids: list[str]) -> str:
-    base = f"profile_summary:{user_id}"
+def _cache_key(user_id: str, kb_ids: list[str], role: str = "qa") -> str:
+    base = f"profile_summary:{role}:{user_id}"
     if not kb_ids:
         return base
     # 绑定知识库不同 -> 画像取材范围不同, 缓存必须分桶 (否则跨库串味)
@@ -121,7 +132,8 @@ async def invalidate_profile_summary_cache(redis, user_id: uuid.UUID | str) -> i
         return 0
     try:
         keys = [
-            key async for key in redis.scan_iter(match=f"profile_summary:{user_id}*")
+            key
+            async for key in redis.scan_iter(match=f"profile_summary:*:{user_id}*")
         ]
         if keys:
             await redis.delete(*keys)
@@ -244,6 +256,7 @@ def _compose_summary(
     error_names: list[str],
     causes: Counter,
     prefs: dict | None = None,
+    role: str = "qa",
 ) -> ProfileContext:
     """确定性拼装中文摘要 (不经 LLM): 掌握点 / 薄弱点(两档定性) / 近期错题KC /
     错因类别 / 偏好段 (P2-3)。
@@ -252,12 +265,19 @@ def _compose_summary(
     定性词; 错因只给类别; 全程无掌握度小数、无题干/作答原文 (见模块 docstring)。
     偏好段排最后且优先级最低: 超 300 字先砍兴趣, 再不够整段让位给薄弱点段。
     """
-    weak = [(name, p) for _kc, name, p in mastery if p < WEAK_THRESHOLD][:_WEAK_TOP]
-    mastered = [name for _kc, name, p in reversed(mastery) if p > MASTERED_THRESHOLD][
+    sections = ROLE_SECTIONS.get(role, ROLE_SECTIONS["qa"])
+    weak_all = [(name, p) for _kc, name, p in mastery if p < WEAK_THRESHOLD][:_WEAK_TOP]
+    mastered_all = [name for _kc, name, p in reversed(mastery) if p > MASTERED_THRESHOLD][
         :_MASTERED_TOP
     ]
     pref_parts = _pref_parts(prefs)
-    if not weak and not mastered and not error_names and not causes and not pref_parts:
+    weak = weak_all if "weak" in sections else []
+    mastered = mastered_all if "mastered" in sections else []
+    selected_errors = error_names if "errors" in sections else []
+    selected_causes = causes if "causes" in sections else Counter()
+    if "prefs" not in sections:
+        pref_parts = []
+    if not weak and not mastered and not selected_errors and not selected_causes and not pref_parts:
         return ProfileContext()
     parts: list[str] = []
     if mastered:
@@ -267,10 +287,10 @@ def _compose_summary(
         parts.append(
             "薄弱点: " + "、".join(f"{name}({zone_label(p)})" for name, p in weak)
         )
-    if error_names:
-        parts.append("近期错题涉及: " + "、".join(error_names[:_RECENT_ERROR_KCS]))
-    if causes:
-        top_cause = causes.most_common(1)[0][0]
+    if selected_errors:
+        parts.append("近期错题涉及: " + "、".join(selected_errors[:_RECENT_ERROR_KCS]))
+    if selected_causes:
+        top_cause = selected_causes.most_common(1)[0][0]
         parts.append("近期错因偏向: " + CAUSE_LABELS.get(top_cause, top_cause))
     summary = "; ".join(parts + pref_parts) + "。"
     if len(summary) > SUMMARY_MAX_CHARS and pref_parts:
@@ -291,10 +311,18 @@ async def build_profile_context(
     user_id: uuid.UUID | str,
     kb_ids=(),
     redis=None,
+    role: str = "qa",
 ) -> ProfileContext:
-    """画像摘要 + 薄弱点名单; 无任何数据时返回空 ProfileContext (summary 为空串)。"""
+    """Build the minimal profile slice for a model feature.
+
+    Unknown roles deliberately fall back to ``qa`` for backwards
+    compatibility.  The normalized role is part of the Redis key, so cached
+    summaries from one feature can never be reused by another feature.
+    """
+    if role not in ROLE_SECTIONS:
+        role = "qa"
     ids = _norm_ids(kb_ids)
-    key = _cache_key(str(user_id), ids)
+    key = _cache_key(str(user_id), ids, role)
     if redis is not None:
         try:
             cached = await redis.get(key)
@@ -308,7 +336,7 @@ async def build_profile_context(
         except Exception:  # noqa: BLE001 — 缓存故障一律回源, 不阻塞问答
             log.warning("profile_summary_cache_get_failed", user_id=str(user_id))
     mastery, error_names, causes, prefs = await _load_snapshot(tenant_id, user_id, ids)
-    ctx = _compose_summary(mastery, error_names, causes, prefs)
+    ctx = _compose_summary(mastery, error_names, causes, prefs, role=role)
     if redis is not None:
         try:
             await redis.setex(
@@ -332,10 +360,15 @@ async def build_profile_summary(
     user_id: uuid.UUID | str,
     kb_ids=(),
     redis=None,
+    role: str = "qa",
 ) -> str:
     """画像摘要文本 (≤300 字, 已脱敏为抽象标签级 — 理由见模块 docstring, P2-7);
     无数据返回空串。结构化字段见 build_profile_context (weak_points 仅 KC 名列表)。"""
-    return (await build_profile_context(tenant_id, user_id, kb_ids, redis=redis)).summary
+    return (
+        await build_profile_context(
+            tenant_id, user_id, kb_ids, redis=redis, role=role
+        )
+    ).summary
 
 
 # 难度档中文名 (与 apps/web 蓝图卡 DIFFICULTY_OPTIONS 同源)
