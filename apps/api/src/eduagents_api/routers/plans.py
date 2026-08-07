@@ -5,7 +5,7 @@ import uuid
 from typing import Literal
 
 from eduagents_core.kc.dag import topological_order
-from eduagents_core.kc.types import PrereqEdge
+from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -31,7 +31,7 @@ from ..plan_adjust import (
     plan_schedule_snapshot,
     set_task_status,
 )
-from ..profile_summary import ProfileContext, build_profile_context
+from ..profile_summary import ProfileContext, build_profile_context, weak_point_kcs
 from ..services import _plan_resource_public, apply_tutor_summary
 from .threads import stream_graph_run
 
@@ -40,6 +40,7 @@ log = get_logger("plans")
 router = APIRouter(prefix="/api/plans", tags=["plans"])
 
 _ADJUSTMENT_LIMIT = 50  # 调整历史返回上限
+_PLAN_WEAK_LIMIT = 8
 
 
 class PlanCreate(BaseModel):
@@ -89,6 +90,31 @@ def _diagnosis_from_rows(rows: list[tuple[str, float, str]], kb_id: str) -> dict
     return out
 
 
+def _qualitative_weak_kcs(items: object) -> list[dict[str, str]]:
+    """weak_point_kcs 出参 -> checkpoint 安全切片。
+
+    丢弃 p_mastery、KC id、难度与错题状态；计划图只需 KC 名和定性区间。
+    """
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if len(result) >= _PLAN_WEAK_LIMIT or not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        zone = item.get("zone")
+        if not isinstance(name, str) or not name.strip() or zone not in {"较弱", "待巩固"}:
+            continue
+        clean_name = name.strip()[:120]
+        normalized = normalize_kc_name(clean_name)
+        if not normalized or normalized in seen:
+            continue
+        result.append({"name": clean_name, "zone": zone})
+        seen.add(normalized)
+    return result
+
+
 def _kc_order_from_edges(
     names_by_id: dict[str, str], edge_pairs: list[tuple[str, str]]
 ) -> list[str]:
@@ -110,9 +136,7 @@ def _kc_order_from_edges(
     return topological_order(ordered_names, edges)
 
 
-async def _load_personalization(
-    ctx: AuthContext, kb_id: str
-) -> tuple[dict[str, float], list[str]]:
+async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str, float], list[str]]:
     """计划个性化预查 (一次事务): 真实 BKT 掌握度 + 先修 DAG 拓扑序。
 
     - diagnosis: 该用户 mastery_records join KC 名 -> 注入 plan 图的 diagnosis 通道,
@@ -176,10 +200,10 @@ async def create_plan(
         # at finalize time because a KB can be deleted while the draft waits.
         async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
             kb = await session.get(KnowledgeBase, body.kb_id)
-            if kb is None or (
-                kb.owner_type == "user" and kb.tenant_id != ctx.user_id
-            ) or (
-                kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids)
+            if (
+                kb is None
+                or (kb.owner_type == "user" and kb.tenant_id != ctx.user_id)
+                or (kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids))
             ):
                 raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
     local_id = str(uuid.uuid4())
@@ -204,6 +228,19 @@ async def create_plan(
         )
     except Exception:  # noqa: BLE001
         log.exception("plan_profile_summary_failed")
+    weak_kcs: list[dict[str, str]] = []
+    try:
+        weak_kcs = _qualitative_weak_kcs(
+            await weak_point_kcs(
+                ctx.tenant_id,
+                ctx.user_id,
+                [str(body.kb_id)] if body.kb_id else [],
+                limit=_PLAN_WEAK_LIMIT,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        # 技能差距是可选个性化；读侧失败不阻断基础计划。
+        log.exception("plan_weak_kcs_load_failed")
     payload = {
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
@@ -216,6 +253,7 @@ async def create_plan(
         "diagnosis": diagnosis,
         # 先修 DAG 拓扑序注入 (G2): draft_plan 的 _fix_kc_order 据此顺延违序任务
         "kc_order": kc_order,
+        "weak_kcs": weak_kcs,
         "profile_summary": profile.summary,
         "profile_weak_points": profile.weak_points,
     }
@@ -235,7 +273,9 @@ async def list_plans(ctx: AuthContext = Depends(api_rate_limited)):
         if kb_ids:
             kb_names = {
                 row.id: row.name
-                for row in (await session.scalars(select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids)))).all()
+                for row in (
+                    await session.scalars(select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids)))
+                ).all()
             }
         return [
             {
@@ -262,7 +302,9 @@ async def _load_plan(session, plan_id: uuid.UUID, ctx: AuthContext) -> Plan:
 async def _plan_detail(session, plan: Plan, today) -> dict:
     resource_rows = (
         await session.scalars(
-            select(PlanResource).where(PlanResource.plan_id == plan.id).order_by(PlanResource.created_at)
+            select(PlanResource)
+            .where(PlanResource.plan_id == plan.id)
+            .order_by(PlanResource.created_at)
         )
     ).all()
     resources = {str(row.id): _plan_resource_public(row) for row in resource_rows}
@@ -313,9 +355,7 @@ async def toggle_task(
         if requested is None and body is not None and body.done is not None:
             requested = "done" if body.done else "pending"
         try:
-            new_structure, final_status = set_task_status(
-                plan.structure_json, task_key, requested
-            )
+            new_structure, final_status = set_task_status(plan.structure_json, task_key, requested)
         except KeyError:
             raise HTTPException(status_code=404, detail="TASK_NOT_FOUND") from None
         plan.structure_json = new_structure  # JSONB 未挂 MutableDict, 必须整体重新赋值
@@ -332,9 +372,7 @@ async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited
     """依据当前学情调整计划 (F3-A3): 薄弱 KC 无对应任务 → 插补强任务 + 写调整审计。"""
     async with tenant_session(ctx.tenant_id) as session:
         plan = await _load_plan(session, plan_id, ctx)
-        result = await adjust_plan(
-            session, ctx.user_id, ctx.tenant_id, plan, trigger="manual"
-        )
+        result = await adjust_plan(session, ctx.user_id, ctx.tenant_id, plan, trigger="manual")
         result["progress"] = plan_progress(plan.structure_json)
         return result
 

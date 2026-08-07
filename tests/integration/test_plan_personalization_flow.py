@@ -35,9 +35,7 @@ class FakeGateway:
 
     def prompts(self, feature: str) -> list[str]:
         return [
-            "\n".join(m.content for m in r.messages)
-            for r in self.requests
-            if r.feature == feature
+            "\n".join(m.content for m in r.messages) for r in self.requests if r.feature == feature
         ]
 
     async def chat(self, req):
@@ -53,8 +51,14 @@ class FakeGateway:
             payload = queue.pop(0)
         text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         return ChatResult(
-            text=text, model="fake", tier=str(req.tier), prompt_tokens=1,
-            completion_tokens=1, cost_cny=0.0, latency_ms=0, mode="replay",
+            text=text,
+            model="fake",
+            tier=str(req.tier),
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_cny=0.0,
+            latency_ms=0,
+            mode="replay",
         )
 
 
@@ -97,14 +101,28 @@ async def _seed_mastery_with_dag(uid: str) -> dict:
         for key, p in (("deriv", 0.24), ("extremum", 0.31), ("taylor", 0.92)):
             s.add(
                 MasteryRecord(
-                    tenant_id=tid, user_id=tid, kc_id=kcs[key].id,
-                    p_mastery=p, confidence=0.6, last_seen=datetime.now(UTC),
+                    tenant_id=tid,
+                    user_id=tid,
+                    kc_id=kcs[key].id,
+                    p_mastery=p,
+                    confidence=0.6,
+                    last_seen=datetime.now(UTC),
                 )
             )
         s.add_all(
             [
-                KcEdge(tenant_id=tid, from_kc=kcs["deriv"].id, to_kc=kcs["extremum"].id, type="prerequisite"),
-                KcEdge(tenant_id=tid, from_kc=kcs["extremum"].id, to_kc=kcs["taylor"].id, type="prerequisite"),
+                KcEdge(
+                    tenant_id=tid,
+                    from_kc=kcs["deriv"].id,
+                    to_kc=kcs["extremum"].id,
+                    type="prerequisite",
+                ),
+                KcEdge(
+                    tenant_id=tid,
+                    from_kc=kcs["extremum"].id,
+                    to_kc=kcs["taylor"].id,
+                    type="prerequisite",
+                ),
             ]
         )
     return {"kb_id": str(kb.id), **{k: str(v.id) for k, v in kcs.items()}}
@@ -137,7 +155,19 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
         {
             # 一个主题有真实记录 (导数定义), 一个无记录 (级数) -> LLM 只该摸底后者
             "plan_parse_goal": [
-                {"subject": "高等数学", "key_topics": ["导数定义", "级数"], "level_hint": ""}
+                {
+                    "subject": "高等数学",
+                    "key_topics": ["导数定义", "级数"],
+                    "level_hint": "",
+                    "skills": [
+                        {
+                            "name": "导数定义",
+                            "required_level": 3,
+                            "reason": "是微分推理的基础",
+                        },
+                        {"name": "级数", "required_level": 2, "reason": "完成目标所需"},
+                    ],
+                }
             ],
             "plan_diagnose": [{"diagnosis": {"级数": 0.3}}],
             "plan_draft": [
@@ -146,8 +176,28 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
                         {
                             "name": "基础",
                             "days": [
-                                {"day": 1, "tasks": [{"title": "学习导数定义", "minutes": 60, "kc_names": ["导数定义"], "resource_ref": None}]},
-                                {"day": 2, "tasks": [{"title": "学习级数", "minutes": 60, "kc_names": ["级数"], "resource_ref": None}]},
+                                {
+                                    "day": 1,
+                                    "tasks": [
+                                        {
+                                            "title": "学习导数定义",
+                                            "minutes": 60,
+                                            "kc_names": ["导数定义"],
+                                            "resource_ref": None,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "day": 2,
+                                    "tasks": [
+                                        {
+                                            "title": "学习级数",
+                                            "minutes": 60,
+                                            "kc_names": ["级数"],
+                                            "resource_ref": None,
+                                        }
+                                    ],
+                                },
                             ],
                         }
                     ]
@@ -159,7 +209,10 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     runtime._deps.gateway = fake
     try:
         events = await _sse(
-            client, "POST", "/api/plans", headers,
+            client,
+            "POST",
+            "/api/plans",
+            headers,
             {"goal": "两周补齐微积分薄弱点", "budget_hours_per_day": 1.0, "total_days": 2},
         )
     finally:
@@ -183,6 +236,15 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     for decimal in ("0.24", "0.31", "0.92"):
         assert decimal not in draft_prompt, "精确掌握度小数不得出境第三方 LLM"
     assert "级数" in draft_prompt
+
+    # 目标技能 ∩ weak_point_kcs 的定性差距独立进 prompt；目标外薄弱 KC
+    # (极值判定) 不得混入。区段中不含精确概率或内部 ID。
+    gap_section = draft_prompt.split("技能差距（目标要求与当前定性状态）>", 1)[1].split(
+        "</技能差距", 1
+    )[0]
+    assert "导数定义：目标灵活迁移，当前较弱" in gap_section
+    assert "极值判定" not in gap_section and "泰勒公式" not in gap_section
+    assert all(decimal not in gap_section for decimal in ("0.24", "0.31", "0.92"))
 
     # G2: 先修 DAG 拓扑序注入 KC_ORDER (kc_edges -> dag.topological_order)
     assert "导数定义 -> 极值判定 -> 泰勒公式" in draft_prompt

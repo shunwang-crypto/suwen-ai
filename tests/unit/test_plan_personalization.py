@@ -11,7 +11,11 @@
 
 import json
 
-from eduagents_api.routers.plans import _diagnosis_from_rows, _kc_order_from_edges
+from eduagents_api.routers.plans import (
+    _diagnosis_from_rows,
+    _kc_order_from_edges,
+    _qualitative_weak_kcs,
+)
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
 from eduagents_core.graphs.plan_graph import build_plan_graph
@@ -61,8 +65,28 @@ DRAFT = {
         {
             "name": "夯实基础",
             "days": [
-                {"day": 1, "tasks": [{"title": "精读极限", "minutes": 60, "kc_names": ["极限"], "resource_ref": None}]},
-                {"day": 2, "tasks": [{"title": "练习导数", "minutes": 60, "kc_names": ["导数"], "resource_ref": None}]},
+                {
+                    "day": 1,
+                    "tasks": [
+                        {
+                            "title": "精读极限",
+                            "minutes": 60,
+                            "kc_names": ["极限"],
+                            "resource_ref": None,
+                        }
+                    ],
+                },
+                {
+                    "day": 2,
+                    "tasks": [
+                        {
+                            "title": "练习导数",
+                            "minutes": 60,
+                            "kc_names": ["导数"],
+                            "resource_ref": None,
+                        }
+                    ],
+                },
             ],
         }
     ]
@@ -156,9 +180,39 @@ TOPO_DRAFT = {
         {
             "name": "违序",
             "days": [
-                {"day": 1, "tasks": [{"title": "先学积分", "minutes": 60, "kc_names": ["积分"], "resource_ref": None}]},
-                {"day": 2, "tasks": [{"title": "再学导数", "minutes": 60, "kc_names": ["导数"], "resource_ref": None}]},
-                {"day": 3, "tasks": [{"title": "最后极限", "minutes": 60, "kc_names": ["极限"], "resource_ref": None}]},
+                {
+                    "day": 1,
+                    "tasks": [
+                        {
+                            "title": "先学积分",
+                            "minutes": 60,
+                            "kc_names": ["积分"],
+                            "resource_ref": None,
+                        }
+                    ],
+                },
+                {
+                    "day": 2,
+                    "tasks": [
+                        {
+                            "title": "再学导数",
+                            "minutes": 60,
+                            "kc_names": ["导数"],
+                            "resource_ref": None,
+                        }
+                    ],
+                },
+                {
+                    "day": 3,
+                    "tasks": [
+                        {
+                            "title": "最后极限",
+                            "minutes": 60,
+                            "kc_names": ["极限"],
+                            "resource_ref": None,
+                        }
+                    ],
+                },
             ],
         }
     ]
@@ -192,7 +246,9 @@ async def test_no_task_before_unmastered_prerequisite():
     deferred = [
         e
         for e in state["trace"]
-        if e.get("node") == "draft_plan" and e.get("event") == "fix" and e.get("fix") == "kc_order_deferred"
+        if e.get("node") == "draft_plan"
+        and e.get("event") == "fix"
+        and e.get("fix") == "kc_order_deferred"
     ]
     assert len(deferred) == 1
 
@@ -202,7 +258,9 @@ async def test_no_task_before_unmastered_prerequisite():
 BAN = "绝对禁止给出最终答案"  # F4-A1 结构性禁令 (代码注入 system prompt)
 PROFILE_HEADER = "学生画像"
 OPENING_MARK = "这正是你之前卡过的"
-PROFILE_SUMMARY = "该学生已掌握: 三角函数; 薄弱点: 导数定义(较弱)、极值判定(待巩固); 近期错因偏向: 概念混淆。"
+PROFILE_SUMMARY = (
+    "该学生已掌握: 三角函数; 薄弱点: 导数定义(较弱)、极值判定(待巩固); 近期错因偏向: 概念混淆。"
+)
 WEAK_POINTS = ["导数定义", "极值判定"]
 HIT_PROBLEM = "用导数定义求 f(x)=x^2 在 x=1 处的导数"  # 命中薄弱 KC "导数定义"
 MISS_PROBLEM = "求 1+2+...+100 的和"  # 不涉及任何薄弱 KC
@@ -219,7 +277,9 @@ def make_tutor_graph():
     return gateway, graph, config
 
 
-async def run_tutor_round(graph, config, text: str, *, problem=HIT_PROBLEM, summary=PROFILE_SUMMARY):
+async def run_tutor_round(
+    graph, config, text: str, *, problem=HIT_PROBLEM, summary=PROFILE_SUMMARY
+):
     return await graph.ainvoke(
         {
             "tenant_id": "t-1",
@@ -359,8 +419,28 @@ def test_fix_kc_order_matches_normalized_variants():
             {
                 "name": "s",
                 "days": [
-                    {"day": 1, "tasks": [{"title": "后置", "minutes": 30, "kc_names": ["泰勒 公式"], "resource_ref": None}]},
-                    {"day": 2, "tasks": [{"title": "前置", "minutes": 30, "kc_names": ["导数定义"], "resource_ref": None}]},
+                    {
+                        "day": 1,
+                        "tasks": [
+                            {
+                                "title": "后置",
+                                "minutes": 30,
+                                "kc_names": ["泰勒 公式"],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
+                    {
+                        "day": 2,
+                        "tasks": [
+                            {
+                                "title": "前置",
+                                "minutes": 30,
+                                "kc_names": ["导数定义"],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
                 ],
             }
         ]
@@ -381,7 +461,17 @@ def test_fix_kc_order_unmatched_is_visible():
             {
                 "name": "s",
                 "days": [
-                    {"day": 1, "tasks": [{"title": "无关", "minutes": 30, "kc_names": ["五十音"], "resource_ref": None}]},
+                    {
+                        "day": 1,
+                        "tasks": [
+                            {
+                                "title": "无关",
+                                "minutes": 30,
+                                "kc_names": ["五十音"],
+                                "resource_ref": None,
+                            }
+                        ],
+                    },
                 ],
             }
         ]
@@ -395,3 +485,133 @@ def test_diagnosis_from_rows_conservative_on_name_collision():
     """跨库同名 KC 取保守低值 (宁可多排复习, 不可乐观跳过)。"""
     rows = [("导数定义", 0.3, "kb-a"), ("导数定义", 0.7, "kb-b")]
     assert _diagnosis_from_rows(rows, "") == {"导数定义": 0.3}
+
+
+# ---------- ⑤ 目标技能 ∩ 定性薄弱点 ----------
+
+
+def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative():
+    from eduagents_core.graphs.plan_graph import skill_gap_analysis
+
+    skills = [
+        {"name": "极限 运算", "required_level": 2, "reason": "是导数基础"},
+        {"name": "导数", "required_level": 3, "reason": "用于解决极值问题"},
+        {"name": "ＤＡＴＡ", "required_level": 1, "reason": "英语大小写归一化"},
+        {"name": "导数", "required_level": 1, "reason": "重复项不应重复输出"},
+        {"name": "矩阵", "required_level": 3, "reason": "目标所需但并非薄弱点"},
+    ]
+    weak = [
+        {"name": "data", "zone": "待巩固", "p_mastery": 0.55},
+        {"name": "导数", "zone": "较弱", "kc_id": "secret-id"},
+        {"name": "极限运算", "zone": "待巩固"},
+    ]
+
+    gaps = skill_gap_analysis(skills, weak)
+
+    assert [item["skill"] for item in gaps] == ["导数", "极限 运算", "ＤＡＴＡ"]
+    assert gaps[0]["required_level"] == 3
+    assert all(item["zone"] in {"较弱", "待巩固"} for item in gaps)
+    assert all("p_mastery" not in item and "kc_id" not in item for item in gaps)
+    assert all("0.55" not in item["gap_reason"] for item in gaps)
+
+
+def test_skill_gap_analysis_rejects_non_intersection_and_invalid_level():
+    from eduagents_core.graphs.plan_graph import skill_gap_analysis
+
+    assert skill_gap_analysis([], [{"name": "导数", "zone": "较弱"}]) == []
+    assert skill_gap_analysis([{"name": "矩阵", "required_level": 3}], []) == []
+    assert (
+        skill_gap_analysis(
+            [{"name": "导数", "required_level": 99}],
+            [{"name": "导数", "zone": "待巩固"}],
+        )[0]["required_level"]
+        == 2
+    )
+
+
+def test_qualitative_weak_kcs_removes_internal_fields_and_normalizes_duplicates():
+    items = [
+        {
+            "name": "ＤＡＴＡ",
+            "zone": "较弱",
+            "p_mastery": 0.12,
+            "kc_id": "internal",
+            "recent_error": True,
+        },
+        {"name": "data", "zone": "待巩固"},
+        {"name": "已掌握项", "zone": "已掌握"},
+    ]
+    assert _qualitative_weak_kcs(items) == [{"name": "ＤＡＴＡ", "zone": "较弱"}]
+
+
+async def test_skill_gaps_survive_diagnose_and_reach_draft_without_polluting_mastery():
+    parse = {
+        "subject": "高等数学",
+        "key_topics": ["极限", "导数"],
+        "level_hint": "零基础",
+        "skills": [
+            {"name": "极限", "required_level": 2, "reason": "导数基础"},
+            {"name": "导数", "required_level": 3, "reason": "目标核心"},
+        ],
+    }
+    profile = "薄弱点: 导数(较弱); 讲解偏好: 严谨。"
+    gateway, state = await run_plan_to_interrupt(
+        {"plan_parse_goal": [parse], "plan_draft": [DRAFT]},
+        input_overrides={
+            "diagnosis": {"极限": 0.7, "导数": 0.2},
+            "weak_kcs": [
+                {"name": "导数", "zone": "较弱"},
+                {"name": "线性代数", "zone": "待巩固"},
+            ],
+            "profile_summary": profile,
+        },
+    )
+
+    assert state["diagnosis"] == {"极限": 0.7, "导数": 0.2}
+    assert state["skill_gaps"] == [
+        {
+            "skill": "导数",
+            "weak_kc": "导数",
+            "required_level": 3,
+            "zone": "较弱",
+            "goal_reason": "目标核心",
+            "gap_reason": "达成目标需要「导数」达到灵活迁移，当前较弱；目标核心",
+        }
+    ]
+    draft_request = next(req for req in gateway.requests if req.feature == "plan_draft")
+    prompt = draft_request.messages[0].content
+    assert "<技能差距" in prompt
+    assert "导数：目标灵活迁移，当前较弱" in prompt
+    assert "<学生画像" in prompt and profile in prompt
+    assert "0.2" not in prompt and "0.7" not in prompt
+
+
+async def test_old_parse_output_falls_back_to_topics_and_empty_weakness_is_compatible():
+    gateway, state = await run_plan_to_interrupt(
+        {"plan_parse_goal": [PARSE], "plan_draft": [DRAFT]},
+        input_overrides={"diagnosis": {"极限": 0.7, "导数": 0.8}, "weak_kcs": []},
+    )
+
+    assert state["parsed_goal"]["skills"] == [
+        {"name": "极限", "required_level": 2, "reason": "达成目标所需"},
+        {"name": "导数", "required_level": 2, "reason": "达成目标所需"},
+    ]
+    assert state["skill_gaps"] == []
+    draft_request = next(req for req in gateway.requests if req.feature == "plan_draft")
+    assert "(当前目标与已知薄弱点无交集)" in draft_request.messages[0].content
+
+
+def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
+    from eduagents_core.graphs.plan_graph import _fallback_plan
+
+    state = {
+        "goal": "补齐微积分",
+        "parsed_goal": {"key_topics": ["微积分"]},
+        "diagnosis": {"导数": 0.2},
+        "skill_gaps": [{"skill": "导数", "required_level": 3, "zone": "较弱"}],
+    }
+    before = dict(state["diagnosis"])
+    plan = _fallback_plan(state, total_days=2, budget_minutes=60)
+    first_task = plan["stages"][0]["days"][0]["tasks"][0]
+    assert "导数" in first_task["title"]
+    assert state["diagnosis"] == before

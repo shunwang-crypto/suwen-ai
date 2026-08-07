@@ -35,6 +35,11 @@ _DEFAULT_MASTERY = 0.3  # 无证据时的保守掌握度初值
 _DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
 _DAY_MAX_RATIO = 1.15  # 上限 = 1.15 * 预算
 _TOPIC_LIMIT = 5  # gather_resources 逐 topic 检索的 topic 上限
+_GOAL_TOPIC_LIMIT = 8
+_GOAL_SKILL_LIMIT = 8
+_SKILL_NAME_LIMIT = 120
+_SKILL_REASON_LIMIT = 80
+_SKILL_GAP_LIMIT = 8
 _KB_TOP_K = 3  # 每 topic 取知识库 top3
 _WEB_TOP_K = 2  # 每 topic 取 web top2
 _DIAGNOSIS_LIMIT = 20  # 进 prompt 的掌握度条目上限 (目标相关优先, 防跨学科全量膨胀)
@@ -73,7 +78,8 @@ def _render_diagnosis(diagnosis: dict, key_topics: list[str]) -> str:
 class PlanGraphState(PlanState, total=False):
     """PlanState 的图内扩展通道 (契约 state.py 不动)。
 
-    parsed_goal: parse_goal 节点产物 {"subject", "key_topics", "level_hint"};
+    parsed_goal: parse_goal 节点产物
+        {"subject", "key_topics", "level_hint", "skills"};
     kc_order: 主题先后约束 (list[str], KC 名)。来自真实先修 DAG: API 层
         (routers/plans.py) 预查 kc_edges 先修边, 经 kc.dag.topological_order
         计算拓扑序后注入 —— GraphDeps 无 kc_edges 字段, 图内不查库,
@@ -82,10 +88,160 @@ class PlanGraphState(PlanState, total=False):
 
     parsed_goal: dict
     kc_order: list[str]
+    # API 层从 weak_point_kcs 结果中裁剪出的定性薄弱点；不含精确
+    # 掌握度、KC id 或错题原文，可安全进 checkpoint。
+    weak_kcs: list[dict]
+    # 目标所需技能 ∩ 当前薄弱点。与 diagnosis 独立，不产生或修改掌握度。
+    skill_gaps: list[dict]
 
 
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+
+def _required_level(value: object) -> int:
+    """目标熟练度只允许 1..3；非法模型输出回落中性档 2。"""
+    if isinstance(value, bool):
+        return 2
+    if isinstance(value, int) and 1 <= value <= 3:
+        return value
+    if isinstance(value, str) and value.strip() in {"1", "2", "3"}:
+        return int(value.strip())
+    return 2
+
+
+def _coerce_goal_skills(raw: object, key_topics: list[str]) -> list[dict]:
+    """收紧 parse_goal 的模型输出：限量、限长、归一化去重，无有效技能时
+    从 key_topics 确定性回退。
+    """
+    skills: list[dict] = []
+    seen: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            if len(skills) >= _GOAL_SKILL_LIMIT or not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            clean_name = name.strip()[:_SKILL_NAME_LIMIT]
+            normalized = normalize_kc_name(clean_name)
+            if not normalized or normalized in seen:
+                continue
+            reason = item.get("reason")
+            skills.append(
+                {
+                    "name": clean_name,
+                    "required_level": _required_level(item.get("required_level")),
+                    "reason": (
+                        reason.strip()[:_SKILL_REASON_LIMIT]
+                        if isinstance(reason, str) and reason.strip()
+                        else ""
+                    ),
+                }
+            )
+            seen.add(normalized)
+    if skills:
+        return skills
+    for topic in key_topics[:_GOAL_SKILL_LIMIT]:
+        normalized = normalize_kc_name(topic)
+        if not normalized or normalized in seen:
+            continue
+        skills.append({"name": topic, "required_level": 2, "reason": "达成目标所需"})
+        seen.add(normalized)
+    return skills
+
+
+def skill_gap_analysis(skills: list[dict], weak_kcs: list[dict]) -> list[dict]:
+    """计算「目标所需技能 ∩ 当前薄弱 KC」，只产出定性规划输入。
+
+    名称匹配复用 KC 归一化规则，不做语义猜测；因此目标外的薄弱点不会
+    被误当成技能差距。返回值不含精确掌握度，也不写 mastery。
+    """
+    if not isinstance(skills, list) or not isinstance(weak_kcs, list):
+        return []
+    zone_rank = {"较弱": 0, "待巩固": 1}
+    weak_by_name: dict[str, tuple[int, str, str]] = {}
+    for index, item in enumerate(weak_kcs):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        clean_name = name.strip()[:_SKILL_NAME_LIMIT]
+        normalized = normalize_kc_name(clean_name)
+        if not normalized:
+            continue
+        raw_zone = item.get("zone")
+        zone = raw_zone if raw_zone in zone_rank else "待巩固"
+        previous = weak_by_name.get(normalized)
+        if previous is None or zone_rank[zone] < zone_rank[previous[2]]:
+            weak_by_name[normalized] = (index, clean_name, zone)
+
+    gaps: list[tuple[int, int, dict]] = []
+    seen: set[str] = set()
+    for skill_index, skill in enumerate(skills):
+        if not isinstance(skill, dict):
+            continue
+        name = skill.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        clean_name = name.strip()[:_SKILL_NAME_LIMIT]
+        normalized = normalize_kc_name(clean_name)
+        if not normalized or normalized in seen or normalized not in weak_by_name:
+            continue
+        _weak_index, weak_name, zone = weak_by_name[normalized]
+        level = _required_level(skill.get("required_level"))
+        raw_reason = skill.get("reason")
+        goal_reason = (
+            raw_reason.strip()[:_SKILL_REASON_LIMIT]
+            if isinstance(raw_reason, str) and raw_reason.strip()
+            else ""
+        )
+        level_label = {1: "了解", 2: "独立应用", 3: "灵活迁移"}[level]
+        gap_reason = f"达成目标需要「{clean_name}」达到{level_label}，当前{zone}"
+        if goal_reason:
+            gap_reason += f"；{goal_reason}"
+        gaps.append(
+            (
+                skill_index,
+                zone_rank[zone],
+                {
+                    "skill": clean_name,
+                    "weak_kc": weak_name,
+                    "required_level": level,
+                    "zone": zone,
+                    "goal_reason": goal_reason,
+                    "gap_reason": gap_reason,
+                },
+            )
+        )
+        seen.add(normalized)
+    gaps.sort(key=lambda item: (-item[2]["required_level"], item[1], item[0]))
+    return [item[2] for item in gaps[:_SKILL_GAP_LIMIT]]
+
+
+def _render_skill_gaps(skill_gaps: object) -> str:
+    """技能差距出境渲染：只保留目标档位与当前定性区间。"""
+    if not isinstance(skill_gaps, list):
+        return "(当前目标与已知薄弱点无交集)"
+    lines: list[str] = []
+    for item in skill_gaps[:_SKILL_GAP_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        skill = item.get("skill")
+        zone = item.get("zone")
+        if not isinstance(skill, str) or not skill.strip() or zone not in {"较弱", "待巩固"}:
+            continue
+        level = _required_level(item.get("required_level"))
+        label = {1: "了解", 2: "独立应用", 3: "灵活迁移"}[level]
+        reason = item.get("goal_reason")
+        suffix = (
+            f"；目标依据：{reason.strip()[:_SKILL_REASON_LIMIT]}"
+            if isinstance(reason, str) and reason.strip()
+            else ""
+        )
+        lines.append(f"- {skill.strip()[:_SKILL_NAME_LIMIT]}：目标{label}，当前{zone}{suffix}")
+    return "\n".join(lines) or "(当前目标与已知薄弱点无交集)"
 
 
 def is_safe_public_url(value: object) -> bool:
@@ -105,7 +261,9 @@ def is_safe_public_url(value: object) -> bool:
             address = ipaddress.ip_address(hostname)
         except ValueError:
             address = None
-        if address is not None and (address.is_private or address.is_loopback or address.is_link_local):
+        if address is not None and (
+            address.is_private or address.is_loopback or address.is_link_local
+        ):
             return False
         return True
     except ValueError:
@@ -153,7 +311,9 @@ def _coerce_task(raw: object) -> dict | None:
     if not isinstance(raw, dict):
         return None
     title = raw.get("title")
-    title = title.strip()[:_MAX_TASK_TITLE] if isinstance(title, str) and title.strip() else "学习任务"
+    title = (
+        title.strip()[:_MAX_TASK_TITLE] if isinstance(title, str) and title.strip() else "学习任务"
+    )
     try:
         minutes = int(round(float(raw.get("minutes", 0))))
     except (TypeError, ValueError):
@@ -175,11 +335,15 @@ def _coerce_task(raw: object) -> dict | None:
         else f"完成“{title}”并能用自己的话说明关键方法"
     )
     raw_instructions = raw.get("instructions")
-    instructions = [
-        item.strip()[:_MAX_TASK_INSTRUCTION]
-        for item in raw_instructions
-        if isinstance(item, str) and item.strip()
-    ][: _MAX_INSTRUCTIONS] if isinstance(raw_instructions, list) else []
+    instructions = (
+        [
+            item.strip()[:_MAX_TASK_INSTRUCTION]
+            for item in raw_instructions
+            if isinstance(item, str) and item.strip()
+        ][:_MAX_INSTRUCTIONS]
+        if isinstance(raw_instructions, list)
+        else []
+    )
     if len(instructions) < 2:
         instructions = [
             f"明确本任务涉及的关键概念：{kc_names[0] if kc_names else title}",
@@ -207,7 +371,11 @@ def _coerce_task(raw: object) -> dict | None:
     else:
         practice_count = min(max(practice_count, 1), 20)
     raw_difficulty = raw.get("difficulty")
-    difficulty = raw_difficulty if isinstance(raw_difficulty, str) and raw_difficulty in _DIFFICULTIES else None
+    difficulty = (
+        raw_difficulty
+        if isinstance(raw_difficulty, str) and raw_difficulty in _DIFFICULTIES
+        else None
+    )
     result = {
         "title": title,
         "objective": objective,
@@ -238,14 +406,15 @@ def _coerce_plan(data: object) -> dict | None:
             continue
         raw_days = raw_stage.get("days")
         days: list[dict] = []
-        for raw_day in (raw_days[:90] if isinstance(raw_days, list) else []):
+        for raw_day in raw_days[:90] if isinstance(raw_days, list) else []:
             if not isinstance(raw_day, dict):
                 continue
             raw_tasks = raw_day.get("tasks")
             tasks = [
                 task
                 for task in (
-                    _coerce_task(t) for t in (raw_tasks[:_MAX_TASKS_PER_DAY] if isinstance(raw_tasks, list) else [])
+                    _coerce_task(t)
+                    for t in (raw_tasks[:_MAX_TASKS_PER_DAY] if isinstance(raw_tasks, list) else [])
                 )
                 if task is not None
             ]
@@ -261,19 +430,25 @@ def _coerce_plan(data: object) -> dict | None:
 
 
 def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
-    """LLM 草稿两次解析失败后的确定性降级: 按 diagnosis 主题轮转铺满天数。
+    """LLM 草稿两次解析失败后的确定性降级: 按目标主题轮转铺满天数。
 
     这不是冒充模型输出 — draft_plan 会在 trace 里记录 draft_fallback, 供上层提示降级。
+    若存在定性技能差距，先排差距技能；这只改变主题顺序，不会伪造掌握度。
     """
     diagnosis = state.get("diagnosis") or {}
     parsed = state.get("parsed_goal") or {}
     key_topics = [t for t in (parsed.get("key_topics") or []) if isinstance(t, str) and t.strip()]
+    gap_topics = [
+        item["skill"].strip()
+        for item in (state.get("skill_gaps") or [])
+        if isinstance(item, dict) and isinstance(item.get("skill"), str) and item["skill"].strip()
+    ][:_SKILL_GAP_LIMIT]
     if key_topics:
         # 目标主题优先, 掌握度记录只取与目标相关的 KC 补充 (防跨学科记录污染降级计划)
         related = [k for k in diagnosis if _topic_related(k, key_topics)]
-        topics = list(dict.fromkeys([*key_topics, *related]))
+        topics = list(dict.fromkeys([*gap_topics, *key_topics, *related]))
     else:
-        topics = [state.get("goal") or "自主学习"]
+        topics = gap_topics or [state.get("goal") or "自主学习"]
     days = []
     for day in range(1, total_days + 1):
         topic = topics[(day - 1) % len(topics)]
@@ -498,23 +673,46 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         data = await _chat_json(
             deps, state, feature="plan_parse_goal", prompt=prompt, tier=Tier.plan, temperature=0.0
         )
-        parsed = {"subject": "", "key_topics": [], "level_hint": ""}
+        parsed = {"subject": "", "key_topics": [], "level_hint": "", "skills": []}
         degraded = data is None
         if data is not None:
             subject = data.get("subject")
-            parsed["subject"] = subject.strip() if isinstance(subject, str) else ""
+            parsed["subject"] = subject.strip()[:120] if isinstance(subject, str) else ""
             topics = data.get("key_topics")
             if isinstance(topics, list):
-                parsed["key_topics"] = [t.strip() for t in topics if isinstance(t, str) and t.strip()]
+                seen_topics: set[str] = set()
+                for topic in topics:
+                    if len(parsed["key_topics"]) >= _GOAL_TOPIC_LIMIT:
+                        break
+                    if not isinstance(topic, str) or not topic.strip():
+                        continue
+                    clean_topic = topic.strip()[:_SKILL_NAME_LIMIT]
+                    normalized = normalize_kc_name(clean_topic)
+                    if normalized and normalized not in seen_topics:
+                        parsed["key_topics"].append(clean_topic)
+                        seen_topics.add(normalized)
             hint = data.get("level_hint")
-            parsed["level_hint"] = hint.strip() if isinstance(hint, str) else ""
+            parsed["level_hint"] = hint.strip()[:160] if isinstance(hint, str) else ""
         if not parsed["key_topics"] and goal.strip():
             # 兜底: 目标本身充当唯一主题, 保证后续节点仍有输入
             parsed["key_topics"] = [goal.strip()[:30]]
+        parsed["skills"] = _coerce_goal_skills(
+            data.get("skills") if isinstance(data, dict) else None,
+            parsed["key_topics"],
+        )
+        skill_gaps = skill_gap_analysis(parsed["skills"], state.get("weak_kcs") or [])
         event = "llm_parse_failed_fallback" if degraded else "parsed"
         return {
             "parsed_goal": parsed,
-            "trace": [{"node": "parse_goal", "event": event, "parsed_goal": parsed}],
+            "skill_gaps": skill_gaps,
+            "trace": [
+                {
+                    "node": "parse_goal",
+                    "event": event,
+                    "parsed_goal": parsed,
+                    "skill_gap_count": len(skill_gaps),
+                }
+            ],
         }
 
     async def diagnose(state: PlanGraphState) -> dict:
@@ -533,7 +731,11 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             return {
                 "diagnosis": existing,
                 "trace": [
-                    {"node": "diagnose", "event": "external_diagnosis_used", "kc_count": len(existing)}
+                    {
+                        "node": "diagnose",
+                        "event": "external_diagnosis_used",
+                        "kc_count": len(existing),
+                    }
                 ],
             }
         if not missing:
@@ -586,7 +788,12 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                     result = await deps.retrieval.retrieve(state.get("tenant_id", ""), kb_id, topic)
                 except Exception as exc:  # 单 topic 检索失败不阻断规划
                     trace.append(
-                        {"node": "gather_resources", "event": "kb_error", "topic": topic, "error": str(exc)}
+                        {
+                            "node": "gather_resources",
+                            "event": "kb_error",
+                            "topic": topic,
+                            "error": str(exc),
+                        }
                     )
                     continue
                 for chunk in result.chunks[:_KB_TOP_K]:
@@ -609,7 +816,12 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                     results = await deps.web_search(topic)
                 except Exception as exc:
                     trace.append(
-                        {"node": "gather_resources", "event": "web_error", "topic": topic, "error": str(exc)}
+                        {
+                            "node": "gather_resources",
+                            "event": "web_error",
+                            "topic": topic,
+                            "error": str(exc),
+                        }
                     )
                     continue
                 for item in (results or [])[:_WEB_TOP_K]:
@@ -636,11 +848,14 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         parsed = state.get("parsed_goal") or {}
         diagnosis = state.get("diagnosis") or {}
         kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
-        resources_block = "\n".join(
-            f"{i}. [{r.get('type', '')}] {r.get('title', '')}"
-            f" (doc_id={r.get('doc_id', '')}, chunk_id={r.get('chunk_id', '')}, url={r.get('url', '')})"
-            for i, r in enumerate(resources)
-        ) or "(暂无资源, 所有任务 resource_ref 一律填 null; action_type 使用 practice、tutor 或 mixed)"
+        resources_block = (
+            "\n".join(
+                f"{i}. [{r.get('type', '')}] {r.get('title', '')}"
+                f" (doc_id={r.get('doc_id', '')}, chunk_id={r.get('chunk_id', '')}, url={r.get('url', '')})"
+                for i, r in enumerate(resources)
+            )
+            or "(暂无资源, 所有任务 resource_ref 一律填 null; action_type 使用 practice、tutor 或 mixed)"
+        )
         prompt = (
             _load_prompt("plan_draft.md")
             .replace("{{TOTAL_DAYS}}", str(total_days))
@@ -650,6 +865,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
             # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
             .replace("{{DIAGNOSIS}}", _render_diagnosis(diagnosis, parsed.get("key_topics") or []))
+            .replace("{{SKILL_GAPS}}", _render_skill_gaps(state.get("skill_gaps")))
             .replace("{{PROFILE}}", (state.get("profile_summary") or "(无额外画像)"))
             .replace("{{RESOURCES}}", resources_block)
             .replace("{{KC_ORDER}}", " -> ".join(kc_order) or "(无硬性先后约束)")
@@ -676,6 +892,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 "event": "drafted",
                 "fix_count": len(fixes),
                 "profile_injected": bool(state.get("profile_summary")),
+                "skill_gap_count": len(state.get("skill_gaps") or []),
             }
         ]
         trace.extend({"node": "draft_plan", "event": "fix", **fix} for fix in fixes)
@@ -690,9 +907,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 "resources": state.get("resources") or [],
             }
         )
-        approved = (
-            bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
-        )
+        approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
         if not approved:
             return {"trace": [{"node": "confirm_plan", "event": "plan_rejected"}]}
         updates: dict[str, Any] = {"plan_confirmed": True}
@@ -705,9 +920,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 event = "plan_approved_invalid_edits_ignored"
             else:
                 total_days = max(int(state.get("total_days") or 1), 1)
-                budget_minutes = max(
-                    float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0
-                )
+                budget_minutes = max(float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0)
                 resources = state.get("resources") or []
                 kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
                 _harden_plan(
