@@ -182,7 +182,9 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | POST | /api/threads/{thread_id}/resume | {value} interrupt 恢复协议 (M3-D2)；thread_id=`kind:user:local`，跨用户 404 |
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?} → SSE：Blueprint → interrupt(blueprint_confirm) |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
-| POST | /api/quiz/{id}/attempts | {answers} → 判分（客观本地/简答 LLM 附理由）+ 错题自动入本 + BKT 直写 + mastery_log 审计；正确率<0.6 时附 `plan_adjustment`（自动补强，F3-A3）；导入卷不可作答 |
+| POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |
+| GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
+| POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?}` → 表达完整度、反馈、缺口、重试建议和 `degraded`；只保存反馈观察，不写掌握度/画像/错题/报告 |
 | POST | /api/plans | `{goal, kb_id?, budget_hours_per_day, total_days}` → SSE → interrupt(plan_confirm)；服务端重新校验 KB 访问、任务结构与资源引用 |
 | GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
 | GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}` 与 `progress{total,done,ratio}` |
@@ -190,6 +192,13 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插带目标、步骤、完成标准、`action_type=practice` 的「补强: {KC}」任务 → `{inserted, reason}` |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
 | POST | /api/tutor | {problem, message, thread_local_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level |
+
+作答前信心的五级概率映射固定为 `0.1/0.3/0.5/0.7/0.9`。高信心答错率只统计概率
+`>=0.7` 的样本；Brier 分数和该比率均只描述预测校准，不评价学习能力。跳过预测时不写
+`metacognition_predictions`。重复 `question_id` 在一次提交中只处理首项，避免重复 Attempt。
+Explain-back 使用 cheap 文本模型和输入/输出审核；模型或 JSON 失败时保留原文并返回
+`degraded=true`，额度耗尽仍返回统一 `INSUFFICIENT_CREDITS/BUDGET_EXCEEDED`。`kc_id` 不存在、
+非本人或跨租户统一 `404 KC_NOT_FOUND`；不支持的输入返回统一审核/校验错误信封。
 
 ### 错题本（M4/F6，用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |

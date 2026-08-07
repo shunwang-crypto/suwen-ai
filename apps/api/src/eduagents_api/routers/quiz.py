@@ -52,8 +52,15 @@ class QuizCreate(BaseModel):
         return self
 
 
+class AttemptAnswerIn(BaseModel):
+    question_id: uuid.UUID
+    response: str = Field(default="", max_length=8000)
+    predicted_confidence: int | None = Field(default=None, ge=1, le=5, strict=True)
+    predicted_correct: bool | None = Field(default=None, strict=True)
+
+
 class AttemptIn(BaseModel):
-    answers: list[dict]  # [{question_id, response}]
+    answers: list[AttemptAnswerIn] = Field(min_length=1, max_length=20)
 
 
 @router.post("")
@@ -211,5 +218,9 @@ async def submit_attempts(
     # 业务时间走虚拟时钟 (§9): 错题入本的 FSRS 卡 due 随 time-travel 前进
     now_dt = await timectl.now(request.app.state.redis)
     return await record_attempts(
-        ctx, request.app.state.gateway, quiz_id, body.answers, now_dt=now_dt
+        ctx,
+        request.app.state.gateway,
+        quiz_id,
+        [answer.model_dump() for answer in body.answers],
+        now_dt=now_dt,
     )

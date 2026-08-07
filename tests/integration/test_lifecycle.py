@@ -92,12 +92,14 @@ async def test_account_deletion_wipes_all_tables(client):
         Chunk,
         Document,
         ErrorItem,
+        ExplainBack,
         KnowledgeBase,
         KnowledgeComponent,
         LearnerInsight,
         LearningResource,
         MasteryLog,
         MasteryRecord,
+        MetacognitionPrediction,
         PendingCleanup,
         Plan,
         PlanAdjustment,
@@ -139,7 +141,26 @@ async def test_account_deletion_wipes_all_tables(client):
         q = Question(tenant_id=uid, quiz_id=quiz.id, type="single", stem="s", answer="A")
         s.add(q)
         await s.flush()
-        s.add(Attempt(tenant_id=uid, user_id=uid, question_id=q.id, response="A"))
+        attempt = Attempt(tenant_id=uid, user_id=uid, question_id=q.id, response="A")
+        s.add(attempt)
+        await s.flush()
+        s.add(
+            MetacognitionPrediction(
+                tenant_id=uid,
+                user_id=uid,
+                attempt_id=attempt.id,
+                question_id=q.id,
+                predicted_confidence=4,
+            )
+        )
+        s.add(
+            ExplainBack(
+                tenant_id=uid,
+                user_id=uid,
+                student_text="我用自己的话解释",
+                feedback="表达完整",
+            )
+        )
         s.add(ErrorItem(tenant_id=uid, user_id=uid, question_id=q.id))
         plan = Plan(tenant_id=uid, user_id=uid, goal="g")
         s.add(plan)
@@ -250,7 +271,8 @@ async def test_account_deletion_wipes_all_tables(client):
     # 12+ 张表零残留 (RLS 租户会话: 有残留必可见)
     models_zero = [
         Attempt, AssessmentAnswer, AssessmentAttempt, ChatSession, ChatMessage,
-        ErrorItem, LearningResource, MasteryLog, MasteryRecord, Plan, PlanAdjustment,
+        ErrorItem, ExplainBack, LearningResource, MasteryLog, MasteryRecord,
+        MetacognitionPrediction, Plan, PlanAdjustment,
         Quiz, Question, ResourceQuestion,
         KnowledgeBase, Document, Chunk, KnowledgeComponent,
         LearnerInsight, UserPreference,
@@ -614,6 +636,8 @@ async def test_export_user_data(client):
         "tables/learning_report_snapshots.json",
         "tables/chat_attachments.json",
         "tables/error_imports.json",
+        "tables/metacognition_predictions.json",
+        "tables/explain_backs.json",
     } <= tables
     kbs = json.loads(zf.read("tables/knowledge_bases.json"))
     assert any(row["id"] == kb_id for row in kbs)

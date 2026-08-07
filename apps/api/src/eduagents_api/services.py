@@ -25,6 +25,7 @@ from .models import (
     LearnerInsight,
     MasteryLog,
     MasteryRecord,
+    MetacognitionPrediction,
     Plan,
     PlanResource,
     Question,
@@ -517,6 +518,7 @@ async def record_attempts(
 
     business_now = now_dt or datetime.now(UTC)
     results = []
+    seen_question_ids: set[str] = set()
     async with tenant_session(ctx.tenant_id) as session:
         quiz = await session.get(Quiz, quiz_id)
         if (
@@ -535,8 +537,9 @@ async def record_attempts(
         }
         for item in answers:
             q = questions.get(str(item["question_id"]))
-            if q is None:
+            if q is None or str(q.id) in seen_question_ids:
                 continue
+            seen_question_ids.add(str(q.id))
             response = str(item.get("response", ""))
             llm_score = None
             scored_reason = None
@@ -590,6 +593,25 @@ async def record_attempts(
             )
             session.add(attempt)
             await session.flush()
+            predicted_confidence = item.get("predicted_confidence")
+            if not isinstance(predicted_confidence, int) or isinstance(
+                predicted_confidence, bool
+            ) or not 1 <= predicted_confidence <= 5:
+                predicted_confidence = None
+            predicted_correct = item.get("predicted_correct")
+            if not isinstance(predicted_correct, bool):
+                predicted_correct = None
+            if predicted_confidence is not None or predicted_correct is not None:
+                session.add(
+                    MetacognitionPrediction(
+                        tenant_id=ctx.tenant_id,
+                        user_id=ctx.user_id,
+                        attempt_id=attempt.id,
+                        question_id=q.id,
+                        predicted_confidence=predicted_confidence,
+                        predicted_correct=predicted_correct,
+                    )
+                )
             kc_ids = [str(k) for k in (q.kc_ids or [])]
             changes = await _update_mastery(
                 session, ctx, kc_ids, correct, weight, attempt.id

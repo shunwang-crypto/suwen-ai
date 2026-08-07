@@ -1,6 +1,6 @@
 """用户数据导出 (P1-8, 个保法第 45 条可携带权)。
 
-export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (17 张业务表 JSON,
+export_user_data(ctx, tenant_id): RLS 租户会话逐表 dump (业务表 JSON,
 含个性化记忆/偏好、学情报告快照与聊天附件 — 均属可携带权范围) +
 chunk 文本 + 上传文件清单, 打 ZIP 存对象存储 exports/{uid}/{ts}.zip,
 完成后写 Redis export:{uid}=path (24h TTL)。下载经 API 流式转发
@@ -84,12 +84,14 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         Document,
         ErrorImport,
         ErrorItem,
+        ExplainBack,
         KnowledgeBase,
         LearnerInsight,
         LearningReportSnapshot,
         LearningResource,
         MasteryLog,
         MasteryRecord,
+        MetacognitionPrediction,
         Plan,
         PlanAdjustment,
         Question,
@@ -126,6 +128,8 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         "plan_adjustments": PlanAdjustment,
         "mastery_records": MasteryRecord,
         "mastery_log": MasteryLog,
+        "metacognition_predictions": MetacognitionPrediction,
+        "explain_backs": ExplainBack,
         # 0005 (P2-1): 长期记忆与偏好 — 个性化数据同属个保法可携带权范围
         "learner_insights": LearnerInsight,
         "user_preferences": UserPreference,

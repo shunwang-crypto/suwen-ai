@@ -436,6 +436,22 @@ export interface AttemptResult {
   plan_adjustment?: (PlanAdjustResult & { plan_id: string }) | null;
 }
 
+export interface MetacognitionSummary {
+  window: "day" | "week" | "all";
+  sample_n: number;
+  brier_score: number | null;
+  overconfidence_rate: number | null;
+}
+
+export interface ExplainBackResult {
+  id: string;
+  understanding_score: number | null;
+  feedback: string;
+  gap: string;
+  retry_guidance: string;
+  degraded: boolean;
+}
+
 // ---- 图工作流 SSE（stream_graph_run：interrupt 负载平铺在顶层）----
 
 export interface GraphInterruptData {

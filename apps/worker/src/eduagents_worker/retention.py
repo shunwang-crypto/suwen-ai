@@ -36,6 +36,7 @@ USAGE_LOG_DAYS = 180
 MASTERY_LOG_DAYS = 730
 CHECKPOINT_DAYS = 30
 FEEDBACK_CLOSED_DAYS = 90
+METACOGNITION_DAYS = 730
 
 
 def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
@@ -44,6 +45,7 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
     cut_mastery = now - timedelta(days=MASTERY_LOG_DAYS)
     cut_ckpt = now - timedelta(days=CHECKPOINT_DAYS)
     cut_feedback = now - timedelta(days=FEEDBACK_CLOSED_DAYS)
+    cut_metacognition = now - timedelta(days=METACOGNITION_DAYS)
     ckpt_where = "(checkpoint->>'ts')::timestamptz < :cutoff"
     orphan_writes = (
         "checkpoint_writes cw WHERE NOT EXISTS "
@@ -65,6 +67,18 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
             "DELETE FROM mastery_log WHERE at < :cutoff",
             "SELECT count(*) FROM mastery_log WHERE at < :cutoff",
             {"cutoff": cut_mastery},
+        ),
+        (
+            "metacognition_predictions",
+            "DELETE FROM metacognition_predictions WHERE created_at < :cutoff",
+            "SELECT count(*) FROM metacognition_predictions WHERE created_at < :cutoff",
+            {"cutoff": cut_metacognition},
+        ),
+        (
+            "explain_backs",
+            "DELETE FROM explain_backs WHERE created_at < :cutoff",
+            "SELECT count(*) FROM explain_backs WHERE created_at < :cutoff",
+            {"cutoff": cut_metacognition},
         ),
         (
             "checkpoints",

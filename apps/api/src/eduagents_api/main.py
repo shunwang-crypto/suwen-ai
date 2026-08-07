@@ -35,6 +35,7 @@ from .routers import (
     feedback,
     health,
     kb,
+    metacognition,
     next_actions,
     ops,
     orgs,
@@ -211,6 +212,7 @@ def create_app() -> FastAPI:
     app.include_router(error_imports.router)  # 学生上传/手动录入错题
     app.include_router(reviews.appeals_router)  # P2-3 判分申诉
     app.include_router(next_actions.router)  # P2-2/P2-5 可解释推荐 (F8-A2 开场卡数据源)
+    app.include_router(metacognition.router)  # 元认知校准与反讲（不写掌握度）
     app.include_router(admin.router)
     app.include_router(evals.router)  # F9 评估看板
     app.include_router(teacher.router)  # U-A4 教师组卷导出

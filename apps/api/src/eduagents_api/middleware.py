@@ -63,6 +63,7 @@ _MODERATED_FIELDS: dict[str, tuple[str, ...]] = {
     "/api/tutor": ("problem", "message"),
     "/api/quiz": ("topic",),
     "/api/plans": ("goal",),
+    "/api/metacognition/explain-back": ("student_text",),
 }
 
 
@@ -220,6 +221,8 @@ def install_error_handlers(app: FastAPI) -> None:
             "TUTOR_RESOURCE_MANAGED": "该附件由分级辅导草稿管理，请在辅导页面操作",
             "TUTOR_NO_QUESTIONS_RECOGNIZED": "未识别到题目，可重试或手工填写题干",
             "TUTOR_OCR_IMAGE_TOO_LARGE": "扫描页渲染后仍超过视觉识别大小上限",
+            "EXPLAIN_BACK_INPUT_REJECTED": "这段解释不符合平台规范，请修改后再试",
+            "KC_NOT_FOUND": "知识点不存在或无权访问",
             "ANSWER_NOT_VERIFIED": "请先核验正确答案，再进入复习或生成变式题",
             "ERROR_ITEM_NOT_EDITABLE": "只有手动录入或上传识别的错题可以修改题目内容",
             "ERROR_ITEM_LOCKED_AFTER_REVIEW": "该错题已经产生复习证据，不能修改题型、选项、正确答案或知识点",

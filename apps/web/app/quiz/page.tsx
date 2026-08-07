@@ -26,11 +26,14 @@ import {
 } from "@/components/common";
 import type { FlowItem } from "@/components/flow-timeline";
 import { BlueprintCard } from "@/components/quiz/blueprint-card";
+import { ExplainBackPanel } from "@/components/quiz/explain-back-panel";
+import { PredictionSlider } from "@/components/quiz/prediction-slider";
 import { QuizForm, type QuizFormValue } from "@/components/quiz/quiz-form";
 import {
   QuestionAnswer,
   QuestionMeta,
 } from "@/components/quiz/question-answer";
+import { buildAttemptAnswers } from "@/components/quiz/submission";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
@@ -43,6 +46,7 @@ import type {
   GraphInterruptData,
   GraphTraceData,
   KbOut,
+  MetacognitionSummary,
   NodeUpdateData,
   QuizDetail,
   QuizListItem,
@@ -197,8 +201,10 @@ export default function QuizPage() {
   const [quiz, setQuiz] = useState<ActiveQuiz | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [predictions, setPredictions] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
   const [attempt, setAttempt] = useState<AttemptResult | null>(null);
+  const [calibration, setCalibration] = useState<MetacognitionSummary | null>(null);
   const [resultFilter, setResultFilter] = useState<"all" | "correct" | "wrong">("all");
   const [showResultDetails, setShowResultDetails] = useState(true);
 
@@ -347,7 +353,9 @@ export default function QuizPage() {
                   questions: result.questions,
                 });
                 setAnswers({});
+                setPredictions({});
                 setAttempt(null);
+                setCalibration(null);
                 setNotice(null);
               } else {
                 setNotice("已取消出题（蓝图未确认），可重新发起。");
@@ -416,6 +424,8 @@ export default function QuizPage() {
       setNotice(null);
       setQuiz(null);
       setAttempt(null);
+      setPredictions({});
+      setCalibration(null);
       setPhase("streaming");
       void consume("/api/quiz", value);
     },
@@ -440,6 +450,8 @@ export default function QuizPage() {
     setNotice(null);
     setQuiz(null);
     setAttempt(null);
+    setPredictions({});
+    setCalibration(null);
     setPhase("streaming");
     void consume("/api/quiz", {
       from_weak_points: true,
@@ -466,6 +478,8 @@ export default function QuizPage() {
     setNotice(null);
     setQuiz(null);
     setAttempt(null);
+    setPredictions({});
+    setCalibration(null);
     setPhase("streaming");
     const base = Math.floor(verifyCount / 3);
     const rem = verifyCount % 3;
@@ -511,7 +525,9 @@ export default function QuizPage() {
         questions: detail.questions,
       });
       setAnswers({});
+      setPredictions({});
       setAttempt(null);
+      setCalibration(null);
       setTimeline([]);
     } catch (err) {
       setFlowError(err instanceof ApiError ? err.message : "练习加载失败");
@@ -527,15 +543,15 @@ export default function QuizPage() {
     try {
       const result = await apiJson<AttemptResult>(`/api/quiz/${quiz.id}/attempts`, {
         body: {
-          answers: quiz.questions.map((q) => ({
-            question_id: q.id,
-            response: answers[q.id] ?? "",
-          })),
+          answers: buildAttemptAnswers(quiz.questions, answers, predictions),
         },
       });
       setAttempt(result);
       setResultFilter("all");
       setShowResultDetails(true);
+      void apiJson<MetacognitionSummary>("/api/metacognition/summary?window=week")
+        .then(setCalibration)
+        .catch(() => setCalibration(null));
       try {
         // 判分即写 BKT，薄弱点随之变化：立刻刷新预览（"上午答错，下午就在卷子上"）
         const currentKbId = weakKbIdRef.current;
@@ -555,7 +571,7 @@ export default function QuizPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [quiz, answers, submitting, weakPointsPath]);
+  }, [quiz, answers, predictions, submitting, weakPointsPath]);
 
   const busy = phase === "streaming" || phase === "resuming";
   // 定向出题的逐 KC 分档理由（interrupt 负载平铺，普通出题为空数组）
@@ -616,6 +632,8 @@ export default function QuizPage() {
                 onClick={() => {
                   setQuiz(null);
                   setAttempt(null);
+                  setPredictions({});
+                  setCalibration(null);
                 }}
                 className="rounded-control border border-line-strong bg-white px-3.5 py-1.5 text-sm font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
               >
@@ -632,11 +650,33 @@ export default function QuizPage() {
               </div>
               <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-[10px] font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-[10px] font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-[11px] text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><MathText text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
               {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-[11px] font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-[10px] text-warning-600"><MathText text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-[10px] font-medium text-warning-700">前往学习计划 →</Link></div>}
+              {calibration && calibration.sample_n > 0 && (
+                <div className="mt-4 rounded-[9px] border border-brand-100 bg-brand-50/45 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold text-brand-800">近 7 天自我判断校准</p>
+                    <span className="text-[10px] text-brand-700">{calibration.sample_n} 次有效预测</span>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <p className="rounded-[7px] bg-white/80 px-3 py-2 text-[11px] text-ink-secondary">
+                      Brier 误差：<strong className="text-ink">{calibration.brier_score == null ? "—" : calibration.brier_score.toFixed(3)}</strong>
+                      <span className="ml-1 text-[10px] text-ink-muted">越低表示预测越贴近结果</span>
+                    </p>
+                    <p className="rounded-[7px] bg-white/80 px-3 py-2 text-[11px] text-ink-secondary">
+                      高信心答错率：<strong className="text-ink">{calibration.overconfidence_rate == null ? "样本不足" : fmtPct(calibration.overconfidence_rate)}</strong>
+                    </p>
+                  </div>
+                  <p className="mt-2 text-[10px] leading-4 text-ink-muted">
+                    {calibration.sample_n < 5
+                      ? "当前样本较少，只展示记录，不对学习能力作评价。"
+                      : "该指标只帮助校准信心，不参与正式评分、掌握度或学习画像。"}
+                  </p>
+                </div>
+              )}
               <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-4">
-                <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setAttempt(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
+                <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setPredictions({}); setAttempt(null); setCalibration(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
                 <Link href={wrongQuestions[0] ? `/tutor?problem=${encodeURIComponent(wrongQuestions[0].stem)}` : "/tutor"} className="rounded-[8px] border border-brand-200 bg-brand-50 px-3 py-2 text-center text-[11px] font-medium text-brand-700">进入分级辅导</Link>
                 <Link href="/profile" className="rounded-[8px] border border-line-strong px-3 py-2 text-center text-[11px] font-medium text-ink-secondary">查看学习画像</Link>
-                <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); }} className="rounded-[8px] border border-line-strong px-3 py-2 text-[11px] font-medium text-ink-secondary">返回智能练习</button>
+                <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); setPredictions({}); setCalibration(null); }} className="rounded-[8px] border border-line-strong px-3 py-2 text-[11px] font-medium text-ink-secondary">返回智能练习</button>
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex gap-1.5" aria-label="筛选答题结果">
@@ -681,6 +721,24 @@ export default function QuizPage() {
                         setAnswers((prev) => ({ ...prev, [q.id]: v }))
                       }
                     />
+
+                    {!attempt && (
+                      <PredictionSlider
+                        questionNumber={i + 1}
+                        value={predictions[q.id]}
+                        disabled={submitting}
+                        onChange={(value) =>
+                          setPredictions((current) => {
+                            if (value == null) {
+                              const next = { ...current };
+                              delete next[q.id];
+                              return next;
+                            }
+                            return { ...current, [q.id]: value };
+                          })
+                        }
+                      />
+                    )}
 
                     {result && (
                       <div
@@ -754,6 +812,10 @@ export default function QuizPage() {
                         {q.type === "short" && result.llm_score != null && (
                           <AppealEntry questionId={q.id} />
                         )}
+                        <ExplainBackPanel
+                          kcId={q.kc_ids[0]}
+                          promptSpanRef={`quiz:${quiz.id}:question:${q.id}`}
+                        />
                       </div>
                     )}
                   </li>

@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -864,6 +865,68 @@ class LearnerInsight(Base):
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class MetacognitionPrediction(Base):
+    """Pre-answer confidence attached to a real attempt.
+
+    Prediction data is an observation channel only and never updates mastery.
+    """
+
+    __tablename__ = "metacognition_predictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "attempt_id",
+            "question_id",
+            name="uq_metacognition_prediction_attempt_question",
+        ),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("attempts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    predicted_confidence: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    predicted_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class ExplainBack(Base):
+    """User explanation feedback; deliberately separate from mastery evidence."""
+
+    __tablename__ = "explain_backs"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kc_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_components.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    prompt_span_ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    student_text: Mapped[str] = mapped_column(Text, nullable=False)
+    understanding_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feedback: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gap: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    retry_guidance: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = _created_at()
 
 

@@ -64,6 +64,9 @@ erDiagram
     USER ||--o{ QUIZ : owns
     QUIZ ||--o{ QUESTION : contains
     QUESTION ||--o{ ATTEMPT : receives
+    ATTEMPT ||--o| METACOGNITION_PREDICTION : may_have
+    USER ||--o{ METACOGNITION_PREDICTION : owns
+    USER ||--o{ EXPLAIN_BACK : writes
     QUESTION ||--o{ ERROR_ITEM : produces
 ~~~
 
@@ -112,11 +115,19 @@ erDiagram
 | `Quiz` | AI 练习蓝图、所属用户/知识库和生成状态 |
 | `Question` | 题干、题型、答案、解析、难度、知识点；可属于 Quiz，也可由 ResourceQuestion 引用 |
 | `Attempt` | 普通测验中针对单题的真实响应和判分结果 |
+| `MetacognitionPrediction` | 作答前可选的 1–5 级信心预测，绑定真实 Attempt；只用于确定性校准统计 |
+| `ExplainBack` | 学生反讲原文、AI 表达反馈和降级状态；不作为掌握度或错题证据 |
 | `ErrorItem` | 错题来源、错因、状态、核验状态、FSRS card、资源/作答关联 |
 | `MasteryRecord` | 用户与知识点的当前 BKT 状态和置信度 |
 | `MasteryLog` | 每次掌握度变化的旧值、新值、证据类型、证据 ID 和权重 |
 
 `Question.quiz_id` 可空。资源题不创建隐藏 Quiz，也不能进入普通测验或教师组卷列表。
+
+`MetacognitionPrediction` 与对应 `Attempt/Question/User` 同事务写入；1–5 映射为
+`0.1/0.3/0.5/0.7/0.9`，Brier 误差和高信心答错率按查询窗口实时计算，不保存易过期聚合。
+预测与 Explain-back 都是 observation-only 数据，不调用 BKT/FSRS，不写 `MasteryRecord`、
+`MasteryLog`、`ErrorItem`、`LearnerInsight` 或报告。Explain-back 模型/JSON 失败时仍保存学生
+原文和 `degraded=true` 的可重试反馈；额度异常继续使用统一 402/429 契约，不伪装成降级成功。
 
 ## 题目资料与真实作答
 
@@ -160,6 +171,7 @@ erDiagram
 | `UsageLog` | 模型/功能/用户维度 token、成本、延迟和模式 |
 | `UserModelCredential` | 0017 用户 DeepSeek 凭据的 AES-256-GCM 密文、nonce、版本和脱敏配置；不保存明文 |
 | `TutorProblemDraft` | 0018 分级辅导的选页、待校对字段、确认快照、资源/题目安全 ID 与绑定 thread；不保存文件二进制/Base64/API Key |
+| `MetacognitionPrediction / ExplainBack` | 0020 作答前信心观察和反讲表达反馈；730 天留存，随用户/Attempt 级联清理并进入数据导出 |
 | `EvalRun` | 评估配置、语料/黄金集版本和指标 |
 | `WalletAccount / WalletLedger / PaymentOrder` | 钱包、不可变流水和支付订单骨架 |
 
