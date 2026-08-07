@@ -13,9 +13,7 @@ from eduagents_api.security import (
 )
 from eduagents_core.config import Settings
 
-settings = Settings(
-    _env_file=None, jwt_secret="test-secret-with-at-least-32-bytes-length!"
-)
+settings = Settings(_env_file=None, jwt_secret="test-secret-with-at-least-32-bytes-length!")
 
 
 def test_password_hash_roundtrip():
@@ -60,6 +58,28 @@ def test_tampered_token_rejected():
     )
     with pytest.raises(pyjwt.PyJWTError):
         decode_access_token(settings, token + "x")
+
+
+def test_access_token_allows_only_bounded_clock_skew():
+    uid, tid = uuid.uuid4(), uuid.uuid4()
+    near_future, _, _ = create_access_token(
+        settings,
+        user_id=uid,
+        tenant_id=tid,
+        role="student",
+        now=datetime.now(UTC) + timedelta(seconds=4),
+    )
+    assert decode_access_token(settings, near_future)["sub"] == str(uid)
+
+    far_future, _, _ = create_access_token(
+        settings,
+        user_id=uid,
+        tenant_id=tid,
+        role="student",
+        now=datetime.now(UTC) + timedelta(seconds=10),
+    )
+    with pytest.raises(pyjwt.ImmatureSignatureError):
+        decode_access_token(settings, far_future)
 
 
 def test_refresh_token_hash_is_stable_and_raw_unstored():

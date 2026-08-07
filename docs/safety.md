@@ -8,7 +8,7 @@
 
 | 防线 | 当前实现 | 主要验证 |
 |---|---|---|
-| 认证 | bcrypt、access token、httpOnly refresh cookie 轮换、重放撤销、登出黑名单、独立限流 | auth 生命周期与限流测试 |
+| 认证 | bcrypt、access token（`iat/exp` 仅允许 5 秒有界时钟漂移）、httpOnly refresh cookie 轮换、重放撤销、登出黑名单、独立限流 | auth 生命周期与限流测试 |
 | 邮箱所有权与邮件滥用 | 图形验证码前置、6 位 HMAC 验证码、10 分钟 TTL、单次消费、5 次错误失效、邮箱/IP 分钟与日限额、60 秒冷却 | 邮箱验证码单元/认证集成测试 |
 | 租户隔离 | 服务层所有权校验 + PostgreSQL ENABLE/FORCE RLS + 非超级应用角色 | 双账号、RLS、连接池复用测试 |
 | 机构权限 | 机构成员只读共享知识库，机构管理员写；平台管理员与机构管理员分离 | org 集成测试 |

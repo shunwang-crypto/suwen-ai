@@ -16,6 +16,9 @@ _KNOWN_WEAK_JWT_SECRETS = frozenset(
     {"dev-secret-change-me", "changeme", "change-me", "secret", "dev", "test"}
 )
 _MIN_JWT_SECRET_LEN = 32
+# 多进程/多机部署的系统时钟可能有秒级漂移。仅容忍很小的有界窗口，
+# 既避免刚签发 token 因 iat 落在“未来”被拒，也不放宽签名、算法或长期过期校验。
+_JWT_CLOCK_SKEW_SECONDS = 5
 
 
 def assert_production_secrets(settings: Settings) -> None:
@@ -86,7 +89,12 @@ def create_access_token(
 
 def decode_access_token(settings: Settings, token: str) -> dict:
     """Raises jwt.PyJWTError on any problem (expiry, signature, malformed)."""
-    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    return jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        leeway=_JWT_CLOCK_SKEW_SECONDS,
+    )
 
 
 def new_refresh_token() -> tuple[str, str]:
