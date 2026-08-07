@@ -11,7 +11,7 @@ import json
 
 import pytest
 from eduagents_core.config import Settings
-from eduagents_core.gateway.base import ChatRequest, ChatResult, Tier
+from eduagents_core.gateway.base import BudgetExceeded, ChatRequest, ChatResult, Tier
 from eduagents_core.graphs.quiz_graph import (
     QUESTION_SCHEMA,
     build_quiz_graph,
@@ -28,14 +28,28 @@ from langgraph.types import Command
 class FakeGateway:
     """预置响应文本队列, 逐次弹出; 记录收到的 ChatRequest 供断言。"""
 
-    def __init__(self, texts: list[str]) -> None:
+    def __init__(
+        self,
+        texts: list[str],
+        *,
+        critic_texts: list[str] | None = None,
+        critic_errors: list[Exception] | None = None,
+    ) -> None:
         self.texts = list(texts)
+        self.critic_texts = list(critic_texts or [])
+        self.critic_errors = list(critic_errors or [])
         self.requests: list[ChatRequest] = []
 
     async def chat(self, req: ChatRequest) -> ChatResult:
         self.requests.append(req)
+        if req.feature == "quiz_verify":
+            if self.critic_errors:
+                raise self.critic_errors.pop(0)
+            text = self.critic_texts.pop(0) if self.critic_texts else verify_json()
+        else:
+            text = self.texts.pop(0)
         return ChatResult(
-            text=self.texts.pop(0),
+            text=text,
             model="fake",
             tier=req.tier.value,
             prompt_tokens=1,
@@ -97,6 +111,12 @@ def good_q(**over) -> dict:
 
 def gen_json(questions: list[dict]) -> str:
     return json.dumps({"questions": questions}, ensure_ascii=False)
+
+
+def verify_json(issues: list[dict] | None = None) -> str:
+    return json.dumps(
+        {"issues": issues or [], "summary": "题目质量合格"}, ensure_ascii=False
+    )
 
 
 def base_state(**over) -> dict:
@@ -176,6 +196,7 @@ async def test_happy_path_interrupt_resume_bad_schema_retry_then_pass():
         "quiz_blueprint",
         "quiz_generate",
         "quiz_generate",
+        "quiz_verify",
     ]
     assert gateway.requests[0].tier == Tier.cheap
     assert all(r.json_mode for r in gateway.requests)
@@ -306,11 +327,145 @@ async def test_kb_materials_and_source_hint_mapping():
     await app.ainvoke(base_state(kb_id="kb1"), config)
     final = await app.ainvoke(Command(resume={"approved": True}), config)
 
-    assert retrieval.calls == [("t1", "kb1", "泰勒公式")]
+    assert retrieval.calls == [
+        ("t1", "kb1", "泰勒公式"),
+        ("t1", "kb1", "泰勒公式"),
+    ]
     gen_prompt = gateway.requests[1].messages[0].content
     assert "[素材 1]" in gen_prompt and "泰勒公式素材" in gen_prompt
     assert final["questions"][0]["source_chunk_id"] == "c2"  # hint=2 -> 第 2 条 chunk
     assert final["questions"][1]["source_chunk_id"] is None  # 越界 hint 置 None
+
+
+# --- 独立质量评审 (critic-guided) ---
+
+
+async def test_critic_major_issue_retries_generate_once_then_passes():
+    gateway = FakeGateway(
+        [
+            bp_json([bp_item()]),
+            gen_json([good_q()]),
+            gen_json([good_q()]),
+        ],
+        critic_texts=[
+            verify_json(
+                [
+                    {
+                        "question_idx": 1,
+                        "severity": "major",
+                        "reason": "easy 题需要多步复合推导，难度标注明显不符",
+                    }
+                ]
+            ),
+            verify_json(),
+        ],
+    )
+    app = make_app(gateway)
+    config = cfg("critic-major")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["critic_retry_count"] == 1
+    assert final["critic_issues"] == []
+    assert [request.feature for request in gateway.requests] == [
+        "quiz_blueprint",
+        "quiz_generate",
+        "quiz_verify",
+        "quiz_generate",
+        "quiz_verify",
+    ]
+    repair_prompt = gateway.requests[3].messages[0].content
+    assert "独立质量评审要求返工" in repair_prompt
+    assert "难度标注明显不符" in repair_prompt
+    critic_events = [event for event in final["trace"] if event["node"] == "critic_review"]
+    assert [event["event"] for event in critic_events] == ["failed", "passed"]
+
+
+async def test_critic_minor_issue_does_not_trigger_rework():
+    gateway = FakeGateway(
+        [bp_json([bp_item()]), gen_json([good_q()])],
+        critic_texts=[
+            verify_json(
+                [{"question_idx": 1, "severity": "minor", "reason": "干扰项可再打磨"}]
+            )
+        ],
+    )
+    app = make_app(gateway)
+    config = cfg("critic-minor")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final.get("critic_retry_count", 0) == 0
+    assert [request.feature for request in gateway.requests] == [
+        "quiz_blueprint",
+        "quiz_generate",
+        "quiz_verify",
+    ]
+    event = [event for event in final["trace"] if event["node"] == "critic_review"][-1]
+    assert event["event"] == "passed"
+    assert event["issues"] == 1
+
+
+async def test_critic_retry_exhaustion_is_explicit_and_does_not_loop():
+    gateway = FakeGateway(
+        [
+            bp_json([bp_item()]),
+            gen_json([good_q()]),
+            gen_json([good_q()]),
+        ],
+        critic_texts=[
+            verify_json([{"question_idx": 1, "severity": "major", "reason": "题干有歧义"}]),
+            verify_json([{"question_idx": 1, "severity": "major", "reason": "仍有歧义"}]),
+        ],
+    )
+    app = make_app(gateway)
+    config = cfg("critic-exhausted")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["critic_retry_count"] == 1
+    assert final["critic_issues"] == []
+    assert len(final["questions"]) == 1
+    critic_events = [event for event in final["trace"] if event["node"] == "critic_review"]
+    assert [event["event"] for event in critic_events] == ["failed", "exhausted"]
+    assert len(gateway.requests) == 5
+
+
+async def test_critic_invalid_response_and_gateway_error_degrade_to_valid_questions():
+    for suffix, critic_texts, critic_errors, reason in (
+        ("parse", ["not-json {"], [], "invalid_response"),
+        ("gateway", [], [RuntimeError("fake failure")], "gateway_error"),
+    ):
+        gateway = FakeGateway(
+            [bp_json([bp_item()]), gen_json([good_q()])],
+            critic_texts=critic_texts,
+            critic_errors=critic_errors,
+        )
+        app = make_app(gateway)
+        config = cfg(f"critic-degraded-{suffix}")
+        await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+        final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+        assert len(final["questions"]) == 1
+        event = [event for event in final["trace"] if event["node"] == "critic_review"][-1]
+        assert event["event"] == "degraded"
+        assert event["reason"] == reason
+
+
+async def test_critic_budget_exceeded_is_not_swallowed():
+    gateway = FakeGateway(
+        [bp_json([bp_item()]), gen_json([good_q()])],
+        critic_errors=[BudgetExceeded(retry_after_seconds=60)],
+    )
+    app = make_app(gateway)
+    config = cfg("critic-budget")
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+
+    with pytest.raises(BudgetExceeded):
+        await app.ainvoke(Command(resume={"approved": True}), config)
 
 
 # --- grade_objective 纯函数 ---

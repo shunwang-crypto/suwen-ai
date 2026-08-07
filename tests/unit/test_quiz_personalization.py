@@ -32,8 +32,13 @@ class FakeGateway:
 
     async def chat(self, req: ChatRequest) -> ChatResult:
         self.requests.append(req)
+        text = (
+            json.dumps({"issues": [], "summary": "题目质量合格"}, ensure_ascii=False)
+            if req.feature == "quiz_verify"
+            else self.texts.pop(0)
+        )
         return ChatResult(
-            text=self.texts.pop(0),
+            text=text,
             model="fake",
             tier=req.tier.value,
             prompt_tokens=1,
@@ -329,7 +334,11 @@ async def test_generate_calls_retrieval_with_real_signature():
     await app.ainvoke(state, config)
     final = await app.ainvoke(Command(resume={"approved": True}), config)
     assert final["validation_errors"] == []
-    assert calls == [("t1", "kb-1", "薄弱点强化练习")]
+    # 生成和独立 critic 各检索一次；素材正文不进入 Graph checkpoint。
+    assert calls == [
+        ("t1", "kb-1", "薄弱点强化练习"),
+        ("t1", "kb-1", "薄弱点强化练习"),
+    ]
     # 素材真实进了出题 prompt
     gen_prompt = gateway.requests[1].messages[0].content
     assert "泰勒公式素材" in gen_prompt

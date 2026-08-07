@@ -6,6 +6,7 @@
   interrupt 负载附带 difficulty_reasons (定向出题的逐 KC 分档理由, P1-1 可解释);
 - generate 注入学生画像段 (P1-2): 干扰项贴合近期错因分布, 摘要为空即不注入;
 - 逐题 Pydantic 严格校验 (QUESTION_SCHEMA), 失败带错误清单回 generate 修复, 最多重试 2 轮;
+- schema 通过后由 cheap 档独立 critic 检查蓝图一致性与教学质量, major 最多返工 1 轮;
 - 判分不进图: 客观题纯函数 grade_objective 由 API 层调用, 简答题走 LLM 评分 (§5.6)。
 """
 
@@ -19,13 +20,18 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from ..gateway.base import ChatMessage, ChatRequest, Tier
+from ..gateway.base import BudgetExceeded, ChatMessage, ChatRequest, Tier
 from ..kc.types import normalize_kc_name
+from ..logging import get_logger
 from .state import GraphDeps, QuizState
 
 # 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 MAX_RETRIES = 2  # 校验失败最多打回 generate 修复 2 轮
+MAX_CRITIC_RETRIES = 1  # 独立评审最多返工 1 轮，避免无限增加成本
+MAX_CRITIC_ISSUES = 5
+MAX_CRITIC_REASON_CHARS = 120
+MAX_CRITIC_MATERIAL_CHARS = 20_000
 
 _TYPES = ("single", "multi", "blank", "short")
 _DIFFICULTIES = ("easy", "mid", "hard")
@@ -43,6 +49,7 @@ PROFILE_SECTION_TEMPLATE = (
     "画像含兴趣标签时，例题的应用情境可自然贴合其兴趣（用其熟悉的场景包装题目背景），"
     "不得生硬堆砌兴趣词，不得改变蓝图规定的知识点与考察目标。"
 )
+log = get_logger("quiz_graph")
 
 
 class _QuizGraphState(QuizState, total=False):
@@ -50,6 +57,8 @@ class _QuizGraphState(QuizState, total=False):
 
     profile_summary: str  # 学生画像摘要 (API 层 profile_summary.py 产出; 空=无画像)
     difficulty_reasons: list[dict]  # 逐薄弱 KC 难度分档理由 (随 blueprint interrupt 下发)
+    critic_issues: list[str]  # 有界修复指令；不保存素材或 critic 原始响应
+    critic_retry_count: int  # 独立评审已触发的返工轮数
 
 
 class QuestionModel(BaseModel):
@@ -383,6 +392,14 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 "## 上一轮输出未通过校验, 本轮必须修复\n\n"
                 f"重新输出全部题目, 并修复以下问题:\n{error_lines}"
             )
+        critic_issues = state.get("critic_issues") or []
+        if critic_issues:
+            critic_lines = "\n".join(f"- {issue}" for issue in critic_issues)
+            critic_block = (
+                "## 独立质量评审要求返工\n\n"
+                f"重新输出全部题目, 并修复以下问题:\n{critic_lines}"
+            )
+            fix_block = f"{fix_block}\n\n{critic_block}" if fix_block else critic_block
         # 画像注入 (P1-2): 空摘要即整段置空, prompt 与无画像时完全一致
         profile_summary = (state.get("profile_summary") or "").strip()
         profile_block = (
@@ -483,16 +500,187 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    def route_after_validate(state: QuizState) -> str:
-        if state.get("validation_errors") and int(state.get("retry_count") or 0) <= MAX_RETRIES:
-            return "generate"
-        return END
+    def route_after_validate(state: _QuizGraphState) -> str:
+        if state.get("validation_errors"):
+            if int(state.get("retry_count") or 0) <= MAX_RETRIES:
+                return "generate"
+            return END
+        return "critic_review"
+
+    async def critic_review(state: _QuizGraphState) -> dict:
+        """独立质量评审；增强项失败可降级，但预算熔断必须继续向上抛出。"""
+        questions = state.get("questions") or []
+        if not questions:
+            return {
+                "critic_issues": [],
+                "trace": [
+                    {"node": "critic_review", "event": "skipped", "reason": "no_questions"}
+                ],
+            }
+
+        materials: list[dict[str, str | int | None]] = []
+        retrieval_degraded = False
+        kb_id = state.get("kb_id", "")
+        if kb_id and deps.retrieval is not None:
+            try:
+                # 不把素材正文塞入 Graph state/checkpoint；独立评审按相同查询重新检索。
+                # 检索层可复用现有缓存，失败则只跳过事实锚定维度，不阻断 schema 合格题目。
+                retrieval = await deps.retrieval.retrieve(
+                    state.get("tenant_id", ""), kb_id, state.get("topic", "")
+                )
+                remaining = MAX_CRITIC_MATERIAL_CHARS
+                for index, chunk in enumerate(list(retrieval.chunks)[:5], start=1):
+                    if remaining <= 0:
+                        break
+                    text = str(chunk.text)[:remaining]
+                    remaining -= len(text)
+                    materials.append(
+                        {
+                            "index": index,
+                            "heading": str(chunk.heading_path or "")[:500],
+                            "text": text,
+                            "page": chunk.page_start,
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001 - critic fact check can run without retrieval
+                retrieval_degraded = True
+                log.warning(
+                    "quiz_critic_retrieval_degraded",
+                    error_type=type(exc).__name__,
+                )
+
+        critic_input = json.dumps(
+            {
+                "blueprint": state.get("blueprint") or {},
+                "materials": materials,
+                "questions": questions,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            result = await deps.gateway.chat(
+                ChatRequest(
+                    messages=(
+                        ChatMessage(role="system", content=_load_prompt("quiz_verify.md")),
+                        ChatMessage(role="user", content=critic_input),
+                    ),
+                    tier=Tier.cheap,
+                    temperature=0.0,
+                    json_mode=True,
+                    feature="quiz_verify",
+                    tenant_id=state.get("tenant_id", ""),
+                    user_id=state.get("user_id", ""),
+                    request_id=state.get("request_id", ""),
+                    max_tokens=700,
+                )
+            )
+        except BudgetExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional critic must not block valid questions
+            log.warning("quiz_critic_degraded", error_type=type(exc).__name__)
+            return {
+                "critic_issues": [],
+                "trace": [
+                    {
+                        "node": "critic_review",
+                        "event": "degraded",
+                        "reason": "gateway_error",
+                        "retrieval_degraded": retrieval_degraded,
+                    }
+                ],
+            }
+
+        data = _parse_json_object(result.text)
+        if data is None or not isinstance(data.get("issues"), list):
+            return {
+                "critic_issues": [],
+                "trace": [
+                    {
+                        "node": "critic_review",
+                        "event": "degraded",
+                        "reason": "invalid_response",
+                        "retrieval_degraded": retrieval_degraded,
+                    }
+                ],
+            }
+
+        issues: list[dict[str, Any]] = []
+        issue_counts: dict[int, int] = {}
+        for item in data["issues"]:
+            if len(issues) >= MAX_CRITIC_ISSUES:
+                break
+            if not isinstance(item, dict):
+                continue
+            question_idx = item.get("question_idx")
+            severity = item.get("severity")
+            reason = item.get("reason")
+            if (
+                not isinstance(question_idx, int)
+                or isinstance(question_idx, bool)
+                or not 1 <= question_idx <= len(questions)
+                or severity not in ("major", "minor")
+                or not isinstance(reason, str)
+                or not reason.strip()
+                or issue_counts.get(question_idx, 0) >= 2
+            ):
+                continue
+            issue_counts[question_idx] = issue_counts.get(question_idx, 0) + 1
+            issues.append(
+                {
+                    "question_idx": question_idx,
+                    "severity": severity,
+                    "reason": reason.strip()[:MAX_CRITIC_REASON_CHARS],
+                }
+            )
+
+        major = [issue for issue in issues if issue["severity"] == "major"]
+        retry_count = int(state.get("critic_retry_count") or 0)
+        if major and retry_count < MAX_CRITIC_RETRIES:
+            fix_lines = [
+                f"第 {issue['question_idx']} 题 ({issue['severity']}): {issue['reason']}"
+                for issue in issues
+            ]
+            return {
+                "critic_issues": fix_lines,
+                "critic_retry_count": retry_count + 1,
+                "trace": [
+                    {
+                        "node": "critic_review",
+                        "event": "failed",
+                        "major": len(major),
+                        "issues": len(issues),
+                        "will_retry": True,
+                        "round": retry_count,
+                        "retrieval_degraded": retrieval_degraded,
+                    }
+                ],
+            }
+
+        event = "exhausted" if major else "passed"
+        return {
+            "critic_issues": [],
+            "trace": [
+                {
+                    "node": "critic_review",
+                    "event": event,
+                    "major": len(major),
+                    "issues": len(issues),
+                    "will_retry": False,
+                    "round": retry_count,
+                    "retrieval_degraded": retrieval_degraded,
+                }
+            ],
+        }
+
+    def route_after_critic(state: _QuizGraphState) -> str:
+        return "generate" if state.get("critic_issues") else END
 
     graph = StateGraph(_QuizGraphState)
     graph.add_node("make_blueprint", make_blueprint)
     graph.add_node("confirm_blueprint", confirm_blueprint)
     graph.add_node("generate", generate)
     graph.add_node("validate", validate)
+    graph.add_node("critic_review", critic_review)
     graph.add_edge(START, "make_blueprint")
     graph.add_edge("make_blueprint", "confirm_blueprint")
     graph.add_conditional_edges(
@@ -500,6 +688,11 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
     )
     graph.add_edge("generate", "validate")
     graph.add_conditional_edges(
-        "validate", route_after_validate, {"generate": "generate", END: END}
+        "validate",
+        route_after_validate,
+        {"generate": "generate", "critic_review": "critic_review", END: END},
+    )
+    graph.add_conditional_edges(
+        "critic_review", route_after_critic, {"generate": "generate", END: END}
     )
     return graph

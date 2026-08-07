@@ -200,6 +200,13 @@ Explain-back 使用 cheap 文本模型和输入/输出审核；模型或 JSON �
 `degraded=true`，额度耗尽仍返回统一 `INSUFFICIENT_CREDITS/BUDGET_EXCEEDED`。`kc_id` 不存在、
 非本人或跨租户统一 `404 KC_NOT_FOUND`；不支持的输入返回统一审核/校验错误信封。
 
+Quiz 题目通过 schema 后会进入独立 cheap critic，检查蓝图一致性、难度、答案/解析、歧义和
+可用素材中的明确事实冲突。只有 major 问题触发整卷返工，最多一次；第二次仍有 major 时以
+`critic_review: exhausted` 结束，禁止无限循环。critic 网关或响应解析失败以
+`critic_review: degraded` 保留 schema 合格题目，额度异常不降级而继续走统一 402/429。
+事实核验会重新检索但不把素材正文或 critic 原始响应写入 Graph state/checkpoint；state 只保留
+最多 5 条、每条有界的修复指令和返工次数。
+
 ### 错题本（M4/F6，用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
