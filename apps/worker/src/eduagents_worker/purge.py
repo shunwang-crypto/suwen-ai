@@ -77,7 +77,7 @@ async def purge_tenant(
             f"export:pending:{tenant_id}",
         ]
         keys += [f"reflect:{sid}" for sid in (session_ids or [])]
-        for pattern in (f"profile_summary:{tenant_id}*", f"budget:{tenant_id}:*"):
+        for pattern in (f"profile_summary:*:{tenant_id}*", f"budget:{tenant_id}:*"):
             async for key in redis.scan_iter(match=pattern, count=500):
                 keys.append(key)
         if keys:
