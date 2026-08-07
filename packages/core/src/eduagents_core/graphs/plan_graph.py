@@ -40,6 +40,9 @@ _GOAL_SKILL_LIMIT = 8
 _SKILL_NAME_LIMIT = 120
 _SKILL_REASON_LIMIT = 80
 _SKILL_GAP_LIMIT = 8
+_GOAL_SUMMARY_LIMIT = 500
+_GOAL_ANALYSIS_ITEM_LIMIT = 5
+_GOAL_ANALYSIS_TEXT_LIMIT = 240
 _KB_TOP_K = 3  # 每 topic 取知识库 top3
 _WEB_TOP_K = 2  # 每 topic 取 web top2
 _DIAGNOSIS_LIMIT = 20  # 进 prompt 的掌握度条目上限 (目标相关优先, 防跨学科全量膨胀)
@@ -93,6 +96,8 @@ class PlanGraphState(PlanState, total=False):
     weak_kcs: list[dict]
     # 目标所需技能 ∩ 当前薄弱点。与 diagnosis 独立，不产生或修改掌握度。
     skill_gaps: list[dict]
+    # 可操作的目标拆解；只保留用户提供或从目标中忠实提取的文本。
+    goal_analysis: dict
 
 
 def _load_prompt(filename: str) -> str:
@@ -242,6 +247,128 @@ def _render_skill_gaps(skill_gaps: object) -> str:
         )
         lines.append(f"- {skill.strip()[:_SKILL_NAME_LIMIT]}：目标{label}，当前{zone}{suffix}")
     return "\n".join(lines) or "(当前目标与已知薄弱点无交集)"
+
+
+def _coerce_text_list(raw: object, *, limit: int = _GOAL_ANALYSIS_ITEM_LIMIT) -> list[str]:
+    """模型文本数组的统一边界：去空、限长、归一化去重。"""
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if len(result) >= limit or not isinstance(item, str) or not item.strip():
+            continue
+        text = " ".join(item.split())[:_GOAL_ANALYSIS_TEXT_LIMIT]
+        normalized = normalize_kc_name(text)
+        if not normalized or normalized in seen:
+            continue
+        result.append(text)
+        seen.add(normalized)
+    return result
+
+
+def _coerce_goal_analysis(data: object, state: PlanGraphState) -> dict:
+    """把目标解析收紧为可展示、可进 checkpoint 的安全契约。
+
+    明确表单字段优先于模型提取；未提供验收标准时保持空列表，
+    不为用户伪造分数、正确率或截止日期。
+    """
+    parsed = data if isinstance(data, dict) else {}
+    goal = " ".join(str(state.get("goal") or "").split())[:_GOAL_SUMMARY_LIMIT]
+    current_level = " ".join(str(state.get("current_level") or "").split())[:160]
+    target_outcome = " ".join(str(state.get("target_outcome") or "").split())[
+        :_GOAL_ANALYSIS_TEXT_LIMIT
+    ]
+    explicit_criteria = " ".join(str(state.get("success_criteria") or "").split())[
+        :_GOAL_ANALYSIS_TEXT_LIMIT
+    ]
+
+    outcomes = _coerce_text_list(parsed.get("outcomes"))
+    if target_outcome:
+        outcomes = [target_outcome, *outcomes]
+        outcomes = _coerce_text_list(outcomes)
+    # 验收标准是用户对“完成”的权威定义；没有明确输入时不采信模型自行补出的数值或比率。
+    criteria = [explicit_criteria] if explicit_criteria else []
+    constraints = _coerce_text_list(parsed.get("constraints"), limit=4)
+
+    raw_summary = parsed.get("goal_summary")
+    if current_level or target_outcome:
+        # 结构化输入是用户原话；用确定性拼装保证模型不会在摘要里改写目标。
+        parts = [goal]
+        if current_level:
+            parts.append(f"当前基础：{current_level}")
+        if target_outcome:
+            parts.append(f"期望成果：{target_outcome}")
+        summary = "；".join(parts)[:_GOAL_SUMMARY_LIMIT]
+    else:
+        summary = (
+            " ".join(raw_summary.split())[:_GOAL_SUMMARY_LIMIT]
+            if isinstance(raw_summary, str) and raw_summary.strip()
+            else goal
+        )
+    allowed_missing = {"scope", "current_level", "target_outcome", "success_criteria"}
+    missing = [
+        item
+        for item in _coerce_text_list(parsed.get("missing_information"), limit=4)
+        if item in allowed_missing
+    ]
+    if current_level:
+        missing = [item for item in missing if item != "current_level"]
+    elif not current_level and not str(parsed.get("level_hint") or "").strip():
+        missing = [*missing, "current_level"]
+    if outcomes:
+        missing = [item for item in missing if item != "target_outcome"]
+    else:
+        missing = [*missing, "target_outcome"]
+    if criteria:
+        missing = [item for item in missing if item != "success_criteria"]
+    else:
+        missing = [*missing, "success_criteria"]
+    missing = list(dict.fromkeys(missing))[:4]
+    supplied = 3 - sum(
+        item in missing for item in ("current_level", "target_outcome", "success_criteria")
+    )
+    quality = "clear" if supplied == 3 else "partial" if supplied >= 1 else "vague"
+    return {
+        "summary": summary,
+        "quality": quality,
+        "outcomes": outcomes,
+        "success_criteria": criteria,
+        "constraints": constraints,
+        "missing_information": missing,
+    }
+
+
+def _render_goal_analysis(goal_analysis: object) -> str:
+    """目标拆解的 prompt 渲染；不展开未知复合字段。"""
+    if not isinstance(goal_analysis, dict):
+        return "(未能拆解，请仅依据原始目标安排基线诊断)"
+    missing_labels = {
+        "scope": "学习范围",
+        "current_level": "当前基础",
+        "target_outcome": "期望成果",
+        "success_criteria": "验收标准",
+    }
+    summary = str(goal_analysis.get("summary") or "").strip()[:_GOAL_SUMMARY_LIMIT]
+    outcomes = _coerce_text_list(goal_analysis.get("outcomes"))
+    criteria = _coerce_text_list(goal_analysis.get("success_criteria"))
+    constraints = _coerce_text_list(goal_analysis.get("constraints"), limit=4)
+    missing = [
+        missing_labels[item]
+        for item in goal_analysis.get("missing_information") or []
+        if item in missing_labels
+    ]
+
+    def block(items: list[str], empty: str) -> str:
+        return "\n".join(f"- {item}" for item in items) or empty
+
+    return (
+        f"目标摘要：{summary or '(未提取)'}\n"
+        f"可观察成果：\n{block(outcomes, '- (未明确)')}\n"
+        f"验收标准：\n{block(criteria, '- (未明确，不得编造)')}\n"
+        f"已知约束：\n{block(constraints, '- (无额外约束)')}\n"
+        f"待明确：{'、'.join(missing) if missing else '(无)'}"
+    )
 
 
 def is_safe_public_url(value: object) -> bool:
@@ -669,7 +796,13 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
 
     async def parse_goal(state: PlanGraphState) -> dict:
         goal = state.get("goal", "")
-        prompt = _load_prompt("plan_parse_goal.md").replace("{{GOAL}}", goal)
+        prompt = (
+            _load_prompt("plan_parse_goal.md")
+            .replace("{{GOAL}}", goal)
+            .replace("{{CURRENT_LEVEL}}", state.get("current_level") or "(未提供)")
+            .replace("{{TARGET_OUTCOME}}", state.get("target_outcome") or "(未提供)")
+            .replace("{{SUCCESS_CRITERIA}}", state.get("success_criteria") or "(未提供)")
+        )
         data = await _chat_json(
             deps, state, feature="plan_parse_goal", prompt=prompt, tier=Tier.plan, temperature=0.0
         )
@@ -693,6 +826,9 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                         seen_topics.add(normalized)
             hint = data.get("level_hint")
             parsed["level_hint"] = hint.strip()[:160] if isinstance(hint, str) else ""
+        if state.get("current_level"):
+            # 用户明确自报的基础比模型归纳更权威。
+            parsed["level_hint"] = str(state["current_level"]).strip()[:160]
         if not parsed["key_topics"] and goal.strip():
             # 兜底: 目标本身充当唯一主题, 保证后续节点仍有输入
             parsed["key_topics"] = [goal.strip()[:30]]
@@ -700,16 +836,19 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             data.get("skills") if isinstance(data, dict) else None,
             parsed["key_topics"],
         )
+        goal_analysis = _coerce_goal_analysis(data, state)
         skill_gaps = skill_gap_analysis(parsed["skills"], state.get("weak_kcs") or [])
         event = "llm_parse_failed_fallback" if degraded else "parsed"
         return {
             "parsed_goal": parsed,
+            "goal_analysis": goal_analysis,
             "skill_gaps": skill_gaps,
             "trace": [
                 {
                     "node": "parse_goal",
                     "event": event,
                     "parsed_goal": parsed,
+                    "goal_quality": goal_analysis["quality"],
                     "skill_gap_count": len(skill_gaps),
                 }
             ],
@@ -861,6 +1000,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{TOTAL_DAYS}}", str(total_days))
             .replace("{{BUDGET_MINUTES}}", str(int(round(budget_minutes))))
             .replace("{{GOAL}}", state.get("goal", ""))
+            .replace("{{GOAL_ANALYSIS}}", _render_goal_analysis(state.get("goal_analysis")))
             .replace("{{SUBJECT}}", parsed.get("subject") or "(未知)")
             # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
             # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
@@ -892,6 +1032,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 "event": "drafted",
                 "fix_count": len(fixes),
                 "profile_injected": bool(state.get("profile_summary")),
+                "goal_quality": (state.get("goal_analysis") or {}).get("quality", "vague"),
                 "skill_gap_count": len(state.get("skill_gaps") or []),
             }
         ]
@@ -905,6 +1046,8 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 "kind": "plan_confirm",
                 "plan": state.get("plan") or {},
                 "resources": state.get("resources") or [],
+                "goal_analysis": state.get("goal_analysis") or {},
+                "skill_gaps": state.get("skill_gaps") or [],
             }
         )
         approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)

@@ -44,7 +44,9 @@ class QaState(TypedDict, total=False):
     answer_tier: str  # standard | strong；strong 的网页路径会启用深度检索
     route: str  # kb | web | direct
     route_reason: str
-    evidences: list[dict]  # RetrievedChunk 序列化: chunk_id/doc_id/text/heading_path/page_start/score
+    evidences: list[
+        dict
+    ]  # RetrievedChunk 序列化: chunk_id/doc_id/text/heading_path/page_start/score
     web_results: list[dict]
     retry_count: int
     confident: bool
@@ -85,13 +87,18 @@ class PlanState(TypedDict, total=False):
     request_id: str
     kb_id: str
     goal: str
+    current_level: str  # 用户自报的当前基础；空串=未提供
+    target_outcome: str  # 用户希望达到的可观察成果；空串=未提供
+    success_criteria: str  # 用户自定的验收标准；空串=未提供
     budget_hours_per_day: float
     total_days: int
     diagnosis: dict  # {kc_name: 掌握度初值} (M3 用自报+摸底简版)
     profile_summary: str  # 脱敏后的 plan 角色画像切片；只含定性标签和偏好
     profile_weak_points: list[str]
     resources: list[dict]  # 知识库分块 / 安全 web 资源 (确认后持久化为 PlanResource)
-    plan: dict  # executable tasks; resource_ref is transient until finalize_plan assigns resource_id
+    plan: (
+        dict  # executable tasks; resource_ref is transient until finalize_plan assigns resource_id
+    )
     plan_confirmed: bool
     trace: Annotated[list[dict], operator.add]
 

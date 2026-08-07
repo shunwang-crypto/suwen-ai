@@ -12,6 +12,7 @@
 import json
 
 from eduagents_api.routers.plans import (
+    PlanCreate,
     _diagnosis_from_rows,
     _kc_order_from_edges,
     _qualitative_weak_kcs,
@@ -615,3 +616,104 @@ def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
     first_task = plan["stages"][0]["days"][0]["tasks"][0]
     assert "导数" in first_task["title"]
     assert state["diagnosis"] == before
+
+
+# ---------- ⑥ 可验证目标拆解 ----------
+
+
+def test_plan_create_trims_optional_goal_context():
+    body = PlanCreate(
+        goal="  极限与导数  ",
+        current_level="  会基本代数  ",
+        target_outcome="  能独立完成基础题  ",
+        success_criteria="  10 题正确 8 题  ",
+    )
+    assert body.goal == "极限与导数"
+    assert body.current_level == "会基本代数"
+    assert body.target_outcome == "能独立完成基础题"
+    assert body.success_criteria == "10 题正确 8 题"
+    assert PlanCreate(goal="导数", current_level="  ").current_level is None
+
+
+async def test_explicit_goal_context_overrides_model_and_reaches_confirmation():
+    parse = {
+        "subject": "高等数学",
+        "goal_summary": "学习导数并能解决基础问题",
+        "outcomes": ["模型提取的次要成果"],
+        "success_criteria": ["模型提取的次要标准"],
+        "constraints": ["每天一小时"],
+        "missing_information": ["current_level", "target_outcome", "success_criteria"],
+        "key_topics": ["导数"],
+        "level_hint": "模型猜测的水平",
+        "skills": [{"name": "导数", "required_level": 2, "reason": "目标核心"}],
+    }
+    gateway, state = await run_plan_to_interrupt(
+        {
+            "plan_parse_goal": [parse],
+            "plan_diagnose": [{"diagnosis": {"导数": 0.3}}],
+            "plan_draft": [DRAFT],
+        },
+        input_overrides={
+            "goal": "学习导数",
+            "current_level": "会基本极限",
+            "target_outcome": "能独立完成基础导数题",
+            "success_criteria": "10 题中至少正确 8 题并说明错因",
+        },
+    )
+
+    analysis = state["goal_analysis"]
+    assert analysis["quality"] == "clear"
+    assert analysis["outcomes"][0] == "能独立完成基础导数题"
+    assert analysis["success_criteria"][0] == "10 题中至少正确 8 题并说明错因"
+    assert analysis["missing_information"] == []
+    assert state["parsed_goal"]["level_hint"] == "会基本极限"
+
+    parse_prompt = (
+        next(req for req in gateway.requests if req.feature == "plan_parse_goal")
+        .messages[0]
+        .content
+    )
+    assert "<当前基础>\n会基本极限" in parse_prompt
+    assert "<期望成果>\n能独立完成基础导数题" in parse_prompt
+    draft_prompt = (
+        next(req for req in gateway.requests if req.feature == "plan_draft").messages[0].content
+    )
+    assert "<目标拆解>" in draft_prompt
+    assert "验收标准：\n- 10 题中至少正确 8 题并说明错因" in draft_prompt
+    interrupt_value = state["__interrupt__"][0].value
+    assert interrupt_value["goal_analysis"] == analysis
+
+
+async def test_vague_goal_keeps_missing_criteria_visible_without_fabrication():
+    parse = {
+        "subject": "数学",
+        "goal_summary": "学习数学",
+        "outcomes": [],
+        # 即使模型越权补了数值标准，用户未明确提供时也不得采信。
+        "success_criteria": ["正确率 100%"],
+        "constraints": [],
+        "missing_information": ["scope", "current_level", "target_outcome", "success_criteria"],
+        "key_topics": ["数学"],
+        "level_hint": "",
+        "skills": [],
+    }
+    gateway, state = await run_plan_to_interrupt(
+        {
+            "plan_parse_goal": [parse],
+            "plan_diagnose": [{"diagnosis": {"数学": 0.3}}],
+            "plan_draft": [DRAFT],
+        },
+        input_overrides={"goal": "学数学"},
+    )
+
+    analysis = state["goal_analysis"]
+    assert analysis["quality"] == "vague"
+    assert analysis["success_criteria"] == []
+    assert "100%" not in repr(analysis)
+    assert {"current_level", "target_outcome", "success_criteria"}.issubset(
+        analysis["missing_information"]
+    )
+    prompt = (
+        next(req for req in gateway.requests if req.feature == "plan_draft").messages[0].content
+    )
+    assert "(未明确，不得编造)" in prompt

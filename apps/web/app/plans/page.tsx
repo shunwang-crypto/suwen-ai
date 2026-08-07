@@ -29,6 +29,11 @@ import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-t
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
+import {
+  PLAN_GOAL_EXAMPLES,
+  isPlanGoalReady,
+  planGoalReadiness,
+} from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
 import type {
   ErrorEventData,
@@ -40,7 +45,9 @@ import type {
   PlanAdjustResult,
   PlanAdjustmentItem,
   PlanDetail,
+  PlanGoalAnalysis,
   PlanListItem,
+  PlanSkillGap,
   PlanStructure,
   PlanTask,
   PlanResource,
@@ -56,6 +63,9 @@ interface PendingPlanDraft {
   startedAt: number;
   form: {
     goal: string;
+    currentLevel: string;
+    targetOutcome: string;
+    successCriteria: string;
     kbId: string;
     hours: number;
     totalDays: number;
@@ -105,6 +115,13 @@ const emptySubscribe = () => () => {};
 const TRIGGER_LABELS: Record<string, string> = {
   manual: "手动调整",
   low_score_attempt: "低分测评触发",
+};
+
+const MISSING_GOAL_LABELS: Record<string, string> = {
+  scope: "学习范围",
+  current_level: "当前基础",
+  target_outcome: "期望成果",
+  success_criteria: "验收标准",
 };
 
 /** 阶段配色（固定顺序分配，不随过滤变化）。 */
@@ -175,7 +192,7 @@ function withTaskStatus(
   const effectiveTotal = total - skipped;
   return {
     ...detail,
-    structure: { stages },
+    structure: { ...detail.structure, stages },
     progress: {
       total,
       done,
@@ -345,11 +362,15 @@ function PlanCalendar({
 function PlanConfirmCard({
   plan,
   resources,
+  goalAnalysis,
+  skillGaps,
   onConfirm,
   onCancel,
 }: {
   plan: PlanStructure;
   resources: PlanResource[];
+  goalAnalysis?: PlanGoalAnalysis;
+  skillGaps?: PlanSkillGap[];
   onConfirm: (edited: PlanStructure) => void;
   onCancel: () => void;
 }) {
@@ -424,6 +445,58 @@ function PlanConfirmCard({
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
         ，可直接修改任务标题与时长，确认后才会保存。
       </p>
+
+      {goalAnalysis && (
+        <section className="mt-4 rounded-xl border border-brand-100 bg-brand-50/40 p-3" aria-label="目标拆解">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold text-ink">目标拆解</h4>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                goalAnalysis.quality === "clear"
+                  ? "bg-success-50 text-success-700"
+                  : "bg-warning-50 text-warning-700"
+              }`}
+            >
+              {goalAnalysis.quality === "clear" ? "信息完整" : "建议后续补充"}
+            </span>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-ink-secondary">
+            {goalAnalysis.summary}
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg bg-white px-2.5 py-2">
+              <p className="text-[10px] font-medium text-ink-muted">可验证成果</p>
+              {goalAnalysis.outcomes.length > 0 ? (
+                <ul className="mt-1 space-y-1 text-[11px] leading-4 text-ink-secondary">
+                  {goalAnalysis.outcomes.map((item) => <li key={item}>• {item}</li>)}
+                </ul>
+              ) : <p className="mt-1 text-[11px] text-warning-700">尚未明确</p>}
+            </div>
+            <div className="rounded-lg bg-white px-2.5 py-2">
+              <p className="text-[10px] font-medium text-ink-muted">验收标准</p>
+              {goalAnalysis.success_criteria.length > 0 ? (
+                <ul className="mt-1 space-y-1 text-[11px] leading-4 text-ink-secondary">
+                  {goalAnalysis.success_criteria.map((item) => <li key={item}>• {item}</li>)}
+                </ul>
+              ) : <p className="mt-1 text-[11px] text-warning-700">未提供，系统不会自行编造</p>}
+            </div>
+          </div>
+          {goalAnalysis.missing_information.length > 0 && (
+            <p className="mt-2 text-[11px] text-warning-700">
+              待明确：{goalAnalysis.missing_information.map((item) => MISSING_GOAL_LABELS[item] ?? item).join("、")}。计划已在前段安排基线任务，也可返回补充后重新生成。
+            </p>
+          )}
+          {skillGaps && skillGaps.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5" aria-label="优先补强技能">
+              {skillGaps.map((gap) => (
+                <span key={`${gap.skill}-${gap.zone}`} className="rounded-full border border-warning-200 bg-white px-2 py-1 text-[10px] text-warning-700">
+                  优先补强：{gap.skill}（{gap.zone}）
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <ul className="mt-3 space-y-2">
         {draft.stages.map((stage, si) => {
@@ -575,7 +648,7 @@ function PlanConfirmCard({
           onClick={onCancel}
           className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:bg-surface-muted"
         >
-          取消
+          返回修改目标
         </button>
         <button
           type="button"
@@ -618,6 +691,9 @@ export default function PlansPage() {
 
   // 表单
   const [goal, setGoal] = useState("");
+  const [currentLevel, setCurrentLevel] = useState("");
+  const [targetOutcome, setTargetOutcome] = useState("");
+  const [successCriteria, setSuccessCriteria] = useState("");
   const [kbId, setKbId] = useState("");
   const [hours, setHours] = useState(1.5);
   const [totalDays, setTotalDays] = useState(14);
@@ -670,6 +746,9 @@ export default function PlansPage() {
       const pending = readPendingPlan(userId);
       if (pending) {
         setGoal(pending.form.goal);
+        setCurrentLevel(pending.form.currentLevel ?? "");
+        setTargetOutcome(pending.form.targetOutcome ?? "");
+        setSuccessCriteria(pending.form.successCriteria ?? "");
         setKbId(pending.form.kbId);
         setHours(pending.form.hours);
         setTotalDays(pending.form.totalDays);
@@ -836,7 +915,15 @@ export default function PlansPage() {
                   status: "await_confirm",
                   interrupt,
                   startedAt: pending?.startedAt ?? Date.now(),
-                  form: { goal, kbId, hours, totalDays },
+                  form: {
+                    goal,
+                    currentLevel,
+                    targetOutcome,
+                    successCriteria,
+                    kbId,
+                    hours,
+                    totalDays,
+                  },
                 });
                 setInterruptData(interrupt);
               }
@@ -904,17 +991,36 @@ export default function PlansPage() {
         setPhase((p) => (p === "await_confirm" ? p : "idle"));
       }
     },
-    [goal, hours, kbId, loadPlans, totalDays, userId],
+    [
+      currentLevel,
+      goal,
+      hours,
+      kbId,
+      loadPlans,
+      successCriteria,
+      targetOutcome,
+      totalDays,
+      userId,
+    ],
   );
 
   const startPlan = (e: FormEvent) => {
     e.preventDefault();
-    if (!goal.trim() || phase !== "idle") return;
+    const goalForm = { goal, currentLevel, targetOutcome, successCriteria };
+    if (!isPlanGoalReady(goalForm) || phase !== "idle") return;
     clearPendingPlan(userId);
     writePendingPlan(userId, {
       status: "generating",
       startedAt: Date.now(),
-      form: { goal: goal.trim(), kbId, hours, totalDays },
+      form: {
+        goal: goal.trim(),
+        currentLevel: currentLevel.trim(),
+        targetOutcome: targetOutcome.trim(),
+        successCriteria: successCriteria.trim(),
+        kbId,
+        hours,
+        totalDays,
+      },
     });
     setTimeline([]);
     setInterruptData(null);
@@ -924,6 +1030,9 @@ export default function PlansPage() {
     setPhase("streaming");
     void consume("/api/plans", {
       goal: goal.trim(),
+      current_level: currentLevel.trim() || undefined,
+      target_outcome: targetOutcome.trim(),
+      success_criteria: successCriteria.trim(),
       kb_id: kbId || undefined,
       budget_hours_per_day: hours,
       total_days: totalDays,
@@ -937,7 +1046,15 @@ export default function PlansPage() {
       status: "resuming",
       interrupt: interruptData,
       startedAt: pending?.startedAt ?? Date.now(),
-      form: { goal, kbId, hours, totalDays },
+      form: {
+        goal,
+        currentLevel,
+        targetOutcome,
+        successCriteria,
+        kbId,
+        hours,
+        totalDays,
+      },
     });
     setPhase("resuming");
     // 编辑版随 approved 一起回传; 服务端 confirm_plan 会重跑硬校验并以其结果为准
@@ -947,6 +1064,9 @@ export default function PlansPage() {
   };
 
   const busy = phase === "streaming" || phase === "resuming";
+  const goalForm = { goal, currentLevel, targetOutcome, successCriteria };
+  const goalReady = isPlanGoalReady(goalForm);
+  const goalReadiness = planGoalReadiness(goalForm);
 
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
@@ -986,19 +1106,96 @@ export default function PlansPage() {
         <aside className="w-full shrink-0 space-y-4">
           {(showCreate || plans?.length === 0) && <Card title="制定学习计划">
             <form onSubmit={startPlan} className="space-y-3">
+              <div className="rounded-xl border border-brand-100 bg-brand-50/40 p-3">
+                <p className="text-xs font-medium text-ink">用一个可验证的目标开始</p>
+                <p id="plan-goal-help" className="mt-1 text-[11px] leading-5 text-ink-muted">
+                  写清“学什么 → 想做到什么 → 怎样算完成”。当前基础可留空，计划会先安排短基线任务。
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5" aria-label="目标示例">
+                  {PLAN_GOAL_EXAMPLES.map((example) => (
+                    <button
+                      key={example.label}
+                      type="button"
+                      onClick={() => {
+                        setGoal(example.goal);
+                        setCurrentLevel(example.currentLevel);
+                        setTargetOutcome(example.targetOutcome);
+                        setSuccessCriteria(example.successCriteria);
+                      }}
+                      className="rounded-full border border-brand-200 bg-white px-2.5 py-1 text-[10px] font-medium text-brand-700 hover:bg-brand-50"
+                    >
+                      使用“{example.label}”示例
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-500">
-                  学习目标
+                  学习主题 <span className="text-rose-500">*</span>
                 </span>
                 <textarea
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
-                  rows={3}
+                  rows={2}
                   maxLength={2000}
-                  placeholder="如：两周内掌握微积分基础，能独立完成课后习题"
+                  required
+                  aria-describedby="plan-goal-help"
+                  placeholder="如：极限与导数基础"
                   className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">
+                  当前基础 <span className="font-normal text-slate-400">（可选）</span>
+                </span>
+                <input
+                  value={currentLevel}
+                  onChange={(e) => setCurrentLevel(e.target.value)}
+                  maxLength={200}
+                  placeholder="如：会基本代数运算，但极限概念不熟"
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">
+                  期望成果 <span className="text-rose-500">*</span>
+                </span>
+                <textarea
+                  value={targetOutcome}
+                  onChange={(e) => setTargetOutcome(e.target.value)}
+                  rows={2}
+                  maxLength={500}
+                  required
+                  placeholder="如：能独立判断常见极限题型并完成基础导数计算"
+                  className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">
+                  验收标准 <span className="text-rose-500">*</span>
+                </span>
+                <textarea
+                  value={successCriteria}
+                  onChange={(e) => setSuccessCriteria(e.target.value)}
+                  rows={2}
+                  maxLength={500}
+                  required
+                  placeholder="如：不看提示完成 10 道教材基础题，至少正确 8 道并能说明错因"
+                  className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:grid-cols-4" aria-label="目标完整度" aria-live="polite">
+                {([
+                  ["学习主题", goalReadiness.topic],
+                  ["当前基础", goalReadiness.baseline],
+                  ["期望成果", goalReadiness.outcome],
+                  ["验收标准", goalReadiness.criteria],
+                ] as const).map(([label, ready]) => (
+                  <span key={label} className={`rounded-lg px-2 py-1.5 ${ready ? "bg-success-50 text-success-700" : "bg-surface-muted text-ink-muted"}`}>
+                    {ready ? "✓" : "○"} {label}
+                  </span>
+                ))}
+              </div>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-500">
                   绑定知识库（可选）
@@ -1053,12 +1250,17 @@ export default function PlansPage() {
               </div>
               <button
                 type="submit"
-                disabled={!goal.trim() || busy || phase === "await_confirm"}
+                disabled={!goalReady || busy || phase === "await_confirm"}
                 className="flex w-full items-center justify-center gap-2 rounded-[8px] bg-brand-600 py-2.5 text-[12px] font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                 {busy ? "正在规划…" : "生成计划草案"}
               </button>
+              {!goalReady && (
+                <p className="text-center text-[10px] text-ink-muted">
+                  请至少补齐学习主题、期望成果和验收标准。
+                </p>
+              )}
             </form>
           </Card>}
 
@@ -1109,6 +1311,8 @@ export default function PlansPage() {
             <PlanConfirmCard
               plan={interruptData.plan}
               resources={interruptData.resources ?? []}
+              goalAnalysis={interruptData.goal_analysis}
+              skillGaps={interruptData.skill_gaps}
               onConfirm={(edited) => resume(true, edited)}
               onCancel={() => resume(false)}
             />
@@ -1250,6 +1454,36 @@ export default function PlansPage() {
                       </ul>
                     )}
                   </div>
+                )}
+
+                {detail?.structure.goal_analysis && (
+                  <details className="mb-3 rounded-xl border border-brand-100 bg-brand-50/30 px-3.5 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-brand-700">
+                      查看确认时的目标与验收标准
+                    </summary>
+                    <p className="mt-2 text-xs leading-5 text-ink-secondary">
+                      {detail.structure.goal_analysis.summary}
+                    </p>
+                    <div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2">
+                      <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
+                        <strong className="block text-[10px] text-ink-muted">可验证成果</strong>
+                        {detail.structure.goal_analysis.outcomes.map((item) => (
+                          <p key={item} className="mt-1">• {item}</p>
+                        ))}
+                      </div>
+                      <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
+                        <strong className="block text-[10px] text-ink-muted">验收标准</strong>
+                        {detail.structure.goal_analysis.success_criteria.map((item) => (
+                          <p key={item} className="mt-1">• {item}</p>
+                        ))}
+                      </div>
+                    </div>
+                    {detail.structure.skill_gaps && detail.structure.skill_gaps.length > 0 && (
+                      <p className="mt-2 text-[11px] text-warning-700">
+                        创建时优先补强：{detail.structure.skill_gaps.map((gap) => `${gap.skill}（${gap.zone}）`).join("、")}
+                      </p>
+                    )}
+                  </details>
                 )}
 
                 {detailError && (

@@ -1,10 +1,16 @@
 # 可执行学习计划
 
-当前计划链路是“目标 → 诊断 → 知识库检索 → 可编辑草案 → 服务端硬校验 → 原子保存”。每个任务都包含：
+当前计划链路是“引导式目标 → 目标拆解/技能差距 → 真实掌握度诊断 → 知识库检索 → 可编辑草案 → 服务端硬校验 → 原子保存”。每个任务都包含：
 
 `title`、`objective`、`instructions`（2–5 步）、`completion_criteria`、`minutes`、`kc_names`、`action_type`、`practice_count`（1–20）、`difficulty`、`task_key` 和 `done`。`action_type` 为 `read`、`practice`、`tutor`、`review_errors` 或 `mixed`。
 
 计划详情还返回由 API 的 time-control 业务时钟计算的 `schedule`：`current_day`、`today_tasks`、`overdue_tasks` 和 `upcoming_tasks`。数组内容是 task_key；今日页按“到期错题 → 当天任务 → 逾期任务 → 最近完成任务”展示，不在浏览器重复计算日期。
+
+## 目标质量与技能差距
+
+新建页将目标拆成“学习主题、当前基础、期望成果、验收标准”。Web 要求主题、成果和验收标准非空；旧客户端仍可只传 `goal`，后端会标记缺失信息并让草案首日安排短基线任务，不会伪造分数、考试、正确率或截止日期。目标拆解与草案一起进入确认卡，用户可返回修改后重新生成。
+
+`parse_goal` 另外输出目标所需技能。API 复用 `weak_point_kcs` 的阈值与租户过滤，在进入 checkpoint 前只保留 KC 名与“较弱/待巩固”定性区间；图内以归一化名称求交集。`skill_gaps` 与 `diagnosis` 独立，不产生或修改掌握度。确认时的 `goal_analysis` 与定性 `skill_gaps` 还会作为快照存入 `Plan.structure_json`，不依赖之后可过期清理的图 checkpoint。
 
 ## 资源保存与权限
 

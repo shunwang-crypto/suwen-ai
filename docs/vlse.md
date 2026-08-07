@@ -42,7 +42,7 @@ flowchart TB
     BKT -- "画像摘要注入 system prompt (确定性拼装)<br/>apps/api/src/eduagents_api/profile_summary.py" --> QA
     BKT -- "薄弱点定向出题 (p_mastery 升序)<br/>apps/api/src/eduagents_api/routers/quiz.py" --> QUIZ
     BKT -- "画像注入四级提示词 + 开场关联卡点<br/>apps/api/src/eduagents_api/routers/plans.py (tutor_turn)" --> TUTOR
-    BKT -- "计划摸底读真实掌握度 (diagnosis 注入,<br/>LLM 只兜底无记录主题)<br/>apps/api/src/eduagents_api/routers/plans.py" --> PLAN
+    BKT -- "计划摸底读真实掌握度；目标技能与定性薄弱 KC 求交集<br/>(diagnosis 与 skill_gaps 独立)<br/>apps/api/src/eduagents_api/routers/plans.py" --> PLAN
     FSRS -- "今日复习队列 (is_due/due_at)<br/>apps/api/src/eduagents_api/routers/reviews.py" --> REVIEW
     KCDAG -- "先修拓扑序 kc_order (dag.topological_order)<br/>apps/api/src/eduagents_api/routers/plans.py 预查注入" --> PLAN
     KCDAG -- "kc_id 外键: 题目/错题/画像禁止裸字符串" --> QUIZ

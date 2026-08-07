@@ -461,6 +461,8 @@ export interface GraphInterruptData {
   blueprint?: Blueprint;
   plan?: PlanStructure;
   resources?: PlanResource[];
+  goal_analysis?: PlanGoalAnalysis;
+  skill_gaps?: PlanSkillGap[];
   [key: string]: unknown;
 }
 
@@ -483,6 +485,26 @@ export interface GraphTraceData {
 }
 
 // ---- 学习计划（F3，对齐 routers/plans.py 与 plan_graph.py）----
+
+export interface PlanGoalAnalysis {
+  summary: string;
+  quality: "clear" | "partial" | "vague";
+  outcomes: string[];
+  success_criteria: string[];
+  constraints: string[];
+  missing_information: Array<
+    "scope" | "current_level" | "target_outcome" | "success_criteria"
+  >;
+}
+
+export interface PlanSkillGap {
+  skill: string;
+  weak_kc: string;
+  required_level: 1 | 2 | 3;
+  zone: "较弱" | "待巩固";
+  goal_reason?: string;
+  gap_reason?: string;
+}
 
 export interface PlanTask {
   title: string;
@@ -518,6 +540,10 @@ export interface PlanStage {
 
 export interface PlanStructure {
   stages: PlanStage[];
+  /** 确认时锁定的可验证目标快照；旧计划无此字段。 */
+  goal_analysis?: PlanGoalAnalysis;
+  /** 创建时的定性技能差距快照；不含精确掌握度。 */
+  skill_gaps?: PlanSkillGap[];
 }
 
 export interface PlanResource {

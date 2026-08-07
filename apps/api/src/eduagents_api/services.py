@@ -110,9 +110,7 @@ async def persist_learner_insights(
         )
     ).all()
     if stale_ids:
-        await session.execute(
-            delete(LearnerInsight).where(LearnerInsight.id.in_(stale_ids))
-        )
+        await session.execute(delete(LearnerInsight).where(LearnerInsight.id.in_(stale_ids)))
     return len(stale_ids)
 
 
@@ -130,9 +128,7 @@ async def _resolve_kc_ids(
     from eduagents_core.kc import KcEntry, KcVocabulary
 
     if kb_id:
-        query = select(KnowledgeComponent).where(
-            KnowledgeComponent.kb_id == uuid.UUID(kb_id)
-        )
+        query = select(KnowledgeComponent).where(KnowledgeComponent.kb_id == uuid.UUID(kb_id))
     else:
         query = (
             select(KnowledgeComponent)
@@ -160,9 +156,7 @@ async def _resolve_kc_ids(
     return resolved
 
 
-async def finalize_quiz(
-    ctx: AuthContext, local_id: str, state: dict
-) -> dict:
+async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
     """quiz 图完成 -> Quiz + Questions 落库 (kc_names 归一为 kc_ids)。"""
     questions = state.get("questions") or []
     kb_id = state.get("kb_id") or None
@@ -222,6 +216,7 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
     resource; they can never attach another tenant's material.
     """
     from eduagents_core.graphs.plan_graph import is_safe_public_url
+
     try:
         plan_id = uuid.UUID(local_id)
     except ValueError:
@@ -237,10 +232,10 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
         kb = None
         if kb_id is not None:
             kb = await session.get(KnowledgeBase, kb_id)
-            if kb is None or (
-                kb.owner_type == "user" and kb.tenant_id != ctx.user_id
-            ) or (
-                kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids)
+            if (
+                kb is None
+                or (kb.owner_type == "user" and kb.tenant_id != ctx.user_id)
+                or (kb.owner_type == "org" and str(kb.tenant_id) not in set(ctx.org_ids))
             ):
                 raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
 
@@ -298,6 +293,13 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
             resource_ids[index] = row.id
 
         structure = copy.deepcopy(state.get("plan") or {})
+        goal_analysis = state.get("goal_analysis")
+        if isinstance(structure, dict) and isinstance(goal_analysis, dict):
+            # 确认时的目标快照随计划保存，后续查看不依赖 LangGraph checkpoint。
+            structure["goal_analysis"] = copy.deepcopy(goal_analysis)
+        skill_gaps = state.get("skill_gaps")
+        if isinstance(structure, dict) and isinstance(skill_gaps, list):
+            structure["skill_gaps"] = copy.deepcopy(skill_gaps)
         for stage in structure.get("stages", []) if isinstance(structure, dict) else []:
             for day in stage.get("days", []) if isinstance(stage, dict) else []:
                 for task in day.get("tasks", []) if isinstance(day, dict) else []:
@@ -307,7 +309,9 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
                     ref = task.get("resource_ref")
                     task["resource_id"] = (
                         str(resource_ids[ref])
-                        if isinstance(ref, int) and not isinstance(ref, bool) and ref in resource_ids
+                        if isinstance(ref, int)
+                        and not isinstance(ref, bool)
+                        and ref in resource_ids
                         else None
                     )
 
@@ -465,9 +469,7 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
     掌握度数字之外留住"他到底错在哪"的语境 (G10)。
     """
     raw_texts = [
-        m.strip()
-        for m in (summary.get("misconceptions") or [])
-        if isinstance(m, str) and m.strip()
+        m.strip() for m in (summary.get("misconceptions") or []) if isinstance(m, str) and m.strip()
     ]
     if not raw_texts:
         return []
@@ -530,9 +532,7 @@ async def record_attempts(
         questions = {
             str(q.id): q
             for q in (
-                await session.scalars(
-                    select(Question).where(Question.quiz_id == quiz_id)
-                )
+                await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
             ).all()
         }
         for item in answers:
@@ -544,9 +544,7 @@ async def record_attempts(
             llm_score = None
             scored_reason = None
             if q.type in ("single", "multi", "blank"):
-                correct = grade_objective(
-                    {"type": q.type, "answer": q.answer}, response
-                )
+                correct = grade_objective({"type": q.type, "answer": q.answer}, response)
                 weight = 1.0
             else:  # short: LLM 评分, ≥0.6 记 correct, 0.5 权重 (§5.6)
                 result = await gateway.chat(
@@ -594,9 +592,11 @@ async def record_attempts(
             session.add(attempt)
             await session.flush()
             predicted_confidence = item.get("predicted_confidence")
-            if not isinstance(predicted_confidence, int) or isinstance(
-                predicted_confidence, bool
-            ) or not 1 <= predicted_confidence <= 5:
+            if (
+                not isinstance(predicted_confidence, int)
+                or isinstance(predicted_confidence, bool)
+                or not 1 <= predicted_confidence <= 5
+            ):
                 predicted_confidence = None
             predicted_correct = item.get("predicted_correct")
             if not isinstance(predicted_correct, bool):
@@ -613,9 +613,7 @@ async def record_attempts(
                     )
                 )
             kc_ids = [str(k) for k in (q.kc_ids or [])]
-            changes = await _update_mastery(
-                session, ctx, kc_ids, correct, weight, attempt.id
-            )
+            changes = await _update_mastery(session, ctx, kc_ids, correct, weight, attempt.id)
             if not correct:
                 # F6-A1: 错题 100% 自动入本 (错因初值 knowledge_gap, M4 错因分类细化)
                 # F6-A4: 入本即挂 FSRS 卡 (due=业务时间, 当天进复习队列)

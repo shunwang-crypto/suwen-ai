@@ -21,14 +21,10 @@ PASSWORD = "pass-12345"
 
 async def _register(client, prefix: str) -> tuple[uuid.UUID, dict[str, str]]:
     email = f"{prefix}-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
-    response = await client.post(
-        "/api/auth/register", json={"email": email, "password": PASSWORD}
-    )
+    response = await client.post("/api/auth/register", json={"email": email, "password": PASSWORD})
     assert response.status_code == 201, response.text
     user_id = uuid.UUID(response.json()["id"])
-    response = await client.post(
-        "/api/auth/login", json={"email": email, "password": PASSWORD}
-    )
+    response = await client.post("/api/auth/login", json={"email": email, "password": PASSWORD})
     assert response.status_code == 200, response.text
     return user_id, {"Authorization": f"Bearer {response.json()['access_token']}"}
 
@@ -81,6 +77,22 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
     plan_id = uuid.uuid4()
     state = {
         "goal": "掌握极限",
+        "goal_analysis": {
+            "summary": "掌握极限并能独立说明定义",
+            "quality": "clear",
+            "outcomes": ["能独立说明极限定义"],
+            "success_criteria": ["不看提示完成一道基础题"],
+            "constraints": [],
+            "missing_information": [],
+        },
+        "skill_gaps": [
+            {
+                "skill": "极限",
+                "weak_kc": "极限",
+                "required_level": 2,
+                "zone": "待巩固",
+            }
+        ],
         "budget_hours_per_day": 1.0,
         "kb_id": str(kb_id),
         "resources": [
@@ -146,9 +158,14 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
 
     async with tenant_session(user_id) as session:
         assert await session.scalar(select(Plan.kb_id).where(Plan.id == plan_id)) == kb_id
-        assert await session.scalar(
-            select(func.count()).select_from(PlanResource).where(PlanResource.plan_id == plan_id)
-        ) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(PlanResource)
+                .where(PlanResource.plan_id == plan_id)
+            )
+            == 1
+        )
         # A pending error item alone must not become plan reinforcement evidence.
         quiz = Quiz(tenant_id=user_id, user_id=user_id, title="pending", status="ready")
         session.add(quiz)
@@ -182,6 +199,8 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
     assert task["resource_id"] == str(resource_id)
     assert task["resource"]["title"] == "极限定义快照"
     assert body["structure"]["stages"][0]["days"][0]["tasks"][1]["resource"] is None
+    assert body["structure"]["goal_analysis"] == state["goal_analysis"]
+    assert body["structure"]["skill_gaps"] == state["skill_gaps"]
     assert body["schedule"]["current_day"] >= 1
     assert "stage0.day0.task0" in body["schedule"]["today_tasks"]
 
@@ -236,6 +255,7 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
     # The API retains the title snapshot, while PlanTaskDrawer's resourceHref
     # returns null when all navigable source fields have been SET NULL.
 
+
 async def test_legacy_plan_detail_does_not_guess_resource_ref(client):
     from eduagents_api.db import tenant_session
     from eduagents_api.models import Plan
@@ -248,10 +268,12 @@ async def test_legacy_plan_detail_does_not_guess_resource_ref(client):
             goal="历史计划",
             budget_hours=1.0,
             structure_json={
-                "stages": [{
-                    "name": "旧阶段",
-                    "days": [{"day": 1, "tasks": [{"title": "旧任务", "resource_ref": 0}]}],
-                }]
+                "stages": [
+                    {
+                        "name": "旧阶段",
+                        "days": [{"day": 1, "tasks": [{"title": "旧任务", "resource_ref": 0}]}],
+                    }
+                ]
             },
         )
         session.add(plan)

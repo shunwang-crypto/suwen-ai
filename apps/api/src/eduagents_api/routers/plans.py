@@ -45,6 +45,9 @@ _PLAN_WEAK_LIMIT = 8
 
 class PlanCreate(BaseModel):
     goal: str = Field(min_length=1, max_length=2000)
+    current_level: str | None = Field(default=None, max_length=200)
+    target_outcome: str | None = Field(default=None, max_length=500)
+    success_criteria: str | None = Field(default=None, max_length=500)
     kb_id: uuid.UUID | None = None
     budget_hours_per_day: float = Field(default=1.5, gt=0, le=12)
     total_days: int = Field(default=14, ge=1, le=90)
@@ -56,6 +59,13 @@ class PlanCreate(BaseModel):
         if not value:
             raise ValueError("goal must not be blank")
         return value
+
+    @field_validator("current_level", "target_outcome", "success_criteria")
+    @classmethod
+    def strip_optional_context(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class TaskToggle(BaseModel):
@@ -247,6 +257,9 @@ async def create_plan(
         "request_id": getattr(request.state, "request_id", ""),
         "kb_id": str(body.kb_id) if body.kb_id else "",
         "goal": body.goal,
+        "current_level": body.current_level or "",
+        "target_outcome": body.target_outcome or "",
+        "success_criteria": body.success_criteria or "",
         "budget_hours_per_day": body.budget_hours_per_day,
         "total_days": body.total_days,
         # 真实 BKT 掌握度注入 (G1): diagnose 节点只对无记录主题走 LLM 摸底

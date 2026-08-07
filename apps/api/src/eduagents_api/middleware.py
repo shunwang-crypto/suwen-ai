@@ -62,7 +62,7 @@ _MODERATED_FIELDS: dict[str, tuple[str, ...]] = {
     "/api/chat": ("message",),
     "/api/tutor": ("problem", "message"),
     "/api/quiz": ("topic",),
-    "/api/plans": ("goal",),
+    "/api/plans": ("goal", "current_level", "target_outcome", "success_criteria"),
     "/api/metacognition/explain-back": ("student_text",),
 }
 

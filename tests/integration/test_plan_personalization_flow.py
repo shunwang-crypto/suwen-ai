@@ -157,6 +157,11 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             "plan_parse_goal": [
                 {
                     "subject": "高等数学",
+                    "goal_summary": "补齐微积分薄弱点并能独立完成基础题",
+                    "outcomes": ["能独立完成导数与级数基础题"],
+                    "success_criteria": ["10 题中至少正确 8 题"],
+                    "constraints": [],
+                    "missing_information": [],
                     "key_topics": ["导数定义", "级数"],
                     "level_hint": "",
                     "skills": [
@@ -213,7 +218,14 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             "POST",
             "/api/plans",
             headers,
-            {"goal": "两周补齐微积分薄弱点", "budget_hours_per_day": 1.0, "total_days": 2},
+            {
+                "goal": "微积分薄弱点",
+                "current_level": "会基本代数，导数定义不熟",
+                "target_outcome": "能独立完成导数与级数基础题",
+                "success_criteria": "10 题中至少正确 8 题",
+                "budget_hours_per_day": 1.0,
+                "total_days": 2,
+            },
         )
     finally:
         runtime._deps.gateway = original
@@ -222,13 +234,18 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     assert events.get("interrupt"), events
     assert events["interrupt"][0]["kind"] == "plan_confirm"
     assert events["interrupt"][0]["plan"]["stages"]
+    goal_analysis = events["interrupt"][0]["goal_analysis"]
+    assert goal_analysis["quality"] == "clear"
+    assert goal_analysis["outcomes"][0] == "能独立完成导数与级数基础题"
+    assert goal_analysis["success_criteria"][0] == "10 题中至少正确 8 题"
 
     # G1: LLM 摸底只对无记录主题兜底 — prompt 里没有任何有真实记录的 KC
     diag_prompts = fake.prompts("plan_diagnose")
     assert len(diag_prompts) == 1
-    assert "级数" in diag_prompts[0]
+    pending_topics = diag_prompts[0].split("<主题列表>", 1)[1].split("</主题列表>", 1)[0]
+    assert "级数" in pending_topics
     for known in ("导数定义", "极值判定", "泰勒公式"):
-        assert known not in diag_prompts[0], f"有真实记录的 {known} 不该再让 LLM 猜"
+        assert known not in pending_topics, f"有真实记录的 {known} 不该再让 LLM 猜"
 
     # 真实 BKT 进 draft 的 DIAGNOSIS, 但只以定性档出境 (P2-7 脱敏: 精确概率不发第三方 LLM)
     draft_prompt = fake.prompts("plan_draft")[0]
