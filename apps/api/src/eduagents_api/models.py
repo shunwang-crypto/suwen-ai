@@ -7,6 +7,7 @@ from decimal import Decimal
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -452,6 +453,53 @@ class ErrorItem(Base):
     )
 
 
+class FsrsReviewEvent(Base):
+    """Immutable replay input/output for one verified ErrorItem review.
+
+    ``error_item_id`` is the business card identity.  The serialized py-fsrs
+    card keeps a deterministic integer derived from that UUID for library
+    compatibility, while ``review_log_json`` preserves the library's exact
+    ReviewLog instead of reconstructing it from mutable current state.
+    """
+
+    __tablename__ = "fsrs_review_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key", name="uq_fsrs_review_events_user_idempotency"),
+        CheckConstraint("rating BETWEEN 1 AND 4", name="ck_fsrs_review_events_rating"),
+        CheckConstraint(
+            "review_duration_ms IS NULL OR review_duration_ms >= 0",
+            name="ck_fsrs_review_events_duration",
+        ),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    error_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("error_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    review_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    card_before_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    card_after_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    review_log_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    params_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+# Keep the acronym-spelled import available to integrations while the class
+# follows the repository's existing CamelCase naming convention.
+FSRSReviewEvent = FsrsReviewEvent
+
+
 class ErrorImport(Base):
     """错题上传/手动录入的可恢复草稿；确认后才进入正式题目与错题表。"""
 
@@ -680,6 +728,57 @@ class AssessmentAnswer(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class LearningEvent(Base):
+    """Unified, immutable learning evidence for quiz/review/assessment flows.
+
+    The KC list and difficulty are snapshots taken at evidence creation time;
+    later edits to a question cannot change the historical event.  No event is
+    written for pending or unverified assessment/resource records.
+    """
+
+    __tablename__ = "learning_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "source_type",
+            "source_id",
+            "idempotency_key",
+            name="uq_learning_events_source_idempotency",
+        ),
+        CheckConstraint(
+            "source_type IN ('quiz_attempt', 'review', 'assessment')",
+            name="ck_learning_events_source_type",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 1)",
+            name="ck_learning_events_score",
+        ),
+        CheckConstraint(
+            "rating IS NULL OR rating BETWEEN 1 AND 4",
+            name="ck_learning_events_rating",
+        ),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    item_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    kc_ids_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    difficulty_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = _created_at()
 
 
 class Plan(Base):
@@ -997,7 +1096,9 @@ class PendingCleanup(Base):
 
     kind: doc (删文档) | kb (删库) | tenant (注销)。payload 按 kind 携带
     tenant_id/kb_id/doc_id/filename/session_ids。无 RLS: 内部运维表, API 只在
-    删除事务内写入, worker 全表扫描, 无任何用户读路径。
+    删除事务内写入, worker 通过短租约领取。done 保留为旧数据/旧查询的兼容事实；
+    新 worker 以每次 claim 独有的 locked_by token、completed_at、locked_at 和 next_attempt_at
+    记录可恢复执行状态。
     """
 
     __tablename__ = "pending_cleanup"
@@ -1009,6 +1110,20 @@ class PendingCleanup(Base):
     done: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    last_error_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    progress_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class EvalRun(Base):

@@ -200,7 +200,7 @@ git diff --check
 | Web 类型或构建异常 | 在 `apps/web` 运行 `npm ci && npm run build` |
 | 页面 API 认证异常 | 使用 `127.0.0.1` 保持同源代理和 cookie 口径一致 |
 | stub 输出被误认为真实模型 | 检查 `.env` 的 `GATEWAY_MODE` 和页面环境提示 |
-| 对象删除失败 | 查看 pending cleanup、对象存储连接和相关重试状态，不手工删数据库掩盖问题 |
+| 对象删除失败 | 查看 pending cleanup 的 `cleanup_outbox_metrics`、`cleanup_outbox_retry/stuck` 结构化日志、对象存储连接和退避时间，不手工删数据库掩盖问题 |
 | 知识库能问但检索永远 0 命中 | 向量库与 PG 脱节，跑 `python scripts/check_vector_drift.py`（见下） |
 
 ### 向量库对账

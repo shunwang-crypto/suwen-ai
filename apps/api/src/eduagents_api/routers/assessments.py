@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from math import isfinite
 
 from eduagents_core.graphs.quiz_graph import grade_objective
@@ -24,11 +24,20 @@ from ..models import (
     Question,
     ResourceQuestion,
 )
-from ..services import _update_mastery
+from ..services import _update_mastery, write_learning_event
 
 router = APIRouter(prefix="/api/assessment-attempts", tags=["assessment-attempts"])
 
 _ATTEMPT_TYPES = {"formal_exam", "mock_exam", "homework", "practice", "imported_record"}
+
+
+def _event_time(value: datetime | None, fallback: datetime) -> datetime:
+    """Normalize an optional historical taken_at to the service UTC contract."""
+
+    candidate = value or fallback
+    if candidate.tzinfo is None:
+        return candidate.replace(tzinfo=UTC)
+    return candidate.astimezone(UTC)
 
 
 def _attempt_type_for_resource(resource_type: str) -> str:
@@ -554,15 +563,39 @@ async def grade_or_verify_assessment(
                             1.0,
                             answer.id,
                             evidence_type="assessment_answer",
+                            now_dt=now_dt,
                         )
                     )
+                score = None
+                if answer.score is not None and answer.max_score:
+                    score = max(0.0, min(1.0, float(answer.score / answer.max_score)))
+                elif answer.is_correct is not None:
+                    score = 1.0 if answer.is_correct else 0.0
+                await write_learning_event(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    source_type="assessment",
+                    source_id=answer.id,
+                    question_id=question.id,
+                    item_key=str(rq.id),
+                    kc_ids=[str(k) for k in (question.kc_ids or [])],
+                    correct=bool(answer.is_correct),
+                    score=score,
+                    rating=3 if answer.is_correct else 1,
+                    difficulty_label=question.difficulty,
+                    occurred_at=_event_time(attempt.taken_at, now_dt),
+                    idempotency_key=f"assessment-answer:{answer.id}",
+                )
                 if answer.is_correct is False:
                     existing_error = await session.scalar(
                         select(ErrorItem).where(ErrorItem.assessment_answer_id == answer.id)
                     )
                     if existing_error is None:
+                        error_item_id = uuid.uuid4()
                         session.add(
                             ErrorItem(
+                                id=error_item_id,
                                 tenant_id=ctx.tenant_id,
                                 user_id=ctx.user_id,
                                 question_id=question.id,
@@ -573,7 +606,9 @@ async def grade_or_verify_assessment(
                                 resource_question_id=rq.id,
                                 assessment_answer_id=answer.id,
                                 original_response=answer.response,
-                                fsrs_card_json=new_card_json(now_dt),
+                                fsrs_card_json=new_card_json(
+                                    now_dt, business_card_id=error_item_id
+                                ),
                             )
                         )
             attempt.status = "graded"

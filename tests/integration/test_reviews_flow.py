@@ -189,6 +189,11 @@ async def test_reviews_fsrs_time_travel_flow(client):
     assert body["correct"] is False and body["state"] == "reviewing"
     assert body["answer"] == "A"
     assert body["explanation"] == "展开点为 0 的特例。"
+    # No-key legacy callers must not use a time bucket as the final identity:
+    # the same answer submitted again is a new legitimate review, not a replay.
+    r = await client.post(f"/api/reviews/{e2_id}/answer", headers=headers, json={"response": "B"})
+    assert r.status_code == 200, r.text
+    assert r.json().get("idempotent") is not True
     async with tenant_session(uid) as session:
         item = await session.get(ErrorItem, uuid.UUID(e2_id))
         assert item.fsrs_card_json["streak"] == 0
@@ -205,7 +210,7 @@ async def test_reviews_fsrs_time_travel_flow(client):
                 )
             )
         ).all()
-        assert len(logs) == 3  # b/d/e 三次复习作答各一条审计
+        assert len(logs) == 4  # b/d/e + 同语义合法重答各一条审计
         assert any(entry.new_p < entry.old_p for entry in logs)
 
     # f) 变式重练: FakeGateway 返回合法题 → 新题落库 (quiz_id 沿用) + variant_of 指向原题

@@ -100,3 +100,27 @@ async def test_search_hit_shape(store):
     assert hit.score == pytest.approx(1.0)  # cosine 同向
     assert hit.payload["doc_id"] == "doc1"
     assert hit.payload["text"] == "chunk of doc1"
+
+
+async def test_scan_point_refs_is_metadata_only_and_handles_missing_collection(store):
+    # A missing collection is an empty audit namespace, matching count_by_kb's
+    # existing compatibility behavior.
+    assert await store.scan_point_refs() == []
+
+    await store.ensure_ready()
+    point = make_point("tenant-a", "kb1", "doc1", [0.5] * DIM, {7: 1.2})
+    await store.upsert([point])
+
+    refs = await store.scan_point_refs(page_size=1, max_pages=2)
+    assert len(refs) == 1
+    assert refs[0].point_id == point.id
+    assert refs[0].tenant_id == "tenant-a"
+    assert refs[0].kb_id == "kb1"
+    assert refs[0].doc_id == "doc1"
+    assert not hasattr(refs[0], "dense")
+    assert not hasattr(refs[0], "text")
+
+    second = make_point("tenant-a", "kb1", "doc2", [0.4] * DIM, {8: 0.7})
+    await store.upsert([second])
+    with pytest.raises(RuntimeError, match="page limit"):
+        await store.scan_point_refs(page_size=1, max_pages=1)

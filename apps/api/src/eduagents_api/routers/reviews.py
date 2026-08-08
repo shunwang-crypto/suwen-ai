@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -38,6 +39,7 @@ from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
     Attempt,
     ErrorItem,
+    FsrsReviewEvent,
     KnowledgeComponent,
     MasteryLog,
     MasteryRecord,
@@ -45,6 +47,7 @@ from ..models import (
     ResourceQuestion,
 )
 from ..plan_adjust import PlanTaskAttributionError, complete_plan_task
+from ..services import write_learning_event
 
 log = get_logger("reviews")
 
@@ -63,8 +66,21 @@ _KC_TOP_N = 10  # 统计里按 KC 计数的 top N
 _RETENTION_HORIZON = timedelta(days=3)
 
 
+def _new_review_idempotency_key() -> str:
+    """Give a legacy request a unique identity instead of guessing retries.
+
+    The web client sends an explicit key and keeps it for the lifetime of one
+    submission.  Older clients cannot provide that guarantee, so each request
+    without a key gets a fresh identity; a time bucket must never turn a later
+    legitimate review into a replay.
+    """
+    return f"request:{uuid.uuid4().hex}"
+
+
 class AnswerIn(BaseModel):
     response: str = Field(default="", max_length=8000)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    review_duration_ms: int | None = Field(default=None, ge=0, le=86_400_000)
     plan_id: uuid.UUID | None = None
     task_key: str | None = Field(default=None, max_length=96)
 
@@ -76,6 +92,8 @@ class AnswerIn(BaseModel):
             self.task_key = self.task_key.strip()
             if not self.task_key:
                 raise ValueError("task_key 不能为空")
+        if self.idempotency_key is not None:
+            self.idempotency_key = self.idempotency_key.strip() or None
         return self
 
 
@@ -261,11 +279,27 @@ async def answer_review(
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """复习作答: 判分 → FSRS review → 状态机推进 → BKT 同步。"""
+    header_idempotency_key = request.headers.get("Idempotency-Key")
+    if header_idempotency_key is not None:
+        header_idempotency_key = header_idempotency_key.strip()
+        if len(header_idempotency_key) > 128:
+            raise HTTPException(
+                status_code=422,
+                detail="Idempotency-Key 长度不能超过 128 个字符",
+            )
     now_dt = await timectl.now(request.app.state.redis)
     request_id = getattr(request.state, "request_id", "")
     plan_task_completion = None
     async with tenant_session(ctx.tenant_id) as session:
-        item = await session.get(ErrorItem, error_item_id)
+        item = await session.scalar(
+            select(ErrorItem)
+            .where(
+                ErrorItem.id == error_item_id,
+                ErrorItem.tenant_id == ctx.tenant_id,
+                ErrorItem.user_id == ctx.user_id,
+            )
+            .with_for_update()
+        )
         if item is None or item.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         if item.verification_status != "verified":
@@ -273,6 +307,41 @@ async def answer_review(
         question = await session.get(Question, item.question_id)
         if question is None:
             raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
+        provided_idempotency_key = (body.idempotency_key or header_idempotency_key or "").strip()
+        request_fingerprint = hashlib.sha256(
+            (
+                f"{question.id}\0{body.response}\0{body.review_duration_ms}\0"
+                f"{body.plan_id}\0{body.task_key}"
+            ).encode()
+        ).hexdigest()
+        idempotency_key = provided_idempotency_key or _new_review_idempotency_key()
+        existing_event = await session.scalar(
+            select(FsrsReviewEvent).where(
+                FsrsReviewEvent.user_id == ctx.user_id,
+                FsrsReviewEvent.idempotency_key == idempotency_key,
+            )
+        )
+        if existing_event is not None:
+            if (
+                existing_event.error_item_id != item.id
+                or (
+                    existing_event.request_fingerprint is not None
+                    and existing_event.request_fingerprint != request_fingerprint
+                )
+            ):
+                raise HTTPException(status_code=409, detail="REVIEW_IDEMPOTENCY_CONFLICT")
+            replay_card = dict(existing_event.card_after_json or {})
+            replay_due = scheduler.due_at(replay_card)
+            return {
+                "correct": existing_event.correct,
+                "state": item.state,
+                "cause": item.cause,
+                "next_due": replay_due.isoformat() if replay_due else None,
+                "answer": question.answer,
+                "explanation": question.explanation,
+                "mastery_changes": [],
+                "idempotent": True,
+            }
         if question.type in ("single", "multi", "blank"):
             correct = grade_objective(
                 {"type": question.type, "answer": question.answer}, body.response
@@ -287,7 +356,14 @@ async def answer_review(
         old_card = dict(item.fsrs_card_json or {})
         was_due = item.state in _ACTIVE_STATES and scheduler.is_due(old_card, now_dt)
         streak = int(old_card.get("streak", 0))
-        new_card, next_due = scheduler.review(old_card, correct, now_dt)
+        card_before = scheduler.normalize_business_card_json(old_card, item.id)
+        new_card, next_due, review_log = scheduler.review_with_log(
+            card_before,
+            correct,
+            now_dt,
+            business_card_id=item.id,
+            review_duration_ms=body.review_duration_ms,
+        )
         if correct:
             streak += 1
             state = "mastered" if streak >= _MASTERY_STREAK else "reviewing"
@@ -313,6 +389,40 @@ async def answer_review(
         kc_ids = [str(k) for k in (question.kc_ids or [])]
         changes = await _update_mastery_review(
             session, ctx, kc_ids, correct, weight, item.id, now_dt
+        )
+        session.add(
+            FsrsReviewEvent(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                error_item_id=item.id,
+                rating=int(review_log.rating),
+                correct=correct,
+                reviewed_at=review_log.review_datetime,
+                review_duration_ms=review_log.review_duration,
+                card_before_json=card_before,
+                card_after_json=new_card,
+                review_log_json=review_log.to_dict(),
+                params_version=scheduler.FSRS_PARAMS_VERSION,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        )
+        await session.flush()
+        await write_learning_event(
+            session,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            source_type="review",
+            source_id=item.id,
+            question_id=question.id,
+            item_key=str(item.id),
+            kc_ids=kc_ids,
+            correct=correct,
+            score=1.0 if correct else 0.0,
+            rating=int(review_log.rating),
+            difficulty_label=question.difficulty,
+            occurred_at=review_log.review_datetime,
+            idempotency_key=idempotency_key,
         )
         if body.plan_id is not None and body.task_key is not None and was_due:
             try:

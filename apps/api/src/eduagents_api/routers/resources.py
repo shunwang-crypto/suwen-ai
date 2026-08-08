@@ -970,8 +970,10 @@ async def confirm_resource_questions(
                     question.source_meta_json = {**meta, "error_selected": True}
                     created.append(str(existing.id))
                     continue
+                error_item_id = uuid.uuid4()
                 session.add(
                     ErrorItem(
+                        id=error_item_id,
                         tenant_id=ctx.tenant_id,
                         user_id=ctx.user_id,
                         question_id=question.id,
@@ -981,7 +983,9 @@ async def confirm_resource_questions(
                         verification_status="verified",
                         resource_question_id=rq.id,
                         original_response=str(meta.get("detected_student_answer") or ""),
-                        fsrs_card_json=new_card_json(review_now),
+                        fsrs_card_json=new_card_json(
+                            review_now, business_card_id=error_item_id
+                        ),
                     )
                 )
                 await session.flush()

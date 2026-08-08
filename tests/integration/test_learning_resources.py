@@ -447,7 +447,14 @@ async def test_resource_extract_verify_select_error_and_assessment(client):
     assert (await client.get("/api/quiz", headers=headers)).json() == []
 
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import Attempt, ErrorItem, LearningResource, Quiz
+    from eduagents_api.models import (
+        AssessmentAnswer,
+        Attempt,
+        ErrorItem,
+        LearningEvent,
+        LearningResource,
+        Quiz,
+    )
     from sqlalchemy import select
 
     async with tenant_session(owner_id) as session:
@@ -509,6 +516,12 @@ async def test_resource_extract_verify_select_error_and_assessment(client):
     assert pending_report.status_code == 200
     assert pending_report.json()["metrics"]["attempt_count"] == 0
     assert all(point["attempts"] == 0 for point in pending_report.json()["trend"])
+    async with tenant_session(owner_id) as session:
+        assert not (
+            await session.scalars(
+                select(LearningEvent).where(LearningEvent.source_type == "assessment")
+            )
+        ).all()
     bypass = await client.post(
         f"/api/assessment-attempts/{attempt_id}/grade-or-verify",
         headers=headers,
@@ -546,6 +559,22 @@ async def test_resource_extract_verify_select_error_and_assessment(client):
     )
     assert graded.status_code == 200, graded.text
     assert graded.json()["status"] == "graded"
+    async with tenant_session(owner_id) as session:
+        answer_id = await session.scalar(
+            select(AssessmentAnswer.id).where(
+                AssessmentAnswer.attempt_id == uuid.UUID(attempt_id)
+            )
+        )
+        assessment_events = (
+            await session.scalars(
+                select(LearningEvent).where(
+                    LearningEvent.source_type == "assessment",
+                    LearningEvent.source_id == answer_id,
+                )
+            )
+        ).all()
+    assert len(assessment_events) == 1
+    assert assessment_events[0].question_id == uuid.UUID(questions[1]["question_id"])
 
     # graded/verified 是终态：完全相同的重试幂等，改作答或分数明确拒绝。
     retry = await client.post(

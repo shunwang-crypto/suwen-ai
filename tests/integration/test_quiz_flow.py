@@ -131,15 +131,29 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
         assert per[q_blank["id"]]["correct"] is False
 
         from eduagents_api.db import tenant_session
-        from eduagents_api.models import Attempt, ErrorItem
+        from eduagents_api.models import Attempt, ErrorItem, LearningEvent
 
         async with tenant_session(
             await _uid(client, email)
         ) as session:
             attempts = (await session.scalars(select(Attempt))).all()
             errors = (await session.scalars(select(ErrorItem))).all()
+            learning_events = (
+                await session.scalars(
+                    select(LearningEvent).where(
+                        LearningEvent.source_type == "quiz_attempt"
+                    )
+                )
+            ).all()
         assert len(attempts) == 2
         assert len(errors) == 1  # 错题 100% 自动入本 (F6-A1)
+        assert len(learning_events) == len(attempts)
+        assert {event.source_id for event in learning_events} == {
+            attempt.id for attempt in attempts
+        }
+        assert {event.question_id for event in learning_events} == {
+            attempt.question_id for attempt in attempts
+        }
 
         # 5) 越权 resume -> 404 (不泄漏存在性)
         email_b = f"quiz-{uuid.uuid4().hex[:12]}@test.eduagents.cn"

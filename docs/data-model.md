@@ -68,6 +68,10 @@ erDiagram
     USER ||--o{ METACOGNITION_PREDICTION : owns
     USER ||--o{ EXPLAIN_BACK : writes
     QUESTION ||--o{ ERROR_ITEM : produces
+    ERROR_ITEM ||--o{ FSRS_REVIEW_EVENT : reviewed
+    USER ||--o{ FSRS_REVIEW_EVENT : owns
+    USER ||--o{ LEARNING_EVENT : owns
+    QUESTION ||--o{ LEARNING_EVENT : snapshots
 ~~~
 
 ## 账户与组织
@@ -120,6 +124,8 @@ erDiagram
 | `ErrorItem` | 错题来源、错因、状态、核验状态、FSRS card、资源/作答关联 |
 | `MasteryRecord` | 用户与知识点的当前 BKT 状态和置信度 |
 | `MasteryLog` | 每次掌握度变化的旧值、新值、证据类型、证据 ID 和权重 |
+| `FsrsReviewEvent` | 一次已核验复习的 py-fsrs ReviewLog、card 前后快照、评分和参数版本；以 ErrorItem UUID 作为业务卡身份 |
+| `LearningEvent` | quiz/review/assessment 统一学习证据；保存题目 KC/难度快照和业务发生时间 |
 
 `Question.quiz_id` 可空。资源题不创建隐藏 Quiz，也不能进入普通测验或教师组卷列表。
 
@@ -128,6 +134,12 @@ erDiagram
 预测与 Explain-back 都是 observation-only 数据，不调用 BKT/FSRS，不写 `MasteryRecord`、
 `MasteryLog`、`ErrorItem`、`LearnerInsight` 或报告。Explain-back 模型/JSON 失败时仍保存学生
 原文和 `degraded=true` 的可重试反馈；额度异常继续使用统一 402/429 契约，不伪装成降级成功。
+
+新复习在同一事务更新 `ErrorItem.fsrs_card_json`、写入 `fsrs_review_events` 和
+`learning_events`；`(user_id, idempotency_key)` 防止相同复习请求二次推进。新 quiz Attempt
+和最终 `verified` 的 assessment answer 各写一个统一事件。pending/未核验记录不写事件；历史
+review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户删除级联、导出清单，并按
+730 天事件留存任务清理；迁移 0022 不做历史回填。
 
 ## 题目资料与真实作答
 
@@ -183,7 +195,12 @@ erDiagram
 元数据。下载必须经过授权 API，不向客户端暴露任意对象 key。
 
 `PendingCleanup` 是删除 outbox：数据库删除和清理任务同事务提交，Worker 重试删除 Qdrant、
-对象存储、Redis 和 checkpoint 外部状态。对象删除失败不得先删除数据库事实并伪装成功。
+对象存储、Redis 和 checkpoint 外部状态。`done` 保留为旧行兼容字段；`last_attempt_at`、
+`next_attempt_at`、`completed_at` 和 `locked_at/locked_by` 记录可恢复租约；`locked_by` 保存每次
+claim 独有的随机 lease token，续租、成功和失败更新同时校验具体行 ID 与 token。失败信息只
+保存有界脱敏的 `last_error_code/last_error_text`，`progress_json` 只保存阶段性状态。Worker
+通过 `FOR UPDATE SKIP LOCKED` 领取任务，过期租约可恢复；对象删除失败不得先删除数据库事实
+并伪装成功。
 
 `TutorProblemDraft.resource_id` 复用 `LearningResource` 原件和对象存储；识别候选仅保存在
 `recognized_questions_json`，用 `selected_question_index` 选中一道，不创建 `Question`、

@@ -142,16 +142,25 @@ export async function apiFetch(
 /** JSON 便捷封装：自动序列化请求体、反序列化响应；204 返回 undefined。 */
 export async function apiJson<T>(
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    signal?: AbortSignal;
+    headers?: HeadersInit;
+  } = {},
 ): Promise<T> {
   const init: RequestInit = {
     method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
     signal: options.signal,
   };
+  const headers = new Headers(options.headers);
   if (options.body !== undefined) {
     init.body = JSON.stringify(options.body);
-    init.headers = { "Content-Type": "application/json" };
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
   }
+  if ([...headers.keys()].length > 0) init.headers = headers;
   const res = await apiFetch(path, init);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

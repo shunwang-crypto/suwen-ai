@@ -82,19 +82,30 @@ function StateBadge({ state }: { state: string }) {
 
 interface ItemState {
   value: string;
+  idempotencyKey: string;
   submitting: boolean;
   variantLoading: boolean;
   isVariant: boolean;
   result: ReviewAnswerResult | null;
 }
 
-const initialItemState: ItemState = {
-  value: "",
-  submitting: false,
-  variantLoading: false,
-  isVariant: false,
-  result: null,
-};
+function newReviewIdempotencyKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `review-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createItemState(): ItemState {
+  return {
+    value: "",
+    idempotencyKey: newReviewIdempotencyKey(),
+    submitting: false,
+    variantLoading: false,
+    isVariant: false,
+    result: null,
+  };
+}
 
 export default function ReviewsPage() {
   const search = useSyncExternalStore(
@@ -151,19 +162,25 @@ export default function ReviewsPage() {
   const patchState = (id: string, patch: Partial<ItemState>) => {
     setStates((prev) => ({
       ...prev,
-      [id]: { ...(prev[id] ?? initialItemState), ...patch },
+      [id]: { ...(prev[id] ?? createItemState()), ...patch },
     }));
   };
 
   const submit = async (item: ReviewItem) => {
-    const st = states[item.error_item_id] ?? initialItemState;
+    const st = states[item.error_item_id] ?? createItemState();
     if (st.submitting || st.result) return;
-    patchState(item.error_item_id, { submitting: true });
+    // Keep this key in state: a network/401 retry must replay the same
+    // submission, while a later intentional submission gets a new key.
+    patchState(item.error_item_id, {
+      idempotencyKey: st.idempotencyKey,
+      submitting: true,
+    });
     setBanner(null);
     try {
       const result = await apiJson<ReviewAnswerResult>(
         `/api/reviews/${item.error_item_id}/answer`,
         {
+          headers: { "Idempotency-Key": st.idempotencyKey },
           body: {
             response: st.value,
             ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
@@ -178,7 +195,7 @@ export default function ReviewsPage() {
   };
 
   const makeVariant = async (item: ReviewItem) => {
-    const st = states[item.error_item_id] ?? initialItemState;
+    const st = states[item.error_item_id] ?? createItemState();
     if (st.variantLoading) return;
     patchState(item.error_item_id, { variantLoading: true });
     setBanner(null);
@@ -202,7 +219,7 @@ export default function ReviewsPage() {
       );
       setStates((prev) => ({
         ...prev,
-        [item.error_item_id]: { ...initialItemState, isVariant: true },
+        [item.error_item_id]: { ...createItemState(), isVariant: true },
       }));
     } catch (err) {
       patchState(item.error_item_id, { variantLoading: false });
@@ -285,7 +302,7 @@ export default function ReviewsPage() {
         <div className="h-1.5 overflow-hidden rounded-full bg-line" aria-label={`复习进度 ${currentIndex + 1}/${data.items.length}`}><div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${((currentIndex + 1) / data.items.length) * 100}%` }} /></div>
         <ul className="space-y-4">
           {(data.items as ReviewItemWithRetention[]).slice(currentIndex, currentIndex + 1).map((item) => {
-            const st = states[item.error_item_id] ?? initialItemState;
+            const st = states[item.error_item_id] ?? createItemState();
             const mastered = st.result?.state === "mastered";
             const wrong = Boolean(st.result && !st.result.correct);
             return (
@@ -359,7 +376,15 @@ export default function ReviewsPage() {
                     question={item.question}
                     value={st.value}
                     disabled={Boolean(st.result) || st.submitting}
-                    onChange={(v) => patchState(item.error_item_id, { value: v })}
+                    onChange={(v) =>
+                      patchState(item.error_item_id, {
+                        value: v,
+                        // Editing after a failed submission starts a new
+                        // semantic attempt; retrying unchanged input reuses
+                        // the old key.
+                        ...(v !== st.value ? { idempotencyKey: newReviewIdempotencyKey() } : {}),
+                      })
+                    }
                   />
 
                   {st.result ? (

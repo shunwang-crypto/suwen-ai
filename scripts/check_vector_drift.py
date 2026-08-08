@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""向量库对账: 比对 PG 的 ``embedding_status='done'`` 块数与 Qdrant 的点数。
+"""向量库对账: 精确比对 PG child chunk 身份与 Qdrant point 引用。
 
 只读。不修改 PG, 不修改 Qdrant。
 
@@ -26,6 +26,10 @@ from eduagents_core.config import get_settings
 from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
 
+def _status_exit_code(status: str) -> int:
+    return {"ok": 0, "drift": 1, "error": 2}.get(status, 2)
+
+
 async def _run(args: argparse.Namespace) -> int:
     settings = get_settings()
     store = QdrantStore(settings)
@@ -44,9 +48,7 @@ async def _run(args: argparse.Namespace) -> int:
     else:
         _print_human(report, show_all=args.all)
 
-    if report.errors:
-        return 2
-    return 1 if report.unhealthy_rows else 0
+    return _status_exit_code(report.status)
 
 
 def _print_human(report, *, show_all: bool) -> None:
@@ -54,6 +56,16 @@ def _print_human(report, *, show_all: bool) -> None:
     print(f"知识库总数: {len(report.rows)}   漂移: {len(report.unhealthy_rows)}")
     print(f"缺失向量 (PG 标 done 但检索不到): {report.missing_vectors}")
     print(f"孤儿点   (Qdrant 有但 PG 无):     {report.orphan_points}")
+    if report.missing_points:
+        print(f"缺失 point/chunk ID: {', '.join(sorted(report.missing_points))}")
+    if report.extra_points:
+        print(f"多余 point ID: {', '.join(sorted(report.extra_points))}")
+    if report.wrong_tenant_points:
+        print(f"租户不匹配 point ID: {', '.join(sorted(report.wrong_tenant_points))}")
+    if report.malformed_points:
+        print(f"格式错误 point: {len(report.malformed_points)}")
+    if report.document_inconsistencies:
+        print(f"文档不一致: {len(report.document_inconsistencies)}")
     if rows:
         print()
         print(f"{'kb_id':38} {'PG_done':>8} {'Qdrant':>8} {'drift':>7}  name")
@@ -73,12 +85,18 @@ def _print_human(report, *, show_all: bool) -> None:
     print()
     if report.errors:
         print("结论: 对账过程出错, 结果不完整。")
-    elif report.unhealthy_rows or report.orphan_kbs:
+    elif report.status == "drift":
         parts = []
         if report.missing_vectors:
             parts.append("drift > 0 的库需要重新摄取才能恢复检索")
         if report.orphan_kbs:
             parts.append("已删库的残留向量应清理 (含原文, 属删除不完整)")
+        if report.wrong_tenant_points:
+            parts.append("租户不匹配的向量必须隔离")
+        if report.malformed_points:
+            parts.append("格式错误的向量需要人工核查")
+        if report.document_inconsistencies:
+            parts.append("文档状态与子块索引不一致")
         print("结论: 存在漂移。" + "; ".join(parts) + "。")
     else:
         print("结论: 两侧一致。")

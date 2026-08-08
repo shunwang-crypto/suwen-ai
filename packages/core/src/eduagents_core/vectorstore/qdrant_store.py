@@ -16,7 +16,7 @@ import warnings
 from qdrant_client import QdrantClient, models
 
 from ..config import Settings
-from .base import SearchHit, VectorPoint
+from .base import SearchHit, VectorPoint, VectorPointRef
 
 # 本地嵌入模式同一路径只允许一个客户端实例 (文件锁): API 进程内
 # RetrievalService 与摄取任务必须共享同一 client, 按目标 key 做进程级单例。
@@ -146,6 +146,81 @@ class QdrantStore:
             exact=True,
         )
         return int(result.count)
+
+    async def scan_point_refs(
+        self,
+        *,
+        page_size: int = 1000,
+        max_pages: int = 1000,
+        timeout: int | None = 10,
+        max_points: int | None = None,
+    ) -> list[VectorPointRef]:
+        """Scan point identity metadata for the administrator audit path.
+
+        The scan deliberately requests only the three ownership/document
+        payload keys and disables vectors.  It is the only global read used by
+        reconciliation; normal retrieval continues to require tenant and KB
+        filters.  A bounded page count/point count turns an unexpectedly large
+        collection into an explicit audit error instead of returning a
+        misleading partial result.
+        """
+        return await asyncio.to_thread(
+            self._scan_point_refs_sync,
+            page_size,
+            max_pages,
+            timeout,
+            max_points,
+        )
+
+    def _scan_point_refs_sync(
+        self,
+        page_size: int,
+        max_pages: int,
+        timeout: int | None,
+        max_points: int | None,
+    ) -> list[VectorPointRef]:
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be positive or None")
+        if max_points is not None and max_points <= 0:
+            raise ValueError("max_points must be positive or None")
+        if not self._client.collection_exists(self._collection):
+            return []
+
+        refs: list[VectorPointRef] = []
+        offset = None
+        for _page_number in range(max_pages):
+            points, next_offset = self._client.scroll(
+                self._collection,
+                limit=page_size,
+                offset=offset,
+                with_payload=["tenant_id", "kb_id", "doc_id"],
+                with_vectors=False,
+                timeout=timeout,
+            )
+            for point in points:
+                payload = point.payload if isinstance(point.payload, dict) else {}
+                refs.append(
+                    VectorPointRef(
+                        point_id=str(point.id) if point.id is not None else None,
+                        tenant_id=payload.get("tenant_id"),
+                        kb_id=payload.get("kb_id"),
+                        doc_id=payload.get("doc_id"),
+                    )
+                )
+                if max_points is not None and len(refs) > max_points:
+                    raise RuntimeError("qdrant point scan point limit exceeded")
+
+            if next_offset is None:
+                return refs
+            if next_offset == offset:
+                raise RuntimeError("qdrant point scan returned a repeated offset")
+            offset = next_offset
+
+        raise RuntimeError("qdrant point scan page limit exceeded")
 
     async def scan_kb_ids(self) -> dict[tuple[str, str], int]:
         """全库 (tenant_id, kb_id) -> 点数。**仅供管理员对账**, 是本类唯一不带租户过滤

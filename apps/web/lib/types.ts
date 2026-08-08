@@ -813,6 +813,7 @@ export interface ReviewAnswerResult {
   answer: string;
   explanation: string;
   mastery_changes: MasteryChange[];
+  idempotent?: boolean;
   plan_task_completion?: PlanTaskCompletion | null;
 }
 

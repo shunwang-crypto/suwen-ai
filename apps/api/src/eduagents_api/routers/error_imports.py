@@ -476,7 +476,9 @@ async def confirm_error_import(
         )
         session.add(resource_question)
         await session.flush()
+        item_id = uuid.uuid4()
         item = ErrorItem(
+            id=item_id,
             tenant_id=ctx.tenant_id,
             user_id=ctx.user_id,
             question_id=question.id,
@@ -487,7 +489,11 @@ async def confirm_error_import(
             source_import_id=imported.id,
             resource_question_id=resource_question.id,
             original_response=body.my_answer.strip(),
-            fsrs_card_json=new_card_json(now_dt) if body.answer_verified else {},
+            fsrs_card_json=(
+                new_card_json(now_dt, business_card_id=item_id)
+                if body.answer_verified
+                else {}
+            ),
         )
         session.add(item)
         await session.flush()
@@ -586,7 +592,7 @@ async def update_imported_error(
         item.original_response = body.my_answer.strip()
         if item.verification_status == "pending" and body.answer_verified:
             item.verification_status = "verified"
-            item.fsrs_card_json = new_card_json(now_dt)
+            item.fsrs_card_json = new_card_json(now_dt, business_card_id=item.id)
         verified = item.verification_status == "verified"
         if item.source_import_id is not None:
             imported = await session.get(ErrorImport, item.source_import_id)

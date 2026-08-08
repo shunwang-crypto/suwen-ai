@@ -225,7 +225,7 @@ Quiz 题目通过 schema 后会进入独立 cheap critic，检查蓝图一致性
 | POST | /api/errors/{id}/archive | 手动归档：state→archived，退出今日复习队列 |
 | POST | /api/errors/{id}/cause | {cause} 错因修正（五分类之一，越界 422） |
 | GET | /api/reviews/today | 到期复习队列；计划入口使用 URL 中的 `plan_id/task_key` |
-| POST | /api/reviews/{id}/answer | `{response, plan_id?, task_key?}`；仅真实到期复习作答可幂等完成 `review_errors/mixed` 计划任务 |
+| POST | /api/reviews/{id}/answer | `{response, plan_id?, task_key?, review_duration_ms?}`；客户端必须为一次提交生成并在网络重试间复用 `Idempotency-Key`（≤128 字符）；仅真实到期复习作答可幂等完成 `review_errors/mixed` 计划任务 |
 
 > 错因自动分类：`POST /api/reviews/{id}/answer` 判错时以 cheap 档 json_mode 重标错因并回传 `cause`；
 > 网关 stub 模式不发请求、异常一律回落 `knowledge_gap`（入本初值），绝不冒充分类结果。

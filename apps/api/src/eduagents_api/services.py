@@ -23,6 +23,7 @@ from .models import (
     KnowledgeBase,
     KnowledgeComponent,
     LearnerInsight,
+    LearningEvent,
     MasteryLog,
     MasteryRecord,
     MetacognitionPrediction,
@@ -38,6 +39,70 @@ _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重进 BKT (写死)
 _SHORT_PASS_SCORE = 0.6
 _TUTOR_EVIDENCE_WEIGHT = 0.5  # 辅导小结证据权重 (与主观题同档: 间接证据减半)
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
+
+
+async def write_learning_event(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    source_type: str,
+    source_id: uuid.UUID,
+    question_id: uuid.UUID | None,
+    item_key: str | None,
+    kc_ids: list[str],
+    correct: bool,
+    score: float | None,
+    rating: int | None,
+    difficulty_label: str | None,
+    occurred_at: datetime,
+    idempotency_key: str,
+) -> LearningEvent:
+    """Insert-or-replay one unified learning event inside the caller's UoW.
+
+    Callers already hold the source row lock where a request can race (review
+    and assessment).  The database unique constraint remains the final guard;
+    a repeated semantic write returns the original row instead of advancing
+    any state a second time.
+    """
+
+    existing = await session.scalar(
+        select(LearningEvent).where(
+            LearningEvent.user_id == user_id,
+            LearningEvent.source_type == source_type,
+            LearningEvent.source_id == source_id,
+            LearningEvent.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        if (
+            existing.tenant_id != tenant_id
+            or existing.question_id != question_id
+            or existing.correct != correct
+            or existing.rating != rating
+            or existing.kc_ids_json != list(kc_ids)
+        ):
+            raise ValueError("learning event idempotency conflict")
+        return existing
+
+    event = LearningEvent(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source_type=source_type,
+        source_id=source_id,
+        question_id=question_id,
+        item_key=item_key,
+        kc_ids_json=list(kc_ids),
+        correct=bool(correct),
+        score=score,
+        rating=rating,
+        difficulty_label=difficulty_label,
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
+    )
+    session.add(event)
+    await session.flush()
+    return event
 
 INSIGHT_TEXT_MAX = 600  # learner_insights.text 截断上限 (学生原话/误解描述)
 INSIGHTS_KEEP_PER_USER = 100  # 长期记忆每用户保留最近 100 条, 超出删最旧 (P2-1)
@@ -363,6 +428,7 @@ async def _update_mastery(
     weight: float,
     evidence_id,
     evidence_type: str = "quiz_attempt",
+    now_dt: datetime | None = None,
 ) -> list[dict]:
     """BKT 直写 (确定性, 不经 LLM) + mastery_log 审计 (F8-A3)。
 
@@ -373,6 +439,7 @@ async def _update_mastery(
     evidence_id=None (tutor_summary) 无去重键, 保持原样。
     """
     changes = []
+    business_now = now_dt or datetime.now(UTC)
     params = BktParams()
     applied: set[str] = set()
     if evidence_id is not None and kc_ids:
@@ -404,13 +471,13 @@ async def _update_mastery(
                 kc_id=uuid.UUID(kc_id),
                 p_mastery=new_p,
                 confidence=weight,
-                last_seen=datetime.now(UTC),
+                last_seen=business_now,
             )
             session.add(record)
         else:
             record.p_mastery = new_p
             record.confidence = min(1.0, record.confidence + 0.1)
-            record.last_seen = datetime.now(UTC)
+            record.last_seen = business_now
         session.add(
             MasteryLog(
                 tenant_id=ctx.tenant_id,
@@ -588,6 +655,7 @@ async def record_attempts(
                 correct = llm_score >= _SHORT_PASS_SCORE
                 weight = _SHORT_ANSWER_WEIGHT
             attempt = Attempt(
+                at=business_now,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 question_id=q.id,
@@ -620,17 +688,45 @@ async def record_attempts(
                     )
                 )
             kc_ids = [str(k) for k in (q.kc_ids or [])]
-            changes = await _update_mastery(session, ctx, kc_ids, correct, weight, attempt.id)
+            changes = await _update_mastery(
+                session,
+                ctx,
+                kc_ids,
+                correct,
+                weight,
+                attempt.id,
+                now_dt=business_now,
+            )
+            await write_learning_event(
+                session,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                source_type="quiz_attempt",
+                source_id=attempt.id,
+                question_id=q.id,
+                item_key=str(q.id),
+                kc_ids=kc_ids,
+                correct=correct,
+                score=llm_score if llm_score is not None else (1.0 if correct else 0.0),
+                rating=3 if correct else 1,
+                difficulty_label=q.difficulty,
+                occurred_at=business_now,
+                idempotency_key=f"attempt:{attempt.id}",
+            )
             if not correct:
                 # F6-A1: 错题 100% 自动入本 (错因初值 knowledge_gap, M4 错因分类细化)
                 # F6-A4: 入本即挂 FSRS 卡 (due=业务时间, 当天进复习队列)
+                error_item_id = uuid.uuid4()
                 session.add(
                     ErrorItem(
+                        id=error_item_id,
                         tenant_id=ctx.tenant_id,
                         user_id=ctx.user_id,
                         question_id=q.id,
                         kc_ids=kc_ids,
-                        fsrs_card_json=new_card_json(business_now),
+                        fsrs_card_json=new_card_json(
+                            business_now, business_card_id=error_item_id
+                        ),
                     )
                 )
             results.append(
