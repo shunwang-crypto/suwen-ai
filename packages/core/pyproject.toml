@@ -21,6 +21,7 @@ dependencies = [
     "minio>=7.2",
     "aiofiles>=23.2",
     "trafilatura>=2.0",
+    "fsrs>=6.3,<7",
 ]
 
 [build-system]

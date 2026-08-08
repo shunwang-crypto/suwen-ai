@@ -12,14 +12,18 @@ Card.from_dict 按键取值, 多余键不影响反序列化 (已对 py-fsrs 6.3.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fsrs import Card, Rating, ReviewLog, Scheduler
 
+from .fsrs_fit import validate_fsrs6_parameters
+
 # enable_fuzzing=False: 间隔确定可复现 (演示脚本与 CI 断言依赖确定性, §9)
 _scheduler = Scheduler(enable_fuzzing=False)
 FSRS_PARAMS_VERSION = "fsrs-6-default"
+FSRS_ALGORITHM = "fsrs-6"
 
 _FSRS_FIELDS = ("card_id", "state", "step", "stability", "difficulty", "due", "last_review")
 type BusinessCardId = UUID | str
@@ -27,6 +31,13 @@ type BusinessCardId = UUID | str
 
 def _ensure_aware(now: datetime) -> datetime:
     return now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+
+
+def _scheduler_for_params(params: Sequence[float]) -> Scheduler:
+    """Build an isolated py-fsrs scheduler for one explicit 21-param version."""
+
+    normalized = validate_fsrs6_parameters(params)
+    return Scheduler(parameters=list(normalized), enable_fuzzing=False)
 
 
 def stable_card_id(business_card_id: BusinessCardId) -> int:
@@ -77,13 +88,17 @@ def _to_card(
 
 
 def new_card_json(
-    now: datetime, business_card_id: BusinessCardId | None = None
+    now: datetime,
+    business_card_id: BusinessCardId | None = None,
+    *,
+    params_version: str = FSRS_PARAMS_VERSION,
 ) -> dict:
     """新建 FSRS 卡并序列化: due=now, 即刻到期 (错题入本当天即可复习)。"""
     now = _ensure_aware(now)
     resolved_business_id = business_card_id or uuid4()
     card = Card(card_id=stable_card_id(resolved_business_id), due=now).to_dict()
     card["business_card_id"] = str(UUID(str(resolved_business_id)))
+    card["params_version"] = params_version
     return card
 
 
@@ -94,6 +109,8 @@ def review_with_log(
     *,
     business_card_id: BusinessCardId | None = None,
     review_duration_ms: int | None = None,
+    params: Sequence[float] | None = None,
+    params_version: str = FSRS_PARAMS_VERSION,
 ) -> tuple[dict, datetime, ReviewLog]:
     """Review a card and retain the py-fsrs ``ReviewLog`` for persistence.
 
@@ -106,7 +123,8 @@ def review_with_log(
     resolved_business_id = business_card_id or (card_json or {}).get("business_card_id")
     card = _to_card(card_json, now, resolved_business_id)
     rating = Rating.Good if correct else Rating.Again
-    new_card, review_log = _scheduler.review_card(
+    active_scheduler = _scheduler if params is None else _scheduler_for_params(params)
+    new_card, review_log = active_scheduler.review_card(
         card,
         rating,
         review_datetime=now,
@@ -119,19 +137,38 @@ def review_with_log(
     if resolved_business_id is not None:
         out["business_card_id"] = str(UUID(str(resolved_business_id)))
         out["card_id"] = stable_card_id(resolved_business_id)
+    out["params_version"] = params_version
     return out, new_card.due, review_log
 
 
-def review(card_json: dict | None, correct: bool, now: datetime) -> tuple[dict, datetime]:
+def review(
+    card_json: dict | None,
+    correct: bool,
+    now: datetime,
+    *,
+    params: Sequence[float] | None = None,
+    params_version: str = FSRS_PARAMS_VERSION,
+) -> tuple[dict, datetime]:
     """一次复习评分: 对=Good / 错=Again, 返回 (新卡 json, 下次到期时间)。
 
     card_json 中的非 FSRS 扩展键 (如 streak) 原样带入新卡 json, 由调用方自行更新。
     """
-    out, due, _log = review_with_log(card_json, correct, now)
+    out, due, _log = review_with_log(
+        card_json,
+        correct,
+        now,
+        params=params,
+        params_version=params_version,
+    )
     return out, due
 
 
-def predicted_retention(card_json: dict | None, at: datetime) -> float | None:
+def predicted_retention(
+    card_json: dict | None,
+    at: datetime,
+    *,
+    params: Sequence[float] | None = None,
+) -> float | None:
     """FSRS 保持率预测 (P2-7 遗忘快照): 该卡在 at 时刻仍能正确回忆的概率。
 
     口径 = fsrs 库 Scheduler.get_card_retrievability (天粒度确定性衰减),
@@ -146,7 +183,8 @@ def predicted_retention(card_json: dict | None, at: datetime) -> float | None:
     card = Card.from_dict(card_json)
     if card.last_review is None or card.stability is None:
         return None
-    return float(_scheduler.get_card_retrievability(card, _ensure_aware(at)))
+    active_scheduler = _scheduler if params is None else _scheduler_for_params(params)
+    return float(active_scheduler.get_card_retrievability(card, _ensure_aware(at)))
 
 
 def due_at(card_json: dict | None) -> datetime | None:

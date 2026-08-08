@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     Numeric,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -421,6 +423,20 @@ class Attempt(Base):
 
 class ErrorItem(Base):
     __tablename__ = "error_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_attempt_id", name="uq_error_items_source_attempt_id"
+        ),
+        CheckConstraint(
+            "confidence_at_error IS NULL OR confidence_at_error BETWEEN 1 AND 5",
+            name="ck_error_items_confidence_at_error",
+        ),
+        CheckConstraint(
+            "confidence_probability_at_error IS NULL OR "
+            "confidence_probability_at_error BETWEEN 0 AND 1",
+            name="ck_error_items_confidence_probability_at_error",
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
@@ -444,6 +460,16 @@ class ErrorItem(Base):
     assessment_answer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True
     )
+    # B2: only quiz-created errors with a real Attempt may populate these
+    # immutable source/confidence snapshots.  Assessment/import/manual paths
+    # intentionally leave them NULL because their confidence scale is not
+    # comparable to the quiz's five-point prediction scale.
+    source_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    confidence_at_error: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    confidence_probability_at_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence_scale_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # 导入时用户在原题上写下的答案；它不是平台作答证据，不进入 Attempt/学情统计。
     original_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     fsrs_card_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -498,6 +524,68 @@ class FsrsReviewEvent(Base):
 # Keep the acronym-spelled import available to integrations while the class
 # follows the repository's existing CamelCase naming convention.
 FSRSReviewEvent = FsrsReviewEvent
+
+
+class FsrsParams(Base):
+    """Versioned, user-scoped FSRS-6 parameter artifact.
+
+    Fit artifacts are immutable after creation in application code.  Status
+    transitions (shadow -> active -> retired) are performed by the offline
+    activation service inside one transaction with card replay; the default
+    API flag keeps this table observation-only until explicitly enabled.
+    """
+
+    __tablename__ = "fsrs_params"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "params_version", name="uq_fsrs_params_user_version"
+        ),
+        CheckConstraint(
+            "algorithm = 'fsrs-6'", name="ck_fsrs_params_algorithm"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(params_json) = 'array' AND jsonb_array_length(params_json) = 21",
+            name="ck_fsrs_params_count",
+        ),
+        CheckConstraint(
+            "status IN ('shadow', 'active', 'retired', 'rejected')",
+            name="ck_fsrs_params_status",
+        ),
+        CheckConstraint(
+            "training_review_count >= 0 AND valid_cross_day_review_count >= 0",
+            name="ck_fsrs_params_counts",
+        ),
+        Index("ix_fsrs_params_user_status", "user_id", "status"),
+        Index(
+            "uq_fsrs_params_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    algorithm: Mapped[str] = mapped_column(String(16), nullable=False, default="fsrs-6")
+    params_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    params_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    training_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    valid_cross_day_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    optimizer_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="fsrs-6-fit-skeleton-v1"
+    )
+    fit_metrics_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="shadow")
+    created_at: Mapped[datetime] = _created_at()
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# Keep both spellings available to offline jobs and integrations.
+FSRSParams = FsrsParams
 
 
 class ErrorImport(Base):
@@ -1007,6 +1095,12 @@ class ExplainBack(Base):
     """User explanation feedback; deliberately separate from mastery evidence."""
 
     __tablename__ = "explain_backs"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(score_json) = 'object'",
+            name="ck_explain_backs_score_json_object",
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -1019,8 +1113,22 @@ class ExplainBack(Base):
         ForeignKey("knowledge_components.id", ondelete="SET NULL"),
         nullable=True,
     )
+    source_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("questions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     prompt_span_ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
     student_text: Mapped[str] = mapped_column(Text, nullable=False)
+    rubric_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="explain-back-rubric-v1", server_default="explain-back-rubric-v1"
+    )
+    # B6 quality dimensions are observation-only.  ``quality_shadow`` records
+    # that numeric values must not be displayed until human agreement gates
+    # are met; no BKT/FSRS writer consumes this JSON.
+    score_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    quality_shadow: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     understanding_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     feedback: Mapped[str] = mapped_column(Text, nullable=False, default="")
     gap: Mapped[str] = mapped_column(Text, nullable=False, default="")

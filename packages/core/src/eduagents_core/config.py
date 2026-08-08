@@ -120,6 +120,18 @@ class Settings(BaseSettings):
     # <=0 关闭全局熔断 (仅保留用户日预算)
     global_daily_budget_cny: float = 50.0
 
+    # --- learning model shadow flags (B3/B4/B5/B7) ---
+    # These controls are intentionally independent from FSRS scheduling.  The
+    # offline evaluator does not read or mutate application state, and every
+    # online/shadow flag remains disabled unless an operator opts in.
+    learning_models_shadow_enabled: bool = False
+    elo_shadow_enabled: bool = False
+    afm_pfa_shadow_enabled: bool = False
+    kc_edge_validation_enabled: bool = False
+    practice_target_success_enabled: bool = False
+    practice_target_success: float = Field(default=0.75, gt=0.0, lt=1.0)
+    fsrs_desired_retention: float = Field(default=0.90, gt=0.0, le=1.0)
+
     # --- billing (0006 预付额度) ---
     # 扣费 = 模型真实成本 × billing_markup (Decimal 运算统一在 apps/api/wallet.py,
     # 本处 float 仅作配置载体, 使用前一律 Decimal(str(...)) 转换, 禁 float 直接参与账目)
@@ -194,6 +206,18 @@ class Settings(BaseSettings):
     # Production keeps the admin fault-injection surface off unless an
     # operator explicitly enables it on a private management network.
     enable_fault_injection: bool = True
+
+    # Learning Core second-wave gates.  Personal FSRS parameters and numeric
+    # Explain-back quality are disabled by default; shadow artifacts may be
+    # recorded without changing scheduling or the student-facing response.
+    fsrs_personalization_enabled: bool = False
+    fsrs_personalization_shadow_enabled: bool = True
+    explain_back_quality_enabled: bool = False
+    explain_back_quality_shadow_enabled: bool = True
+    explain_back_quality_display_enabled: bool = False
+    explain_back_quality_min_agreement: float = Field(default=0.8, ge=0.0, le=1.0)
+    overcorrection_ranking_enabled: bool = False
+    overcorrection_ranking_shadow_enabled: bool = True
 
     @model_validator(mode="before")
     @classmethod

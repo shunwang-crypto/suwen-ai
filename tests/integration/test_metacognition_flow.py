@@ -155,7 +155,11 @@ async def test_explain_back_retains_degraded_text_but_never_writes_learning_evid
             json={"student_text": "我先看定义域，再比较两边。", "prompt_span_ref": "quiz:q1"},
         )
         assert response.status_code == 200, response.text
-        assert response.json()["understanding_score"] == 0.75
+        # The structured rubric remains shadow-only until the offline human
+        # agreement gate is satisfied; the legacy field is deliberately
+        # present but its numeric value is not student-visible.
+        assert response.json()["understanding_score"] is None
+        assert response.json()["quality_shadow"] is True
         assert response.json()["degraded"] is False
 
         app.state.gateway = _BrokenGateway()

@@ -15,6 +15,8 @@ from .models import Attempt, MetacognitionPrediction
 
 WINDOWS = ("day", "week", "all")
 CONFIDENCE_PROBABILITIES = {1: 0.1, 2: 0.3, 3: 0.5, 4: 0.7, 5: 0.9}
+CONFIDENCE_SCALE_VERSION = "quiz-confidence-5-v1"
+PREDICTED_CORRECT_SCALE_VERSION = "quiz-predicted-correct-v1"
 HIGH_CONFIDENCE_MIN = 0.7
 
 
@@ -31,6 +33,34 @@ def prediction_probability(
     if isinstance(predicted_correct, bool):
         return 1.0 if predicted_correct else 0.0
     return None
+
+
+def confidence_snapshot(
+    predicted_confidence: int | None,
+    predicted_correct: bool | None = None,
+) -> tuple[int | None, float | None, str | None]:
+    """Return the immutable confidence snapshot for an ErrorItem.
+
+    The five-point confidence value is the only comparable confidence scale.
+    A binary ``predicted_correct`` is retained as a probability observation
+    with its own version, but never masquerades as a five-point score.  Other
+    sources (assessment/import/manual) must call this with ``None`` and keep
+    all three fields NULL.
+    """
+
+    if (
+        isinstance(predicted_confidence, int)
+        and not isinstance(predicted_confidence, bool)
+        and predicted_confidence in CONFIDENCE_PROBABILITIES
+    ):
+        return (
+            predicted_confidence,
+            CONFIDENCE_PROBABILITIES[predicted_confidence],
+            CONFIDENCE_SCALE_VERSION,
+        )
+    if isinstance(predicted_correct, bool):
+        return None, (1.0 if predicted_correct else 0.0), PREDICTED_CORRECT_SCALE_VERSION
+    return None, None, None
 
 
 def compute_calibration(rows: list[dict]) -> dict:

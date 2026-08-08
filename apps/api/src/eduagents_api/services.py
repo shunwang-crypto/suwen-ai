@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 
 from .db import tenant_session
 from .deps import AuthContext
+from .metacognition import confidence_snapshot
 from .models import (
     ERROR_IMPORT_QUIZ_KIND,
     Attempt,
@@ -687,6 +688,9 @@ async def record_attempts(
                         predicted_correct=predicted_correct,
                     )
                 )
+            confidence_at_error, confidence_probability, confidence_scale_version = (
+                confidence_snapshot(predicted_confidence, predicted_correct)
+            )
             kc_ids = [str(k) for k in (q.kc_ids or [])]
             changes = await _update_mastery(
                 session,
@@ -717,6 +721,10 @@ async def record_attempts(
                 # F6-A1: 错题 100% 自动入本 (错因初值 knowledge_gap, M4 错因分类细化)
                 # F6-A4: 入本即挂 FSRS 卡 (due=业务时间, 当天进复习队列)
                 error_item_id = uuid.uuid4()
+                # The Attempt, its confidence snapshot, and the ErrorItem are
+                # all added to this same tenant transaction.  The unique
+                # source_attempt_id constraint is the database backstop for a
+                # retry of this write path.
                 session.add(
                     ErrorItem(
                         id=error_item_id,
@@ -724,6 +732,10 @@ async def record_attempts(
                         user_id=ctx.user_id,
                         question_id=q.id,
                         kc_ids=kc_ids,
+                        source_attempt_id=attempt.id,
+                        confidence_at_error=confidence_at_error,
+                        confidence_probability_at_error=confidence_probability,
+                        confidence_scale_version=confidence_scale_version,
                         fsrs_card_json=new_card_json(
                             business_now, business_card_id=error_item_id
                         ),

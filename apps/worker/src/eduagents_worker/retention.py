@@ -38,6 +38,7 @@ CHECKPOINT_DAYS = 30
 FEEDBACK_CLOSED_DAYS = 90
 METACOGNITION_DAYS = 730
 LEARNING_EVENTS_DAYS = 730
+FSRS_PARAMS_DAYS = 730
 
 
 def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
@@ -48,6 +49,7 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
     cut_feedback = now - timedelta(days=FEEDBACK_CLOSED_DAYS)
     cut_metacognition = now - timedelta(days=METACOGNITION_DAYS)
     cut_learning_events = now - timedelta(days=LEARNING_EVENTS_DAYS)
+    cut_fsrs_params = now - timedelta(days=FSRS_PARAMS_DAYS)
     ckpt_where = "(checkpoint->>'ts')::timestamptz < :cutoff"
     orphan_writes = (
         "checkpoint_writes cw WHERE NOT EXISTS "
@@ -93,6 +95,13 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
             "DELETE FROM learning_events WHERE created_at < :cutoff",
             "SELECT count(*) FROM learning_events WHERE created_at < :cutoff",
             {"cutoff": cut_learning_events},
+        ),
+        (
+            "fsrs_params",
+            "DELETE FROM fsrs_params WHERE created_at < :cutoff AND status <> 'active'",
+            "SELECT count(*) FROM fsrs_params "
+            "WHERE created_at < :cutoff AND status <> 'active'",
+            {"cutoff": cut_fsrs_params},
         ),
         (
             "checkpoints",

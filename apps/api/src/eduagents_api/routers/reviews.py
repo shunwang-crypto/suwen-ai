@@ -35,6 +35,7 @@ from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..error_analysis import CAUSES, classify_error_cause
+from ..fsrs_params import resolve_schedule_params
 from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
     Attempt,
@@ -113,15 +114,48 @@ def _question_public(q: Question) -> dict:
     }
 
 
-def filter_due(rows: list, now_dt: datetime) -> list:
+def _confidence_priority(row) -> float:
+    value = getattr(row, "confidence_probability_at_error", None)
+    return (
+        float(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else 0.0
+    )
+
+
+def filter_due(
+    rows: list,
+    now_dt: datetime,
+    *,
+    overcorrection_enabled: bool = False,
+) -> list:
     """到期过滤 + 排序 (纯函数, F6 到期口径唯一出处): FSRS 到期 (空卡视为到期),
     按到期时间升序, 空卡按建卡时间。rows 需已限定活跃态 (new/reviewing)。"""
     due_rows = [r for r in rows if scheduler.is_due(r.fsrs_card_json, now_dt)]
-    due_rows.sort(key=lambda r: scheduler.due_at(r.fsrs_card_json) or r.created_at)
+    if not overcorrection_enabled:
+        due_rows.sort(key=lambda r: scheduler.due_at(r.fsrs_card_json) or r.created_at)
+        return due_rows
+
+    # Due-ness is filtered first and remains the primary sort key.  The
+    # confidence snapshot only orders rows within the same due layer; a
+    # high-confidence error can never jump ahead of an earlier-due card.
+    due_rows.sort(
+        key=lambda r: (
+            scheduler.due_at(r.fsrs_card_json) or r.created_at,
+            -_confidence_priority(r),
+        )
+    )
     return due_rows
 
 
-async def due_error_items(session, user_id, now_dt: datetime) -> list:
+async def due_error_items(
+    session,
+    user_id,
+    now_dt: datetime,
+    *,
+    overcorrection_enabled: bool = False,
+    overcorrection_shadow: bool = False,
+) -> list:
     """全量到期错题 (B3 同源共用函数): reviews 今日队列与 next_actions 开场卡都调这里。
 
     此前两处各写一份查询, 复习页"5"(截断后) 与开场卡"37"(全量) 数字打架;
@@ -136,7 +170,19 @@ async def due_error_items(session, user_id, now_dt: datetime) -> list:
             )
         )
     ).all()
-    return filter_due(rows, now_dt)
+    default_rows = filter_due(rows, now_dt)
+    if overcorrection_shadow and not overcorrection_enabled:
+        shadow_rows = filter_due(rows, now_dt, overcorrection_enabled=True)
+        if [row.id for row in shadow_rows] != [row.id for row in default_rows]:
+            log.info(
+                "overcorrection_queue_shadow",
+                candidate_count=len(shadow_rows),
+                reordered_count=sum(
+                    left.id != right.id
+                    for left, right in zip(default_rows, shadow_rows, strict=False)
+                ),
+            )
+    return filter_due(rows, now_dt, overcorrection_enabled=overcorrection_enabled)
 
 
 @router.get("/today")
@@ -147,8 +193,21 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
     共 37 题到期"两个数字同源; 条目带 subject/kb_name/kb_id (kc_hierarchy 推导)。
     """
     now_dt = await timectl.now(request.app.state.redis)
+    settings = getattr(request.app.state, "settings", None)
+    overcorrection_enabled = bool(
+        getattr(settings, "overcorrection_ranking_enabled", False)
+    )
+    overcorrection_shadow = bool(
+        getattr(settings, "overcorrection_ranking_shadow_enabled", True)
+    )
     async with tenant_session(ctx.tenant_id) as session:
-        due_rows = await due_error_items(session, ctx.user_id, now_dt)
+        due_rows = await due_error_items(
+            session,
+            ctx.user_id,
+            now_dt,
+            overcorrection_enabled=overcorrection_enabled,
+            overcorrection_shadow=overcorrection_shadow,
+        )
         total_due = len(due_rows)
         items = []
         at_3d = now_dt + _RETENTION_HORIZON
@@ -289,6 +348,10 @@ async def answer_review(
             )
     now_dt = await timectl.now(request.app.state.redis)
     request_id = getattr(request.state, "request_id", "")
+    settings = getattr(request.app.state, "settings", None)
+    personalization_enabled = bool(
+        getattr(settings, "fsrs_personalization_enabled", False)
+    )
     plan_task_completion = None
     async with tenant_session(ctx.tenant_id) as session:
         item = await session.scalar(
@@ -307,6 +370,12 @@ async def answer_review(
         question = await session.get(Question, item.question_id)
         if question is None:
             raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
+        schedule = await resolve_schedule_params(
+            session,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            enabled=personalization_enabled,
+        )
         provided_idempotency_key = (body.idempotency_key or header_idempotency_key or "").strip()
         request_fingerprint = hashlib.sha256(
             (
@@ -363,6 +432,8 @@ async def answer_review(
             now_dt,
             business_card_id=item.id,
             review_duration_ms=body.review_duration_ms,
+            params=schedule.params if personalization_enabled else None,
+            params_version=schedule.version,
         )
         if correct:
             streak += 1
@@ -402,7 +473,7 @@ async def answer_review(
                 card_before_json=card_before,
                 card_after_json=new_card,
                 review_log_json=review_log.to_dict(),
-                params_version=scheduler.FSRS_PARAMS_VERSION,
+                params_version=schedule.version,
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
             )
