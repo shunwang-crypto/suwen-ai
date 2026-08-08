@@ -56,7 +56,9 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 ### 系统（公开）
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /api/health | {status, gateway_mode, checks:{postgres, redis}} |
+| GET | /api/health/live | 进程存活探针 `{status: "ok"}`；不探依赖，失败处理由重启/编排器负责 |
+| GET | /api/health/ready | 就绪探针 `{status,gateway_mode,checks:{postgres,redis,qdrant,worker[,graph,vector_audit]},vector_audit}`；PG/Redis/Qdrant（生产另含 graph）失败返回 503，worker/审计异常可为 degraded |
+| GET | /api/health | 旧兼容路径，OpenAPI 标为 deprecated 并返回 `Deprecation: true` 与 successor `Link`；只检查 PG/Redis。仓库调用已切换，外部 monitor 仍需观察期确认后再移除兼容 |
 | GET | /api/docs | OpenAPI 文档 |
 
 ### 钱包与额度（用户）
@@ -77,7 +79,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 |---|---|---|
 | GET | /api/admin/users?query=...&limit=... | 仅管理员；邮箱精确优先并支持安全前缀查询；query 至少 3 个字符；仅返回用户身份、角色、状态、注册时间和字符串额度余额 |
 | POST | /api/admin/users/{user_id}/wallet-adjust | 仅管理员；`{delta, note, reference}`；delta 必须是字符串、非零、-1000 至 1000 且最多 4 位小数；同一用户同一 reference 重试返回原结果，若参数不同返回 `409 WALLET_ADJUST_REFERENCE_CONFLICT` |
-| GET | /api/admin/vector-reconcile?kb_id=...&include_all=... | 仅管理员；PG `chunks(done)` 与 Qdrant 点数对账，只读不修改两侧；检索栈不可用时 `503 retrieval_stack_unavailable` |
+| GET | /api/admin/vector-reconcile?kb_id=...&include_all=... | 仅管理员；PG child chunk 与 Qdrant point 的 `(tenant_id,kb_id,point_id)` 精确元数据对账，只读、不读取向量/正文、不修改两侧；检索栈不可用时 `503 retrieval_stack_unavailable` |
 
 调额使用 Decimal，并在同一个数据库事务内锁定钱包账户、写入 `admin_adjust` 流水和更新余额。
 `(user_id, ref)` 的条件唯一索引由 0015 migration 提供，保证并发请求最多一次真正入账。
@@ -86,11 +88,13 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 无 `query` 时 `/api/admin/users` 返回 `{items,page,page_size,total,has_more}`，默认按注册时间倒序、每页 20；`query` 参数保留旧数组响应以兼容已有运营客户端。`GET /api/admin/users/{user_id}` 返回聚合详情和脱敏的 BYOK 状态（provider、启用状态、后四位、模型名），绝不返回密码、token、密文或 nonce。所有管理员端点要求 `admin` 角色。
 
 `/api/admin/vector-reconcile` 返回
-`{status, kb_total, kb_drifted, kb_orphaned, missing_vectors, orphan_points, items, orphans, errors}`。
+`{status, kb_total, kb_drifted, kb_orphaned, missing_vectors, orphan_points, items, orphans, errors, missing_points, extra_points, wrong_tenant_points, wrong_tenant_details, malformed_points, document_inconsistencies}`。
 `status` 为 `ok` / `drift` / `error`。`missing_vectors` 是 PG 标 `done` 但 Qdrant 查不到的块数——
-该库检索已静默失效，需重新摄取；`orphan_points` 是 Qdrant 有而 PG 无的点数，属删除不完整
-（payload 含文档原文）。默认只返回有问题的库，`include_all=true` 才带上一致的。单库查询
-（带 `kb_id`）不做反向扫描，因此不报 orphans。单个库出错记入 `errors` 而不中断整体扫描。
+该库检索已静默失效，需重新摄取；`orphan_points` 是 Qdrant 有而 PG 无的点数，属删除不完整。
+精确字段还区分 `extra_points`、`wrong_tenant_points`、`malformed_points` 和文档一致性问题；
+扫描只取 point ID 与 tenant/kb/doc 标识，不读向量或正文。默认只返回有问题的库，
+`include_all=true` 才带上一致的。单库查询（带 `kb_id`）仍从全局元数据扫描中过滤目标 KB，
+因此能识别该 KB 的 extra/orphan；单个库出错记入 `errors` 而不中断整体扫描。
 
 
 ### 用户自带 DeepSeek 模型（0017）
@@ -193,7 +197,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
 | POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |
 | GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
-| POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?}` → 表达完整度、反馈、缺口、重试建议和 `degraded`；只保存反馈观察，不写掌握度/画像/错题/报告 |
+| POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
 | POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。旧调用方可只传 `goal`；服务端重新校验 KB 访问、任务结构与资源引用 |
 | GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
 | GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}` 与 `progress{total,done,ratio}` |
@@ -209,6 +213,10 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 Explain-back 使用 cheap 文本模型和输入/输出审核；模型或 JSON 失败时保留原文并返回
 `degraded=true`，额度耗尽仍返回统一 `INSUFFICIENT_CREDITS/BUDGET_EXCEEDED`。`kc_id` 不存在、
 非本人或跨租户统一 `404 KC_NOT_FOUND`；不支持的输入返回统一审核/校验错误信封。
+`source_attempt_id` 必须属于当前用户；若同时提供 `question_id`，两者不匹配返回
+`SOURCE_QUESTION_MISMATCH`。`rubric_version` 当前为 `explain-back-rubric-v1`；结构化
+`quality_score` 只在未来显式通过一致性门槛后展示，默认 `quality_shadow=true`，不影响掌握度、FSRS、
+推荐或报告。
 
 Quiz 题目通过 schema 后会进入独立 cheap critic，检查蓝图一致性、难度、答案/解析、歧义和
 可用素材中的明确事实冲突。只有 major 问题触发整卷返工，最多一次；第二次仍有 major 时以
@@ -246,6 +254,8 @@ Quiz 题目通过 schema 后会进入独立 cheap critic，检查蓝图一致性
 `GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；题目资料错题还返回 `resource_id/resource_question_id`，前端可回到题目资料查看原题。`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
 
 `ErrorItem.verification_status` 的状态只能从 `pending` 前进到 `verified`，不能回退；待核验错题不会进入复习、FSRS、掌握度、画像、报告或推荐。题目资料错题的“查看原题资料”链接使用 `/resources?resource_id=<resource_id>&question_id=<resource_question_id>`，页面会通过受保护接口打开资料并定位题目；无效题目参数不会跨资料读取，返回列表时会清理这两个查询参数。
+Explain-back 的来源校验错误包括 `SOURCE_ATTEMPT_NOT_FOUND`、`QUESTION_NOT_FOUND` 和
+`SOURCE_QUESTION_MISMATCH`。
 
 导入状态为 `draft|confirmed`，对象清理期间内部为 `deleting`；过期草稿由 API 创建请求和 worker 定时任务清理。相关错误码：`ANSWER_NOT_VERIFIED`、`VERIFICATION_ROLLBACK_FORBIDDEN`、`ERROR_ITEM_LOCKED_AFTER_REVIEW`、`ERROR_ITEM_NOT_EDITABLE`、`TOO_MANY_PENDING_ERROR_IMPORTS`、`IMPORT_ALREADY_CONFIRMED`、`IMPORT_DELETE_PENDING`、`ERROR_IMPORT_DELETE_FAILED`、`STORAGE_QUOTA_EXCEEDED`、`SOURCE_NOT_FOUND`。
 
@@ -351,6 +361,10 @@ MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt�
 测评学生/阅卷人和关联 KB 均有明确 FK 删除语义；downgrade 先移除引用再删除结构化表，
 不伪造已删除的隐藏 Quiz。
 旧环境可执行 `scripts/audit_0011_error_import_isolation.sql` 做只读审计。
+
+后续迁移 0024 增加 ErrorItem 的 Attempt/信心快照，0025 增加用户级 FSRS-6 shadow 参数产物，
+0027 增加 Explain-back 的来源、rubric 和 shadow 质量分字段；这些 schema 变化不代表已经完成真实
+环境验收或启用个体参数/数值评分。
 
 账号导出的 `uploads_manifest.json` 保留原始对象元数据，同时把可读取的资源文件写入
 `uploads/resources/{resource_id}/{safe_filename}`，旧错题导入文件写入

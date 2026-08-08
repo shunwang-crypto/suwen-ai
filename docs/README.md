@@ -16,7 +16,7 @@
 | 生产部署 | [部署手册](../deploy/README-deploy.md) | [安全](safety.md)、[扩展性](scaling.md) |
 | 安全审查 | [安全](safety.md) | [数据模型](data-model.md)、[API 契约](api-contract.md) |
 | 比赛答辩 | `docs/defense/` | [VLSE](vlse.md)；历史 evidence 已清除，不能作为当前验收凭据 |
-| AI 编程代理 | 本文件 | 仓库级指令及目标目录中的 `AGENTS.md` |
+| AI 编程代理 | 本文件 | [向量/学习实施计划](VECTOR_LEARNING_IMPLEMENTATION_PLAN_2026-08-08.md)、仓库级指令及目标目录中的 `AGENTS.md` |
 
 ## 权威来源
 
@@ -51,10 +51,11 @@
 |---|---|---|
 | `docs/api-contract.md`、`data-model.md`、`learning-plan.md`、`decisions.md`、`safety.md` | Active | 随相关代码变更 |
 | `docs/vlse.md`、`scaling.md`、`tradeoffs.md` | Reference | 重大设计变化时复核 |
+| `docs/VECTOR_LEARNING_IMPLEMENTATION_PLAN_2026-08-08.md` | Reference | 分阶段实施规格；不得写成已完成功能 |
 | `docs/research/`、`docs/design/` | Reference | 明确“设计不等于实现” |
 | `docs/defense/` | Presentation | 上台前对照 STATUS 和 evidence |
 | `docs/evidence/` | Evidence | 仅保留清理说明；新证据须针对明确日期和环境重新生成 |
-| `docs/*PROMPT.md`、`HANDOFF.md`、`PRODUCTION_GAP_REVIEW.md`、`TODO_COMPETITION.md` | Historical | 不作为当前实施依据 |
+| `docs/*PROMPT*.md`、`HANDOFF.md`、`PRODUCTION_GAP_REVIEW.md`、`TODO_COMPETITION.md` | Historical | 不作为当前实施事实；仅供提示词和过程追溯 |
 
 ## 维护规则
 

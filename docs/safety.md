@@ -4,6 +4,15 @@
 > 目标读者：开发、运维、安全审查与产品负责人
 > 本文区分“代码防线已经实现”和“生产运营仍需完成”，不把设计或比赛证据当成合规资质。
 
+## 2026-08-08 向量与学习增量的验收边界
+
+- A0/A1/A2/A3/A4 和 B0 的代码切片已存在；A2 仍默认 dry-run，未执行真实向量修复。
+- B1/B3/B4/B5/B7 只做离线或 shadow 评估；B2 的来源/信心快照和 B6 的结构化评分不会自动改变
+  FSRS、掌握度、推荐或报告，B6 数值默认不展示。
+- A1 真实 `pending_cleanup` 积压根因、A0 的孤儿/错租户对账和外部残留核对仍待在明确目标环境中
+  只读验收。没有真实环境只读凭据时，权限是阻塞项，不能用本地测试或合成数据冒充生产结论。
+- 本仓库的 migration/local test 通过只说明代码和 schema 路径可验证；没有产生生产问题已解决的证据。
+
 ## 已实现的工程防线
 
 | 防线 | 当前实现 | 主要验证 |
@@ -98,6 +107,8 @@ JSON Mode 的 MiMo/Qwen VL 发送 `response_format`。流式请求只有首 toke
 - 图形验证码用于防机器人，邮箱验证码用于证明邮箱所有权；普通登录不要求邮箱验证码。
 - 生产 `REGISTRATION_MODE=invite|open` 缺少 SMTP 时启动失败，不会回退 `DevEmailSender`；找回密码继续复用同一
   `EmailSender`，并保持恒定防枚举响应。
+- API/Worker 启动日志只记录注册配置来自 `REGISTRATION_MODE`、兼容别名或默认值，不打印模式值、
+  Secret 或环境变量内容；生产部署只接受唯一新名称。
 - Resend 使用 SMTP：主机 `smtp.resend.com`、用户 `resend`、API Key 仅作为服务器端
   `SMTP_PASSWORD`。发件人必须来自 Verified 的 `mail.adfgt.xyz` 域名，建议配置 SPF、DKIM、
   DMARC 和 `SMTP_REPLY_TO`。
@@ -126,8 +137,9 @@ JSON Mode 的 MiMo/Qwen VL 发送 `response_format`。流式请求只有首 toke
 自然淘汰，并限制恢复权限；恢复旧备份后必须重新执行删除事件对账，避免已注销数据复活。
 
 FSRS ReviewLog 与统一 learning event 属于用户学习证据：写入时带 tenant/RLS 和业务 UTC
-时间，随用户外键级联删除并进入导出；当前 retention worker 按 730 天清理。0022 不从历史
-card 反推 review，避免把不可验证的推测伪装成学习事实。
+时间，随用户外键级联删除并进入导出；当前 retention worker 按 730 天清理。非 active 的
+`fsrs_params` shadow 产物也按 730 天清理，active 产物不被该规则删除。0022 不从历史 card
+反推 review，避免把不可验证的推测伪装成学习事实。
 
 代码中存在默认或建议留存周期不等于已经获得用户同意。正式上线前应把账户数据、模型日志、
 审计日志、备份、导出包和对象垃圾的保留时间写入隐私政策和运维任务。

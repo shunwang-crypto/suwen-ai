@@ -13,7 +13,7 @@
 | 0.1 | 基础设施在跑 | `make dev-infra` | PostgreSQL + Redis 可用 |
 | 0.2 | 迁移到 head | `make migrate` | 无报错 |
 | 0.3 | 演示数据就位 | `make seed` | 输出学生账号 `demo@eduagents.cn / demo-pass-123`、管理员账号 `admin@eduagents.cn / admin-pass-123`，以及 `tenant_id=…`、`kb_id=…`、`doc_id=… status=ready` |
-| 0.4 | **网关模式不是 stub** | `.env` 中 `GATEWAY_MODE=replay`（推荐）或 `live` | `curl localhost:8000/api/health` 返回的 `gateway_mode` 与预期一致 |
+| 0.4 | **网关模式不是 stub** | `.env` 中 `GATEWAY_MODE=replay`（推荐）或 `live` | `curl localhost:8000/api/health/ready` 返回的 `gateway_mode` 与预期一致 |
 | 0.5 | API 在跑 | `make api` | `http://127.0.0.1:8000/api/docs` 可打开 |
 | 0.6 | Worker 在跑 | `make worker` | 无报错（摄取/增强异步任务需要它） |
 | 0.7 | 前端在跑 | `apps/web` 下 `npm run dev` | `http://localhost:3000` 可打开 |

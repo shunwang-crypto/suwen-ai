@@ -156,6 +156,16 @@ make docs-check
 6. 新 migration 必须增加从旧 head 升级的专项测试，并运行 `alembic heads`。
 7. 应用连接和 migration 连接分离：应用角色不得拥有绕过 RLS 的权限。
 
+当前 0023–0027 的隔离门禁为：
+
+~~~bash
+MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0023_0027.py -q
+~~~
+
+该命令只适用于已确认的本机开发 PostgreSQL；测试会创建随机临时库并在结束时删除，不能把
+`MIGRATION_DATABASE_URL` 指向生产或共享远程数据库。它验证 0023–0027 的 upgrade/downgrade、
+0024 的从零 ORM 已有列与旧库缺列路径，以及 0025/0027 的 RLS/约束元数据。
+
 常用命令：
 
 ~~~bash
@@ -210,11 +220,16 @@ PG 侧仍标着 `embedding_status='done'`，检索会静默返回 0 命中并降
 表面正常，RAG 已失效。对账把两侧差异显式化：
 
 ~~~bash
+export READONLY_DATABASE_URL='<目标 PostgreSQL 只读 DSN>'
+export READONLY_QDRANT_URL='<目标 Qdrant 只读 endpoint>'
 python scripts/check_vector_drift.py            # 全量，只列有问题的库
 python scripts/check_vector_drift.py --all      # 连一致的库一起列
 python scripts/check_vector_drift.py --kb <id>  # 只看一个库
 python scripts/check_vector_drift.py --json     # 机器可读，供 cron/告警接管
 ~~~
+
+对账 CLI 不会回退到普通 `DATABASE_URL/QDRANT_URL`；没有目标只读连接时应停止并报告权限阻塞。
+生产证据必须记录目标环境和代码版本，不能用本地开发数据替代。
 
 退出码：`0` 一致、`1` 存在漂移、`2` 对账本身出错，可直接挂 cron 或 CI。
 管理员亦可走 `GET /api/admin/vector-reconcile`（`?kb_id=` 单库、`?include_all=true` 全量）。

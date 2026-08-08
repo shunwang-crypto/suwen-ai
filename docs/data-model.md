@@ -120,12 +120,13 @@ erDiagram
 | `Question` | 题干、题型、答案、解析、难度、知识点；可属于 Quiz，也可由 ResourceQuestion 引用 |
 | `Attempt` | 普通测验中针对单题的真实响应和判分结果 |
 | `MetacognitionPrediction` | 作答前可选的 1–5 级信心预测，绑定真实 Attempt；只用于确定性校准统计 |
-| `ExplainBack` | 学生反讲原文、AI 表达反馈和降级状态；不作为掌握度或错题证据 |
-| `ErrorItem` | 错题来源、错因、状态、核验状态、FSRS card、资源/作答关联 |
+| `ExplainBack` | 学生反讲原文、可选 question/Attempt 来源、rubric 版本、结构化质量分和降级状态；质量分默认 shadow，不作为掌握度或错题证据 |
+| `ErrorItem` | 错题来源、错因、状态、核验状态、FSRS card、资源/作答关联；Quiz 错题可保存唯一 Attempt/信心快照 |
 | `MasteryRecord` | 用户与知识点的当前 BKT 状态和置信度 |
 | `MasteryLog` | 每次掌握度变化的旧值、新值、证据类型、证据 ID 和权重 |
 | `FsrsReviewEvent` | 一次已核验复习的 py-fsrs ReviewLog、card 前后快照、评分和参数版本；以 ErrorItem UUID 作为业务卡身份 |
 | `LearningEvent` | quiz/review/assessment 统一学习证据；保存题目 KC/难度快照和业务发生时间 |
+| `FsrsParams` | 用户级、版本化的 21 参数 FSRS-6 拟合产物；默认 `shadow`，只有显式门槛通过后才可激活 |
 
 `Question.quiz_id` 可空。资源题不创建隐藏 Quiz，也不能进入普通测验或教师组卷列表。
 
@@ -140,6 +141,12 @@ erDiagram
 和最终 `verified` 的 assessment answer 各写一个统一事件。pending/未核验记录不写事件；历史
 review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户删除级联、导出清单，并按
 730 天事件留存任务清理；迁移 0022 不做历史回填。
+
+迁移 0024 为 ErrorItem 增加可空的 Attempt/信心快照字段、检查约束和唯一
+`source_attempt_id` 关联；没有可证明来源的历史行保持 NULL。迁移 0025 建立 `FsrsParams`，保存
+21 个 FSRS-6 参数、拟合指标和 shadow/active/retired 状态；非 active 产物按 730 天留存规则清理。
+迁移 0027 为 ExplainBack 增加可选来源、`rubric_version`、`score_json` 和 `quality_shadow`；
+这些质量分仍是观察/shadow 数据，默认不展示数值，也不写 BKT/FSRS。
 
 ## 题目资料与真实作答
 
@@ -183,7 +190,7 @@ review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户
 | `UsageLog` | 模型/功能/用户维度 token、成本、延迟和模式 |
 | `UserModelCredential` | 0017 用户 DeepSeek 凭据的 AES-256-GCM 密文、nonce、版本和脱敏配置；不保存明文 |
 | `TutorProblemDraft` | 0018 分级辅导的选页、待校对字段、确认快照、资源/题目安全 ID 与绑定 thread；不保存文件二进制/Base64/API Key |
-| `MetacognitionPrediction / ExplainBack` | 0020 作答前信心观察和反讲表达反馈；730 天留存，随用户/Attempt 级联清理并进入数据导出 |
+| `MetacognitionPrediction / ExplainBack` | 0020 基础观察 + 0027 来源/rubric/质量 shadow 字段；730 天留存，随用户/Attempt 级联清理并进入数据导出 |
 | `EvalRun` | 评估配置、语料/黄金集版本和指标 |
 | `WalletAccount / WalletLedger / PaymentOrder` | 钱包、不可变流水和支付订单骨架 |
 
