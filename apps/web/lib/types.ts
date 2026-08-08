@@ -534,8 +534,17 @@ export interface PlanTask {
   task_key?: string;
   status?: "pending" | "done" | "skipped";
   done?: boolean;
+  /** 先修未掌握 → 派生锁定态（服务端按实时掌握度计算，不落库，故不进 status） */
+  locked?: boolean;
+  /** 阻塞该任务的先修知识点及其定性区间（掌握度小数不出境） */
+  lock_blockers?: PlanTaskLockBlocker[];
   /** "adjust" = 学情调整插入的补强任务 */
   source?: string;
+}
+
+export interface PlanTaskLockBlocker {
+  kc_name: string;
+  zone: string;
 }
 
 export interface PlanDay {

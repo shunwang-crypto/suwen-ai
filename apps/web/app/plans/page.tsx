@@ -204,6 +204,22 @@ function withTaskStatus(
   };
 }
 
+function TaskLockBadge({ task }: { task: PlanTask }) {
+  const blockers = task.lock_blockers ?? [];
+  if (!task.locked || blockers.length === 0) return null;
+  // 服务端只下发定性区间（掌握度小数不出境），这里原样展示。
+  const detail = blockers.map((b) => `${b.kc_name}（${b.zone}）`).join("、");
+  return (
+    <span
+      title={`需先掌握：${detail}`}
+      className="inline-flex items-center gap-0.5 rounded bg-surface-muted px-1 py-0.5 font-medium text-ink-secondary"
+    >
+      🔒 需先掌握 {blockers[0].kc_name}
+      {blockers.length > 1 ? ` 等 ${blockers.length} 项` : ""}
+    </span>
+  );
+}
+
 function TaskStatusControls({
   task,
   taskKey,
@@ -287,7 +303,7 @@ function PlanCalendar({
             const status = normalizedTaskStatus(task);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}</p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
@@ -334,7 +350,7 @@ function PlanCalendar({
                               return (
                                 <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
                                   <TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} compact onStatus={onStatus} />
-                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}</p></div>
+                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}<TaskLockBadge task={task} /></p></div>
                                 </li>
                               );
                             })}

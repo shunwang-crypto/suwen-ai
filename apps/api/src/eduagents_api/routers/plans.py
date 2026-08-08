@@ -28,6 +28,7 @@ from ..plan_adjust import (
     PlanTaskAttributionError,
     adjust_plan,
     complete_plan_task,
+    compute_task_locks,
     enrich_structure,
     plan_progress,
     plan_schedule_snapshot,
@@ -328,6 +329,45 @@ async def _load_plan(session, plan_id: uuid.UUID, ctx: AuthContext) -> Plan:
     return plan
 
 
+async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
+    """先修未达标 -> 任务锁定信息 (派生态, 不落库; 判据见 plan_adjust.compute_task_locks)。
+
+    只查该用户已有掌握度记录的 KC 之间的 prerequisite 边: 没有掌握度记录的先修 KC
+    不算阻塞, 所以也不必把整库 KC 拉进来。
+    """
+    mastery_rows = (
+        await session.execute(
+            select(KnowledgeComponent.id, KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
+            .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+            .where(MasteryRecord.user_id == plan.user_id)
+        )
+    ).all()
+    if not mastery_rows:
+        return {}
+    mastery_by_kc = {
+        normalize_kc_name(name): float(score) for _kc_id, name, score in mastery_rows
+    }
+    names_by_id = {str(kc_id): name for kc_id, name, _score in mastery_rows}
+    edge_rows = (
+        await session.execute(
+            select(KcEdge.from_kc, KcEdge.to_kc).where(
+                KcEdge.type == "prerequisite",
+                KcEdge.to_kc.in_([kc_id for kc_id, _n, _s in mastery_rows]),
+            )
+        )
+    ).all()
+    prereq_by_kc: dict[str, list[str]] = {}
+    for from_kc, to_kc in edge_rows:
+        target = names_by_id.get(str(to_kc))
+        source = names_by_id.get(str(from_kc))
+        if not target or not source:
+            continue
+        prereq_by_kc.setdefault(normalize_kc_name(target), []).append(
+            normalize_kc_name(source)
+        )
+    return compute_task_locks(plan.structure_json, mastery_by_kc, prereq_by_kc)
+
+
 async def _plan_detail(session, plan: Plan, today) -> dict:
     resource_rows = (
         await session.scalars(
@@ -338,7 +378,8 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
     ).all()
     resources = {str(row.id): _plan_resource_public(row) for row in resource_rows}
     kb = await session.get(KnowledgeBase, plan.kb_id) if plan.kb_id else None
-    structure = enrich_structure(plan.structure_json, resources)
+    locks = await _load_task_locks(session, plan)
+    structure = enrich_structure(plan.structure_json, resources, locks)
     schedule = plan_schedule_snapshot(
         plan.created_at.astimezone(CN_TZ).date(), plan.structure_json, today
     )

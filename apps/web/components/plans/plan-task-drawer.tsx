@@ -134,6 +134,13 @@ export function PlanTaskDrawer({
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
+          {task.locked && (task.lock_blockers?.length ?? 0) > 0 && (
+            <p className="w-full rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 text-[11px] leading-5 text-warning-700">
+              先修知识点尚未掌握：
+              {task.lock_blockers!.map((b) => `${b.kc_name}（${b.zone}）`).join("、")}。
+              建议先补齐再做本任务；仍可继续，由你决定。
+            </p>
+          )}
           {showRead && resourceUrl && <ActionLink href={resourceUrl} external={Boolean(resource?.url)}>阅读资料</ActionLink>}
           {showPractice && <ActionLink href={quizHref}>开始针对性练习</ActionLink>}
           {showTutor && <ActionLink href={tutorHref}>进入分级辅导</ActionLink>}

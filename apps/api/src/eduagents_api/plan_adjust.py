@@ -25,7 +25,7 @@ from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
 from eduagents_core.logging import get_logger
-from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD
+from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD, zone_label
 from sqlalchemy import select
 
 from .models import KnowledgeComponent, MasteryRecord, Plan, PlanAdjustment
@@ -136,20 +136,67 @@ def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -
     }
 
 
-def enrich_structure(structure: dict | None, resources: dict[str, dict] | None = None) -> dict:
+def compute_task_locks(
+    structure: dict | None,
+    mastery_by_kc: dict[str, float] | None,
+    prereq_by_kc: dict[str, list[str]] | None,
+) -> dict[str, dict]:
+    """任务 -> 先修未达标信息 (task_key -> {"blockers": [...]})。纯函数, 零 IO。
+
+    锁定是**派生态, 不落库**: 它依赖实时 p_mastery, 掌握度一变就该自动解锁。写进
+    structure_json 会立刻陈旧, 还会污染 plan_progress 的分母口径 (locked 任务仍是
+    "待完成", 不是被跳过)。因此只在读取侧计算, TASK_STATUSES 保持三态不变。
+
+    判据: 任务任一 KC 的先修 KC 掌握度 < REINFORCE_THRESHOLD 即视为未达标。
+    无掌握度记录的先修 KC 一律不算阻塞 —— 没学过不等于没掌握, 冷启动时把整棵树
+    锁死会让新用户寸步难行 (F3 计划必须可执行)。
+    已完成/已跳过的任务不锁: 学习者已经做过的事不该被事后判定为"不可做"。
+    """
+    if not mastery_by_kc or not prereq_by_kc:
+        return {}
+    locks: dict[str, dict] = {}
+    for si, di, ti, _stage, _day, task in iter_tasks(structure):
+        if task_status(task) != "pending":
+            continue
+        blockers: list[dict] = []
+        seen: set[str] = set()
+        for name in task.get("kc_names") or []:
+            if not isinstance(name, str):
+                continue
+            for prereq in prereq_by_kc.get(normalize_kc_name(name), ()):
+                score = mastery_by_kc.get(prereq)
+                if score is None or score >= REINFORCE_THRESHOLD or prereq in seen:
+                    continue
+                seen.add(prereq)
+                blockers.append({"kc_name": prereq, "zone": zone_label(score)})
+        if blockers:
+            locks[make_task_key(si, di, ti)] = {"blockers": blockers}
+    return locks
+
+
+def enrich_structure(
+    structure: dict | None,
+    resources: dict[str, dict] | None = None,
+    locks: dict[str, dict] | None = None,
+) -> dict:
     """读取侧加工 task_key/status/done and a same-plan resource object.
 
     Missing resource ids are represented as ``resource: None`` so legacy
     plans remain readable without inventing a resource association.
+    ``locked`` 是派生展示态 (见 compute_task_locks), 不进 status 也不落库。
     """
     out = copy.deepcopy(structure or {})
     if not isinstance(out, dict):
         return {"stages": []}
     for si, di, ti, _stage, _day, task in iter_tasks(out):
-        task["task_key"] = make_task_key(si, di, ti)
+        task_key = make_task_key(si, di, ti)
+        task["task_key"] = task_key
         status = task_status(task)
         task["status"] = status
         task["done"] = status == "done"
+        lock = (locks or {}).get(task_key)
+        task["locked"] = bool(lock)
+        task["lock_blockers"] = lock["blockers"] if lock else []
         resource_id = task.get("resource_id")
         task["resource"] = resources.get(str(resource_id)) if resources and resource_id else None
     out.setdefault("stages", [])
