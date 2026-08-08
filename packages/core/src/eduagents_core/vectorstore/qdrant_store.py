@@ -150,6 +150,7 @@ class QdrantStore:
     async def scan_point_refs(
         self,
         *,
+        collection: str | None = None,
         page_size: int = 1000,
         max_pages: int = 1000,
         timeout: int | None = 10,
@@ -166,6 +167,7 @@ class QdrantStore:
         """
         return await asyncio.to_thread(
             self._scan_point_refs_sync,
+            collection,
             page_size,
             max_pages,
             timeout,
@@ -174,6 +176,7 @@ class QdrantStore:
 
     def _scan_point_refs_sync(
         self,
+        collection: str | None,
         page_size: int,
         max_pages: int,
         timeout: int | None,
@@ -187,14 +190,15 @@ class QdrantStore:
             raise ValueError("timeout must be positive or None")
         if max_points is not None and max_points <= 0:
             raise ValueError("max_points must be positive or None")
-        if not self._client.collection_exists(self._collection):
+        target_collection = collection or self._collection
+        if not self._client.collection_exists(target_collection):
             return []
 
         refs: list[VectorPointRef] = []
         offset = None
         for _page_number in range(max_pages):
             points, next_offset = self._client.scroll(
-                self._collection,
+                target_collection,
                 limit=page_size,
                 offset=offset,
                 with_payload=["tenant_id", "kb_id", "doc_id"],

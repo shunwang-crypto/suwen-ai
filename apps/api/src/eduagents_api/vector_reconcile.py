@@ -22,14 +22,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from eduagents_core.logging import get_logger
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, select
 
 from .db import tenant_session
 from .models import Chunk, Document, KnowledgeBase
 
 log = get_logger("vector_reconcile")
-
-_ADMIN_GUC = text("SELECT set_config('app.is_admin', 'true', true)")
 
 # The limits are intentionally explicit.  A partial global scan must be an
 # error, otherwise it could be mistaken for a clean collection.
@@ -214,8 +212,7 @@ def _sorted_issue_dicts(items: list[dict]) -> list[dict]:
 
 async def _list_knowledge_bases(admin_tenant_id: uuid.UUID | str) -> list[tuple]:
     """Enumerate all KB owners without widening chunk/document RLS."""
-    async with tenant_session(admin_tenant_id) as session:
-        await session.execute(_ADMIN_GUC)
+    async with tenant_session(admin_tenant_id, is_admin=True) as session:
         rows = await session.execute(
             select(KnowledgeBase.id, KnowledgeBase.tenant_id, KnowledgeBase.name).order_by(
                 KnowledgeBase.id

@@ -64,6 +64,7 @@ class VectorStore(Protocol):
     async def scan_point_refs(
         self,
         *,
+        collection: str | None = None,
         page_size: int = 1000,
         max_pages: int = 1000,
         timeout: int | None = 10,

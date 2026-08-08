@@ -26,12 +26,18 @@ _CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 
 
 async def purge_tenant(
-    ctx: dict, tenant_id: str, session_ids: list[str] | None = None
+    ctx: dict,
+    tenant_id: str,
+    session_ids: list[str] | None = None,
+    *,
+    progress=None,
 ) -> str:
     from eduagents_api.db import plain_session
     from eduagents_core.storage import create_storage
     from eduagents_core.vectorstore.qdrant_store import _get_client
     from sqlalchemy import text
+
+    from .cleanup_progress import run_cleanup_step
 
     settings = ctx.get("settings") or get_settings()
     tenant_id = str(tenant_id)
@@ -55,12 +61,16 @@ async def purge_tenant(
                     wait=True,
                 )
 
-    await asyncio.to_thread(_purge_vectors)
+    await run_cleanup_step(progress, "qdrant", lambda: asyncio.to_thread(_purge_vectors))
 
     # 2) 对象存储前缀
     storage = create_storage(settings)
-    await storage.delete_prefix(tenant_id)
-    await storage.delete_prefix(f"exports/{tenant_id}")
+
+    async def _purge_storage() -> None:
+        await storage.delete_prefix(tenant_id)
+        await storage.delete_prefix(f"exports/{tenant_id}")
+
+    await run_cleanup_step(progress, "storage", _purge_storage)
 
     # 3) Redis 前缀 (ctx 无 redis 时临时建连接, 供测试/独立调用)
     redis = ctx.get("redis")
@@ -70,34 +80,40 @@ async def purge_tenant(
 
         redis = Redis.from_url(settings.redis_url)
         owns_redis = True
-    try:
-        keys: list = [
-            f"orgs:{tenant_id}",
-            f"export:{tenant_id}",
-            f"export:pending:{tenant_id}",
-        ]
-        keys += [f"reflect:{sid}" for sid in (session_ids or [])]
-        for pattern in (f"profile_summary:*:{tenant_id}*", f"budget:{tenant_id}:*"):
-            async for key in redis.scan_iter(match=pattern, count=500):
-                keys.append(key)
-        if keys:
-            await redis.delete(*keys)
-    finally:
-        if owns_redis:
-            await redis.aclose()
+    async def _purge_redis() -> None:
+        try:
+            keys: list = [
+                f"orgs:{tenant_id}",
+                f"export:{tenant_id}",
+                f"export:pending:{tenant_id}",
+            ]
+            keys += [f"reflect:{sid}" for sid in (session_ids or [])]
+            for pattern in (f"profile_summary:*:{tenant_id}*", f"budget:{tenant_id}:*"):
+                async for key in redis.scan_iter(match=pattern, count=500):
+                    keys.append(key)
+            if keys:
+                await redis.delete(*keys)
+        finally:
+            if owns_redis:
+                await redis.aclose()
+
+    await run_cleanup_step(progress, "redis", _purge_redis)
 
     # 4) checkpoint 三表 (明文问答, P0-4)
-    async with plain_session() as session:
-        for table in _CHECKPOINT_TABLES:
-            exists = await session.scalar(
-                text("SELECT to_regclass(:name)"), {"name": f"public.{table}"}
-            )
-            if exists is None:
-                continue
-            await session.execute(
-                text(f"DELETE FROM {table} WHERE thread_id LIKE :pat"),  # noqa: S608 — 表名白名单
-                {"pat": f"%:{tenant_id}:%"},
-            )
+    async def _purge_checkpoints() -> None:
+        async with plain_session() as session:
+            for table in _CHECKPOINT_TABLES:
+                exists = await session.scalar(
+                    text("SELECT to_regclass(:name)"), {"name": f"public.{table}"}
+                )
+                if exists is None:
+                    continue
+                await session.execute(
+                    text(f"DELETE FROM {table} WHERE thread_id LIKE :pat"),  # noqa: S608 — 表名白名单
+                    {"pat": f"%:{tenant_id}:%"},
+                )
+
+    await run_cleanup_step(progress, "checkpoint", _purge_checkpoints)
 
     log.info("purge_tenant_done", tenant_id=tenant_id, sessions=len(session_ids or []))
     return "ok"

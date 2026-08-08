@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from arq import cron
 from arq.connections import RedisSettings
+from eduagents_api.vector_audit import run_vector_audit
 from eduagents_core.cache.answer_cache import cleanup_answer_cache
 from eduagents_core.config import get_settings
 from eduagents_core.logging import configure_logging, get_logger
@@ -73,6 +74,7 @@ class WorkerSettings:
         purge_tenant,
         reap_stale_ingestion,
         process_pending_cleanup,
+        run_vector_audit,
         purge_retention,
         reap_stale_error_imports,
         reap_stale_tutor_drafts,
@@ -82,6 +84,8 @@ class WorkerSettings:
         cron(cleanup_answer_cache, hour=4, minute=30, name="cleanup_answer_cache_daily"),
         # P1-5 outbox: 删除的物理清理消费 (幂等, 毒行不阻塞)
         cron(process_pending_cleanup, minute=set(range(60)), name="cleanup_outbox_minutely"),
+        # A3/A4: metadata-only full vector audit; Redis lock prevents overlap.
+        cron(run_vector_audit, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}, name="vector_audit_5m"),
         # P1-6 摄取停滞回收: >30min 中间态置 failed, 重入队 ≤3 次
         cron(reap_stale_ingestion, minute={0, 15, 30, 45}, name="reap_stale_ingestion"),
         # P2-9 留存: usage_log 180d / mastery_log 730d / checkpoint 30d / closed feedback 90d

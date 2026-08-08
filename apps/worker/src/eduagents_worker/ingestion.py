@@ -492,29 +492,55 @@ async def reap_stale_ingestion(ctx: dict) -> dict:
 
 
 async def cleanup_document(
-    ctx: dict, tenant_id: str, kb_id: str, doc_id: str, filename: str
+    ctx: dict,
+    tenant_id: str,
+    kb_id: str,
+    doc_id: str,
+    filename: str,
+    *,
+    progress=None,
 ) -> str:
     """文档删除的物理清理: 向量 + 对象存储 (DB 行已由 API 层级联删除)。"""
     from eduagents_core.storage import create_storage
     from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
+    from .cleanup_progress import run_cleanup_step
+
     settings = get_settings()
     store = QdrantStore(settings)
-    await store.ensure_ready()
-    await store.delete_by_doc(tenant_id, doc_id)
-    await create_storage(settings).delete_prefix(f"{tenant_id}/{kb_id}/{doc_id}")
+
+    async def _delete_vectors() -> None:
+        await store.ensure_ready()
+        await store.delete_by_doc(tenant_id, doc_id)
+
+    await run_cleanup_step(progress, "qdrant", _delete_vectors)
+    await run_cleanup_step(
+        progress,
+        "storage",
+        lambda: create_storage(settings).delete_prefix(f"{tenant_id}/{kb_id}/{doc_id}"),
+    )
     log.info("cleanup_document_done", doc_id=doc_id)
     return "ok"
 
 
-async def cleanup_kb(ctx: dict, tenant_id: str, kb_id: str) -> str:
+async def cleanup_kb(ctx: dict, tenant_id: str, kb_id: str, *, progress=None) -> str:
     from eduagents_core.storage import create_storage
     from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
+    from .cleanup_progress import run_cleanup_step
+
     settings = get_settings()
     store = QdrantStore(settings)
-    await store.ensure_ready()
-    await store.delete_by_kb(tenant_id, kb_id)
-    await create_storage(settings).delete_prefix(f"{tenant_id}/{kb_id}")
+
+    async def _delete_vectors() -> None:
+        await store.ensure_ready()
+        await store.delete_by_kb(tenant_id, kb_id)
+
+    await run_cleanup_step(progress, "qdrant", _delete_vectors)
+    await run_cleanup_step(
+        progress,
+        "storage",
+        lambda: create_storage(settings).delete_prefix(f"{tenant_id}/{kb_id}"),
+    )
     log.info("cleanup_kb_done", kb_id=kb_id)
     return "ok"

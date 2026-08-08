@@ -8,6 +8,9 @@
     python scripts/check_vector_drift.py --kb <uuid>  # 只看一个库
     python scripts/check_vector_drift.py --json       # 机器可读 (供 cron/告警接管)
 
+必须通过 ``--database-url/--qdrant-url`` 或 ``READONLY_DATABASE_URL``/
+``READONLY_QDRANT_URL`` 指定本次目标；不会回退到普通应用连接配置。
+
 退出码: 0 = 一致; 1 = 存在漂移; 2 = 对账过程本身出错。适合直接挂进 cron/CI。
 
 **为什么需要它**: /api/health/ready 的 qdrant 探针只验连通性。若 Qdrant 丢过数据,
@@ -19,8 +22,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+from urllib.parse import urlparse
 
+from eduagents_api.db import dispose_engine
 from eduagents_api.vector_reconcile import reconcile_vectors
 from eduagents_core.config import get_settings
 from eduagents_core.vectorstore.qdrant_store import QdrantStore
@@ -30,10 +36,44 @@ def _status_exit_code(status: str) -> int:
     return {"ok": 0, "drift": 1, "error": 2}.get(status, 2)
 
 
+def _validate_endpoint(value: str | None, *, name: str, schemes: set[str]) -> str:
+    if not value:
+        raise ValueError(f"{name} read-only endpoint is required")
+    parsed = urlparse(value)
+    if parsed.scheme not in schemes or not parsed.hostname:
+        raise ValueError(f"{name} read-only endpoint is invalid")
+    return value
+
+
 async def _run(args: argparse.Namespace) -> int:
-    settings = get_settings()
-    store = QdrantStore(settings)
+    database_url = _validate_endpoint(
+        args.database_url,
+        name="database",
+        schemes={"postgres", "postgresql", "postgresql+asyncpg"},
+    )
+    qdrant_url = _validate_endpoint(
+        args.qdrant_url,
+        name="qdrant",
+        schemes={"http", "https"},
+    )
+    previous = {
+        name: os.environ.get(name)
+        for name in ("DATABASE_URL", "QDRANT_URL", "QDRANT_LOCAL_PATH")
+    }
+    os.environ["DATABASE_URL"] = database_url
+    os.environ["QDRANT_URL"] = qdrant_url
+    os.environ["QDRANT_LOCAL_PATH"] = ""
+    get_settings.cache_clear()
+    store = None
     try:
+        settings = get_settings().model_copy(
+            update={
+                "database_url": database_url,
+                "qdrant_url": qdrant_url,
+                "qdrant_local_path": "",
+            }
+        )
+        store = QdrantStore(settings)
         # 枚举 kb 需要一个 tenant GUC 落脚点 (随后立刻 set app.is_admin 放行);
         # 逐库计数仍回到各自租户的 session, 见 vector_reconcile 模块 docstring。
         report = await reconcile_vectors(
@@ -41,7 +81,19 @@ async def _run(args: argparse.Namespace) -> int:
             kb_id=args.kb,
         )
     finally:
-        store.close()
+        try:
+            if store is not None:
+                store.close()
+        finally:
+            try:
+                await dispose_engine()
+            finally:
+                for name, value in previous.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                get_settings.cache_clear()
 
     if args.json:
         print(json.dumps(report.as_dict(include_all=args.all), ensure_ascii=False, indent=2))
@@ -108,10 +160,24 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="连一致的库一起列出")
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument(
+        "--database-url",
+        default=os.getenv("READONLY_DATABASE_URL"),
+        help="本次目标 PostgreSQL 只读 DSN；默认读取 READONLY_DATABASE_URL",
+    )
+    parser.add_argument(
+        "--qdrant-url",
+        default=os.getenv("READONLY_QDRANT_URL"),
+        help="本次目标 Qdrant 只读 endpoint；默认读取 READONLY_QDRANT_URL",
+    )
+    parser.add_argument(
         "--admin-tenant",
         help="枚举 kb 时落脚的 tenant GUC (任意合法 uuid 即可, 随后走 is_admin 放行)",
     )
-    return asyncio.run(_run(parser.parse_args()))
+    try:
+        return asyncio.run(_run(parser.parse_args()))
+    except ValueError as exc:
+        print(f"vector_drift_contract_error={str(exc)[:96]}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

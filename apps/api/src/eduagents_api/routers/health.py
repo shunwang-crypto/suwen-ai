@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from ..db import get_sessionmaker
+from ..vector_audit import load_audit_summary
 
 router = APIRouter(tags=["health"])
 log = get_logger("health")
@@ -106,13 +107,17 @@ async def ready(request: Request):
         "qdrant",
     )
     hard_ok = all(checks[k] == "ok" for k in hard_keys)
-    status = "ok" if hard_ok and checks["worker"] == "ok" else (
+    vector_audit = await load_audit_summary(request.app.state.redis)
+    checks["vector_audit"] = vector_audit["status"]
+    audit_ok = vector_audit["status"] == "ok"
+    status = "ok" if hard_ok and checks["worker"] == "ok" and audit_ok else (
         "degraded" if hard_ok else "down"
     )
     body = {
         "status": status,
         "gateway_mode": request.app.state.settings.gateway_mode,
         "checks": checks,
+        "vector_audit": vector_audit,
     }
     if not hard_ok:
         return JSONResponse(body, status_code=503)

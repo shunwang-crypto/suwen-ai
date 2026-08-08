@@ -14,6 +14,7 @@ so an operator can repair the poison row without blocking newer work.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import uuid
 from dataclasses import dataclass
@@ -23,6 +24,10 @@ from typing import Any
 from eduagents_core.logging import get_logger
 from sqlalchemy import and_, func, or_, select, update
 
+from .cleanup_progress import (
+    CleanupComponentError,
+    CleanupProgressError,
+)
 from .ingestion import cleanup_document, cleanup_kb
 from .purge import purge_tenant
 
@@ -57,6 +62,36 @@ class CleanupPayloadError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+class CleanupLeaseLost(RuntimeError):
+    """The current claim no longer owns the outbox row."""
+
+
+@dataclass(slots=True)
+class _ProgressState:
+    """Only short stage names and claim metadata are persisted."""
+
+    worker_id: str
+    claim_id: str
+    current_step: str | None = None
+    completed_steps: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.completed_steps is None:
+            self.completed_steps = []
+
+    def as_json(self, phase: str, *, error_code: str | None = None) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "phase": phase,
+            "worker_id": self.worker_id,
+            "claim_id": self.claim_id,
+            "current_step": self.current_step,
+            "completed_steps": list(self.completed_steps or []),
+        }
+        if error_code:
+            data["error_code"] = error_code
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +175,10 @@ def sanitize_cleanup_error(value: object) -> str:
 
 def _error_code(exc: BaseException) -> str:
     if isinstance(exc, CleanupPayloadError):
+        return exc.code
+    if isinstance(exc, CleanupComponentError):
+        return exc.code
+    if isinstance(exc, CleanupProgressError):
         return exc.code
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "EXTERNAL_TIMEOUT"
@@ -263,10 +302,52 @@ async def _renew_leases(claims: list[_Claim], stop: asyncio.Event) -> None:
             log.warning("cleanup_outbox_lease_renew_failed", claims=len(remaining))
 
 
-async def _execute_cleanup(ctx: dict, claim: _Claim) -> None:
+async def _mark_progress(claim: _Claim, state: _ProgressState) -> None:
+    """Persist a short phase transition while retaining claim ownership."""
+    from eduagents_api.db import plain_session
+    from eduagents_api.models import PendingCleanup
+
+    async with plain_session() as session:
+        result = await session.execute(
+            update(PendingCleanup)
+            .where(
+                PendingCleanup.id == claim.row_id,
+                PendingCleanup.done.is_(False),
+                PendingCleanup.locked_by == claim.lease_token,
+            )
+            .values(progress_json=state.as_json("executing"))
+        )
+    if result.rowcount != 1:
+        raise CleanupLeaseLost("cleanup claim is no longer owned")
+
+
+async def _execute_cleanup(
+    ctx: dict,
+    claim: _Claim,
+    *,
+    progress=None,
+) -> None:
     payload = validate_cleanup_payload(claim.kind, claim.payload)
+
+    async def _invoke(callable_obj, *args) -> None:
+        """Keep older test fakes/callers source-compatible with progress hooks."""
+        try:
+            signature = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            signature = None
+        accepts_progress = signature is None or any(
+            parameter.kind == parameter.VAR_KEYWORD
+            or parameter.name == "progress"
+            for parameter in signature.parameters.values()
+        )
+        if accepts_progress:
+            await callable_obj(*args, progress=progress)
+        else:
+            await callable_obj(*args)
+
     if claim.kind == "doc":
-        await cleanup_document(
+        await _invoke(
+            cleanup_document,
             ctx,
             payload["tenant_id"],
             payload["kb_id"],
@@ -274,18 +355,24 @@ async def _execute_cleanup(ctx: dict, claim: _Claim) -> None:
             payload["filename"],
         )
     elif claim.kind == "kb":
-        await cleanup_kb(ctx, payload["tenant_id"], payload["kb_id"])
+        await _invoke(cleanup_kb, ctx, payload["tenant_id"], payload["kb_id"])
     elif claim.kind == "tenant":
-        await purge_tenant(ctx, payload["tenant_id"], payload.get("session_ids"))
+        await _invoke(purge_tenant, ctx, payload["tenant_id"], payload.get("session_ids"))
     else:
         from eduagents_core.config import get_settings
         from eduagents_core.storage import create_storage
 
         settings = ctx.get("settings") or get_settings()
-        await create_storage(settings).delete_prefix(payload["prefix"])
+        from .cleanup_progress import run_cleanup_step
+
+        await run_cleanup_step(
+            progress,
+            "storage",
+            lambda: create_storage(settings).delete_prefix(payload["prefix"]),
+        )
 
 
-async def _mark_completed(claim: _Claim) -> bool:
+async def _mark_completed(claim: _Claim, state: _ProgressState | None = None) -> bool:
     from eduagents_api.db import plain_session
     from eduagents_api.models import PendingCleanup
 
@@ -303,13 +390,19 @@ async def _mark_completed(claim: _Claim) -> bool:
                 next_attempt_at=None,
                 locked_at=None,
                 locked_by=None,
-                progress_json={"phase": "completed"},
+                progress_json=(
+                    state.as_json("completed") if state is not None else {"phase": "completed"}
+                ),
             )
         )
     return result.rowcount == 1
 
 
-async def _mark_failed(claim: _Claim, exc: BaseException) -> bool:
+async def _mark_failed(
+    claim: _Claim,
+    exc: BaseException,
+    state: _ProgressState | None = None,
+) -> bool:
     from eduagents_api.db import plain_session
     from eduagents_api.models import PendingCleanup
 
@@ -331,7 +424,11 @@ async def _mark_failed(claim: _Claim, exc: BaseException) -> bool:
                 next_attempt_at=next_attempt,
                 locked_at=None,
                 locked_by=None,
-                progress_json={"phase": "retry_wait", "error_code": code},
+                progress_json=(
+                    state.as_json("retry_wait", error_code=code)
+                    if state is not None
+                    else {"phase": "retry_wait", "error_code": code}
+                ),
             )
         )
     return result.rowcount == 1
@@ -390,13 +487,36 @@ async def _process_claim(
     ctx: dict,
     claim: _Claim,
 ) -> tuple[bool, bool]:
+    state = _ProgressState(
+        worker_id=str(ctx.get("cleanup_worker_id") or "cleanup"),
+        claim_id=str(claim.row_id),
+    )
+
+    async def progress(component: str, completed: bool) -> None:
+        state.current_step = component
+        if completed and component not in (state.completed_steps or []):
+            state.completed_steps.append(component)
+        try:
+            await _mark_progress(claim, state)
+        except CleanupLeaseLost:
+            raise
+        except Exception as exc:  # noqa: BLE001 - record a bounded retry if possible
+            raise CleanupProgressError(str(exc)) from exc
+
     try:
-        await _execute_cleanup(ctx, claim)
+        await _execute_cleanup(ctx, claim, progress=progress)
+    except CleanupLeaseLost:
+        log.warning("cleanup_outbox_lease_lost", id=str(claim.row_id), kind=claim.kind)
+        return False, False
     except Exception as exc:  # noqa: BLE001 - one poison row must not block its batch
         try:
-            updated = await _mark_failed(claim, exc)
+            updated = await _mark_failed(claim, exc, state)
         except Exception:  # noqa: BLE001 - lease expiry makes the row recoverable
-            log.warning("cleanup_outbox_failure_record_failed", id=str(claim.row_id))
+            log.warning(
+                "cleanup_outbox_failure_record_failed",
+                id=str(claim.row_id),
+                error_code="FAILURE_RECORD_WRITE_FAILED",
+            )
             return False, True
         if updated:
             code = _error_code(exc)
@@ -413,9 +533,13 @@ async def _process_claim(
         return False, True
 
     try:
-        completed = await _mark_completed(claim)
+        completed = await _mark_completed(claim, state)
     except Exception:  # noqa: BLE001 - a committed lease can be reclaimed later
-        log.warning("cleanup_outbox_completion_record_failed", id=str(claim.row_id))
+        log.warning(
+            "cleanup_outbox_completion_record_failed",
+            id=str(claim.row_id),
+            error_code="COMPLETION_WRITE_FAILED",
+        )
         return False, False
     if completed:
         log.info("cleanup_outbox_done", id=str(claim.row_id), kind=claim.kind)
