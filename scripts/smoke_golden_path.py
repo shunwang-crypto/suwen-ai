@@ -68,7 +68,7 @@ def main() -> None:
     c = httpx.Client(base_url=args.base, timeout=60)
 
     # 1) 健康
-    r = c.get("/api/health")
+    r = c.get("/api/health/ready")
     body = r.json()
     if body["checks"]["postgres"] != "ok" or body["checks"]["redis"] != "ok":
         fail("health", str(body))
@@ -122,7 +122,7 @@ def main() -> None:
 
     # 4) 带引用问答 (qa 自省环)
     ev = sse_events(c, "POST", "/api/chat", token,
-                    {"message": "拉格朗日余项的形式是什么?", "kb_id": kb_id})
+                    {"message": "拉格朗日余项的形式是什么?", "kb_ids": [kb_id]})
     if "citation" not in ev or "done" not in ev:
         fail("qa_citations", str(list(ev.keys())))
     if not any(e.get("type") == "retrieval" for e in ev.get("trace_event", [])):
@@ -178,7 +178,7 @@ def main() -> None:
 
     # 8) 库外问题拒答语义 (无关问题仍应正常完成, 不 500)
     ev = sse_events(c, "POST", "/api/chat", token,
-                    {"message": "水浒传作者是谁?", "kb_id": kb_id})
+                    {"message": "水浒传作者是谁?", "kb_ids": [kb_id]})
     if "done" not in ev:
         fail("qa_offtopic", "无 done")
     ok(f"库外问题正常收敛 (refused={ev['done'][0].get('refused')})")

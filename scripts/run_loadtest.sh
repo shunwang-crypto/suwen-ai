@@ -49,9 +49,9 @@ echo "== EduAgents 压测 =="
 echo "  HOST=$HOST  USERS=$USERS  SPAWN_RATE=$SPAWN_RATE  RUN_TIME=$RUN_TIME"
 
 # ---------------------------------------------------------------- 1) 健康检查
-echo "-- 健康检查 $HOST/api/health"
-if ! HEALTH=$(curl -fsS --max-time 5 "$HOST/api/health" 2>/dev/null); then
-  echo "错误: $HOST/api/health 不可达。" >&2
+echo "-- 健康检查 $HOST/api/health/ready"
+if ! HEALTH=$(curl -fsS --max-time 5 "$HOST/api/health/ready" 2>/dev/null); then
+  echo "错误: $HOST/api/health/ready 不可达。" >&2
   echo "压测需要一个专供压测的 stub 档 API 实例, 请另开一个终端执行 (完整命令):" >&2
   echo "" >&2
   echo "$START_CMD" >&2

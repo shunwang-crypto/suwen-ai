@@ -20,15 +20,27 @@ def test_invite_codes_are_high_entropy_and_only_hash_is_storage_value():
 
 
 def test_registration_mode_defaults_closed_in_production_and_open_in_dev():
-    assert Settings(_env_file=None, app_env="prod").registration_mode == "closed"
-    assert Settings(_env_file=None, app_env="dev").registration_mode == "open"
+    prod = Settings(_env_file=None, app_env="prod")
+    dev = Settings(_env_file=None, app_env="dev")
+    assert prod.registration_mode == "closed"
+    assert dev.registration_mode == "open"
+    assert prod.registration_mode_source == "default"
+    assert dev.registration_mode_source == "default"
 
 
-def test_legacy_public_registration_is_compatible_but_conflicts_are_rejected():
-    assert (
-        Settings(_env_file=None, app_env="dev", public_registration=True).registration_mode
-        == "open"
-    )
+def test_registration_mode_records_canonical_source_without_logging_value():
+    settings = Settings(_env_file=None, app_env="prod", registration_mode="invite")
+    assert settings.registration_mode == "invite"
+    assert settings.registration_mode_source == "REGISTRATION_MODE"
+
+
+def test_legacy_public_registration_is_compatible_and_records_alias_source():
+    settings = Settings(_env_file=None, app_env="dev", public_registration=True)
+    assert settings.registration_mode == "open"
+    assert settings.registration_mode_source == "PUBLIC_REGISTRATION"
+
+
+def test_registration_mode_conflict_is_rejected():
     with pytest.raises(ValidationError, match="conflicts"):
         Settings(
             _env_file=None,

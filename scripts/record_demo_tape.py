@@ -197,7 +197,7 @@ def main() -> None:
         asyncio.run(reset_demo_state())
 
     c = httpx.Client(base_url=args.base, timeout=300)
-    health = c.get("/api/health").json()
+    health = c.get("/api/health/ready").json()
     if health["gateway_mode"] != args.expect_mode:
         fail("health", f"gateway_mode={health['gateway_mode']}, 期望 {args.expect_mode}")
     ok(f"health (gateway={health['gateway_mode']})")
@@ -234,7 +234,7 @@ def main() -> None:
     ok("P.2 辅导预热 (3 轮, 小结入画像)")
 
     # §2 带引用问答
-    ev = sse(c, "POST", "/api/chat", token, {"message": CHAT_QUESTION, "kb_id": kb_id})
+    ev = sse(c, "POST", "/api/chat", token, {"message": CHAT_QUESTION, "kb_ids": [kb_id]})
     if "citation" not in ev or "done" not in ev:
         fail("chat", f"事件缺失: {list(ev.keys())}")
     answer = "".join(t.get("text", "") for t in ev.get("token", []))

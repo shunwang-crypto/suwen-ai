@@ -203,7 +203,7 @@ class EduAgentsUser(HttpUser):
         """
         payload = {
             "message": random.choice(QUESTIONS),
-            "kb_id": self.kb_id,
+            "kb_ids": [self.kb_id],
             "session_id": None,
         }
         t0 = time.perf_counter()

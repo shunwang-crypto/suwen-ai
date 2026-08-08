@@ -78,16 +78,16 @@ import，删除前逐个核对过。
 | `breaker_state`（单数） | `packages/core/src/eduagents_core/gateway/openai_gateway.py` | 被同文件的 `breaker_states`（复数）依赖，admin 路由调的是复数版。存在依赖链，不是孤立符号 |
 | 名含 legacy/compat 的测试 | `test_metacognition.py`、`test_tutor_recognition.py`、`test_plan_task_status.py`、`test_registration_invites.py` 等 | 测的都是**活着的历史数据兼容**（老数据只有布尔预测无概率值、LLM 返回裸数组格式、老计划无 `status`、新旧注册配置冲突检测），删了会真丢覆盖 |
 
-## 四、仍待处理：有活调用方的兼容代码（本次未动）
+## 四、兼容迁移状态（代码已迁移，删除待发布观察）
 
-这三处是真正的「新旧并存」，但**旧路径当前仍有调用方**，删除前必须先切换调用方，
-属于行为变更，不在本次纯清理范围内。
+这三处是真正的「新旧并存」。仓库内业务调用方已经迁移；兼容测试仍会有意调用旧入口，
+删除前还必须完成发布观察和外部调用归零确认，属于行为变更，不在本次纯清理范围内。
 
-| 兼容代码 | 位置 | 活着的调用方 |
+| 兼容代码 | 位置 | 当前状态 |
 |---|---|---|
-| 单值 `kb_id`（等价 `kb_ids=[kb_id]`） | `schemas.py`、`routers/chat.py` | `scripts/smoke_golden_path.py`、`apps/web/app/evals/page.tsx` 仍在发单值 |
-| `PUBLIC_REGISTRATION` | `packages/core/src/eduagents_core/config.py` | 生产启动断言 `assert_public_registration_email_config` 仍在读；且含新旧冲突检测（防误配保护） |
-| 旧 `/api/health` 路径 | `routers/health.py` | `scripts/run_loadtest.sh`、`scripts/preheat.sh`、`scripts/smoke_golden_path.py`、`scripts/record_demo_tape.py` 四个脚本仍在打 |
+| 单值 chat `kb_id`（等价 `kb_ids=[kb_id]`） | `schemas.py`、`routers/chat.py` | 业务脚本、Web chat 和压测已迁移；`test_org_kb.py` 仅保留兼容/越权契约。eval 页的单值 `kb_id` 属于单库 retrieval eval API，不是 chat 兼容调用方 |
+| `PUBLIC_REGISTRATION` | `packages/core/src/eduagents_core/config.py` | 应用仍接受旧别名并检测新旧冲突；启动日志仅记录配置名来源，不记录模式值。生产部署脚本要求新名称 |
+| 旧 `/api/health` 路径 | `routers/health.py` | 仓库脚本和 compose 已切换；旧路由带 OpenAPI 弃用标记、响应 header 和结构化计数事件。外部 monitor/负载均衡仍需观察期后确认归零 |
 
 建议顺序：先改调用方 → 跑全套验证 → 再删兼容分支，每项独立提交便于回滚。
 

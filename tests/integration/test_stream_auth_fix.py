@@ -411,6 +411,8 @@ async def test_ready_and_legacy_health_ok_with_healthy_deps(client):
     # 旧路径兼容: 形状不变
     r = await client.get("/api/health")
     assert r.status_code == 200
+    assert r.headers["Deprecation"] == "true"
+    assert r.headers["Link"] == '</api/health/ready>; rel="successor-version"'
     assert r.json()["checks"]["postgres"] == "ok"
 
 

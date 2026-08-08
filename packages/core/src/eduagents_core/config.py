@@ -6,10 +6,11 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 RegistrationMode = Literal["closed", "invite", "open"]
+RegistrationModeSource = Literal["REGISTRATION_MODE", "PUBLIC_REGISTRATION", "default"]
 
 
 class TierConfig(BaseModel):
@@ -32,6 +33,13 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    _registration_mode_source: RegistrationModeSource = PrivateAttr(default="default")
+
+    @property
+    def registration_mode_source(self) -> RegistrationModeSource:
+        """Return only the setting name used, never its value."""
+        return self._registration_mode_source
 
     app_env: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
@@ -218,6 +226,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def resolve_registration_mode(self) -> Settings:
         legacy_mode = None
+        canonical_supplied = self.registration_mode is not None
         if self.public_registration is not None:
             legacy_mode = "open" if self.public_registration else "closed"
         if self.registration_mode is None:
@@ -228,6 +237,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REGISTRATION_MODE conflicts with legacy PUBLIC_REGISTRATION; remove the legacy setting"
             )
+        self._registration_mode_source = (
+            "REGISTRATION_MODE"
+            if canonical_supplied
+            else "PUBLIC_REGISTRATION"
+            if legacy_mode is not None
+            else "default"
+        )
         self.public_registration = self.registration_mode == "open"
         if self.referral_campaign_enabled:
             if not self.siliconflow_referral_url.startswith(

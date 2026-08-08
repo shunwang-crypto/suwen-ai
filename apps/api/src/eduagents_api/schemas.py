@@ -238,7 +238,11 @@ class ChatRequestIn(BaseModel):
     session_id: uuid.UUID | None = None
     # 显式回答模式。旧客户端未发送 mode 且携带 kb_id(s) 时，路由层仍按知识库模式处理。
     mode: Literal["fast", "think", "web", "research", "kb"] = "fast"
-    kb_id: uuid.UUID | None = None  # 向后兼容: 等价 kb_ids=[kb_id]
+    kb_id: uuid.UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility input; use kb_ids=[kb_id].",
+    )
     # Wave3 联合检索: 多库显式列表 (个人库+机构库), 服务端逐库校验可见性
     kb_ids: list[uuid.UUID] | None = Field(default=None, max_length=8)
     attachment_ids: list[uuid.UUID] | None = None

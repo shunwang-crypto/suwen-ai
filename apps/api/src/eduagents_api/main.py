@@ -146,7 +146,12 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 — 图运行时缺失时基础问答仍可用
         app.state.graphs = None
         log.exception("graph_runtime_unavailable")
-    log.info("app_started", env=settings.app_env, gateway_mode=settings.gateway_mode)
+    log.info(
+        "app_started",
+        env=settings.app_env,
+        gateway_mode=settings.gateway_mode,
+        registration_mode_source=settings.registration_mode_source,
+    )
     yield
     # 先停止仍在后台生成的对话，再关闭其依赖的图运行时/Redis/数据库连接。
     await chat.shutdown_chat_runs()

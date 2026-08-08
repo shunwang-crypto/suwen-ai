@@ -45,7 +45,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 ### 对话（用户，120次/分限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/chat | {message, session_id?, mode, kb_ids?, attachment_ids?} → SSE 流（见下）；无 session_id 自动建会话 |
+| POST | /api/chat | {message, session_id?, mode, kb_ids?, attachment_ids?} → SSE 流（见下）；无 session_id 自动建会话。旧 `kb_id` 仅兼容一版且在 OpenAPI 标为 deprecated |
 | GET | /api/chat/sessions | 会话列表（按更新时间倒序，≤100） |
 | GET | /api/chat/sessions/{id}/messages | 历史消息（他人会话 → 404，不泄漏存在性） |
 | GET | /api/chat/sessions/{id}/run | 查询该会话的生成状态 → {status: running\|idle, run_id?} |
@@ -159,7 +159,7 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
 Wave3 机构库（D14）：
 - `GET /api/kb` 每项新增 `owner_type/org_id/org_name/writable`；机构库写端点
   （上传/删文档/重建索引/删库/检索调试）member 一律 `403 ORG_READONLY`。
-- `/api/chat` 请求体新增 `kb_ids: UUID[]`（联合检索，`kb_id` 保留等价 `kb_ids=[kb_id]`）；
+- `/api/chat` 请求体新增 `kb_ids: UUID[]`（联合检索，deprecated `kb_id` 暂保留等价 `kb_ids=[kb_id]`）；
   任一 kb 不可见 → `403 KB_FORBIDDEN`；citation 事件新增 `kb_id/kb_name` 来源库标注。
 
 | 方法 | 路径 | 说明 |

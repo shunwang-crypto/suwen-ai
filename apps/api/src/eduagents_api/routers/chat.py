@@ -335,6 +335,14 @@ async def chat(
     requested_kb_ids: list[uuid.UUID] = list(
         dict.fromkeys(body.kb_ids or ([body.kb_id] if body.kb_id is not None else []))
     )
+    if body.kb_id is not None and not body.kb_ids:
+        log.info(
+            "legacy_kb_id_compat_used",
+            surface="chat",
+            replacement="kb_ids",
+            metric="eduagents_legacy_kb_id_calls_total",
+            increment=1,
+        )
     # 未携带 mode 的旧客户端继续沿用“有 kb_id 即知识库问答”的历史契约；
     # 新客户端把 kb_ids 作为独立资料范围，可与 fast/think 组合。
     mode_explicit = "mode" in body.model_fields_set

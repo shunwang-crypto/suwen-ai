@@ -212,7 +212,7 @@ make up
 docker compose -f deploy/docker-compose.yml ps
 curl -fsS http://127.0.0.1:8000/api/health/live
 curl -fsS http://127.0.0.1:8000/api/health/ready
-curl -fsS http://127.0.0.1:8080/api/health
+curl -fsS http://127.0.0.1:8080/api/health/ready
 ~~~
 
 `ready` 依赖 PostgreSQL、Redis、Qdrant 和 Worker 心跳。只有所有预期服务 healthy、只有预期

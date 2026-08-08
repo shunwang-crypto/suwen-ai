@@ -34,7 +34,10 @@ async def startup(ctx: dict) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     ctx["settings"] = settings
-    log.info("worker_started")
+    log.info(
+        "worker_started",
+        registration_mode_source=settings.registration_mode_source,
+    )
 
 
 async def shutdown(ctx: dict) -> None:

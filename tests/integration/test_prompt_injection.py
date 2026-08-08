@@ -129,7 +129,7 @@ async def test_injection_payloads_neutralized_in_citations(client):
 
     all_citations: list[dict] = []
     for query in _QUERIES:
-        events = await _sse_events(client, headers, {"message": query, "kb_id": kb_id})
+        events = await _sse_events(client, headers, {"message": query, "kb_ids": [kb_id]})
         # b) SSE 正常完成: done 事件存在 (状态码 200 已在 _sse_events 内断言)
         assert "done" in events, f"query={query!r} 未收到 done 事件"
         for citation in events.get("citation", []):

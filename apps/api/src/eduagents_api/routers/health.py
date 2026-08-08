@@ -11,18 +11,34 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Request
+from eduagents_core.logging import get_logger
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from ..db import get_sessionmaker
 
 router = APIRouter(tags=["health"])
+log = get_logger("health")
 
 # arq 默认队列的健康键: worker 每 health_check_interval 写入, 自带过期。
 # worker 侧未自定义 queue_name (apps/worker/main.py), 故为默认值。
 _ARQ_HEALTH_KEY = "arq:queue:health-check"
 _PROBE_TIMEOUT = 3.0
+_LEGACY_HEALTH_HEADERS = {
+    "Deprecation": "true",
+    "Link": '</api/health/ready>; rel="successor-version"',
+}
+_LEGACY_HEALTH_OPENAPI_HEADERS = {
+    "Deprecation": {
+        "description": "This compatibility endpoint is deprecated.",
+        "schema": {"type": "string", "example": "true"},
+    },
+    "Link": {
+        "description": "Successor endpoint.",
+        "schema": {"type": "string"},
+    },
+}
 
 
 async def _check_postgres() -> str:
@@ -103,9 +119,23 @@ async def ready(request: Request):
     return body
 
 
-@router.get("/api/health")
-async def health(request: Request):
+@router.get(
+    "/api/health",
+    deprecated=True,
+    responses={
+        200: {"headers": _LEGACY_HEALTH_OPENAPI_HEADERS},
+        503: {"headers": _LEGACY_HEALTH_OPENAPI_HEADERS},
+    },
+)
+async def health(request: Request, response: Response):
     """旧路径兼容: 只探 PG/Redis (原有语义), 但依赖挂时如实返 503。"""
+    response.headers.update(_LEGACY_HEALTH_HEADERS)
+    log.info(
+        "legacy_health_compat_used",
+        replacement="/api/health/ready",
+        metric="eduagents_legacy_health_calls_total",
+        increment=1,
+    )
     checks = {
         "postgres": await _check_postgres(),
         "redis": await _check_redis(request),
@@ -117,5 +147,5 @@ async def health(request: Request):
         "checks": checks,
     }
     if not healthy:
-        return JSONResponse(body, status_code=503)
+        return JSONResponse(body, status_code=503, headers=_LEGACY_HEALTH_HEADERS)
     return body

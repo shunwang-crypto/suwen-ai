@@ -110,7 +110,7 @@ async def test_rag_pipeline_end_to_end(client):
 
     # 5) 带引用问答: citation 事件 + 生成 + done 计数一致
     events = await _sse_events(
-        client, headers, {"message": "泰勒公式的拉格朗日余项是什么形式?", "kb_id": kb_id}
+        client, headers, {"message": "泰勒公式的拉格朗日余项是什么形式?", "kb_ids": [kb_id]}
     )
     assert "citation" in events and len(events["citation"]) >= 1
     cited = events["citation"][0]
@@ -125,7 +125,7 @@ async def test_rag_pipeline_end_to_end(client):
 
     # 6) 库外问题 (语料无关) -> 检索仍返回若干结果或拒答, 但绝不 500
     events2 = await _sse_events(
-        client, headers, {"message": "水浒传的作者是谁?", "kb_id": kb_id}
+        client, headers, {"message": "水浒传的作者是谁?", "kb_ids": [kb_id]}
     )
     assert "done" in events2
 

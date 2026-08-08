@@ -50,13 +50,13 @@ else
 fi
 
 # ---------- 2) API / web 端口 ----------
-HEALTH_JSON=$(curl -sf --max-time 5 "$API_BASE/api/health" 2>/dev/null || true)
+HEALTH_JSON=$(curl -sf --max-time 5 "$API_BASE/api/health/ready" 2>/dev/null || true)
 if [ -n "$HEALTH_JSON" ]; then
   GWMODE=$(printf '%s' "$HEALTH_JSON" \
     | "$ENV_BIN/python" -c 'import json,sys; print(json.load(sys.stdin).get("gateway_mode","?"))' 2>/dev/null || echo "?")
-  row "api $API_BASE" ok "health ok, gateway_mode=$GWMODE"
+  row "api $API_BASE" ok "ready ok, gateway_mode=$GWMODE"
 else
-  row "api $API_BASE" FAIL "/api/health 不通 (make api)"
+  row "api $API_BASE" FAIL "/api/health/ready 不通 (make api)"
 fi
 WEB_CODE=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$WEB_BASE" 2>/dev/null || echo 000)
 if [ "$WEB_CODE" = "200" ]; then

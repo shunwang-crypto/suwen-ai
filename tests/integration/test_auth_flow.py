@@ -86,7 +86,7 @@ async def test_full_auth_lifecycle(client):
 
 
 async def test_health_endpoint(client):
-    r = await client.get("/api/health")
+    r = await client.get("/api/health/ready")
     assert r.status_code == 200
     body = r.json()
     assert body["checks"]["postgres"] == "ok"
