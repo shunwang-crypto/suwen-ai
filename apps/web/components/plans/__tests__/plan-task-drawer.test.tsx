@@ -72,7 +72,7 @@ describe("PlanTaskDrawer", () => {
     );
     expect(screen.getByRole("link", { name: "复习相关错题" })).toHaveAttribute(
       "href",
-      `/errors?kb_id=${KB_ID}`,
+      "/reviews",
     );
   });
 

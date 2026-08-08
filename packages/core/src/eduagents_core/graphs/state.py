@@ -66,6 +66,8 @@ class QuizState(TypedDict, total=False):
     tenant_id: str
     user_id: str
     request_id: str
+    plan_id: str  # safe plan attribution; never contains task/problem content
+    task_key: str
     kb_id: str
     topic: str
     num_questions: int
@@ -110,6 +112,8 @@ class TutorState(TypedDict, total=False):
     tenant_id: str
     user_id: str
     request_id: str
+    plan_id: str  # safe plan attribution, bound when the thread is first created
+    task_key: str
     problem: str
     # Safe identifiers only. Source bytes and image data never enter checkpoints.
     tutor_draft_id: str

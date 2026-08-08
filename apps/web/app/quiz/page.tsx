@@ -165,6 +165,8 @@ export default function QuizPage() {
   const prefillDifficulty = ["easy", "mid", "hard"].includes(urlParams.get("difficulty") ?? "")
     ? (urlParams.get("difficulty") as "easy" | "mid" | "hard")
     : undefined;
+  const planId = urlParams.get("plan_id") ?? "";
+  const taskKey = urlParams.get("task_key") ?? "";
   // /quiz?weak=1（画像页/学情报告页的「针对此点练习」）：高亮薄弱点定向出题卡片
   const fromWeakLink = urlParams.get("weak") === "1";
   // /quiz?kc=<KC名>&n=3（画像页「验证一下」，P2-6 可争辩画像）：
@@ -427,9 +429,12 @@ export default function QuizPage() {
       setPredictions({});
       setCalibration(null);
       setPhase("streaming");
-      void consume("/api/quiz", value);
+      void consume("/api/quiz", {
+        ...value,
+        ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
+      });
     },
-    [consume, userId],
+    [consume, planId, taskKey, userId],
   );
 
   /** 画像定向出题：kc_names 与难度分布都由后端按掌握度计算（M4-D2 / P1-1），

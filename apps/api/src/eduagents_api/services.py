@@ -161,13 +161,19 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
     questions = state.get("questions") or []
     kb_id = state.get("kb_id") or None
     async with tenant_session(ctx.tenant_id) as session:
+        blueprint = dict(state.get("blueprint") or {})
+        if state.get("plan_id") and state.get("task_key"):
+            blueprint["_plan_task_attribution"] = {
+                "plan_id": str(state["plan_id"]),
+                "task_key": str(state["task_key"]),
+            }
         quiz = Quiz(
             id=uuid.UUID(local_id),
             tenant_id=ctx.tenant_id,
             user_id=ctx.user_id,
             kb_id=uuid.UUID(kb_id) if kb_id else None,
             title=state.get("topic", "")[:255],
-            blueprint_json=state.get("blueprint") or {},
+            blueprint_json=blueprint,
             status="ready",
         )
         session.add(quiz)
@@ -520,6 +526,7 @@ async def record_attempts(
 
     business_now = now_dt or datetime.now(UTC)
     results = []
+    plan_task_completion = None
     seen_question_ids: set[str] = set()
     async with tenant_session(ctx.tenant_id) as session:
         quiz = await session.get(Quiz, quiz_id)
@@ -637,6 +644,29 @@ async def record_attempts(
                     "mastery_changes": changes,
                 }
             )
+        attribution = (quiz.blueprint_json or {}).get("_plan_task_attribution")
+        if isinstance(attribution, dict) and len(results) == len(questions) and questions:
+            from .plan_adjust import PlanTaskAttributionError, complete_plan_task
+
+            try:
+                plan_task_completion = await complete_plan_task(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    plan_id=uuid.UUID(str(attribution.get("plan_id") or "")),
+                    task_key=str(attribution.get("task_key") or ""),
+                    source_type="quiz_attempt",
+                    source_id=str(quiz_id),
+                    completed_at=business_now,
+                )
+            except (ValueError, PlanTaskAttributionError) as exc:
+                code = getattr(exc, "code", "PLAN_TASK_NOT_FOUND")
+                log.warning(
+                    "quiz_plan_task_completion_failed",
+                    quiz_id=str(quiz_id),
+                    code=code,
+                )
+                plan_task_completion = {"completed": False, "error_code": code}
     total = len(results)
     n_correct = sum(1 for r in results if r["correct"])
     # F3-A3 联动 (尾部追加, 判分主流程一行未改): 本次正确率 <0.6 且存在活跃计划时,
@@ -652,4 +682,5 @@ async def record_attempts(
         "correct": n_correct,
         "results": results,
         "plan_adjustment": plan_adjustment,  # 新增键, 老调用方忽略即可
+        "plan_task_completion": plan_task_completion,
     }

@@ -70,10 +70,11 @@ describe("server-owned today plan buckets", () => {
 
 describe("task execution links", () => {
   const base = task("t", 1, "极限练习", { practice_count: 12, difficulty: "easy" });
-  it("uses real page parameters for practice, tutor, errors, and resource fallback", () => {
+  it("uses real page parameters for practice, tutor, review, and resource fallback", () => {
     expect(taskExecutionHref(base, "11111111-1111-4111-8111-111111111111")).toContain("/quiz?topic=%E5%87%BD%E6%95%B0&kb=11111111-1111-4111-8111-111111111111&count=12&difficulty=easy");
     expect(taskExecutionHref({ ...base, action_type: "tutor" }, null)).toBe("/tutor?problem=%E6%8E%8C%E6%8F%A1%E6%9E%81%E9%99%90%E7%BB%83%E4%B9%A0");
-    expect(taskExecutionHref({ ...base, action_type: "review_errors" }, "11111111-1111-4111-8111-111111111111")).toBe("/errors?kb_id=11111111-1111-4111-8111-111111111111");
+    expect(taskExecutionHref({ ...base, action_type: "review_errors" }, "11111111-1111-4111-8111-111111111111")).toBe("/reviews");
+    expect(taskExecutionHref({ ...base, action_type: "review_errors" }, null, "22222222-2222-4222-8222-222222222222")).toBe("/reviews?plan_id=22222222-2222-4222-8222-222222222222&task_key=t");
     expect(taskExecutionHref({ ...base, action_type: "read", resource: { title: "公开资料", url: "https://example.com/lesson" } }, null)).toBe("https://example.com/lesson");
   });
 });

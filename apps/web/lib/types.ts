@@ -434,6 +434,16 @@ export interface AttemptResult {
   results: AttemptResultItem[];
   /** F3-A3：正确率 <0.6 且存在活跃计划时，后端自动插入补强任务的结果（否则 null） */
   plan_adjustment?: (PlanAdjustResult & { plan_id: string }) | null;
+  plan_task_completion?: PlanTaskCompletion | null;
+}
+
+export interface PlanTaskCompletion {
+  task_key?: string;
+  status?: "pending" | "done" | "skipped";
+  done?: boolean;
+  completed: boolean;
+  changed?: boolean;
+  error_code?: string;
 }
 
 export interface MetacognitionSummary {
@@ -606,6 +616,9 @@ export interface PlanToggleResult {
   status: "pending" | "done" | "skipped";
   done: boolean;
   progress: PlanProgress;
+  completed?: boolean;
+  changed?: boolean;
+  completion?: { source_type: string; source_id: string; completed_at: string };
 }
 
 /** 学情调整插入的补强任务。 */
@@ -653,6 +666,7 @@ export interface TutorTurnResult {
   /** summarize 节点产出的 JSON 字符串（未结束时为空串） */
   session_summary: string;
   mastery_changes: MasteryChange[];
+  plan_task_completion?: PlanTaskCompletion | null;
 }
 
 export type TutorDraftStatus = "uploaded" | "recognizing" | "review" | "confirmed" | "failed";
@@ -799,6 +813,7 @@ export interface ReviewAnswerResult {
   answer: string;
   explanation: string;
   mastery_changes: MasteryChange[];
+  plan_task_completion?: PlanTaskCompletion | null;
 }
 
 export interface ReviewVariantResult {

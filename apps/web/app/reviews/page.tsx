@@ -5,7 +5,7 @@
 // 卡片附 FSRS 遗忘快照（P2-7「再不复习，3 天后预计保持率 N%」，<90% 才显示）。
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
 import {
@@ -58,6 +58,7 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
 
 /** 遗忘快照只在 3 天后保持率低于此值时渲染（P2-7，与画像页同口径）。 */
 const RETENTION_SHOW_BELOW = 0.9;
+const emptySubscribe = () => () => {};
 
 /** 队列项 + 遗忘快照字段（P2-7，后端已附带；共享 types.ts 不改，页面局部扩展）。 */
 type ReviewItemWithRetention = ReviewItem & {
@@ -96,6 +97,14 @@ const initialItemState: ItemState = {
 };
 
 export default function ReviewsPage() {
+  const search = useSyncExternalStore(
+    emptySubscribe,
+    () => window.location.search,
+    () => "",
+  );
+  const urlParams = new URLSearchParams(search);
+  const planId = urlParams.get("plan_id") ?? "";
+  const taskKey = urlParams.get("task_key") ?? "";
   const [data, setData] = useState<ReviewTodayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +163,12 @@ export default function ReviewsPage() {
     try {
       const result = await apiJson<ReviewAnswerResult>(
         `/api/reviews/${item.error_item_id}/answer`,
-        { body: { response: st.value } },
+        {
+          body: {
+            response: st.value,
+            ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
+          },
+        },
       );
       patchState(item.error_item_id, { submitting: false, result });
     } catch (err) {

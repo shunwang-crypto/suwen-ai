@@ -8,7 +8,7 @@ from eduagents_core.kc.dag import topological_order
 from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 
 from .. import timectl
@@ -25,11 +25,14 @@ from ..models import (
     PlanResource,
 )
 from ..plan_adjust import (
+    PlanTaskAttributionError,
     adjust_plan,
+    complete_plan_task,
     enrich_structure,
     plan_progress,
     plan_schedule_snapshot,
     set_task_status,
+    validate_plan_task_attribution,
 )
 from ..profile_summary import ProfileContext, build_profile_context, weak_point_kcs
 from ..services import _plan_resource_public, apply_tutor_summary
@@ -80,6 +83,19 @@ class TutorTurn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_local_id: uuid.UUID | None = None
     tutor_draft_id: uuid.UUID | None = None
+    plan_id: uuid.UUID | None = None
+    task_key: str | None = Field(default=None, max_length=96)
+
+    @field_validator("task_key")
+    @classmethod
+    def _normalize_task_key(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
+    @model_validator(mode="after")
+    def _plan_attribution_pair(self) -> TutorTurn:
+        if (self.plan_id is None) != (self.task_key is None):
+            raise ValueError("plan_id 与 task_key 必须同时提供")
+        return self
 
 
 def _diagnosis_from_rows(rows: list[tuple[str, float, str]], kb_id: str) -> dict[str, float]:
@@ -380,6 +396,29 @@ async def toggle_task(
         }
 
 
+@router.post("/{plan_id}/tasks/{task_key}/complete")
+async def complete_reading_task(
+    plan_id: uuid.UUID,
+    task_key: str,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Explicitly complete a reading task; merely opening a link never completes it."""
+    async with tenant_session(ctx.tenant_id) as session:
+        try:
+            return await complete_plan_task(
+                session,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan_id,
+                task_key=task_key,
+                source_type="manual_read",
+                source_id=f"{plan_id}:{task_key}",
+            )
+        except PlanTaskAttributionError as exc:
+            status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
+            raise HTTPException(status_code=status, detail=exc.code) from None
+
+
 @router.post("/{plan_id}/adjust")
 async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """依据当前学情调整计划 (F3-A3): 薄弱 KC 无对应任务 → 插补强任务 + 写调整审计。"""
@@ -496,6 +535,37 @@ async def tutor_turn(
             attachment_id = str(draft.resource_id or "")
             problem_page_no = draft.confirmed_page_no
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
+    graph = runtime.graph("tutor")
+    config = {"configurable": {"thread_id": thread_id}}
+    checkpoint = await graph.aget_state(config)
+    existing = dict(checkpoint.values)
+    stored_plan_id = str(existing.get("plan_id") or "")
+    stored_task_key = str(existing.get("task_key") or "")
+    requested_plan_id = str(body.plan_id or "")
+    requested_task_key = body.task_key or ""
+    if existing and not stored_plan_id and requested_plan_id:
+        raise HTTPException(status_code=409, detail="TUTOR_PLAN_TASK_LATE_BIND")
+    if stored_plan_id and requested_plan_id and (
+        stored_plan_id != requested_plan_id or stored_task_key != requested_task_key
+    ):
+        raise HTTPException(status_code=409, detail="TUTOR_PLAN_TASK_MISMATCH")
+    plan_id = stored_plan_id or requested_plan_id
+    task_key = stored_task_key or requested_task_key
+    if plan_id:
+        async with tenant_session(ctx.tenant_id) as session:
+            try:
+                await validate_plan_task_attribution(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    plan_id=uuid.UUID(plan_id),
+                    task_key=task_key,
+                    source_type="tutor_summary",
+                )
+            except (ValueError, PlanTaskAttributionError) as exc:
+                code = getattr(exc, "code", "PLAN_TASK_NOT_FOUND")
+                status = 404 if code == "PLAN_TASK_NOT_FOUND" else 409
+                raise HTTPException(status_code=status, detail=code) from None
     # 画像注入 (G9, P2-7 脱敏口径同问答): 读画像失败一律降级为"无画像"继续辅导
     profile = ProfileContext()
     try:
@@ -520,12 +590,14 @@ async def tutor_turn(
         "profile_summary": profile.summary,
         "profile_weak_points": profile.weak_points,
     }
-    graph = runtime.graph("tutor")
-    config = {"configurable": {"thread_id": thread_id}}
+    if plan_id:
+        payload["plan_id"] = plan_id
+        payload["task_key"] = task_key
     state = await graph.ainvoke(payload, config)
     # F4→F8 联动: 仅当本轮走了 summarize (trace 末项) 才把小结写入画像 —
     # trace/session_summary 会随 checkpointer 跨轮保留, 不能只看非空, 否则同 thread 续聊会重复计分。
     mastery_changes: list[dict] = []
+    plan_task_completion = None
     summary_raw = state.get("session_summary", "")
     trace = state.get("trace") or []
     if summary_raw and trace and trace[-1].get("node") == "summarize":
@@ -535,6 +607,27 @@ async def tutor_turn(
             summary = None
         if isinstance(summary, dict):
             mastery_changes = await apply_tutor_summary(ctx, summary)
+        if plan_id and task_key:
+            try:
+                async with tenant_session(ctx.tenant_id) as session:
+                    plan_task_completion = await complete_plan_task(
+                        session,
+                        tenant_id=ctx.tenant_id,
+                        user_id=ctx.user_id,
+                        plan_id=uuid.UUID(plan_id),
+                        task_key=task_key,
+                        source_type="tutor_summary",
+                        source_id=local_id,
+                    )
+            except (ValueError, PlanTaskAttributionError) as exc:
+                code = getattr(exc, "code", "PLAN_TASK_NOT_FOUND")
+                log.warning(
+                    "tutor_plan_task_completion_failed",
+                    plan_id=plan_id,
+                    task_key=task_key,
+                    code=code,
+                )
+                plan_task_completion = {"completed": False, "error_code": code}
     return {
         "thread_local_id": local_id,
         "reply": state.get("reply", ""),
@@ -542,4 +635,5 @@ async def tutor_turn(
         "stuck_type": state.get("stuck_type", ""),
         "session_summary": summary_raw,
         "mastery_changes": mastery_changes,
+        "plan_task_completion": plan_task_completion,
     }

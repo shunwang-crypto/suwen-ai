@@ -1500,7 +1500,7 @@ export default function PlansPage() {
                     key={detail.id}
                     structure={detail.structure}
                     onStatus={(key, status) => void updateTaskStatus(key, status)}
-                    onTaskOpen={(location) => setOpenTask({ ...location, planKbId: detail.kb_id })}
+                    onTaskOpen={(location) => setOpenTask({ ...location, planId: detail.id, planKbId: detail.kb_id })}
                     pendingKeys={pendingKeys}
                     highlightKeys={highlightKeys}
                   />
@@ -1511,7 +1511,7 @@ export default function PlansPage() {
                 )}
               </Card>
 
-              {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} />}
+              {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} onCompleted={() => setDetailKey((key) => key + 1)} />}
 
               <Card
                 title="调整历史"

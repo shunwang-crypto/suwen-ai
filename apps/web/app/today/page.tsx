@@ -114,15 +114,15 @@ export default function TodayPage() {
     const tasks: FlatPlanTask[] = (data.plan?.structure.stages ?? []).flatMap((stage) =>
       stage.days.flatMap((day) => day.tasks.map((task) => ({ ...task, day: day.day, stage: stage.name }))),
     );
-    const today = buildTodayItems(tasks, data.plan?.schedule, data.reviews?.items ?? [], data.plan?.kb_id);
+    const today = buildTodayItems(tasks, data.plan?.schedule, data.reviews?.items ?? [], data.plan?.kb_id, data.plan?.id);
     const { nextTask } = today;
     const currentStage = nextTask?.stage ?? data.plan?.structure.stages[0]?.name ?? data.plan?.goal ?? "当前学习";
     const stageTasks = tasks.filter((task) => task.stage === currentStage).slice(0, 4);
     const stageDone = stageTasks.filter((task) => task.done).length;
     const stagePct = stageTasks.length ? Math.round((stageDone / stageTasks.length) * 100) : 0;
     const topic = nextTask?.kc_names?.[0] || nextTask?.title || data.plan?.goal || "";
-    const tutorHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "tutor" }, data.plan?.kb_id) : `/tutor?problem=${encodeURIComponent(data.plan?.goal || "请描述你正在学习的问题")}`;
-    const quizHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "practice" }, data.plan?.kb_id) : "/quiz";
+    const tutorHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "tutor" }, data.plan?.kb_id, data.plan?.id) : `/tutor?problem=${encodeURIComponent(data.plan?.goal || "请描述你正在学习的问题")}`;
+    const quizHref = nextTask ? taskExecutionHref({ ...nextTask, action_type: "practice" }, data.plan?.kb_id, data.plan?.id) : "/quiz";
     const mastery = (data.profile?.mastery ?? []) as ScopedMastery[];
     const weak = [...mastery].filter((item) => item.p_mastery < 0.6).sort((a, b) => a.p_mastery - b.p_mastery)[0] ?? null;
     return {
@@ -192,6 +192,30 @@ export default function TodayPage() {
     } finally {
       setTogglingKey(null);
     }
+  };
+
+  const applyTaskCompletion = (result: PlanToggleResult) => {
+    setData((current) => {
+      if (!current?.plan) return current;
+      return {
+        ...current,
+        plan: {
+          ...current.plan,
+          progress: result.progress,
+          structure: {
+            stages: current.plan.structure.stages.map((stage) => ({
+              ...stage,
+              days: stage.days.map((day) => ({
+                ...day,
+                tasks: day.tasks.map((task) => task.task_key === result.task_key
+                  ? { ...task, status: result.status, done: result.done }
+                  : task),
+              })),
+            })),
+          },
+        },
+      };
+    });
   };
 
   if (!data || !view) return <DashboardSkeleton />;
@@ -265,7 +289,7 @@ export default function TodayPage() {
                     ) : <Link href={item.href} aria-label={`开始 ${item.title}`} className="h-[18px] w-[18px] shrink-0 rounded-[4px] border border-line-strong bg-white transition-colors hover:border-ink-muted" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        {item.task ? <button type="button" onClick={() => setOpenTask({ task: item.task!, stageName: item.task!.stage, day: item.task!.day, planKbId: data.plan?.kb_id })} className={`min-w-0 truncate text-left text-[13px] font-medium hover:text-brand-700 ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></button> : <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></p>}
+                        {item.task ? <button type="button" onClick={() => setOpenTask({ task: item.task!, stageName: item.task!.stage, day: item.task!.day, planId: data.plan?.id, planKbId: data.plan?.kb_id })} className={`min-w-0 truncate text-left text-[13px] font-medium hover:text-brand-700 ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></button> : <p className={`min-w-0 truncate text-[13px] font-medium ${item.done ? "text-ink-muted line-through" : "text-ink"}`}><MathText text={item.title} singleLine /></p>}
                         {item.dueLabel && !item.done && <span className="shrink-0 rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-semibold text-warning-700">{item.dueLabel}</span>}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-[10px] text-ink-muted"><span className="rounded-[3px] bg-[#f1f0ed] px-1.5 py-0.5 font-semibold text-ink-secondary">{item.type === "review" ? "复习" : item.type === "practice" ? "练习" : "学习"}</span><span className="truncate">{item.context}</span></div>
@@ -298,7 +322,7 @@ export default function TodayPage() {
           ) : <p className="px-5 py-8 text-center text-[12px] text-ink-muted">暂未发现需要优先加强的知识点。</p>}
         </Panel>
       </div>
-      {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} />}
+      {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} onCompleted={applyTaskCompletion} />}
     </div>
   );
 }

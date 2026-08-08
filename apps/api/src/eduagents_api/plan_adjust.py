@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import re
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
@@ -34,6 +34,20 @@ log = get_logger("plan_adjust")
 
 TASK_KEY_RE = re.compile(r"^stage(\d+)\.day(\d+)\.task(\d+)$")
 TASK_STATUSES: tuple[str, ...] = ("pending", "done", "skipped")
+PLAN_TASK_SOURCE_ACTIONS: dict[str, set[str]] = {
+    "quiz_attempt": {"practice", "mixed"},
+    "tutor_summary": {"tutor", "mixed", "read"},
+    "review_answer": {"review_errors", "mixed"},
+    "manual_read": {"read", "mixed"},
+}
+
+
+class PlanTaskAttributionError(Exception):
+    """A stable, user-safe failure raised while validating plan attribution."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 # 薄弱判据 = REINFORCE_THRESHOLD (掌握度阈值唯一来源 eduagents_core.mastery.thresholds)
 _REINFORCE_PCT = round(REINFORCE_THRESHOLD * 100)  # 中文理由里的百分数表述
@@ -189,18 +203,132 @@ def set_task_status(
         final = status or ("done" if current == "pending" else "pending")
         task["status"] = final
         task["done"] = final == "done"
+        if final != "done":
+            # A reopened/skipped task no longer has valid completion evidence.
+            task.pop("completion", None)
         return new_structure, final
     raise KeyError(task_key)
 
 
-def set_task_done(structure: dict | None, task_key: str, done: bool | None) -> tuple[dict, bool]:
-    """返回 (新 structure 副本, 该任务最终 done)。task_key 不存在抛 KeyError。
+def _task_for_key(structure: dict | None, task_key: str) -> dict | None:
+    parsed = parse_task_key(task_key)
+    if parsed is None:
+        return None
+    for si, di, ti, _stage, _day, task in iter_tasks(structure):
+        if (si, di, ti) == parsed:
+            return task
+    return None
 
-    done=None 表示取反 (前端只发切换意图时用)。
+
+def _validate_completion_source(task: dict, source_type: str) -> None:
+    allowed_actions = PLAN_TASK_SOURCE_ACTIONS.get(source_type)
+    if allowed_actions is None:
+        raise PlanTaskAttributionError("PLAN_TASK_SOURCE_INVALID")
+    action_type = str(task.get("action_type") or "tutor")
+    if action_type not in allowed_actions:
+        raise PlanTaskAttributionError("PLAN_TASK_ACTIVITY_MISMATCH")
+    if source_type == "manual_read" and not (task.get("resource_id") or task.get("resource")):
+        raise PlanTaskAttributionError("PLAN_TASK_READING_RESOURCE_REQUIRED")
+
+
+async def validate_plan_task_attribution(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    task_key: str,
+    source_type: str,
+) -> None:
+    """Validate an attribution without mutating the plan.
+
+    Both tenant and user ownership are checked even when RLS is enabled.  A
+    missing/foreign plan and a missing task intentionally share 404-style
+    codes so callers do not disclose another learner's plan structure.
     """
-    requested = None if done is None else ("done" if done else "pending")
-    new_structure, final = set_task_status(structure, task_key, requested)
-    return new_structure, final == "done"
+    plan = await session.scalar(
+        select(Plan).where(
+            Plan.id == plan_id,
+            Plan.tenant_id == tenant_id,
+            Plan.user_id == user_id,
+        )
+    )
+    if plan is None:
+        raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
+    task = _task_for_key(plan.structure_json, task_key)
+    if task is None:
+        raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
+    _validate_completion_source(task, source_type)
+
+
+async def complete_plan_task(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    task_key: str,
+    source_type: str,
+    source_id: str,
+    completed_at: datetime | None = None,
+) -> dict:
+    """Idempotently mark one owned task done with bounded completion evidence.
+
+    Only safe identifiers, the source kind and a server timestamp are written
+    to ``structure_json``.  The plan row is locked to avoid losing concurrent
+    task updates.
+    """
+    plan = await session.scalar(
+        select(Plan)
+        .where(
+            Plan.id == plan_id,
+            Plan.tenant_id == tenant_id,
+            Plan.user_id == user_id,
+        )
+        .with_for_update()
+    )
+    if plan is None:
+        raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
+    task = _task_for_key(plan.structure_json, task_key)
+    if task is None:
+        raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
+    _validate_completion_source(task, source_type)
+
+    previous = task.get("completion") if isinstance(task.get("completion"), dict) else None
+    if task_status(task) == "done" and previous:
+        return {
+            "task_key": task_key,
+            "status": "done",
+            "done": True,
+            "completed": True,
+            "changed": False,
+            "completion": previous,
+            "progress": plan_progress(plan.structure_json),
+        }
+
+    new_structure = copy.deepcopy(plan.structure_json or {})
+    target = _task_for_key(new_structure, task_key)
+    if target is None:  # Defensive: structure changed between copy and lookup.
+        raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
+    completion = {
+        "source_type": source_type,
+        "source_id": str(source_id)[:128],
+        "completed_at": (completed_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
+    }
+    target["status"] = "done"
+    target["done"] = True
+    target["completion"] = completion
+    plan.structure_json = new_structure
+    await session.flush()
+    return {
+        "task_key": task_key,
+        "status": "done",
+        "done": True,
+        "completed": True,
+        "changed": True,
+        "completion": completion,
+        "progress": plan_progress(new_structure),
+    }
 
 
 def _existing_kc_keys(structure: dict | None) -> set[str]:

@@ -4,7 +4,6 @@ import pytest
 from eduagents_api.plan_adjust import (
     enrich_structure,
     plan_progress,
-    set_task_done,
     set_task_status,
     task_status,
 )
@@ -66,8 +65,8 @@ def test_explicit_status_is_idempotent_and_does_not_mutate_input():
 
 
 def test_legacy_toggle_recovers_skipped_to_pending():
-    updated, done = set_task_done(_structure(), "stage0.day0.task2", None)
-    assert done is False
+    updated, status = set_task_status(_structure(), "stage0.day0.task2", None)
+    assert status == "pending"
     assert task_status(updated["stages"][0]["days"][0]["tasks"][2]) == "pending"
 
 

@@ -12,6 +12,7 @@ from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
+from ..plan_adjust import PlanTaskAttributionError, validate_plan_task_attribution
 from ..profile_summary import build_profile_context, weak_point_kcs
 from ..services import record_attempts
 from .threads import stream_graph_run
@@ -44,11 +45,19 @@ class QuizCreate(BaseModel):
     kc_names: list[str] = Field(default_factory=list)
     # 画像联动出题 (M4-D2): 由后端按掌握度自动填 kc_names, 不信任前端传的薄弱点
     from_weak_points: bool = False
+    plan_id: uuid.UUID | None = None
+    task_key: str | None = Field(default=None, max_length=96)
 
     @model_validator(mode="after")
     def _topic_required(self) -> QuizCreate:
         if not self.from_weak_points and not self.topic.strip():
             raise ValueError("topic 不能为空")
+        if (self.plan_id is None) != (self.task_key is None):
+            raise ValueError("plan_id 与 task_key 必须同时提供")
+        if self.task_key is not None:
+            self.task_key = self.task_key.strip()
+            if not self.task_key:
+                raise ValueError("task_key 不能为空")
         return self
 
 
@@ -76,6 +85,20 @@ async def create_quiz(
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
+    if body.plan_id is not None and body.task_key is not None:
+        async with tenant_session(ctx.tenant_id) as session:
+            try:
+                await validate_plan_task_attribution(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    plan_id=body.plan_id,
+                    task_key=body.task_key,
+                    source_type="quiz_attempt",
+                )
+            except PlanTaskAttributionError as exc:
+                status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
+                raise HTTPException(status_code=status, detail=exc.code) from None
     topic = body.topic.strip()
     kc_names = list(body.kc_names)
     difficulty_mix = dict(body.difficulty_mix)
@@ -142,6 +165,9 @@ async def create_quiz(
         "profile_summary": profile_summary,
         "difficulty_reasons": difficulty_reasons,
     }
+    if body.plan_id is not None and body.task_key is not None:
+        payload["plan_id"] = str(body.plan_id)
+        payload["task_key"] = body.task_key
     return await stream_graph_run(
         runtime, "quiz", thread_id, ctx, payload, trace_prelude=trace_prelude
     )
@@ -182,10 +208,12 @@ async def get_quiz(quiz_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limit
         questions = (
             await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
         ).all()
+        blueprint = dict(quiz.blueprint_json or {})
+        blueprint.pop("_plan_task_attribution", None)
         return {
             "id": str(quiz.id),
             "title": quiz.title,
-            "blueprint": quiz.blueprint_json,
+            "blueprint": blueprint,
             "questions": [
                 {
                     "id": str(q.id),

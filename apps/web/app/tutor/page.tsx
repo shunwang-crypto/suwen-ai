@@ -312,6 +312,8 @@ export default function TutorPage() {
   const prefilledProblem = urlParams.get("problem") ?? "";
   const sourceKbId = urlParams.get("kb") ?? "";
   const requestedDraftId = urlParams.get("draft") ?? "";
+  const planId = urlParams.get("plan_id") ?? "";
+  const taskKey = urlParams.get("task_key") ?? "";
   const [problem, setProblem] = useState("");
   const [problemTouched, setProblemTouched] = useState(false);
   const [sourceKb, setSourceKb] = useState<KbOut | null>(null);
@@ -471,6 +473,7 @@ export default function TutorPage() {
           message,
           thread_local_id: activeThreadId,
           tutor_draft_id: activeDraftId,
+          ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
         },
       });
       setThreadId(res.thread_local_id);

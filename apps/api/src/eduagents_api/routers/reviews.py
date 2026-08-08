@@ -44,6 +44,7 @@ from ..models import (
     Question,
     ResourceQuestion,
 )
+from ..plan_adjust import PlanTaskAttributionError, complete_plan_task
 
 log = get_logger("reviews")
 
@@ -64,6 +65,18 @@ _RETENTION_HORIZON = timedelta(days=3)
 
 class AnswerIn(BaseModel):
     response: str = Field(default="", max_length=8000)
+    plan_id: uuid.UUID | None = None
+    task_key: str | None = Field(default=None, max_length=96)
+
+    @model_validator(mode="after")
+    def _plan_attribution_pair(self) -> AnswerIn:
+        if (self.plan_id is None) != (self.task_key is None):
+            raise ValueError("plan_id 与 task_key 必须同时提供")
+        if self.task_key is not None:
+            self.task_key = self.task_key.strip()
+            if not self.task_key:
+                raise ValueError("task_key 不能为空")
+        return self
 
 
 class CauseIn(BaseModel):
@@ -250,6 +263,7 @@ async def answer_review(
     """复习作答: 判分 → FSRS review → 状态机推进 → BKT 同步。"""
     now_dt = await timectl.now(request.app.state.redis)
     request_id = getattr(request.state, "request_id", "")
+    plan_task_completion = None
     async with tenant_session(ctx.tenant_id) as session:
         item = await session.get(ErrorItem, error_item_id)
         if item is None or item.user_id != ctx.user_id:
@@ -271,6 +285,7 @@ async def answer_review(
             weight = _SHORT_ANSWER_WEIGHT
         # FSRS: 对=Good 错=Again; streak 计数随卡走 (fsrs_card_json 扩展键)
         old_card = dict(item.fsrs_card_json or {})
+        was_due = item.state in _ACTIVE_STATES and scheduler.is_due(old_card, now_dt)
         streak = int(old_card.get("streak", 0))
         new_card, next_due = scheduler.review(old_card, correct, now_dt)
         if correct:
@@ -299,6 +314,25 @@ async def answer_review(
         changes = await _update_mastery_review(
             session, ctx, kc_ids, correct, weight, item.id, now_dt
         )
+        if body.plan_id is not None and body.task_key is not None and was_due:
+            try:
+                plan_task_completion = await complete_plan_task(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    plan_id=body.plan_id,
+                    task_key=body.task_key,
+                    source_type="review_answer",
+                    source_id=str(item.id),
+                    completed_at=now_dt,
+                )
+            except PlanTaskAttributionError as exc:
+                log.warning(
+                    "review_plan_task_completion_failed",
+                    error_item_id=str(item.id),
+                    code=exc.code,
+                )
+                plan_task_completion = {"completed": False, "error_code": exc.code}
     return {
         "correct": correct,
         "state": state,
@@ -307,6 +341,7 @@ async def answer_review(
         "answer": question.answer,
         "explanation": question.explanation,
         "mastery_changes": changes,
+        "plan_task_completion": plan_task_completion,
     }
 
 

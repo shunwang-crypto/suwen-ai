@@ -20,24 +20,30 @@ export interface TodayItem {
   href: string;
 }
 
-export function taskExecutionHref(task: PlanTask, kbId?: string | null): string {
+function attributionQuery(task: PlanTask, planId?: string | null): string {
+  if (!planId || !task.task_key) return "";
+  return `&plan_id=${encodeURIComponent(planId)}&task_key=${encodeURIComponent(task.task_key)}`;
+}
+
+export function taskExecutionHref(task: PlanTask, kbId?: string | null, planId?: string | null): string {
   const topic = task.kc_names?.[0] || task.title;
   const kb = kbId ? `&kb=${encodeURIComponent(kbId)}` : "";
   const count = task.practice_count && task.practice_count >= 1 && task.practice_count <= 20 ? task.practice_count : 3;
   const difficultyValue = task.difficulty && ["easy", "mid", "hard"].includes(task.difficulty) ? task.difficulty : "mid";
   const difficulty = `&difficulty=${encodeURIComponent(difficultyValue)}`;
+  const attribution = attributionQuery(task, planId);
   switch (task.action_type) {
     case "practice":
-      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
+      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}${attribution}`;
     case "read":
       return task.resource?.url || (task.resource?.kb_id || kbId ? `/kb?kb=${encodeURIComponent(task.resource?.kb_id || kbId || "")}` : `/tutor?problem=${encodeURIComponent(task.objective || task.title)}`);
     case "review_errors":
-      return kbId ? `/errors?kb_id=${encodeURIComponent(kbId)}` : "/errors";
+      return attribution ? `/reviews?${attribution.slice(1)}` : "/reviews";
     case "mixed":
-      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}`;
+      return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}${attribution}`;
     case "tutor":
     default:
-      return `/tutor?problem=${encodeURIComponent(task.objective || task.title)}${kb}`;
+      return `/tutor?problem=${encodeURIComponent(task.objective || task.title)}${kb}${attribution}`;
   }
 }
 
@@ -53,6 +59,7 @@ export function buildTodayItems(
   schedule: PlanSchedule | undefined,
   reviews: ReviewItem[],
   planKbId?: string | null,
+  planId?: string | null,
 ): TodayItemsResult {
   const todayKeys = new Set(schedule?.today_tasks ?? []);
   const overdueKeys = new Set(schedule?.overdue_tasks ?? []);
@@ -87,7 +94,7 @@ export function buildTodayItems(
         dueLabel: isOverdue ? "逾期" : "计划今日",
         done: Boolean(task.done),
         task,
-        href: taskExecutionHref(task, planKbId),
+        href: taskExecutionHref(task, planKbId, planId),
       };
     });
   const completed = [...tasks].reverse().find((task) => task.done);
@@ -100,7 +107,7 @@ export function buildTodayItems(
     priority: "normal",
     done: true,
     task: completed,
-    href: taskExecutionHref(completed, planKbId),
+    href: taskExecutionHref(completed, planKbId, planId),
   }] : [];
 
   return { todayTasks, overdueTasks, nextTask, todos: [...reviewItems, ...planItems, ...completedItem] };
