@@ -284,12 +284,6 @@ class MessageOut(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
-class ErrorEnvelope(BaseModel):
-    code: str
-    message: str
-    request_id: str
-
-
 class KbCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     subject: str = Field(default="general", max_length=64)

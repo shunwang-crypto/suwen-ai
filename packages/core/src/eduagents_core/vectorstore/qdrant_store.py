@@ -129,6 +129,54 @@ class QdrantStore:
 
     # --- read path ---
 
+    async def count_by_kb(self, tenant_id: str, kb_id: str) -> int:
+        """该 kb 已落库的点数 (对账用, 精确计数)。
+
+        collection 尚未创建时返回 0 而不是抛错: 全新环境对账应报"两侧都空",
+        不该被当成基础设施故障。
+        """
+        return await asyncio.to_thread(self._count_sync, tenant_id, kb_id)
+
+    def _count_sync(self, tenant_id: str, kb_id: str) -> int:
+        if not self._client.collection_exists(self._collection):
+            return 0
+        result = self._client.count(
+            self._collection,
+            count_filter=self._filter(tenant_id=tenant_id, kb_id=kb_id),
+            exact=True,
+        )
+        return int(result.count)
+
+    async def scan_kb_ids(self) -> dict[tuple[str, str], int]:
+        """全库 (tenant_id, kb_id) -> 点数。**仅供管理员对账**, 是本类唯一不带租户过滤
+        的读路径 (§14 的显式例外)。
+
+        只取 tenant_id/kb_id 两个 payload 键, 不取 text/向量 —— 对账要回答的是
+        "有没有、有多少", 不需要看内容。用途是发现 PG 侧已删除但 Qdrant 仍留存的
+        孤儿向量 (知识库删除后未清理会同时造成存储浪费与数据删除不完整)。
+        """
+        return await asyncio.to_thread(self._scan_kb_ids_sync)
+
+    def _scan_kb_ids_sync(self) -> dict[tuple[str, str], int]:
+        if not self._client.collection_exists(self._collection):
+            return {}
+        counts: dict[tuple[str, str], int] = {}
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                self._collection,
+                limit=1000,
+                offset=offset,
+                with_payload=["tenant_id", "kb_id"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                key = (str(payload.get("tenant_id")), str(payload.get("kb_id")))
+                counts[key] = counts.get(key, 0) + 1
+            if offset is None:
+                return counts
+
     async def search_dense(
         self,
         tenant_id: str | list[str],

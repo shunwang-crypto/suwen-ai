@@ -108,14 +108,6 @@ def get_redis(request: Request):
     return request.app.state.redis
 
 
-def get_gateway(request: Request):
-    return request.app.state.gateway
-
-
-def get_rate_limiter(request: Request):
-    return request.app.state.rate_limiter
-
-
 async def current_user(
     request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),

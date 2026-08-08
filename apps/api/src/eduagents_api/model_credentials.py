@@ -14,7 +14,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -214,7 +214,3 @@ def public_credential(row: UserModelCredential | None) -> dict:
         "last_validation_status": row.last_validation_status,
         "last_error_code": row.last_error_code,
     }
-
-
-def validation_now() -> datetime:
-    return datetime.now(UTC)

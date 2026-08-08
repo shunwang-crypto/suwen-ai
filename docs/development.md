@@ -201,6 +201,43 @@ git diff --check
 | 页面 API 认证异常 | 使用 `127.0.0.1` 保持同源代理和 cookie 口径一致 |
 | stub 输出被误认为真实模型 | 检查 `.env` 的 `GATEWAY_MODE` 和页面环境提示 |
 | 对象删除失败 | 查看 pending cleanup、对象存储连接和相关重试状态，不手工删数据库掩盖问题 |
+| 知识库能问但检索永远 0 命中 | 向量库与 PG 脱节，跑 `python scripts/check_vector_drift.py`（见下） |
+
+### 向量库对账
+
+`/api/health/ready` 的 qdrant 探针只验连通性，不看数据。若 Qdrant 丢过数据或被重建，
+PG 侧仍标着 `embedding_status='done'`，检索会静默返回 0 命中并降级到 web 兜底——
+表面正常，RAG 已失效。对账把两侧差异显式化：
+
+~~~bash
+python scripts/check_vector_drift.py            # 全量，只列有问题的库
+python scripts/check_vector_drift.py --all      # 连一致的库一起列
+python scripts/check_vector_drift.py --kb <id>  # 只看一个库
+python scripts/check_vector_drift.py --json     # 机器可读，供 cron/告警接管
+~~~
+
+退出码：`0` 一致、`1` 存在漂移、`2` 对账本身出错，可直接挂 cron 或 CI。
+管理员亦可走 `GET /api/admin/vector-reconcile`（`?kb_id=` 单库、`?include_all=true` 全量）。
+
+两个方向都查，含义不同：
+
+- **`missing_vectors`**（PG 有 / Qdrant 无）：该库检索已失效，需重新摄取文档才能恢复。
+- **`orphan_points`**（Qdrant 有 / PG 无）：删除未清理干净。点的 payload 含文档原文，
+  知识库删除或账号注销后仍留存属于数据删除不完整，不只是存储浪费。
+
+两侧均为只读，不会自动修改数据。
+
+清理孤儿向量（`missing_vectors` 不适用，那要重新摄取原文档）：
+
+~~~bash
+python scripts/purge_orphan_vectors.py             # 预演，只打印将删什么
+python scripts/purge_orphan_vectors.py --execute   # 真删，删后自动复核
+python scripts/purge_orphan_vectors.py --execute --kb <id>
+~~~
+
+默认 dry-run，删除必须显式 `--execute`。只删 PG 中已无对应 `knowledge_bases` 行的
+kb_id，现存库一律不碰（哪怕它有漂移）。删除按 `(tenant_id, kb_id)` 过滤下发，不做
+无租户删除。**不可逆**：向量重建需要原始文件重新摄取。对账报错时拒绝执行删除。
 
 ## 变更完成清单
 

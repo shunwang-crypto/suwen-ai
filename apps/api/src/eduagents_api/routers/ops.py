@@ -10,12 +10,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from eduagents_core.config import get_settings
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import Date, cast, func, select, text
 
 from ..db import tenant_session
 from ..deps import AuthContext, require_admin
 from ..models import UsageLog
+from ..vector_reconcile import reconcile_vectors
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -216,3 +217,23 @@ async def usage_latency(
             for feature, calls, p50, p95 in rows
         ],
     }
+
+
+@router.get("/vector-reconcile")
+async def vector_reconcile(
+    request: Request,
+    kb_id: str | None = Query(default=None, description="只对账单个知识库"),
+    include_all: bool = Query(default=False, description="连健康的库一起返回"),
+    ctx: AuthContext = Depends(require_admin),
+):
+    """PG chunks(done) 与 Qdrant 点数对账。只读诊断, 不写任何一侧。
+
+    ready 探针只测 Qdrant 连通性, 数据丢失时 RAG 会静默降级而无告警; 这里把差异显式
+    暴露出来。``missing_vectors`` > 0 意味着有子块标了 done 却检索不到。
+    """
+    retrieval = getattr(request.app.state, "retrieval", None)
+    store = getattr(retrieval, "_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="retrieval_stack_unavailable")
+    report = await reconcile_vectors(store, ctx.tenant_id, kb_id=kb_id)
+    return report.as_dict(include_all=include_all)

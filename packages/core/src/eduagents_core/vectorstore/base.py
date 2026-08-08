@@ -36,6 +36,10 @@ class VectorStore(Protocol):
 
     async def delete_by_kb(self, tenant_id: str, kb_id: str) -> None: ...
 
+    async def count_by_kb(self, tenant_id: str, kb_id: str) -> int: ...
+
+    async def scan_kb_ids(self) -> dict[tuple[str, str], int]: ...
+
     async def search_dense(
         self,
         tenant_id: str | list[str],

@@ -1240,15 +1240,6 @@ export interface EvalImportResponse {
   items: EvalImportItem[];
 }
 
-export interface EvalRunRequest {
-  kb_id: string;
-  tenant_id?: string;
-  golden?: string;
-  no_sparse?: boolean;
-  no_rerank?: boolean;
-  label?: string;
-}
-
 export interface EvalRunJobStart {
   job_id: string;
   status: string;

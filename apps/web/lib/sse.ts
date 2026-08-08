@@ -28,8 +28,6 @@ export const SSE_EVENT_NAMES = [
   "error",
 ] as const;
 
-export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
-
 /** 软超时（P2-18）：连续 N 毫秒收不到任何服务端事件时，产出一条客户端合成的
  *  `stall` 事件（非契约事件，服务端永远不会发），随后继续等待。上游恢复推送后
  *  正常事件继续产出。默认 45 秒。 */
@@ -39,10 +37,6 @@ export interface StreamSseOptions {
   signal?: AbortSignal;
   /** 无事件软超时毫秒数；<=0 关闭。默认 45000。 */
   idleTimeoutMs?: number;
-}
-
-export interface StallEventData {
-  idle_ms: number;
 }
 
 function parseBlock(block: string): SseMessage | null {

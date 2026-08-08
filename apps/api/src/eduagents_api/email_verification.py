@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from eduagents_core.config import Settings
 
 from .email_utils import normalize_email
 
-CODE_LENGTH = 6
 EMAIL_CODE_KEY_PREFIX = "email_verify:code:"
 EMAIL_CODE_COOLDOWN_PREFIX = "email_verify:cooldown:"
 EMAIL_CODE_DAILY_EMAIL_PREFIX = "email_verify:daily:email:"
@@ -90,7 +89,3 @@ async def consume_email_code(redis, email: str, code: str, settings: Settings) -
         settings.email_code_max_attempts,
     )
     return int(result) == 1
-
-
-def code_expiry(settings: Settings) -> datetime:
-    return datetime.now(UTC) + timedelta(seconds=settings.email_code_ttl_seconds)

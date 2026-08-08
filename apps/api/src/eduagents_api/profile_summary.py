@@ -92,7 +92,6 @@ ROLE_SECTIONS: dict[str, tuple[str, ...]] = {
     "tutor": ("weak", "errors", "prefs"),
     "plan": ("weak", "errors", "prefs"),
 }
-PROFILE_ROLES = tuple(ROLE_SECTIONS)
 
 
 @dataclass(frozen=True)
@@ -353,22 +352,6 @@ async def build_profile_context(
         except Exception:  # noqa: BLE001
             log.warning("profile_summary_cache_put_failed", user_id=str(user_id))
     return ctx
-
-
-async def build_profile_summary(
-    tenant_id: uuid.UUID | str,
-    user_id: uuid.UUID | str,
-    kb_ids=(),
-    redis=None,
-    role: str = "qa",
-) -> str:
-    """画像摘要文本 (≤300 字, 已脱敏为抽象标签级 — 理由见模块 docstring, P2-7);
-    无数据返回空串。结构化字段见 build_profile_context (weak_points 仅 KC 名列表)。"""
-    return (
-        await build_profile_context(
-            tenant_id, user_id, kb_ids, redis=redis, role=role
-        )
-    ).summary
 
 
 # 难度档中文名 (与 apps/web 蓝图卡 DIFFICULTY_OPTIONS 同源)

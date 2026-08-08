@@ -26,7 +26,6 @@ RESOURCE_TYPES = (
     "single_question",
     "other",
 )
-RESOURCE_STATUSES = ("uploaded", "extracting", "reviewing", "ready", "failed", "archived")
 QUESTION_SOURCE_SUFFIXES = {".pdf", ".docx", ".pptx", ".md", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
 SOURCE_MIMES = {
     ".pdf": "application/pdf",

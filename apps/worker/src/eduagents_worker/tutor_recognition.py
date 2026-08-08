@@ -57,13 +57,6 @@ def _tutor_page_request_id(
     return f"{prefix}{digest[: 64 - len(prefix)]}"
 
 
-def _payload_questions(text: str) -> list[dict]:
-    payload = parse_json_payload(text)
-    if isinstance(payload, dict):
-        payload = payload.get("questions") or []
-    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-
-
 def _parse_question_response(text: str) -> tuple[list[dict], bool]:
     raw_text = text.strip()
     if raw_text.startswith("```"):

@@ -29,7 +29,6 @@ from ..services import _update_mastery
 router = APIRouter(prefix="/api/assessment-attempts", tags=["assessment-attempts"])
 
 _ATTEMPT_TYPES = {"formal_exam", "mock_exam", "homework", "practice", "imported_record"}
-_ATTEMPT_STATUSES = {"draft", "submitted", "graded"}
 
 
 def _attempt_type_for_resource(resource_type: str) -> str:

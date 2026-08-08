@@ -49,9 +49,6 @@ log = get_logger("wallet")
 # NUMERIC(12,4) 同精度量化 (半进位)
 _Q4 = Decimal("0.0001")
 
-LEDGER_KINDS = ("signup_grant", "consume", "recharge", "refund", "admin_adjust")
-
-
 def q4(value: Decimal) -> Decimal:
     """量化到 0.0001 (与 NUMERIC(12,4) 同精度), 半进位。"""
     return value.quantize(_Q4, rounding=ROUND_HALF_UP)

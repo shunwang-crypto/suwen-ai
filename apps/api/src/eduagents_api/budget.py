@@ -41,8 +41,6 @@ log = get_logger("budget")
 CN_TZ = ZoneInfo("Asia/Shanghai")
 MICRO_PER_CNY = 1000.0  # 厘
 KEY_TTL_SECONDS = 48 * 3600
-SOFT_RATIO = 0.8
-GLOBAL_HARD_RATIO = 1.5  # 全局 150%: 全档熔断 (含 admin)
 
 # P1-12: 按档位定额预扣 (元)。settle 时以实际成本差额返还/补记。
 RESERVE_CNY_PER_TIER: dict[str, float] = {

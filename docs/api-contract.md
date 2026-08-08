@@ -77,12 +77,21 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 |---|---|---|
 | GET | /api/admin/users?query=...&limit=... | 仅管理员；邮箱精确优先并支持安全前缀查询；query 至少 3 个字符；仅返回用户身份、角色、状态、注册时间和字符串额度余额 |
 | POST | /api/admin/users/{user_id}/wallet-adjust | 仅管理员；`{delta, note, reference}`；delta 必须是字符串、非零、-1000 至 1000 且最多 4 位小数；同一用户同一 reference 重试返回原结果，若参数不同返回 `409 WALLET_ADJUST_REFERENCE_CONFLICT` |
+| GET | /api/admin/vector-reconcile?kb_id=...&include_all=... | 仅管理员；PG `chunks(done)` 与 Qdrant 点数对账，只读不修改两侧；检索栈不可用时 `503 retrieval_stack_unavailable` |
 
 调额使用 Decimal，并在同一个数据库事务内锁定钱包账户、写入 `admin_adjust` 流水和更新余额。
 `(user_id, ref)` 的条件唯一索引由 0015 migration 提供，保证并发请求最多一次真正入账。
 管理员审计日志记录执行人、目标用户、金额和业务凭证；搜索日志只记录 query 哈希。
 
 无 `query` 时 `/api/admin/users` 返回 `{items,page,page_size,total,has_more}`，默认按注册时间倒序、每页 20；`query` 参数保留旧数组响应以兼容已有运营客户端。`GET /api/admin/users/{user_id}` 返回聚合详情和脱敏的 BYOK 状态（provider、启用状态、后四位、模型名），绝不返回密码、token、密文或 nonce。所有管理员端点要求 `admin` 角色。
+
+`/api/admin/vector-reconcile` 返回
+`{status, kb_total, kb_drifted, kb_orphaned, missing_vectors, orphan_points, items, orphans, errors}`。
+`status` 为 `ok` / `drift` / `error`。`missing_vectors` 是 PG 标 `done` 但 Qdrant 查不到的块数——
+该库检索已静默失效，需重新摄取；`orphan_points` 是 Qdrant 有而 PG 无的点数，属删除不完整
+（payload 含文档原文）。默认只返回有问题的库，`include_all=true` 才带上一致的。单库查询
+（带 `kb_id`）不做反向扫描，因此不报 orphans。单个库出错记入 `errors` 而不中断整体扫描。
+
 
 ### 用户自带 DeepSeek 模型（0017）
 
