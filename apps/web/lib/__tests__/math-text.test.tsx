@@ -34,6 +34,16 @@ describe("MathText formula rendering across non-Markdown screens", () => {
     expect(formulaWrapper).toHaveClass("max-w-full", "overflow-x-auto");
   });
 
+  it("never clips the vertical axis of inline formulas", () => {
+    // overflow-x:auto 会让浏览器把同元素上的 overflow-y:hidden 也按 auto 处理,
+    // 形成裁剪盒并从顶部切掉上标 (x² 的 2 曾因此消失)。纵轴必须保持 visible。
+    const { container } = render(<MathText text={"求 $x^2$ 的导数"} />);
+    const formulaWrapper = container.querySelector(".katex")?.parentElement;
+
+    expect(formulaWrapper).toHaveClass("overflow-y-visible");
+    expect(formulaWrapper?.className).not.toContain("overflow-y-hidden");
+  });
+
   it("renders a bare TeX suffix after a Chinese label", () => {
     const { container } = render(
       <MathText text={"选项：\\sum_{n=1}^{\\infty} \\frac{1}{n^2}"} />,

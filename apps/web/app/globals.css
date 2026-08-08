@@ -348,19 +348,26 @@ select:focus-visible {
   scrollbar-color: #c9c9c4 transparent;
 }
 
-/* KaTeX 块级公式在窄屏下允许横向滚动，避免破版 */
+/* KaTeX 块级公式在窄屏下允许横向滚动，避免破版。
+   注意不要写 overflow-y: hidden —— overflow-x:auto 会让浏览器把另一轴的
+   hidden 也当作 auto 处理（两轴不能一个 visible 一个 scroll），形成裁剪盒，
+   把上标/根号/分数撑到行框之外的部分（如 x² 的 2）从顶部切掉。
+   留 overflow-y: visible + 纵向 padding 给 ascender/descender 让位。 */
 .katex-display {
-  margin: 0.25rem 0;
+  margin: 0.75rem 0;
+  padding: 0.35em 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
 }
 
-/* Markdown 行内公式也可能很长；限制在正文宽度内，窄屏局部滚动而非撑宽 body。 */
+/* Markdown 行内公式也可能很长；限制在正文宽度内，窄屏局部滚动而非撑宽 body。
+   同样不设 overflow-y: hidden（理由见上）；行内公式的上下标全靠这里不被裁剪。 */
 .markdown-answer .katex {
   display: inline-block;
   max-width: 100%;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
+  padding: 0.15em 0;
   vertical-align: middle;
 }
 

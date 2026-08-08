@@ -694,13 +694,16 @@ export function MathText({
         return seg.display ? (
           <span
             key={key}
-            className="block overflow-x-auto py-1"
+            className="block overflow-x-auto py-1.5"
             dangerouslySetInnerHTML={{ __html: html }}
           />
         ) : (
+          // 不能加 overflow-y-hidden: overflow-x:auto 会让浏览器把另一轴的 hidden
+          // 也按 auto 处理 (两轴不允许一个 visible 一个 scroll), 形成裁剪盒, 把上标
+          // 撑出行框的部分 (如 x² 的 2) 从顶部切掉。留 visible + py 给 ascender 让位。
           <span
             key={key}
-            className="inline-block max-w-full overflow-x-auto overflow-y-hidden align-middle"
+            className="inline-block max-w-full overflow-x-auto overflow-y-visible py-0.5 align-middle"
             dangerouslySetInnerHTML={{ __html: html }}
           />
         );
