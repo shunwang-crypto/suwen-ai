@@ -315,6 +315,24 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
 
     async def query_plan(state: _QaGraphState) -> dict:
         query = state.get("query", "")
+        # UI 的“极速”是显式延迟策略，而非下方由检索置信度决定的 fast_path。
+        # 这里只短路首轮多查询 LLM 规划；retrieve 后的 grade 置信度门控、rewrite
+        # 自省环和生成后的 verify 均保持不变。
+        response_mode = state.get("response_mode")
+        if response_mode == "fast" and state.get("route") == "kb":
+            return {
+                "queries": [query],
+                "trace": [
+                    {
+                        "type": "query_plan",
+                        "queries": [query],
+                        "degraded": False,
+                        "skipped": True,
+                        "mode": "fast",
+                        "reason": "fast_kb_original_query",
+                    }
+                ],
+            }
         prompt = _load_prompt("qa_query_plan.md").replace("{{QUERY}}", query)
         data = await _chat_json(state, feature="qa_query_plan", prompt=prompt)
         queries = [query]

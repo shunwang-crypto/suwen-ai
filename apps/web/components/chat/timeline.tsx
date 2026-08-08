@@ -12,6 +12,9 @@ export type TimelineItem =
   | { kind: "trace"; data: TraceEventData };
 
 const NODE_LABELS: Record<string, string> = {
+  cache: "缓存匹配",
+  cache_lookup: "缓存匹配",
+  query_plan: "整理问题",
   retrieve: "检索",
   retrieval: "检索",
   rerank: "重排",
@@ -22,6 +25,9 @@ const NODE_LABELS: Record<string, string> = {
   reflection: "自省",
   rewrite: "改写",
   grade: "评估",
+  verify: "核验依据",
+  verify_support: "核验依据",
+  followups: "整理追问",
   sanitize: "注入过滤",
 };
 
@@ -38,10 +44,18 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const TRACE_LABELS: Record<string, string> = {
+  cache: "缓存匹配",
+  cache_lookup: "缓存匹配",
   router: "路由决策",
+  query_plan: "整理问题",
   retrieval: "检索",
   retrieve: "检索",
   rerank: "融合重排",
+  grade: "资料评估",
+  generate: "生成回答",
+  verify: "依据核验",
+  verify_support: "依据核验",
+  followups: "整理追问",
   reflection: "自省",
   reflect: "自省",
   sanitizer: "注入过滤",
@@ -53,6 +67,22 @@ const TRACE_LABELS: Record<string, string> = {
 
 /** 已知 trace 事件的一句话描述；未知类型回退到 reason 字段。 */
 function traceDetail(data: TraceEventData): string | null {
+  if (data.type === "cache" || data.type === "cache_lookup") {
+    const source = typeof data.source === "string" ? data.source.toUpperCase() : "";
+    return source ? `已命中 ${source} 缓存` : "已完成缓存匹配";
+  }
+  if (data.type === "query_plan") {
+    const count = Array.isArray(data.queries) ? data.queries.length : 0;
+    return count > 0 ? `已整理 ${count} 个检索问题` : "已整理检索问题";
+  }
+  if (data.type === "retrieval" || data.type === "retrieve") {
+    const returned = Number(data.returned);
+    return Number.isFinite(returned) ? `已找到 ${returned} 条相关资料` : "已完成资料检索";
+  }
+  if (data.type === "generate") return "已生成回答";
+  if (data.type === "verify" || data.type === "verify_support") {
+    return data.supported === false ? "部分内容需要进一步核验" : "已核验回答依据";
+  }
   if (data.type === "profile") {
     const raw = Array.isArray(data.weak_points) ? data.weak_points : [];
     const names = raw.filter((x): x is string => typeof x === "string");
@@ -65,6 +95,9 @@ function traceDetail(data: TraceEventData): string | null {
 
 /* 各阶段 16px 内联小图标（路由/检索/自评/生成 + 相邻别名），纯视觉 */
 const STAGE_ICON_PATHS: Record<string, string> = {
+  // 缓存匹配：闪电
+  cache: "m13 2-9 12h7l-1 8 9-12h-7l1-8Z",
+  cache_lookup: "m13 2-9 12h7l-1 8 9-12h-7l1-8Z",
   // 路由：交叉换轨
   router: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
   route: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
@@ -86,10 +119,14 @@ const STAGE_ICON_PATHS: Record<string, string> = {
     "m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z",
   // 改写：钢笔
   rewrite: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z",
+  query_plan: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z",
   // 学情画像：用户
   profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0",
   web_query_plan: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
   web_search: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
+  verify: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  verify_support: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
+  followups: "m8 10 4-4 4 4m-4-4v12M5 21h14",
 };
 
 function stageIcon(kind: string, className: string) {
@@ -205,7 +242,7 @@ function TimelineRow({ item }: { item: TimelineItem }) {
               className={`ml-1.5 ${
                 status === "error" || status === "failed"
                   ? "text-red-600"
-                  : status === "running"
+                  : status === "running" || status === "pending"
                     ? "text-indigo-600"
                     : "text-emerald-600"
               }`}
@@ -214,7 +251,10 @@ function TimelineRow({ item }: { item: TimelineItem }) {
             </span>
           </p>
           {detail && <p className="text-xs text-slate-500">{detail}</p>}
-          <ExtraFields data={item.data} known={["node", "status", "detail"]} />
+          <ExtraFields
+            data={item.data}
+            known={["node", "status", "detail", "synthetic"]}
+          />
         </div>
       </li>
     );
@@ -261,22 +301,39 @@ function TimelineRow({ item }: { item: TimelineItem }) {
 export function ProcessTimeline({
   items,
   streaming,
+  answerStarted = false,
 }: {
   items: TimelineItem[];
   streaming: boolean;
+  answerStarted?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   if (items.length === 0) return null;
 
   const last = items[items.length - 1];
-  const summary =
+  const lastStage = last.kind === "node" ? last.data.node : last.data.type;
+  const lastLabel =
     last.kind === "node"
-      ? `${NODE_LABELS[last.data.node] ?? last.data.node}${
-          last.data.detail ? `：${last.data.detail}` : ""
-        }`
-      : `${TRACE_LABELS[last.data.type] ?? last.data.type}${
-          traceDetail(last.data) ? `：${traceDetail(last.data)}` : ""
-        }`;
+      ? NODE_LABELS[last.data.node] ?? last.data.node
+      : TRACE_LABELS[last.data.type] ?? last.data.type;
+  const lastDetail =
+    last.kind === "node" ? last.data.detail : traceDetail(last.data);
+  let summary = `${lastLabel}${lastDetail ? `：${lastDetail}` : ""}`;
+  if (streaming && answerStarted) {
+    summary = "正在生成回答…";
+  } else if (streaming && ["router", "route", "query_plan"].includes(lastStage)) {
+    summary = "正在检索资料…";
+  } else if (
+    streaming &&
+    ["retrieve", "retrieval", "rerank", "grade"].includes(lastStage)
+  ) {
+    summary = "资料已就绪，正在生成回答…";
+  } else if (
+    streaming &&
+    ["generate", "verify", "verify_support"].includes(lastStage)
+  ) {
+    summary = "回答已生成，正在核验依据…";
+  }
 
   return (
     <div className="mb-2 overflow-hidden rounded-lg border border-slate-200 bg-slate-50/80">
@@ -284,6 +341,7 @@ export function ProcessTimeline({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+        aria-expanded={open}
       >
         {streaming ? (
           <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />

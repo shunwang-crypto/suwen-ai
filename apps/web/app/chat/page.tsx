@@ -21,7 +21,10 @@ import { ContextDrawer } from "@/components/chat/context-drawer";
 import { MarkdownAnswer } from "@/components/chat/markdown-answer";
 import { OpeningCard } from "@/components/chat/opening-card";
 import { SessionList } from "@/components/chat/session-list";
-import type { TimelineItem } from "@/components/chat/timeline";
+import {
+  ProcessTimeline,
+  type TimelineItem,
+} from "@/components/chat/timeline";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
@@ -779,11 +782,28 @@ function ChatView() {
         chatMode,
       };
       const asstId = genId();
+      const initialTimeline: TimelineItem[] =
+        kbIds.length > 0 && (chatMode === "fast" || chatMode === "think")
+          ? [
+              {
+                kind: "node",
+                data: {
+                  node: chatMode === "fast" ? "cache_lookup" : "retrieve",
+                  status: chatMode === "fast" ? "running" : "pending",
+                  detail:
+                    chatMode === "fast"
+                      ? "正在匹配可复用回答"
+                      : "正在准备检索资料",
+                  synthetic: true,
+                },
+              },
+            ]
+          : [];
       const asstMsg: ChatMsg = {
         id: asstId,
         role: "assistant",
         content: "",
-        timeline: [],
+        timeline: initialTimeline,
         citations: [],
         streaming: true,
         attempt: 0,
@@ -853,7 +873,12 @@ function ChatView() {
               const d = msg.data as NodeUpdateData;
               patchMsg(asstId, (m) => ({
                 ...m,
-                timeline: [...m.timeline, { kind: "node", data: d }],
+                timeline: [
+                  ...m.timeline.filter(
+                    (item) => item.kind !== "node" || item.data.synthetic !== true,
+                  ),
+                  { kind: "node", data: d },
+                ],
               }));
               break;
             }
@@ -861,7 +886,12 @@ function ChatView() {
               const d = msg.data as TraceEventData;
               patchMsg(asstId, (m) => ({
                 ...m,
-                timeline: [...m.timeline, { kind: "trace", data: d }],
+                timeline: [
+                  ...m.timeline.filter(
+                    (item) => item.kind !== "node" || item.data.synthetic !== true,
+                  ),
+                  { kind: "trace", data: d },
+                ],
               }));
               break;
             }
@@ -961,7 +991,13 @@ function ChatView() {
         }
       } finally {
         if (viewEpochRef.current === runEpoch) {
-          patchMsg(asstId, (m) => ({ ...m, streaming: false }));
+          patchMsg(asstId, (m) => ({
+            ...m,
+            timeline: m.timeline.filter(
+              (item) => item.kind !== "node" || item.data.synthetic !== true,
+            ),
+            streaming: false,
+          }));
           setStreaming(false);
           setActiveRunId(null);
         }
@@ -1354,6 +1390,16 @@ function ChatView() {
                         </div>
                       )}
 
+                      {(m.chatMode === "fast" ||
+                        m.chatMode === "think" ||
+                        m.streaming) && (
+                        <ProcessTimeline
+                          items={m.timeline}
+                          streaming={Boolean(m.streaming)}
+                          answerStarted={Boolean(m.content)}
+                        />
+                      )}
+
                       {(m.content || m.streaming) && (
                         <div
                           className={`text-sm leading-[1.75] text-slate-800 ${
@@ -1379,7 +1425,7 @@ function ChatView() {
                                 <span className="fx-caret" aria-hidden />
                               )}
                             </>
-                          ) : (
+                          ) : m.timeline.length === 0 ? (
                             <span className="inline-flex items-center gap-2 text-slate-400">
                               {/* 首 token 前的「正在思考」三点跳动指示器 */}
                               <span className="fx-typing" aria-hidden>
@@ -1389,7 +1435,7 @@ function ChatView() {
                               </span>
                               正在思考…
                             </span>
-                          )}
+                          ) : null}
                         </div>
                       )}
 

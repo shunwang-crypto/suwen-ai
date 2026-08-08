@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult, StreamDelta, Tier
 from eduagents_core.graphs.qa_graph import (
@@ -384,6 +385,65 @@ async def test_fast_path_confident_skips_grade():
     retr_ev = [e for e in out["trace"] if e["type"] == "retrieval"][0]
     assert retr_ev["fast_path"] is True
     assert out["answer"] == "快路径回答 [1]"
+
+
+async def test_explicit_fast_kb_skips_query_plan_but_keeps_safety_gates():
+    """UI 极速档只省掉首轮规划；低置信时 grade 与生成后 verify 仍必须执行。"""
+    gw = FakeGateway(
+        {
+            "qa_grade": [grades(True, True)],
+            "qa_generate": ["极速档回答 [1]"],
+            "qa_verify_support": [json.dumps({"supported": True, "unsupported_claims": []})],
+            "qa_followups": followups_script(),
+        }
+    )
+    retrieval = FakeRetrieval([rr([chunk("c1"), chunk("c2")], confident=False)])
+    state = init_state("什么是导数", kb_id="kb1")
+    state["response_mode"] = "fast"
+
+    # 模拟 checkpointer/API 边界的 JSON 往返，确保模式字段可序列化且不丢失。
+    out = await run(make_deps(gw, retrieval=retrieval), json.loads(json.dumps(state)))
+
+    assert out["response_mode"] == "fast"
+    assert gw.calls("qa_query_plan") == []
+    assert retrieval.calls == [("t1", "kb1", "什么是导数")]
+    assert len(gw.calls("qa_grade")) == 1
+    assert len(gw.calls("qa_verify_support")) == 1
+    plan_ev = [e for e in out["trace"] if e["type"] == "query_plan"][0]
+    assert plan_ev == {
+        "type": "query_plan",
+        "queries": ["什么是导数"],
+        "degraded": False,
+        "skipped": True,
+        "mode": "fast",
+        "reason": "fast_kb_original_query",
+    }
+    assert out["answer"] == "极速档回答 [1]"
+
+
+@pytest.mark.parametrize("response_mode", ["think", "research"])
+async def test_non_fast_kb_keeps_multi_query_plan(response_mode: str):
+    """think/research 与旧无字段请求继续走原多查询规划链路。"""
+    gw = FakeGateway(
+        {
+            **kb_happy_scripts(),
+            "qa_query_plan": [json.dumps({"queries": ["什么是导数", "导数定义"]})],
+        }
+    )
+    retrieval = FakeRetrieval(
+        [
+            rr([chunk("c1"), chunk("c2")]),
+            rr([chunk("c1"), chunk("c2")]),
+        ]
+    )
+    state = init_state("什么是导数", kb_id="kb1")
+    state["response_mode"] = response_mode
+    out = await run(make_deps(gw, retrieval=retrieval), state)
+
+    assert len(gw.calls("qa_query_plan")) == 1
+    assert [call[2] for call in retrieval.calls] == ["什么是导数", "导数定义"]
+    plan_ev = [e for e in out["trace"] if e["type"] == "query_plan"][0]
+    assert "skipped" not in plan_ev
 
 
 # --- 自省环: 改写重检 -> web fallback -> 拒答 ---

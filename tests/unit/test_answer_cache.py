@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -59,6 +60,20 @@ class ExplodingEmbedder:
         raise AssertionError("L1 精确命中不应触发向量化")
 
 
+class BlockingEmbedder:
+    dim = DIM
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 @pytest.fixture
 async def redis():
     r = FakeAsyncRedis(decode_responses=True)
@@ -99,6 +114,33 @@ async def test_l1_exact_hit_without_embedding(cache):
     assert hit.followups == ["追问一", "追问二"]
     assert hit.tier == "standard"
     assert hit.completion_tokens == 120
+
+
+async def test_l1_exact_hit_is_not_subject_to_semantic_timeout(cache):
+    await _put(cache, "牛顿第一定律是什么")
+    hit = await cache.get(
+        TENANT,
+        KB,
+        1,
+        "牛顿第一定律是什么",
+        ExplodingEmbedder(),
+        semantic_timeout_seconds=0,
+    )
+    assert hit is not None and hit.source == "exact"
+
+
+async def test_l2_timeout_is_a_cache_miss_and_cancels_embedding(cache):
+    embedder = BlockingEmbedder()
+    hit = await cache.get(
+        TENANT,
+        KB,
+        1,
+        "牛顿第一定律是什么",
+        embedder,
+        semantic_timeout_seconds=0.01,
+    )
+    assert hit is None
+    assert embedder.cancelled is True
 
 
 async def test_l1_normalization_equivalent_queries(cache):

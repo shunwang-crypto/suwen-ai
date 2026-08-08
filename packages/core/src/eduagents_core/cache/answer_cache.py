@@ -167,7 +167,16 @@ class AnswerCache:
         kb_version: int,
         query: str,
         embedder: EmbeddingProvider,
+        *,
+        semantic_timeout_seconds: float | None = None,
     ) -> CacheHit | None:
+        """Read the exact cache first, then optionally bound the semantic lookup.
+
+        ``semantic_timeout_seconds`` deliberately applies only to L2. Exact Redis
+        hits remain available to latency-sensitive callers without putting the
+        remote embedding and Qdrant round trips on their critical path forever.
+        A timed-out L2 read is a normal cache miss; it never changes cache data.
+        """
         kb_version = int(kb_version)
         # L1 精确命中: 不触发向量化
         if self._redis is not None:
@@ -180,6 +189,32 @@ class AnswerCache:
                 if isinstance(data, dict):
                     return self._to_hit(data, source="exact", matched_query=query)
 
+        if semantic_timeout_seconds is None:
+            return await self._get_semantic(
+                tenant_id, kb_id, kb_version, query, embedder
+            )
+        if semantic_timeout_seconds <= 0:
+            return None
+        try:
+            async with asyncio.timeout(semantic_timeout_seconds):
+                return await self._get_semantic(
+                    tenant_id, kb_id, kb_version, query, embedder
+                )
+        except TimeoutError:
+            log.info(
+                "answer_cache_semantic_timeout",
+                timeout_seconds=semantic_timeout_seconds,
+            )
+            return None
+
+    async def _get_semantic(
+        self,
+        tenant_id: str,
+        kb_id: str,
+        kb_version: int,
+        query: str,
+        embedder: EmbeddingProvider,
+    ) -> CacheHit | None:
         # L2 语义命中: 同租户同库同版本 filter + 余弦阈值 + 数字/否定词复核
         [vector] = await embedder.embed([normalize_query(query)])
         await self.ensure_ready()

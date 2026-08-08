@@ -287,6 +287,8 @@ async def test_profile_injected_into_qa(client):
     assert "泰勒公式" in summary  # p=0.92 -> 已掌握段
     assert "概念混淆" in summary  # 错因分布进摘要
     assert payload["profile_weak_points"][:2] == ["导数定义", "极值判定"]
+    assert payload["response_mode"] == "fast"
+    assert events["node_update"][0] == {"node": "retrieve", "status": "running"}
 
     # trace 可见 (前端时间线渲染"已加载学情画像: N 个薄弱点")
     profile_events = [t for t in events.get("trace_event", []) if t.get("type") == "profile"]
@@ -607,7 +609,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
     app.state.graphs = runtime2
     app.state.answer_cache = spy2
     try:
-        await _sse(
+        events2 = await _sse(
             client, "POST", "/api/chat", headers2,
             {"message": "导数的定义是什么?", "kb_ids": [ids2["kb_id"]]},
         )
@@ -617,6 +619,11 @@ async def test_answer_cache_disabled_when_profile_present(client):
         app.state.embedder = old_embedder
         await runtime2.stop()
     assert spy2.gets == 1 and spy2.puts == 1
+    assert events2["node_update"][:3] == [
+        {"node": "cache_lookup", "status": "running"},
+        {"node": "cache_lookup", "status": "done"},
+        {"node": "retrieve", "status": "running"},
+    ]
 
 
 # ---------- ⑤ 非 KB 会话画像注入 + 缓存互斥 (P1-5) ----------

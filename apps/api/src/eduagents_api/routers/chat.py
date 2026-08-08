@@ -75,6 +75,10 @@ _SYSTEM_PROMPT = (
 # kb 路径的 RAG 防注入/引用/拒答文案由 qa 子图内联维护 (graphs/qa_graph.py)
 _HISTORY_LIMIT = 20  # M3 接入 LangGraph checkpointer 后由滚动摘要接管
 
+# 极速档允许 L1 精确缓存完整命中，但 L2 需要额外的 embedding + Qdrant
+# 往返。只对 L2 设短预算，超时按普通 miss 继续 RAG，避免缓存本身拖慢 TTFT。
+_FAST_CACHE_SEMANTIC_TIMEOUT_SECONDS = 0.35
+
 _ATTACHMENT_CONTEXT_CHARS = 60_000
 _ATTACHMENT_CHUNK_CHARS = 1_600
 _ATTACHMENT_CHUNK_STEP = 1_400
@@ -589,6 +593,10 @@ async def chat(
                 # owner_ids 恰一个元素。
                 cache_scope = owner_ids[0] if owner_ids else str(ctx.tenant_id)
                 if cacheable:
+                    yield {
+                        "event": "node_update",
+                        "data": _sse({"node": "cache_lookup", "status": "running"}),
+                    }
                     try:
                         hit = await cache.get(
                             cache_scope,
@@ -596,10 +604,15 @@ async def chat(
                             kb_versions[str(kb_ids[0])],
                             body.message,
                             cache_embedder,
+                            semantic_timeout_seconds=_FAST_CACHE_SEMANTIC_TIMEOUT_SECONDS,
                         )
                     except Exception:  # noqa: BLE001 — 缓存故障不阻塞主链路
                         log.exception("answer_cache_get_failed")
                         hit = None
+                    yield {
+                        "event": "node_update",
+                        "data": _sse({"node": "cache_lookup", "status": "done"}),
+                    }
                     if hit is not None:
                         # P0-6: 命中答案先落库再下发, 中途断流也不丢
                         await _persist_assistant(
@@ -684,6 +697,9 @@ async def chat(
                     "requested_route": (
                         "web" if chat_mode in {"web", "research"} else "kb"
                     ),
+                    # UI 回答强度与图内延迟策略使用同一字段；极速 KB 会跳过
+                    # query_plan 的远程 LLM 调用，其他安全/检索门控保持不变。
+                    "response_mode": chat_mode,
                     "answer_tier": (
                         "strong" if chat_mode in {"think", "research"} else "standard"
                     ),
@@ -698,6 +714,17 @@ async def chat(
                 mod_buf = _new_mod_buffer(strict=minor)
                 blocked = False
                 try:
+                    initial_node = (
+                        "retrieve"
+                        if chat_mode == "fast" and kb_ids
+                        else "web_query_plan"
+                        if chat_mode in {"web", "research"}
+                        else "query_plan"
+                    )
+                    yield {
+                        "event": "node_update",
+                        "data": _sse({"node": initial_node, "status": "running"}),
+                    }
                     async for ev in runtime.astream_updates("qa", thread, payload):
                         if ev["kind"] == "token":
                             # 图内真流式 token (generate 节点 get_stream_writer 写出);
