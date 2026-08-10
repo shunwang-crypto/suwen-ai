@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import orjson
+from eduagents_core.kc.types import normalize_kc_name
 from eduagents_core.logging import get_logger
 
 # 阈值唯一来源 (个性化波次 G6): 此处仅 import 再导出 (routers/profile.py 等既有
@@ -44,6 +45,7 @@ from eduagents_core.mastery.thresholds import (
     WEAK_THRESHOLD,
     ZPD_LOWER,
     difficulty_for_mastery,
+    mastery_band,
     zone_label,
 )
 from sqlalchemy import select
@@ -65,6 +67,9 @@ _ERROR_SCAN = 10  # 错因分布的近期错题扫描窗口
 # 定向出题口径 (M4-D2: "上午答错的概念下午自动出现在练习卷")
 QUIZ_WEAK_TOP = 5
 _RECENT_ERROR_DAYS = 7
+# 题面 ↔ KC 名子串匹配的最短归一化长度 (同 services._MIN_KC_MATCH_LEN 口径):
+# 单字 KC 名 (如"角""集") 会命中几乎任意题面, 放行会把起始层级判飞。
+_MIN_BAND_MATCH_LEN = 2
 
 # 错因五分类中文名 (与 apps/web profile 页 CAUSE_LABELS 同源)
 CAUSE_LABELS = {
@@ -90,7 +95,10 @@ ROLE_SECTIONS: dict[str, tuple[str, ...]] = {
     "qa": ("mastered", "weak", "errors", "causes", "prefs"),
     "quiz": ("weak", "errors", "causes", "prefs"),
     "tutor": ("weak", "errors", "prefs"),
-    "plan": ("weak", "errors", "prefs"),
+    # plan 必须拿到 mastered: 规划的核心决策之一是"哪些可以跳过/略讲"。只给薄弱点
+    # 会让 LLM 对已掌握的知识点也照常展开, 挤占有限的每日时长。quiz 相反 —— 出题
+    # 不需要已掌握 (不出会做的题), 故仍不给。
+    "plan": ("mastered", "weak", "errors", "prefs"),
 }
 
 
@@ -414,6 +422,45 @@ def difficulty_rationale(name: str, p_mastery: float, recent_error: bool) -> dic
     if recent_error:
         reason += _RECENT_ERROR_SUFFIXES[pos]
     return {"kc_name": name, "zone": zone, "difficulty": difficulty, "reason": reason}
+
+
+async def problem_mastery_band(
+    tenant_id: uuid.UUID | str,
+    user_id: uuid.UUID | str,
+    problem: str,
+    kb_ids=(),
+) -> str:
+    """题目文本命中的 KC 的掌握度档 (weak/reinforce/near/mastered), 无命中返回 ""。
+
+    tutor 子图内不查库 (GraphDeps 无 session), 因此这里在路由层算好后注入 state,
+    由 policy 决定**起始** hint_level (§18: 讲解先适应"会不会")。
+
+    匹配口径与 tutor_graph._render_profile_section 的开场关联一致: 归一化后做子串
+    包含。命中多个时取掌握度**最低**的 —— 一道题涉及多个知识点时, 学生的难点在最
+    弱的那个, 按最强的定起始层级会把人架空。
+    """
+    key = normalize_kc_name(problem or "")
+    if not key:
+        return ""
+    uid = uuid.UUID(str(user_id))
+    ids = _norm_ids(kb_ids)
+    async with tenant_session(tenant_id) as session:
+        stmt = (
+            select(KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
+            .join(MasteryRecord, MasteryRecord.kc_id == KnowledgeComponent.id)
+            .where(MasteryRecord.user_id == uid)
+        )
+        if ids:
+            stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(i) for i in ids]))
+        rows = (await session.execute(stmt)).all()
+
+    hits = [
+        float(p)
+        for name, p in rows
+        if name and len(normalize_kc_name(name)) >= _MIN_BAND_MATCH_LEN
+        and normalize_kc_name(name) in key
+    ]
+    return mastery_band(min(hits)) if hits else ""
 
 
 async def weak_point_kcs(

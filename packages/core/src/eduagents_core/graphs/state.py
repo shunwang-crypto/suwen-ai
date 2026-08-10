@@ -121,6 +121,10 @@ class TutorState(TypedDict, total=False):
     attachment_id: str
     problem_page_no: int | None
     hint_level: int  # 0=开场提问 1=方向性 2=关键步骤 3=展开讲解(完整解答)
+    # 题目命中 KC 的掌握度定性档 (mastered/near/reinforce/weak/""), 由路由层按
+    # p_mastery 算好注入 —— 子图内不查库 (GraphDeps 无 session)。只用于决定**起始**
+    # hint_level: 已经会的人不该从第 0 层开场提问慢慢爬。空串=无画像, 保持原行为。
+    mastery_band: str
     answer_requests: int  # 学生索要答案次数: 第1次温和坚持, 第2次给答案
     stuck_type: str  # concept | calculation | misread | unknown
     reply: str

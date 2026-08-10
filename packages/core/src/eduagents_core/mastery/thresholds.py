@@ -62,3 +62,18 @@ def zone_label(p_mastery: float) -> str:
     if p_mastery < MASTERED_THRESHOLD:
         return "接近掌握"
     return "已掌握"
+
+
+def mastery_band(p_mastery: float) -> str:
+    """zone_label 的稳定英文键版本 (weak/reinforce/near/mastered), 同一组阈值。
+
+    zone_label 的中文串是**出境展示文案**, 会随文案打磨变动; 需要按档位分支的代码
+    (如 tutor 起始 hint_level) 必须用这里的稳定键, 否则改一次文案就静默改掉行为。
+    """
+    if p_mastery < ZPD_LOWER:
+        return "weak"
+    if p_mastery < QUIZ_WEAK_THRESHOLD:
+        return "reinforce"
+    if p_mastery < MASTERED_THRESHOLD:
+        return "near"
+    return "mastered"

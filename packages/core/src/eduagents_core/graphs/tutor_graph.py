@@ -26,6 +26,17 @@ from .plan_graph import _chat_json, _load_prompt
 from .state import GraphDeps, TutorState
 
 _MAX_HINT_LEVEL = 3
+# 首轮起始层级的天花板: 掌握度再高也不能首轮直接给完整解答 (那是 _MAX_HINT_LEVEL),
+# 否则 F4-A1 的"hint_level < 3 强制禁止最终答案"这条结构性防线会被起始值绕过。
+_START_LEVEL_CEILING = 2
+# 掌握度定性档 -> 首轮起始 hint_level (§18: 讲解先适应"会不会")。
+# 未命中的档 (含空串/无画像) 取 0, 即保持原有的第 0 层开场提问行为。
+_START_LEVEL_BY_BAND = {
+    "mastered": _START_LEVEL_CEILING,  # 已掌握: 直接给关键步骤, 多半只是卡在某一步
+    "near": 1,  # 接近掌握: 方向性提示足够
+    "reinforce": 0,  # 待巩固: 正常开场提问
+    "weak": 0,  # 较弱: 正常开场提问, 从概念问起
+}
 
 # 卡点类型 -> respond 策略措辞 ({{STUCK_GUIDANCE}} 占位)
 _STUCK_GUIDANCE = {
@@ -189,8 +200,14 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
                 event = "answer_request_grant"
         else:
             user_turns = sum(1 for m in (state.get("messages") or []) if m.get("role") == "user")
-            if user_turns > 1:  # 首轮用第 0 层开场提问, 之后每轮递进一层, 封顶 3
+            if user_turns > 1:  # 首轮用起始层级开场, 之后每轮递进一层, 封顶 3
                 hint_level = min(hint_level + 1, _MAX_HINT_LEVEL)
+            else:
+                # 首轮: 起始层级随掌握度上移 (§18 讲解适应"会不会")。掌握度高的学生
+                # 从第 0 层开场提问慢慢爬是浪费 —— 直接给方向性提示更接近其 ZPD。
+                # 上限 _START_LEVEL_CEILING < _MAX_HINT_LEVEL: 无论多熟练, 首轮都不
+                # 得跳到完整解答, 否则苏格拉底式辅导的结构性防线 (F4-A1) 形同虚设。
+                hint_level = max(hint_level, _START_LEVEL_BY_BAND.get(state.get("mastery_band") or "", 0))
             updates["hint_level"] = hint_level
             event = "hint_advanced"
         updates["trace"] = [

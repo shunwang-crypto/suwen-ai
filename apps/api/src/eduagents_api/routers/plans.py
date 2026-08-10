@@ -35,7 +35,12 @@ from ..plan_adjust import (
     set_task_status,
     validate_plan_task_attribution,
 )
-from ..profile_summary import ProfileContext, build_profile_context, weak_point_kcs
+from ..profile_summary import (
+    ProfileContext,
+    build_profile_context,
+    problem_mastery_band,
+    weak_point_kcs,
+)
 from ..services import _plan_resource_public, apply_tutor_summary
 from .threads import stream_graph_run
 
@@ -609,6 +614,7 @@ async def tutor_turn(
                 raise HTTPException(status_code=status, detail=code) from None
     # 画像注入 (G9, P2-7 脱敏口径同问答): 读画像失败一律降级为"无画像"继续辅导
     profile = ProfileContext()
+    band = ""
     try:
         profile = await build_profile_context(
             ctx.tenant_id,
@@ -618,6 +624,11 @@ async def tutor_turn(
         )
     except Exception:  # noqa: BLE001
         log.exception("tutor_profile_summary_failed")
+    try:
+        band = await problem_mastery_band(ctx.tenant_id, ctx.user_id, problem)
+    except Exception:  # noqa: BLE001
+        # 与画像同样的降级口径: 算不出档位就按无画像走原有起始层级, 不拖垮辅导主链路
+        log.exception("tutor_mastery_band_failed")
     payload = {
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
@@ -630,6 +641,8 @@ async def tutor_turn(
         # 画像摘要进 respond 的 system prompt; 薄弱 KC 名供开场关联卡点 (仅 KC 名, 无数值)
         "profile_summary": profile.summary,
         "profile_weak_points": profile.weak_points,
+        # 掌握度档只决定起始 hint_level, 不进 prompt (P2-7: 数值与档位都不出境)
+        "mastery_band": band,
     }
     if plan_id:
         payload["plan_id"] = plan_id
