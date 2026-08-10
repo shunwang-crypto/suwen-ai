@@ -421,7 +421,7 @@ def _plan_resource_public(row: PlanResource) -> dict:
     }
 
 
-async def _update_mastery(
+async def apply_mastery_evidence(
     session,
     ctx: AuthContext,
     kc_ids: list[str],
@@ -566,7 +566,7 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
         )
         if not matched:
             return []
-        changes = await _update_mastery(
+        changes = await apply_mastery_evidence(
             session,
             ctx,
             matched,
@@ -692,7 +692,7 @@ async def record_attempts(
                 confidence_snapshot(predicted_confidence, predicted_correct)
             )
             kc_ids = [str(k) for k in (q.kc_ids or [])]
-            changes = await _update_mastery(
+            changes = await apply_mastery_evidence(
                 session,
                 ctx,
                 kc_ids,

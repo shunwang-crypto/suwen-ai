@@ -1,6 +1,6 @@
 """P1-7 幂等: reflect_session 重复执行 (worker 重试/重复入队) 不得重复写画像。
 
-_update_mastery 以 (user_id, kc_id, evidence_type, evidence_id) 查重 —
+apply_mastery_evidence 以 (user_id, kc_id, evidence_type, evidence_id) 查重 —
 同一会话的重复反思, mastery_log 只保留第一组, BKT 不被重复推。
 """
 

@@ -1,6 +1,6 @@
 """Reflection 节点 (§5.5 画像写入双通道的第二条): 对话洞察异步入画像。
 
-测评/辅导是确定性直写 (services._update_mastery), 对话只能靠抽取, 因此:
+测评/辅导是确定性直写 (services.apply_mastery_evidence), 对话只能靠抽取, 因此:
 - 触发: 由 chat 路由每会话每 5 轮入队一次 (routers/chat.py, Redis 计数), 不是每轮都跑;
 - 抽取: cheap 档 json_mode 从最近 ≤10 轮对话抽 {"insights":[{kc_name, signal, evidence}]};
 - 落库: 仅接受能在该用户可见 KC 受控词表里匹配到的 kc_name (词表外如实丢弃, 不新建 KC);
@@ -133,7 +133,7 @@ async def reflect_session(
     from eduagents_api.deps import AuthContext
     from eduagents_api.models import ChatMessage as ChatMessageRow
     from eduagents_api.models import ChatSession, KnowledgeComponent
-    from eduagents_api.services import _update_mastery, persist_learner_insights
+    from eduagents_api.services import apply_mastery_evidence, persist_learner_insights
 
     from .enrichment import get_worker_gateway
 
@@ -219,7 +219,7 @@ async def reflect_session(
             if not kc_ids:
                 continue
             changes.extend(
-                await _update_mastery(
+                await apply_mastery_evidence(
                     session,
                     auth,
                     kc_ids,
@@ -230,7 +230,7 @@ async def reflect_session(
                 )
             )
         # P2-1: 真正入账的洞察连同学生原话写入长期记忆 (G10)。以 changes 过滤 =
-        # 复用 _update_mastery 的 (evidence_type, evidence_id) 幂等口径 —
+        # 复用 apply_mastery_evidence 的 (evidence_type, evidence_id) 幂等口径 —
         # worker 重试/重复入队时 changes 为空, 原话不会重复落库。
         applied_kcs = {str(c["kc_id"]) for c in changes}
         memory_rows = [r for r in insight_rows if r["kc_id"] in applied_kcs]

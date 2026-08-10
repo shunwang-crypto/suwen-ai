@@ -24,7 +24,7 @@ from ..models import (
     Question,
     ResourceQuestion,
 )
-from ..services import _update_mastery, write_learning_event
+from ..services import apply_mastery_evidence, write_learning_event
 
 router = APIRouter(prefix="/api/assessment-attempts", tags=["assessment-attempts"])
 
@@ -555,7 +555,7 @@ async def grade_or_verify_assessment(
                 )
                 if has_mastery is None:
                     changes.extend(
-                        await _update_mastery(
+                        await apply_mastery_evidence(
                             session,
                             ctx,
                             [str(k) for k in (question.kc_ids or [])],

@@ -24,7 +24,6 @@ from eduagents_core.gateway import Tier
 from eduagents_core.graphs.quiz_graph import QuestionModel, grade_objective
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery import scheduler
-from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -48,7 +47,7 @@ from ..models import (
     ResourceQuestion,
 )
 from ..plan_adjust import PlanTaskAttributionError, complete_plan_task
-from ..services import write_learning_event
+from ..services import apply_mastery_evidence, write_learning_event
 
 log = get_logger("reviews")
 
@@ -288,46 +287,22 @@ async def _update_mastery_review(
     evidence_id: uuid.UUID,
     now_dt: datetime,
 ) -> list[dict]:
-    """复习证据的 BKT 直写 + mastery_log 审计 (evidence_type="review", F8-A3)。"""
-    changes = []
-    params = BktParams()
-    for kc_id in kc_ids:
-        record = await session.scalar(
-            select(MasteryRecord).where(
-                MasteryRecord.user_id == ctx.user_id,
-                MasteryRecord.kc_id == uuid.UUID(kc_id),
-            )
-        )
-        old_p = record.p_mastery if record else params.p_l0
-        new_p = bkt_update(old_p, correct, params, weight=weight)
-        if record is None:
-            record = MasteryRecord(
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                kc_id=uuid.UUID(kc_id),
-                p_mastery=new_p,
-                confidence=weight,
-                last_seen=now_dt,
-            )
-            session.add(record)
-        else:
-            record.p_mastery = new_p
-            record.confidence = min(1.0, record.confidence + 0.1)
-            record.last_seen = now_dt
-        session.add(
-            MasteryLog(
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                kc_id=uuid.UUID(kc_id),
-                old_p=old_p,
-                new_p=new_p,
-                evidence_type="review",
-                evidence_id=evidence_id,
-                weight=weight,
-            )
-        )
-        changes.append({"kc_id": kc_id, "old_p": round(old_p, 4), "new_p": round(new_p, 4)})
-    return changes
+    """复习证据 → 统一 EvidenceUpdater (evidence_type="review", F8-A3)。
+
+    §16: 掌握度只能有一条更新链路。这里曾是 services.apply_mastery_evidence 的
+    逐行复制, 但漏了它的 (user_id, kc_id, evidence_type, evidence_id) 幂等去重 ——
+    复习接口重试会把同一条证据重复推进 BKT。改为委托后该缺陷一并消失。
+    """
+    return await apply_mastery_evidence(
+        session,
+        ctx,
+        kc_ids,
+        correct,
+        weight,
+        evidence_id,
+        evidence_type="review",
+        now_dt=now_dt,
+    )
 
 
 @router.post("/{error_item_id}/answer")

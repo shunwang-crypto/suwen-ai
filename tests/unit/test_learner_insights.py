@@ -259,7 +259,7 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
         return 0
 
     monkeypatch.setattr(db_mod, "tenant_session", fake_tenant_session)
-    monkeypatch.setattr(services_mod, "_update_mastery", fake_update_mastery)
+    monkeypatch.setattr(services_mod, "apply_mastery_evidence", fake_update_mastery)
     monkeypatch.setattr(services_mod, "persist_learner_insights", fake_persist)
 
     gateway = _FakeGateway()
