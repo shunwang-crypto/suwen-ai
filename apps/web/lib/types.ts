@@ -410,6 +410,34 @@ export interface QuizDetail {
   questions: QuizQuestion[];
 }
 
+export type PracticeRecommendationStatus =
+  | "ready"
+  | "needs_scope"
+  | "preparing"
+  | "needs_upload";
+
+export type PracticeRecommendationAction =
+  | "review"
+  | "quiz"
+  | "choose_scope"
+  | "upload"
+  | "sample_diagnostic";
+
+export interface PracticeRecommendation {
+  status: PracticeRecommendationStatus;
+  action: PracticeRecommendationAction;
+  source: "due_review" | "plan_task" | "weak_kc" | "cold_start" | "mastery" | "choose_scope" | "sample";
+  title: string;
+  reason: string;
+  question_count: number;
+  difficulty_mix: Record<"easy" | "mid" | "hard", number>;
+  kb: { id: string; name: string } | null;
+  scope_options: Array<{ id: string; name: string }>;
+  adjustments: Array<"easier" | "harder" | "switch_kc" | "switch_kb">;
+  plan_id?: string | null;
+  task_key?: string | null;
+}
+
 export interface MasteryChange {
   kc_id: string;
   old_p: number;
@@ -478,13 +506,22 @@ export interface GraphInterruptData {
 
 export interface GraphDoneData {
   thread_id: string;
+  schema_version?: 2;
+  outcome?: "succeeded" | "cancelled_by_user" | "generation_failed" | "validation_failed";
   result: {
     quiz_id?: string;
     questions?: QuizQuestion[];
     plan_id?: string;
     plan?: PlanStructure;
     [key: string]: unknown;
-  };
+  } | null;
+  error?: {
+    code: string;
+    message: string;
+    stage?: string;
+    retryable?: boolean;
+    attempts?: number;
+  } | null;
 }
 
 /** 图工作流的 trace_event 负载：{node, event, ...}（与对话页的 {type,...} 不同）。 */
@@ -865,6 +902,24 @@ export interface ErrorItemOut {
   is_variant: boolean;
   created_at: string;
   question: ErrorQuestion | null;
+}
+
+export interface TutorContextOut {
+  problem: string;
+  error_item_id?: string;
+  kb_id?: string | null;
+  plan_id?: string;
+  task_key?: string;
+  kc_ids?: string[];
+}
+
+export interface TutorEntrypointsOut {
+  today_task:
+    | { status: "ready"; plan_id: string; task_key: string }
+    | { status: "empty"; reason: "NO_PENDING_TODAY_TASK" };
+  errors:
+    | { status: "ready"; error_ids: string[] }
+    | { status: "empty"; reason: "NO_AVAILABLE_ERRORS"; error_ids: [] };
 }
 
 export interface ErrorImportDraft {
@@ -1471,6 +1526,18 @@ export interface LearningResourceOut {
 
 export type ResourceQuestionVerificationStatus = "pending" | "verified" | "rejected";
 
+export interface ResourceQuestionFieldConfidence {
+  confidence: number | null;
+  source: "parser" | "ocr_provider" | "rule" | "model_reported" | "unknown" | "user_correction";
+  warnings: string[];
+}
+
+export interface ResourceQuestionEligibility {
+  schema_version: string;
+  eligible: boolean;
+  reasons: string[];
+}
+
 export interface ResourceQuestionOut {
   id: string;
   resource_question_id: string;
@@ -1482,6 +1549,12 @@ export interface ResourceQuestionOut {
   source_region: Record<string, unknown>;
   points: number | null;
   extraction_confidence: number | null;
+  field_confidence?: {
+    schema_version: string;
+    fields: Record<string, ResourceQuestionFieldConfidence>;
+    applicable_fields?: string[];
+  };
+  eligibility?: ResourceQuestionEligibility;
   verification_status: ResourceQuestionVerificationStatus;
   type: string;
   stem: string;

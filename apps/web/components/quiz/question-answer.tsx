@@ -52,7 +52,7 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-[12px] transition-colors ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-body-sm transition-colors ${
                 checked
                   ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
                   : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
@@ -93,7 +93,7 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-[12px] transition-colors ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-body-sm transition-colors ${
                 checked
                   ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
                   : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
@@ -147,11 +147,11 @@ export function QuestionAnswer({
 export function QuestionMeta({ question }: { question: QuizQuestion }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5">
-      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
+      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-body-sm font-medium text-indigo-600">
         {TYPE_LABELS[question.type] ?? question.type}
       </span>
       <span
-        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+        className={`rounded-full px-2 py-0.5 text-body-sm font-medium ${
           question.difficulty === "hard"
             ? "bg-red-50 text-red-600"
             : question.difficulty === "easy"

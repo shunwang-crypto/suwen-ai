@@ -11,7 +11,6 @@
 // - 保留：「验证一下」→ /quiz?kc=..&n=3 重估（P2-6 可争辩画像）、「我已掌握」→ POST override、
 //  「AI 记住的你」记忆条目可见可删（P2-1）。
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
@@ -166,7 +165,7 @@ function CountBars({
 }) {
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
   if (entries.length === 0) {
-    return <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>;
+    return <p className="py-3 text-center text-caption text-slate-400">暂无数据</p>;
   }
   const max = Math.max(...entries.map(([, n]) => n), 1);
   return (
@@ -174,7 +173,7 @@ function CountBars({
       {entries.map(([key, n]) => (
         <li
           key={key}
-          className="flex items-center gap-2 rounded-lg px-1 py-0.5 text-xs transition-colors hover:bg-slate-50"
+          className="flex items-center gap-2 rounded-lg px-1 py-0.5 text-caption transition-colors hover:bg-slate-50"
         >
           <span className="w-16 shrink-0 truncate text-slate-500" title={key}>
             {labels[key] ?? key}
@@ -308,7 +307,6 @@ function MasteryRow({
 }) {
   const weak = isWeak(item);
   const ret3d = item.retention_in_3d;
-  const verifyHref = `/quiz?kc=${encodeURIComponent(item.name)}&n=3`;
   const retentionTitle =
     ret3d != null
       ? `再不复习，3 天后预计保持率 ${Math.floor(ret3d * 100)}%${
@@ -319,7 +317,7 @@ function MasteryRow({
       : undefined;
 
   const menuItemCls =
-    "flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors";
+    "flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-caption font-medium transition-colors";
 
   return (
     <li className="group relative rounded-lg transition-colors hover:bg-indigo-50/50">
@@ -337,14 +335,14 @@ function MasteryRow({
             </span>
             {weak && (
               <span
-                className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
+                className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
                 title={`薄弱点：掌握度 ${fmtPct(item.p_mastery)} < ${fmtPct(WEAK_THRESHOLD)}`}
               >
                 薄弱
               </span>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-body-sm text-slate-400">
             {evidenceStrengthLabel(item) && (
               <span
                 className="cursor-help"
@@ -356,7 +354,7 @@ function MasteryRow({
             {/* 遗忘快照（P2-7）缩成徽章，整句进 tooltip；<90% 才显示避免噪声 */}
             {ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
               <span
-                className="inline-flex cursor-help items-center rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
+                className="inline-flex cursor-help items-center rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
                 title={retentionTitle}
               >
                 3 天后 {Math.floor(ret3d * 100)}%
@@ -381,31 +379,16 @@ function MasteryRow({
         </button>
       </div>
 
-      {/* 桌面 hover / 键盘聚焦浮出的快捷动作（绝对定位盖行右侧，不挤压行宽） */}
+      {/* 桌面 hover / 键盘聚焦浮出的快捷动作（绝对定位盖行右侧，不挤压行宽）
+          「练习」「验证」两个跳转已移除：派活统一由今日页承担，本页只回答"我现在什么水平"。
+          「已掌握」保留 —— 它是就地写 p_mastery 的动作，不离开本页。 */}
       <div className="pointer-events-none absolute inset-y-0.5 right-1 z-[5] hidden items-center gap-1 rounded-lg bg-white/95 pl-1.5 pr-1 opacity-0 shadow-sm ring-1 ring-slate-100 backdrop-blur-[2px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex sm:focus-within:pointer-events-auto sm:focus-within:opacity-100">
-        {weak && (
-          <Link
-            href="/quiz?weak=1"
-            title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
-            className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
-          >
-            练习
-          </Link>
-        )}
-        {/* 可争辩画像（P2-6）：3 题快速验证 → 判分走既有 BKT 链路即重估 */}
-        <Link
-          href={verifyHref}
-          title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
-          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100"
-        >
-          验证
-        </Link>
         <button
           type="button"
           disabled={overrideDisabled}
           onClick={onOverride}
-          title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志；想经做题重估请用「验证」"
-          className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+          title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志"
+          className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-caption font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {overriding && <Spinner className="h-3 w-3" />}
           已掌握
@@ -417,28 +400,6 @@ function MasteryRow({
         <>
           <div className="fixed inset-0 z-10" onClick={onCloseMenu} aria-hidden />
           <div className="absolute right-1 top-9 z-20 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-            {weak && (
-              <Link
-                href="/quiz?weak=1"
-                onClick={onCloseMenu}
-                title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
-                className={`${menuItemCls} text-amber-700 hover:bg-amber-50`}
-              >
-                针对此点练习
-                <span className="text-[10px] font-normal text-slate-400">
-                  薄弱点自动进卷
-                </span>
-              </Link>
-            )}
-            <Link
-              href={verifyHref}
-              onClick={onCloseMenu}
-              title="不同意画像？做 3 道该知识点的题，判分结果作为真实证据重估掌握度"
-              className={`${menuItemCls} text-indigo-700 hover:bg-indigo-50`}
-            >
-              验证一下
-              <span className="text-[10px] font-normal text-slate-400">做 3 题重估掌握度</span>
-            </Link>
             <button
               type="button"
               disabled={overrideDisabled}
@@ -453,7 +414,7 @@ function MasteryRow({
                 {overriding && <Spinner className="h-3 w-3" />}
                 我已掌握
               </span>
-              <span className="text-[10px] font-normal text-slate-400">
+              <span className="text-caption font-normal text-slate-400">
                 直接标记，不验证
               </span>
             </button>
@@ -598,7 +559,7 @@ export default function ProfilePage() {
   const weakest = [...mastery].sort((a, b) => a.p_mastery - b.p_mastery)[0];
 
   const chipCls = (on: boolean) =>
-    `rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+    `rounded-full border px-2.5 py-1 text-caption font-medium transition-colors ${
       on
         ? "border-indigo-300 bg-indigo-50 text-indigo-700"
         : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
@@ -613,7 +574,7 @@ export default function ProfilePage() {
           <button
             type="button"
             onClick={() => setReloadKey((k) => k + 1)}
-            className="rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
+            className="rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
           >
             刷新画像
           </button>
@@ -621,15 +582,23 @@ export default function ProfilePage() {
       />
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
-      <section className="rounded-[14px] bg-brand-700 p-5 text-white sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[11px] font-medium text-indigo-100">系统此刻如何认识你</p><p className="mt-3 max-w-4xl text-[15px] font-medium leading-7">{mastery.length === 0 ? "还没有足够的真实作答证据。完成第一次练习、复习或辅导后，这里会逐步形成你的学习画像。" : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实证据持续更新。</>}</p></div><button type="button" onClick={() => setReloadKey((key) => key + 1)} className="rounded-[7px] bg-white/10 px-3 py-2 text-[11px] font-medium text-white hover:bg-white/15">刷新</button></div>
-        {changes[0] && <p className="mt-3 text-[10px] text-indigo-200">最近更新 {fmtDateTime(changes[0].at)} · {EVIDENCE_LABELS[changes[0].evidence_type] ?? changes[0].evidence_type}</p>}
+      {/* 画像概述：陈述性信息，不是主操作 —— 用浅色面，近黑只留给本页唯一的黑按钮。
+          原来这里是 bg-brand-700，与下方 bg-brand-600 的按钮同色值（见 globals.css
+          --color-brand-600/700），四块同深度的黑并列，层级直接失效。 */}
+      <section className="rounded-[14px] border border-line bg-surface-muted p-5 sm:p-6">
+        <p className="text-body-sm font-medium text-ink-secondary">系统此刻如何认识你</p>
+        <p className="mt-2 max-w-4xl text-[15px] leading-7 text-ink">
+          {mastery.length === 0
+            ? "还没有足够的真实作答证据。完成第一次练习、复习或辅导后，这里会逐步形成你的学习画像。"
+            : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实证据持续更新。</>}
+        </p>
+        {changes[0] && <p className="mt-3 text-caption text-ink-muted">最近更新 {fmtDateTime(changes[0].at)} · {EVIDENCE_LABELS[changes[0].evidence_type] ?? changes[0].evidence_type}</p>}
       </section>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="consolidate" /><strong className="text-[20px] text-ink">{consolidateItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待巩固</h2><p className="mt-1 text-[10px] text-ink-muted">掌握较薄弱，最值得先动手</p><ul className="mt-3 space-y-2">{consolidateItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/quiz?weak=1" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始巩固练习 →</Link></section>
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="review" /><strong className="text-[20px] text-ink">{dueItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待复习</h2><p className="mt-1 text-[10px] text-ink-muted">掌握过，但快要遗忘</p><ul className="mt-3 space-y-2">{dueItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul><Link href="/reviews" className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">开始今日复习 →</Link></section>
-        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="verify" /><strong className="text-[20px] text-ink">{verifyItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待验证</h2><p className="mt-1 text-[10px] text-ink-muted">记录太少，画像还不确定</p><ul className="mt-3 space-y-2">{verifyItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-[11px] text-ink-secondary"><span className="mr-2 text-brand-500">•</span>{item.name}</li>)}</ul><Link href={verifyItems[0] ? `/quiz?kc=${encodeURIComponent(verifyItems[0].name)}&n=3` : "/quiz"} className="mt-4 flex h-9 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-medium text-white">做几道题验证 →</Link></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="consolidate" /><strong className="text-[20px] text-ink">{consolidateItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待巩固</h2><p className="mt-1 text-body-sm text-ink-muted">掌握较薄弱，最值得先动手</p><ul className="mt-3 space-y-2">{consolidateItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-body-sm text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="review" /><strong className="text-[20px] text-ink">{dueItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待复习</h2><p className="mt-1 text-body-sm text-ink-muted">掌握过，但快要遗忘</p><ul className="mt-3 space-y-2">{dueItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-body-sm text-ink-secondary"><span className="mr-2 text-warning-500">•</span>{item.name}</li>)}</ul></section>
+        <section className="rounded-[14px] border border-line bg-white p-4"><div className="flex items-start justify-between"><ActionIcon kind="verify" /><strong className="text-[20px] text-ink">{verifyItems.length}</strong></div><h2 className="mt-3 text-[14px] font-semibold text-ink">待验证</h2><p className="mt-1 text-body-sm text-ink-muted">记录太少，画像还不确定</p><ul className="mt-3 space-y-2">{verifyItems.slice(0, 3).map((item) => <li key={item.kc_id} className="truncate text-body-sm text-ink-secondary"><span className="mr-2 text-brand-500">•</span>{item.name}</li>)}</ul></section>
       </div>
 
       {/* 雷达（A1）：库 tab + 章节聚合轴 + 少轴条形降级 + 轴下钻（组件内实现） */}
@@ -639,7 +608,7 @@ export default function ProfilePage() {
       <Card
         title="掌握度明细"
         extra={
-          <span className="text-xs text-slate-400">
+          <span className="text-caption text-slate-400">
             {filterActive ? `${filtered.length} / ${mastery.length}` : mastery.length} 个知识点
           </span>
         }
@@ -658,7 +627,7 @@ export default function ProfilePage() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="搜索知识点名称…"
                 aria-label="搜索知识点"
-                className="w-full max-w-56 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                className="w-full max-w-56 rounded-lg border border-slate-200 px-2.5 py-1.5 text-caption outline-none transition-colors focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
               />
               <button type="button" className={chipCls(weakOnly)} onClick={() => setWeakOnly((v) => !v)}>
                 只看薄弱
@@ -668,7 +637,7 @@ export default function ProfilePage() {
               </button>
             </div>
             {tree.length === 0 ? (
-              <p className="py-4 text-center text-xs text-slate-400">没有匹配的知识点</p>
+              <p className="py-4 text-center text-caption text-slate-400">没有匹配的知识点</p>
             ) : (
               <ul className="space-y-1.5">
                 {tree.map((g) => {
@@ -685,7 +654,7 @@ export default function ProfilePage() {
                       >
                         <Chevron open={subjectOpen} />
                         <span className="text-sm font-semibold text-slate-700">{g.name}</span>
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-body-sm text-slate-400">
                           {g.total} 个知识点
                           {g.weakCount > 0 && (
                             <span className="ml-1 text-amber-600">· {g.weakCount} 个薄弱</span>
@@ -712,18 +681,18 @@ export default function ProfilePage() {
                                   className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-slate-100/70"
                                 >
                                   <Chevron open={chapterOpen} className="h-3 w-3" />
-                                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-600">
+                                  <span className="min-w-0 flex-1 truncate text-caption font-medium text-slate-600">
                                     {c.name}
                                   </span>
                                   <span
-                                    className="font-mono text-[11px]"
+                                    className="font-mono text-body-sm"
                                     style={{ color: masteryColor(c.mean) }}
                                     title={`章平均掌握度 ${fmtPct(c.mean)}（${c.items.length} 个知识点）`}
                                   >
                                     {fmtPct(c.mean)}
                                   </span>
                                   {c.weakCount > 0 && (
-                                    <span className="rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
+                                    <span className="rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
                                       {c.weakCount} 薄弱
                                     </span>
                                   )}
@@ -774,10 +743,10 @@ export default function ProfilePage() {
       {/* 最近掌握度变化（C1）：默认 10 条；权重徽章收 tooltip */}
       <Card
         title="最近掌握度变化"
-        extra={<span className="text-xs text-slate-400">每次变化可核对到具体作答（F8-A3）</span>}
+        extra={<span className="text-caption text-slate-400">每次变化可核对到具体作答（F8-A3）</span>}
       >
         {changes.length === 0 ? (
-          <p className="py-3 text-center text-xs text-slate-400">暂无变化记录</p>
+          <p className="py-3 text-center text-caption text-slate-400">暂无变化记录</p>
         ) : (
           <>
             <ul className="divide-y divide-slate-100">
@@ -785,10 +754,10 @@ export default function ProfilePage() {
                 const [oldS, newS] = fmtPair(c.old_p, c.new_p);
                 const up = c.new_p >= c.old_p;
                 return (
-                  <li key={c.id} className="flex items-center gap-2.5 py-1.5 text-xs">
+                  <li key={c.id} className="flex items-center gap-2.5 py-1.5 text-caption">
                     <span
                       aria-hidden
-                      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white ${
+                      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-caption font-bold text-white ${
                         up ? "bg-emerald-500" : "bg-orange-500"
                       }`}
                     >
@@ -802,7 +771,7 @@ export default function ProfilePage() {
                       {oldS} → {newS}
                     </span>
                     <span
-                      className="shrink-0 cursor-help rounded bg-slate-100 px-1.5 py-px text-[10px] text-slate-500"
+                      className="shrink-0 cursor-help rounded bg-slate-100 px-1.5 py-px text-caption text-slate-500"
                       title={
                         c.weight < 1
                           ? `${EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type} · 证据权重 ×${c.weight}（主观/间接证据降权，系数直接暴露可审计）`
@@ -820,7 +789,7 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => setChangesExpanded((v) => !v)}
-                className="mt-2 w-full rounded-lg border border-slate-100 py-1.5 text-xs text-slate-500 transition-colors hover:border-slate-200 hover:text-slate-700"
+                className="mt-2 w-full rounded-lg border border-slate-100 py-1.5 text-caption text-slate-500 transition-colors hover:border-slate-200 hover:text-slate-700"
               >
                 {changesExpanded ? "收起" : `展开更多（共 ${changes.length} 条）`}
               </button>
@@ -832,34 +801,22 @@ export default function ProfilePage() {
       {/* AI 记住的你（P2-1）：长期记忆可见可删 */}
       <Card
         title="AI 记住的你"
-        extra={<span className="text-xs text-slate-400">来自对话与辅导的长期记忆 · 可逐条删除</span>}
+        extra={<span className="text-caption text-slate-400">来自对话与辅导的长期记忆 · 可逐条删除</span>}
       >
         {insights === null ? (
           <SkeletonList rows={3} />
         ) : insights.length === 0 ? (
-          <p className="py-4 text-center text-xs text-slate-400">
-            {insightsError ?? (
-              <>
-                还没有记忆条目 —— 去{" "}
-                <Link href="/chat" className="text-indigo-600 hover:underline">
-                  对话
-                </Link>{" "}
-                或{" "}
-                <Link href="/tutor" className="text-indigo-600 hover:underline">
-                  辅导
-                </Link>{" "}
-                中学习，AI 会记下你在什么语境下困惑、又在哪里豁然开朗
-              </>
-            )}
+          <p className="py-4 text-center text-caption text-slate-400">
+            {insightsError ?? "还没有记忆条目 —— 在对话或辅导中学习后，AI 会记下你在什么语境下困惑、又在哪里豁然开朗"}
           </p>
         ) : (
           <ul className="divide-y divide-slate-100">
             {insights.map((it) => {
               const kind = KIND_LABELS[it.kind];
               return (
-                <li key={it.id} className="flex items-start gap-2.5 py-2 text-xs">
+                <li key={it.id} className="flex items-start gap-2.5 py-2 text-caption">
                   <span
-                    className={`mt-px shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium ring-1 ring-inset ${
+                    className={`mt-px shrink-0 rounded-full px-1.5 py-px text-caption font-medium ring-1 ring-inset ${
                       kind?.className ?? KIND_BADGE_FALLBACK
                     }`}
                   >
@@ -867,7 +824,7 @@ export default function ProfilePage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="break-words text-slate-600"><MathText text={it.text} /></div>
-                    <p className="mt-0.5 text-[10px] text-slate-400">
+                    <p className="mt-0.5 text-caption text-slate-400">
                       {it.kc_name && <span className="mr-1.5">{it.kc_name}</span>}
                       {SOURCE_LABELS[it.source] ?? it.source} · {fmtDateTime(it.created_at)}
                     </p>

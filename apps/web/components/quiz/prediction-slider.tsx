@@ -22,7 +22,7 @@ export function PredictionSlider({
   const selected = value != null;
   return (
     <fieldset className="mt-3 rounded-[9px] border border-dashed border-brand-200 bg-brand-50/35 px-3 py-2.5">
-      <legend className="text-[11px] font-medium text-ink-secondary">
+      <legend className="text-body-sm font-medium text-ink-secondary">
         作答前，你觉得自己有多大把握？
       </legend>
       {selected && (
@@ -31,14 +31,14 @@ export function PredictionSlider({
             type="button"
             disabled={disabled}
             onClick={() => onChange(undefined)}
-            className="text-[10px] font-medium text-ink-muted underline-offset-2 hover:text-brand-700 hover:underline disabled:opacity-50"
+            className="text-caption font-medium text-ink-muted underline-offset-2 hover:text-brand-700 hover:underline disabled:opacity-50"
           >
             清除预测
           </button>
         </div>
       )}
       <div className="mt-2 flex items-center gap-3">
-        <span className="text-[10px] text-ink-muted">没把握</span>
+        <span className="text-caption text-ink-muted">没把握</span>
         <input
           type="range"
           min={1}
@@ -53,15 +53,15 @@ export function PredictionSlider({
           }}
           className={`min-w-0 flex-1 accent-indigo-600 ${selected ? "" : "opacity-45"}`}
         />
-        <span className="text-[10px] text-ink-muted">很有把握</span>
+        <span className="text-caption text-ink-muted">很有把握</span>
         <output
           aria-live="polite"
-          className="w-16 text-right text-[10px] font-medium text-brand-700"
+          className="w-16 text-right text-caption font-medium text-brand-700"
         >
           {selected ? LABELS[value ?? 3] : "可跳过"}
         </output>
       </div>
-      <p className="mt-1.5 text-[10px] leading-4 text-ink-muted">
+      <p className="mt-1.5 text-caption leading-4 text-ink-muted">
         这是校准自我判断的预测，可跳过，不影响本题评分和掌握度。
       </p>
     </fieldset>

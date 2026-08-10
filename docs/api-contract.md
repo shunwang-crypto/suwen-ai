@@ -193,19 +193,23 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/threads/{thread_id}/resume | {value} interrupt 恢复协议 (M3-D2)；thread_id=`kind:user:local`，跨用户 404 |
-| POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_key?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
+| POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_key?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
+| GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason/question_count/difficulty_mix`，不返回题干或掌握度小数 |
+| POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_key?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
 | POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |
 | GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
 | POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
-| POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。旧调用方可只传 `goal`；服务端重新校验 KB 访问、任务结构与资源引用 |
+| POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认，服务端不再静默补默认值；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。服务端重新校验 KB 访问、任务结构与资源引用 |
 | GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
 | GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}` 与 `progress{total,done,ratio}` |
+| GET | /api/plans/{id}/tasks/{task_key}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_key`；任务文字不进入 URL，非法或他人任务统一 404 |
 | POST | /api/plans/{id}/tasks/{task_key}/toggle | {done?} 勾选/取消任务（缺省取反）；done 内嵌 structure_json，不另建列 |
 | POST | /api/plans/{id}/tasks/{task_key}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
 | POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插带目标、步骤、完成标准、`action_type=practice` 的「补强: {KC}」任务 → `{inserted, reason}` |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
 | POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_key?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
+| GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_key`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |
 
 作答前信心的五级概率映射固定为 `0.1/0.3/0.5/0.7/0.9`。高信心答错率只统计概率
 `>=0.7` 的样本；Brier 分数和该比率均只描述预测校准，不评价学习能力。跳过预测时不写
@@ -225,10 +229,37 @@ Quiz 题目通过 schema 后会进入独立 cheap critic，检查蓝图一致性
 事实核验会重新检索但不把素材正文或 critic 原始响应写入 Graph state/checkpoint；state 只保留
 最多 5 条、每条有界的修复指令和返工次数。
 
+Quiz 的 `done` 使用 schema v2，不再用空 `result` 表示失败：
+
+```json
+{
+  "schema_version": 2,
+  "outcome": "generation_failed",
+  "result": null,
+  "error": {
+    "code": "QUIZ_GENERATION_EMPTY",
+    "message": "这次没有生成出可用题目，请重试。",
+    "stage": "generate",
+    "retryable": true,
+    "attempts": 3
+  }
+}
+```
+
+`outcome` 仅允许 `succeeded`、`cancelled_by_user`、`generation_failed`、
+`validation_failed`。`succeeded` 只在题目校验通过并成功落库后发送；明确拒绝蓝图才是
+`cancelled_by_user`；所有生成轮次没有非空题目数组是 `generation_failed`；至少有一题但
+schema 重试耗尽是 `validation_failed`。`confirmation_mode` 为 `required` 或 `auto`，默认
+`required`；生成失败诊断只记录 provider/model/feature、响应长度、finish reason、JSON
+解析/顶层 key/题目计数、截断、重试轮次及 request/thread ID，不记录题干、密码、token 或学生资料。
+如果校验成功但事务未能落库，或落库函数返回空结果，服务端只发送 `error` 事件
+（`QUIZ_FINALIZE_FAILED` / `QUIZ_FINALIZE_INVALID`），不会发送 `succeeded`。
+
 ### 错题本（M4/F6，用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/errors | 错题列表；筛选 `state`(new\|reviewing\|mastered\|archived\|active) / `cause`(五分类) / `kc_id`，分页 `page`/`page_size`；含题干·选项·答案·解析·我的作答·错误次数·下次复习时间 |
+| GET | /api/errors/{id}/tutor-context | 仅本人可读的错题 Tutor 上下文，返回有界 `problem/error_item_id/kc_ids`；他人或不存在的 ID 统一 404，题干不放进 URL |
 | GET | /api/errors/stats | 仅统计 `verification_status=verified` 的错题：{total, by_cause(五分类补零), by_state, by_kc(top10)}；待核验数量单列 `pending_verification` |
 | POST | /api/errors/{id}/archive | 手动归档：state→archived，退出今日复习队列 |
 | POST | /api/errors/{id}/cause | {cause} 错因修正（五分类之一，越界 422） |

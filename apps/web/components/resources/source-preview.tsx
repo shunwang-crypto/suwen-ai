@@ -61,7 +61,7 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
 
   if (!resource.source_url) {
     return (
-      <div className="flex min-h-64 items-center justify-center rounded-[12px] border border-dashed border-line-strong bg-[#fafaf9] px-5 text-center text-[12px] text-ink-muted">
+      <div className="flex min-h-64 items-center justify-center rounded-[12px] border border-dashed border-line-strong bg-[#fafaf9] px-5 text-center text-body-sm text-ink-muted">
         这是手动创建的资料，还没有原始文件。你可以直接在右侧添加题目。
       </div>
     );
@@ -71,8 +71,8 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
     <section className="rounded-[12px] border border-line bg-white p-3 sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-ink-muted">原始来源</p>
-          <p className="mt-1 truncate text-[12px] font-medium text-ink" title={filename}>{filename}</p>
+          <p className="text-caption font-medium uppercase tracking-[0.08em] text-ink-muted">原始来源</p>
+          <p className="mt-1 truncate text-body-sm font-medium text-ink" title={filename}>{filename}</p>
         </div>
         {objectUrl && (
           <a
@@ -80,7 +80,7 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
             download={filename}
             target={image || pdf ? "_blank" : undefined}
             rel={image || pdf ? "noreferrer" : undefined}
-            className="shrink-0 rounded-[7px] border border-line-strong px-3 py-1.5 text-[10px] font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
+            className="shrink-0 rounded-[7px] border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
           >
             {image || pdf ? "打开原文件" : "下载原文件"}
           </a>
@@ -88,12 +88,12 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
       </div>
 
       {loading && (
-        <div className="mt-3 flex min-h-64 items-center justify-center rounded-[9px] bg-surface-muted text-[11px] text-ink-muted">
+        <div className="mt-3 flex min-h-64 items-center justify-center rounded-[9px] bg-surface-muted text-body-sm text-ink-muted">
           正在加载来源预览…
         </div>
       )}
       {error && !loading && (
-        <p className="mt-3 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-700">{error}</p>
+        <p className="mt-3 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">{error}</p>
       )}
       {!loading && objectUrl && image && (
         <div className="mt-3 flex min-h-64 items-center justify-center overflow-hidden rounded-[9px] bg-[#fafaf9] p-2">
@@ -119,8 +119,8 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
           <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-50 text-[13px] font-semibold text-brand-700">
             {extensionOf(filename).replace(".", "").toUpperCase() || "FILE"}
           </span>
-          <p className="mt-3 text-[12px] font-medium text-ink">{filename}</p>
-          <p className="mt-1 text-[11px] text-ink-muted">Word、PPT 文件可安全下载后查看。</p>
+          <p className="mt-3 text-body-sm font-medium text-ink">{filename}</p>
+          <p className="mt-1 text-body-sm text-ink-muted">Word、PPT 文件可安全下载后查看。</p>
         </div>
       )}
     </section>

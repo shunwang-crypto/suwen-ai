@@ -26,10 +26,9 @@
 上述“已实现”只表示仓库代码切片和相应本地验证存在；不表示真实环境问题已经解决。
 本轮没有生产连接、清理、向量修复、外部数据写入、embedding/LLM 或付费调用。
 
-本地门禁于 2026-08-09 重新执行：Python 单元测试 687 项、服务集成测试 153 项、
-Alembic 隔离 upgrade/downgrade 13 项、Web 单元测试 92 项均通过；Web TypeScript、ESLint
-和生产构建通过。集成套件中另有 13 项 migration 测试因该套件未设置 `MIGRATION_TESTS=1`
-而跳过，同一批 migration 已在独立门禁中全部通过。
+本地门禁于 2026-08-09 重新执行，Python/Web 测试、Web TypeScript、ESLint 和生产构建均需以
+当前命令的真实输出为准；集成与 migration 门禁依赖本机隔离 PostgreSQL/Redis/Docker，若环境
+不可用必须报告跳过原因，不得把 stub 或跳过结果写成生产验收。
 
 ## 产品能力
 
@@ -39,7 +38,7 @@ Alembic 隔离 upgrade/downgrade 13 项、Web 单元测试 92 项均通过；Web
 | 个人与机构知识库 | 已实现 | 文件/URL 导入、摄取、分块、混合检索、引用、学习指南；机构成员只读、机构管理员写 | RAG、机构库、越权测试 |
 | AI 对话 | 已实现 | 知识库/网络/直接路由、SSE、引用、会话历史、附件、停止运行 | QA、SSE、附件测试 |
 | 分级辅导 | 已实现 | 图片/PDF/Word/PPT 附件识别与人工校对、多题选择、锁定题目、四级提示和小结入画像 | tutor 附件、权限与图状态测试 |
-| 智能练习 | 已实现 | Blueprint 确认、独立有界 critic、客观/主观判分、作答前信心预测、Brier 校准与 explain-back | quiz/元认知/VLSE 测试 |
+| 智能练习 | 已实现 | Blueprint 确认、自动推荐/事后调整、独立有界 critic、客观/主观判分、作答前信心预测、Brier 校准与 explain-back | quiz/推荐/元认知/VLSE 测试 |
 | 题目资料 | 已实现 | 图片、PDF、Word、PPT、文本、手动多题；原件、识别、校对、知识库关联、深链接 | learning resources 测试 |
 | 真实作答 | 已实现 | `draft -> submitted -> graded`；PUT 替换、PATCH 部分更新、评分与最终核验 | resource launch contract |
 | 错题本 | 已实现 | 普通测验、人工选择、真实作答三类来源；待核验隔离；FSRS 与变式 | error/review 测试 |

@@ -73,7 +73,7 @@ function StateBadge({ state }: { state: string }) {
   };
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
+      className={`rounded-full px-2 py-0.5 text-caption font-medium ${meta.className}`}
     >
       {meta.label}
     </span>
@@ -248,7 +248,7 @@ export default function ReviewsPage() {
           <button
             type="button"
             onClick={reload}
-            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
+            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
           >
             刷新队列
           </button>
@@ -279,14 +279,14 @@ export default function ReviewsPage() {
         <section className="rounded-[14px] border border-line bg-white px-5 py-10 text-center sm:px-8">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success-50 text-xl text-success-600">✓</span>
           <h2 className="mt-4 text-[18px] font-semibold text-ink">今日复习已完成</h2>
-          <p className="mt-2 text-[12px] text-ink-muted">
+          <p className="mt-2 text-body-sm text-ink-muted">
             完成 {finishedCount} 题，答对 {correctCount} 题；记忆进度和学习画像已按真实作答更新。
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
-            <Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white">返回今日</Link>
-            <Link href="/errors" className="rounded-[8px] border border-line-strong px-4 py-2 text-[12px] font-medium text-ink-secondary">查看错题本</Link>
+            <Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">返回今日</Link>
+            <Link href="/errors" className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题本</Link>
             {data.items.find((item) => states[item.error_item_id]?.result?.correct === false) && (
-              <Link href={`/tutor?problem=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.question.stem ?? "")}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2 text-[12px] font-medium text-brand-700">辅导未掌握题目</Link>
+              <Link href={`/tutor?error_id=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.error_item_id ?? "")}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2 text-body-sm font-medium text-brand-700">辅导未掌握题目</Link>
             )}
           </div>
         </section>
@@ -298,7 +298,7 @@ export default function ReviewsPage() {
         />
       ) : (
         <>
-        <div className="flex flex-wrap items-center justify-between gap-3 py-1 text-[11px]"><p><strong className="text-ink">第 {currentIndex + 1} 题</strong><span className="ml-3 text-ink-muted">今日 {data.items.length} 题 · 已完成 {finishedCount} · 剩余 {Math.max(0, data.items.length - finishedCount)}</span></p><button type="button" onClick={() => setShowExitConfirm(true)} className="text-ink-secondary hover:text-brand-700">← 暂时退出</button></div>
+        <div className="flex flex-wrap items-center justify-between gap-3 py-1 text-body-sm"><p><strong className="text-ink">第 {currentIndex + 1} 题</strong><span className="ml-3 text-ink-muted">今日 {data.items.length} 题 · 已完成 {finishedCount} · 剩余 {Math.max(0, data.items.length - finishedCount)}</span></p><button type="button" onClick={() => setShowExitConfirm(true)} className="text-ink-secondary hover:text-brand-700">← 暂时退出</button></div>
         <div className="h-1.5 overflow-hidden rounded-full bg-line" aria-label={`复习进度 ${currentIndex + 1}/${data.items.length}`}><div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${((currentIndex + 1) / data.items.length) * 100}%` }} /></div>
         <ul className="space-y-4">
           {(data.items as ReviewItemWithRetention[]).slice(currentIndex, currentIndex + 1).map((item) => {
@@ -326,7 +326,7 @@ export default function ReviewsPage() {
                       const cause = st.result?.cause ?? item.cause;
                       return (
                         <span
-                          className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                          className={`rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${
                             CAUSE_BADGE_STYLES[cause] ?? CAUSE_BADGE_FALLBACK
                           }`}
                         >
@@ -337,7 +337,7 @@ export default function ReviewsPage() {
                     })()}
                     {item.due && (
                       <span
-                        className="text-xs text-slate-400"
+                        className="text-caption text-slate-400"
                         title={fmtDateTime(item.due)}
                       >
                         到期 {fmtRelative(item.due)}
@@ -348,7 +348,7 @@ export default function ReviewsPage() {
                       item.retention_in_3d != null &&
                       item.retention_in_3d < RETENTION_SHOW_BELOW && (
                         <span
-                          className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+                          className="rounded-full bg-amber-50 px-2 py-0.5 text-caption font-medium text-amber-700"
                           title={
                             item.retention_now != null
                               ? `当前预计保持率 ${Math.floor(item.retention_now * 100)}%（FSRS 遗忘曲线确定性预测）`
@@ -360,7 +360,7 @@ export default function ReviewsPage() {
                         </span>
                       )}
                     {st.isVariant && (
-                      <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600">
+                      <span className="rounded-full bg-violet-50 px-2 py-0.5 text-caption font-medium text-violet-600">
                         变式题
                       </span>
                     )}
@@ -413,7 +413,7 @@ export default function ReviewsPage() {
                               <path d="M20 6 9 17l-5-5" />
                             </svg>
                           </span>
-                          <span className="edu-pop inline-flex animate-bounce items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm motion-reduce:animate-none">
+                          <span className="edu-pop inline-flex animate-bounce items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-0.5 text-caption font-bold text-white shadow-sm motion-reduce:animate-none">
                             已攻克
                           </span>
                           连续答对，这道题已掌握！它将移出复习队列。
@@ -429,7 +429,7 @@ export default function ReviewsPage() {
                             : "回答错误，连对计数已清零。"}
                         </p>
                       )}
-                      <p className="mt-1 text-xs text-slate-600">
+                      <p className="mt-1 text-caption text-slate-600">
                         下次复习：
                         <span
                           className="font-medium"
@@ -444,12 +444,12 @@ export default function ReviewsPage() {
                         {STATE_LABELS[st.result.state]?.label ?? st.result.state}
                       </p>
                       <div className="mt-3 rounded-[8px] border border-line bg-white/70">
-                        <button type="button" onClick={() => setOpenExplanation((current) => ({ ...current, [item.error_item_id]: !current[item.error_item_id] }))} className="flex w-full items-center justify-between px-3 py-2 text-left text-[11px] font-medium text-ink-secondary">
+                        <button type="button" onClick={() => setOpenExplanation((current) => ({ ...current, [item.error_item_id]: !current[item.error_item_id] }))} className="flex w-full items-center justify-between px-3 py-2 text-left text-body-sm font-medium text-ink-secondary">
                           <span>查看解析与思路</span>
                           <span aria-hidden>{openExplanation[item.error_item_id] ? "⌃" : "⌄"}</span>
                         </button>
                         {openExplanation[item.error_item_id] && (
-                          <div className="space-y-2 border-t border-line px-3 py-3 text-xs leading-5 text-slate-600">
+                          <div className="space-y-2 border-t border-line px-3 py-3 text-caption leading-5 text-slate-600">
                             <p><span className="font-medium text-slate-500">参考答案：</span><MathText text={st.result.answer} /></p>
                             {st.result.explanation && <p><span className="font-medium text-slate-500">解析：</span><MathText text={st.result.explanation} /></p>}
                           </div>
@@ -467,7 +467,7 @@ export default function ReviewsPage() {
                       {item.question.type === "short" && (
                         <AppealEntry questionId={item.question.id} />
                       )}
-                      <div className="mt-3 flex flex-wrap justify-end gap-2"><Link href={`/tutor?problem=${encodeURIComponent(item.question.stem)}`} className="rounded-[8px] border border-brand-200 bg-white px-4 py-2 text-[12px] font-medium text-brand-700">带题去辅导</Link><button type="button" onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : setCompleted(true)} className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-800">{currentIndex < data.items.length - 1 ? "继续下一题 →" : "完成今日复习"}</button></div>
+                      <div className="mt-3 flex flex-wrap justify-end gap-2"><Link href={`/tutor?error_id=${encodeURIComponent(item.error_item_id)}`} className="rounded-[8px] border border-brand-200 bg-white px-4 py-2 text-body-sm font-medium text-brand-700">带题去辅导</Link><button type="button" onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : setCompleted(true)} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800">{currentIndex < data.items.length - 1 ? "继续下一题 →" : "完成今日复习"}</button></div>
                     </div>
                   ) : (
                     <div className="mt-3 flex items-center justify-end gap-2">
@@ -505,8 +505,8 @@ export default function ReviewsPage() {
           <button type="button" aria-label="关闭退出确认" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setShowExitConfirm(false)} />
           <section role="dialog" aria-modal="true" aria-labelledby="review-exit-title" className="relative w-full max-w-[400px] rounded-[14px] border border-line bg-white p-5 shadow-floating">
             <h2 id="review-exit-title" className="text-[16px] font-semibold text-ink">暂时退出复习？</h2>
-            <p className="mt-2 text-[12px] leading-5 text-ink-muted">已提交的答案和记忆进度会保留，未完成题目仍留在复习队列。</p>
-            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-[8px] border border-line-strong px-4 py-2 text-[12px] font-medium text-ink-secondary">继续复习</button><Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white">确认退出</Link></div>
+            <p className="mt-2 text-body-sm leading-5 text-ink-muted">已提交的答案和记忆进度会保留，未完成题目仍留在复习队列。</p>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">继续复习</button><Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">确认退出</Link></div>
           </section>
         </div>
       )}

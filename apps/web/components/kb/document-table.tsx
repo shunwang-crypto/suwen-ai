@@ -138,19 +138,19 @@ export function DocumentTable({
                     </span>
                     {doc.parse_backend === "web" && (
                       <span
-                        className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700"
+                        className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-caption font-medium text-sky-700"
                         title="从网址导入"
                       >
                         网页
                       </span>
                     )}
                     {doc.parse_backend === "pdf-vision" && (
-                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-caption font-medium text-amber-700">
                         扫描识别
                       </span>
                     )}
                     {doc.parse_backend === "pdf-mixed" && (
-                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-caption font-medium text-amber-700">
                         混合 PDF
                       </span>
                     )}

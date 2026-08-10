@@ -34,6 +34,13 @@
    只加不改：旧类名（indigo- / slate- / rounded- 等）语义全部保留。
    ============================================================ */
 @theme {
+  /* 中文界面最低字号：caption 只用于次要说明，body-sm 用于控件正文。 */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.25rem;
+  --text-body-sm: 0.8125rem;
+  --text-body-sm--line-height: 1.5rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.5rem;
   --color-canvas: #f7f6f4;
   --color-surface: #ffffff;
   --color-surface-muted: #f3f2ef;
@@ -43,7 +50,10 @@
   --color-ink-secondary: #57564e;
   --color-ink-muted: #97968e;
 
-  /* 主操作为近黑；旧 brand-* 组件因此自动同步到新版外壳。 */
+  /* 主操作为近黑；旧 brand-* 组件因此自动同步到新版外壳。
+     600 与 700 曾是同一个值 #1e1e1c，导致 hover:bg-brand-700 在 bg-brand-600
+     按钮上完全不可见（2 处），且深色容器与深色按钮无法分层。700 下调为 600 与
+     800 之间的中间值：hover 变成真实的加深，text-brand-700 的位移不可感知。 */
   --color-brand-50: #eeedea;
   --color-brand-100: #e7e6e2;
   --color-brand-200: #d2d1cc;
@@ -51,7 +61,7 @@
   --color-brand-400: #77766f;
   --color-brand-500: #4b4a45;
   --color-brand-600: #1e1e1c;
-  --color-brand-700: #1e1e1c;
+  --color-brand-700: #1a1a18;
   --color-brand-800: #171715;
   --color-brand-900: #11110f;
   --color-brand-950: #090908;

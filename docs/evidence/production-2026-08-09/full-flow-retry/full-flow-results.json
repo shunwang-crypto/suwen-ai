@@ -1,0 +1,123 @@
+{
+  "reviewedAt": "2026-08-09T00:29:46.357Z",
+  "baseUrl": "https://20-239-104-201.sslip.io",
+  "runName": "线上验收·二次函数·20260809",
+  "kbId": "6bee41df-66e8-46c2-8b08-b28cd4bc3022",
+  "inputFile": "online-acceptance-quadratic-functions.md",
+  "balanceBefore": 9.85,
+  "balanceAfter": null,
+  "balanceSpent": null,
+  "completed": false,
+  "fatalError": "locator.waitFor: Timeout 180000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: '提交答卷' }) to be visible\u001b[22m\n\n    at testQuiz (/home/shunw/eduagents/apps/web/production_full_flow.mjs:344:16)\n    at async file:///home/shunw/eduagents/apps/web/production_full_flow.mjs:397:3",
+  "steps": [
+    {
+      "step": "00-login",
+      "url": "https://20-239-104-201.sslip.io/login",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "登录苏问"
+      ],
+      "text": "苏 苏问 AI 课堂 让每个学生，都拥有 自己的 AI 苏格拉底 RAG 知识库问答，每个结论都有引用来源 苏格拉底式辅导，引导思考而非直接给答案 遗忘曲线复习 + 学情报告，随学习自动生成 苏问 AI课堂 · 不急着给答案，先陪你想明白 苏 登录苏问 多智能体驱动的个性化学习平台 邮箱 密码 记住账号 忘记密码？ 登录 还没有账号？立即注册",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "01-login-success",
+      "url": "https://20-239-104-201.sslip.io/today",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "上午好，平台管理员"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 上午好，平台管理员 星期日 · 2026年8月9日 平 平台管理员 继续上次学习 按当前计划继续 夯实极限基础 当前任务：极限与导数基础 本章 100% 进入苏格拉底辅导学习 改做练习题 苏问是你的 AI 苏格拉底——不急着给答案，先陪你想明白。 当前阶段进度 认识极限的直观定义与常见题型 ✓ 精读极限的严格定义（ε-δ语言） ✓ 完成极限定义基础练习 ✓ 学习极限的四则运算法则并练习 ✓ 计划总进度 41% · 7/17 今日待办 1 / 1 完成 ✓ 极限计算综合练习 练习 夯实极限基础 · 第 6 天 目标：通过综合练习巩固极限计算的各类方法 60 分钟 来自「极限与导数基础」· 最近创建的计划用于今日任务与自动调整 查看完整计划 → 重点提醒 暂未发现需要优先加强的知识点。 反馈",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "02-billing-before",
+      "url": "https://20-239-104-201.sslip.io/billing",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "苏问 AI 额度"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 苏问 AI 额度 平 平台管理员 苏问 AI 额度 苏问 AI 额度用于对话、出题、辅导等 AI 功能，1 额度 = 1 元人民币 当前余额 9.85 额度 1 额度 = 1 元（CNY），AI 功能按实际用量扣减。 计费说明 AI 调用按模型用量成本的 2.5 倍 折算扣减额度，用多少扣多少 新账号注册即赠 10.00 额度 缓存命中免费：相同请求命中缓存时不扣任何额度 按模型真实成本×2.5 透明计费, 缓存命中免费 邀请活动 完成硅基流动有效注册，可申请 30.00 元苏问 AI 额度 请通过指定邀请链接注册。完成后联系平台管理员，经硅基流动后台确认属于有效邀请后人工发放；点击链接不会自动到账。活动额度仅限站内 AI 功能使用，不可提现或转让。 前往硅基流动注册 ↗ 在线充值暂未开放 当前暂不提供在线充值。注册赠送额度和每笔 AI 用量仍会如实记录；如需补充额度，请联系平台管理员。 额度流水 刷新 类型 变动 变动后余额 备注 时间 消费 -0.00 9.85 AI 调用扣费: quiz_blueprint 4 分钟前 消费 -0.00 9.85 AI 调用扣费: tutor_classify 5 分钟前 消费 -0.00 9.85 AI 调用扣费: tutor_classify 5 分钟前 消费 -0.00 9.85 AI 调用扣费: qa_grade 5 分钟前 消费 -0.00 9.85 AI 调用扣费: qa_grade 11 分钟前 消费 -0.02 9.85 AI 调用扣费: plan_parse_goal 8 小时前 消费 -0.00 9.87 AI 调用扣费: qa_web_query_plan 2 天前 消费 -0.00 9.87 AI 调用扣费: qa_web_query_plan 5 天前 消费 -0.00 9.87 AI 调用扣费: tutor_classif",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "18-quiz-config",
+      "url": "https://20-239-104-201.sslip.io/quiz?kb=6bee41df-66e8-46c2-8b08-b28cd4bc3022&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E5%9F%BA%E7%A1%80",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "智能练习"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 智能练习 平 平台管理员 智能练习 根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。 为你推荐的练习 根据真实学情画像自动选择知识点（掌握度 < 60%，近 7 天错过的优先） 开始个性化练习 科目范围 全部 高数 线上验收·二次函数·20260809 还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。 自定义练习 自选主题、资料范围和难度，生成一组专属练习 收起设置⌃ 练习主题 绑定知识库（可选，出题将取材于库内文档） 不绑定（通用出题） 高数 线上验收·二次函数·20260809 难度配比（题数 = 三档之和，共 5 题，上限 20） 简单 中等 困难 开始出题 最近练习 还没有练习记录 反馈",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "19-quiz-configured",
+      "url": "https://20-239-104-201.sslip.io/quiz?kb=6bee41df-66e8-46c2-8b08-b28cd4bc3022&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E5%9F%BA%E7%A1%80",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "智能练习"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 智能练习 平 平台管理员 智能练习 根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。 为你推荐的练习 根据真实学情画像自动选择知识点（掌握度 < 60%，近 7 天错过的优先） 开始个性化练习 科目范围 全部 高数 线上验收·二次函数·20260809 还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。 自定义练习 自选主题、资料范围和难度，生成一组专属练习 收起设置⌃ 练习主题 绑定知识库（可选，出题将取材于库内文档） 不绑定（通用出题） 高数 线上验收·二次函数·20260809 难度配比（题数 = 三档之和，共 2 题，上限 20） 简单 中等 困难 开始出题 最近练习 还没有练习记录 反馈",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "20-quiz-blueprint",
+      "url": "https://20-239-104-201.sslip.io/quiz?kb=6bee41df-66e8-46c2-8b08-b28cd4bc3022&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E5%9F%BA%E7%A1%80",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "智能练习"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 智能练习 平 平台管理员 ✓ 设置 2 蓝图确认 3 作答 4 查看结果 智能练习 根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。 为你推荐的练习 根据真实学情画像自动选择知识点（掌握度 < 60%，近 7 天错过的优先） 开始个性化练习 科目范围 全部 高数 线上验收·二次函数·20260809 还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。 自定义练习 自选主题、资料范围和难度，生成一组专属练习 收起设置⌃ 练习主题 绑定知识库（可选，出题将取材于库内文档） 不绑定（通用出题） 高数 线上验收·二次函数·20260809 难度配比（题数 = 三档之和，共 2 题，上限 20） 简单 中等 困难 开始出题 练习蓝图 确认无误后再生成正式题目；每一题都可以单独调整。 覆盖二次函数图像性质及解析式求法，难度分布为 1 道简单单选和 1 道中等填空。 总题数 2 题 简单 1 题 中等 1 题 困难 0 题 1 二次函数图像与性质 单选 · 简单 调整 2 二次函数解析式的求法 填空 · 中等 调整 取消 确认并生成题目 最近练习 还没有练习记录 反馈",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "21-quiz-blueprint-edited",
+      "url": "https://20-239-104-201.sslip.io/quiz?kb=6bee41df-66e8-46c2-8b08-b28cd4bc3022&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E5%9F%BA%E7%A1%80",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "智能练习"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 智能练习 平 平台管理员 ✓ 设置 2 蓝图确认 3 作答 4 查看结果 智能练习 根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。 为你推荐的练习 根据真实学情画像自动选择知识点（掌握度 < 60%，近 7 天错过的优先） 开始个性化练习 科目范围 全部 高数 线上验收·二次函数·20260809 还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。 自定义练习 自选主题、资料范围和难度，生成一组专属练习 收起设置⌃ 练习主题 绑定知识库（可选，出题将取材于库内文档） 不绑定（通用出题） 高数 线上验收·二次函数·20260809 难度配比（题数 = 三档之和，共 2 题，上限 20） 简单 中等 困难 开始出题 练习蓝图 确认无误后再生成正式题目；每一题都可以单独调整。 覆盖二次函数图像性质及解析式求法，难度分布为 1 道简单单选和 1 道中等填空。 总题数 2 题 简单 1 题 中等 1 题 困难 0 题 1 二次函数图像与性质 单选 · 简单 调整 2 二次函数解析式的求法 填空 · 中等 调整 取消 确认并生成题目 最近练习 还没有练习记录 反馈",
+      "horizontalOverflow": 0
+    },
+    {
+      "step": "99-failure-state",
+      "url": "https://20-239-104-201.sslip.io/quiz?kb=6bee41df-66e8-46c2-8b08-b28cd4bc3022&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E5%9F%BA%E7%A1%80",
+      "title": "苏问 AI课堂 · 个性化学习平台",
+      "h1": [
+        "智能练习"
+      ],
+      "text": "苏 苏问 AI 课堂 今日 学习与资料 AI 对话 分级辅导 知识库 练习巩固 智能练习 今日复习 错题本 题目资料 规划与成长 学习计划 学习画像 学情报告 机构 苏问 AI 额度 智能练习 平 平台管理员 已取消出题（蓝图未确认），可重新发起。 ✕ 智能练习 根据你的学习状态选择个性化练习，或按主题和资料自定义一组题。 为你推荐的练习 根据真实学情画像自动选择知识点（掌握度 < 60%，近 7 天错过的优先） 开始个性化练习 科目范围 全部 高数 线上验收·二次函数·20260809 还没有识别到薄弱点 —— 先做一次练习积累数据，判分后画像才会给出定向出题的知识点。 自定义练习 自选主题、资料范围和难度，生成一组专属练习 收起设置⌃ 练习主题 绑定知识库（可选，出题将取材于库内文档） 不绑定（通用出题） 高数 线上验收·二次函数·20260809 难度配比（题数 = 三档之和，共 2 题，上限 20） 简单 中等 困难 开始出题 最近练习 还没有练习记录 反馈",
+      "horizontalOverflow": 0
+    }
+  ],
+  "issues": [
+    {
+      "step": "00-login",
+      "kind": "http:401",
+      "detail": "POST https://20-239-104-201.sslip.io/api/auth/refresh"
+    },
+    {
+      "step": "00-login",
+      "kind": "console:error",
+      "detail": "Failed to load resource: the server responded with a status of 401 ()"
+    },
+    {
+      "step": "21-quiz-blueprint-edited",
+      "kind": "fatal",
+      "detail": "locator.waitFor: Timeout 180000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: '提交答卷' }) to be visible\u001b[22m\n\n    at testQuiz (/home/shunw/eduagents/apps/web/production_full_flow.mjs:344:16)\n    at async file:///home/shunw/eduagents/apps/web/production_full_flow.mjs:397:3"
+    }
+  ],
+  "sseTranscripts": [
+    {
+      "url": "https://20-239-104-201.sslip.io/api/quiz",
+      "status": 200,
+      "body": "event: node_update\r\ndata: {\"node\":\"make_blueprint\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"make_blueprint\",\"event\":\"blueprint_ready\",\"items\":2,\"parsed\":true,\"corrected\":false,\"difficulty_enforced\":0}\r\n\r\nevent: interrupt\r\ndata: {\"kind\":\"blueprint_confirm\",\"blueprint\":{\"items\":[{\"kc_name\":\"二次函数图像与性质\",\"type\":\"single\",\"difficulty\":\"easy\"},{\"kc_name\":\"二次函数解析式的求法\",\"type\":\"blank\",\"difficulty\":\"mid\"}],\"summary\":\"覆盖二次函数图像性质及解析式求法，难度分布为 1 道简单单选和 1 道中等填空。\"},\"difficulty_reasons\":[],\"thread_id\":\"quiz:e99dc037-5572-4c4e-b408-73d8abd05fb9:693cdab8-975c-4caf-8503-1ac7d8634684\",\"resume_url\":\"/api/threads/quiz:e99dc037-5572-4c4e-b408-73d8abd05fb9:693cdab8-975c-4caf-8503-1ac7d8634684/resume\"}\r\n\r\n"
+    },
+    {
+      "url": "https://20-239-104-201.sslip.io/api/threads/quiz:e99dc037-5572-4c4e-b408-73d8abd05fb9:693cdab8-975c-4caf-8503-1ac7d8634684/resume",
+      "status": 200,
+      "body": "event: node_update\r\ndata: {\"node\":\"confirm_blueprint\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"confirm_blueprint\",\"event\":\"approved\",\"edited\":true}\r\n\r\nevent: node_update\r\ndata: {\"node\":\"generate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"generate\",\"event\":\"generated\",\"count\":0,\"materials\":5,\"round\":0,\"profile_injected\":false}\r\n\r\nevent: node_update\r\ndata: {\"node\":\"validate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"validate\",\"event\":\"failed\",\"round\":0,\"error_count\":1,\"will_retry\":true}\r\n\r\n: ping - 2026-08-09 00:27:00.094536+00:00\r\n\r\n: ping - 2026-08-09 00:27:15.094791+00:00\r\n\r\nevent: node_update\r\ndata: {\"node\":\"generate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"generate\",\"event\":\"generated\",\"count\":0,\"materials\":5,\"round\":1,\"profile_injected\":false}\r\n\r\nevent: node_update\r\ndata: {\"node\":\"validate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"validate\",\"event\":\"failed\",\"round\":1,\"error_count\":1,\"will_retry\":true}\r\n\r\nevent: node_update\r\ndata: {\"node\":\"generate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"generate\",\"event\":\"generated\",\"count\":0,\"materials\":5,\"round\":2,\"profile_injected\":false}\r\n\r\nevent: node_update\r\ndata: {\"node\":\"validate\",\"status\":\"done\"}\r\n\r\nevent: trace_event\r\ndata: {\"node\":\"validate\",\"event\":\"failed\",\"round\":2,\"error_count\":1,\"will_retry\":false}\r\n\r\nevent: done\r\ndata: {\"thread_id\":\"quiz:e99dc037-5572-4c4e-b408-73d8abd05fb9:693cdab8-975c-4caf-8503-1ac7d8634684\",\"result\":{}}\r\n\r\n"
+    }
+  ]
+}

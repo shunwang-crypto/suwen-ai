@@ -121,7 +121,7 @@ export function ContextDrawer({
           <p className="break-words text-xs text-slate-500">
             {(data?.chunk.heading_path || citation.heading_path) ?? ""}
             {page != null && (
-              <span className="ml-1.5 rounded bg-slate-200/70 px-1.5 py-0.5 text-[11px] text-slate-600">
+              <span className="ml-1.5 rounded bg-slate-200/70 px-1.5 py-0.5 text-body-sm text-slate-600">
                 第 {page} 页
               </span>
             )}

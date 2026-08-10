@@ -108,7 +108,7 @@ export function Flow() {
                   <div className="flex items-start gap-4 md:flex-col md:items-center md:text-center">
                     <span className="relative z-10 flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border-2 border-indigo-200 bg-white text-indigo-600 shadow-sm">
                       {s.icon}
-                      <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-sky-500 text-[10px] font-bold text-white">
+                      <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-sky-500 text-caption font-bold text-white">
                         {i + 1}
                       </span>
                     </span>

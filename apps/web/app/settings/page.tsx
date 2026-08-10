@@ -95,7 +95,7 @@ function SettingRow({ label, value, note, action }: { label: string; value: Reac
       <span className="text-xs text-ink-muted">{label}</span>
       <div className="min-w-0">
         <div className="text-[13px] font-medium text-ink">{value}</div>
-        {note && <p className="mt-1 text-[11px] leading-5 text-ink-muted">{note}</p>}
+        {note && <p className="mt-1 text-body-sm leading-5 text-ink-muted">{note}</p>}
       </div>
       {action && <div className="justify-self-start sm:justify-self-end">{action}</div>}
     </div>
@@ -255,7 +255,7 @@ function ModelCredentialSection() {
             <p className="mt-1">删除后文本生成恢复使用苏问平台模型和额度，已保存的 Key 不可恢复。</p>
             <div className="mt-3 flex gap-2"><button ref={deleteButtonRef} type="button" onClick={() => void remove()} className="rounded-control bg-danger-600 px-3 py-1.5 text-white">确认删除</button><button type="button" onClick={() => setConfirmDelete(false)} className="rounded-control border border-danger-300 px-3 py-1.5">取消</button></div>
           </div>}
-          <p className="text-[11px] leading-5 text-ink-muted">安全说明：Key 只在服务端加密保存，页面不会写入 URL、localStorage 或 sessionStorage；管理员只能看到 provider、状态和后四位。</p>
+          <p className="text-body-sm leading-5 text-ink-muted">安全说明：Key 只在服务端加密保存，页面不会写入 URL、localStorage 或 sessionStorage；管理员只能看到 provider、状态和后四位。</p>
         </div>
       )}
     </div>
@@ -420,7 +420,7 @@ export default function SettingsPage() {
             <button key={item.id} type="button" onClick={() => { setSection(item.id); setError(null); setSaved(null); }} className={`relative shrink-0 rounded-control px-3 py-2 text-left text-xs transition-colors lg:flex lg:h-11 lg:w-full lg:items-center lg:rounded-none lg:px-4 ${section === item.id ? "bg-surface-muted font-medium text-ink" : "text-ink-secondary hover:bg-surface-muted hover:text-ink"}`}>
               {section === item.id && <span className="absolute bottom-[-13px] left-3 right-3 h-[2px] bg-brand-600 lg:bottom-auto lg:left-0 lg:right-auto lg:h-7 lg:w-[3px]" aria-hidden />}
               <span>{item.label}</span>
-              {item.id === "memory" && insights && insights.length > 0 && <span className="ml-auto rounded-full bg-white px-2 py-0.5 text-[10px] text-ink-muted">{insights.length}</span>}
+              {item.id === "memory" && insights && insights.length > 0 && <span className="ml-auto rounded-full bg-white px-2 py-0.5 text-caption text-ink-muted">{insights.length}</span>}
             </button>
           ))}
         </nav>
@@ -477,10 +477,10 @@ export default function SettingsPage() {
                   <div>
                     <label htmlFor="goal" className="text-xs font-medium text-ink">学习目标</label>
                     <input id="goal" value={goal} maxLength={GOAL_MAX} onChange={(event) => { setGoal(event.target.value); setSaved(null); }} placeholder="如：高数期末冲 90 分" className="mt-3 w-full rounded-control border border-line-strong bg-white px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-ink-muted focus:border-brand-600" />
-                    <p className="mt-2 text-[11px] text-ink-muted">一句话即可，学习内容会围绕目标调整重点。</p>
+                    <p className="mt-2 text-body-sm text-ink-muted">一句话即可，学习内容会围绕目标调整重点。</p>
                   </div>
                   <div>
-                    <div className="flex items-center justify-between"><p className="text-xs font-medium text-ink">兴趣情境</p><span className="text-[10px] text-ink-muted">{interests.length}/{INTERESTS_MAX}</span></div>
+                    <div className="flex items-center justify-between"><p className="text-xs font-medium text-ink">兴趣情境</p><span className="text-caption text-ink-muted">{interests.length}/{INTERESTS_MAX}</span></div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {PRESET_INTERESTS.map((tag) => <Chip key={tag} active={interests.includes(tag)} onClick={() => toggleInterest(tag)}>{tag}</Chip>)}
                       {interests.filter((tag) => !PRESET_INTERESTS.includes(tag)).map((tag) => <Chip key={tag} active title="点击移除" onClick={() => toggleInterest(tag)}>{tag} ×</Chip>)}
@@ -517,7 +517,7 @@ export default function SettingsPage() {
               {insights === null ? <div className="mt-7 h-40 animate-pulse rounded-overlay bg-line/60" /> : insights.length === 0 ? <p className="border-b border-line py-10 text-sm text-ink-muted">目前没有长期记忆条目。</p> : (
                 <div className="divide-y divide-line">{insights.map((item) => (
                   <article key={item.id} className="grid gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span><span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] text-ink-muted">{item.kind}</span></div><div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div><p className="mt-2 text-[10px] text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p></div>
+                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span><span className="rounded-full bg-surface-muted px-2 py-0.5 text-caption text-ink-muted">{item.kind}</span></div><div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div><p className="mt-2 text-caption text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p></div>
                     <button type="button" disabled={deletingId === item.id} onClick={() => deleteInsight(item.id)} className="self-start text-xs font-medium text-danger-600 disabled:opacity-50">{deletingId === item.id ? "删除中…" : "删除"}</button>
                   </article>
                 ))}</div>

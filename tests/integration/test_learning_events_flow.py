@@ -37,6 +37,7 @@ async def test_review_persists_reviewlog_learning_event_and_replays_once(client)
         KnowledgeBase,
         KnowledgeComponent,
         LearningEvent,
+        MasteryLog,
         Question,
         Quiz,
     )
@@ -108,7 +109,15 @@ async def test_review_persists_reviewlog_learning_event_and_replays_once(client)
                 LearningEvent.idempotency_key == idem,
             )
         )
-        assert fsrs_event is not None and learning_event is not None
+        assert fsrs_event is not None
+        mastery_log = await session.scalar(
+            select(MasteryLog).where(
+                MasteryLog.user_id == user_id,
+                MasteryLog.evidence_type == "review",
+                MasteryLog.evidence_id == fsrs_event.id,
+            )
+        )
+        assert learning_event is not None and mastery_log is not None
         assert fsrs_event.rating == 3 and fsrs_event.correct is True
         assert fsrs_event.review_duration_ms == 321
         assert fsrs_event.review_log_json["rating"] == 3
@@ -139,6 +148,13 @@ async def test_review_persists_reviewlog_learning_event_and_replays_once(client)
                 LearningEvent.source_type == "review",
                 LearningEvent.source_id == item_id,
                 LearningEvent.idempotency_key == idem,
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(MasteryLog).where(
+                MasteryLog.user_id == user_id,
+                MasteryLog.evidence_type == "review",
+                MasteryLog.evidence_id == fsrs_event.id,
             )
         ) == 1
         assert (await session.get(ErrorItem, item_id)).fsrs_card_json == card_snapshot

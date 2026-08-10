@@ -9,6 +9,53 @@ export interface PlanGoalExample extends PlanGoalFormValue {
   label: string;
 }
 
+export interface ParsedPlanIntent {
+  prompt: string;
+  deadline: string | null;
+  dailyHours: number | null;
+  totalDays: number | null;
+  missing: readonly ("deadline" | "daily_hours")[];
+}
+
+/** Parse only explicit, user-authored scheduling facts; do not invent dates or time. */
+export function parsePlanIntent(prompt: string, now = new Date()): ParsedPlanIntent {
+  const value = prompt.trim();
+  const dateMatch = value.match(/(?:在|到|于)?\s*(\d{1,2})月(\d{1,2})(?:日|号)/);
+  let deadline: string | null = null;
+  if (dateMatch) {
+    const month = Number(dateMatch[1]);
+    const day = Number(dateMatch[2]);
+    const year = now.getFullYear();
+    const candidate = new Date(year, month - 1, day);
+    if (candidate.getMonth() === month - 1 && candidate.getDate() === day) {
+      if (candidate.getTime() < new Date(year, now.getMonth(), now.getDate()).getTime()) {
+        candidate.setFullYear(year + 1);
+      }
+      deadline = `${candidate.getFullYear()}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+  const weekMatch = value.match(/(\d{1,2})\s*周(?:内|后|完成|达到|冲刺)?/);
+  const chineseWeekMatch = value.match(/(一|两|二|三|四|五|六|七|八|九|十)\s*周(?:内|后|完成|达到|冲刺)?/);
+  const dayMatch = value.match(/(\d{1,3})\s*天(?:内|后|完成|达到|冲刺)?/);
+  const hoursMatch = value.match(/每天\s*(\d+(?:\.\d+)?)\s*(?:小时|h)/i);
+  const dailyHours = hoursMatch ? Math.max(0.5, Math.min(12, Number(hoursMatch[1]))) : null;
+  const chineseWeeks = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 } as const;
+  const weekCount = weekMatch
+    ? Number(weekMatch[1])
+    : chineseWeekMatch
+      ? chineseWeeks[chineseWeekMatch[1] as keyof typeof chineseWeeks]
+      : null;
+  const totalDays = weekCount != null
+    ? Math.max(1, Math.min(90, weekCount * 7))
+    : dayMatch
+      ? Math.max(1, Math.min(90, Number(dayMatch[1])))
+      : null;
+  const missing: Array<"deadline" | "daily_hours"> = [];
+  if (!deadline && !totalDays) missing.push("deadline");
+  if (dailyHours == null) missing.push("daily_hours");
+  return { prompt: value, deadline, dailyHours, totalDays, missing };
+}
+
 export const PLAN_GOAL_EXAMPLES: readonly PlanGoalExample[] = [
   {
     label: "高数基础",
@@ -44,6 +91,6 @@ export function planGoalReadiness(value: PlanGoalFormValue) {
 
 export function isPlanGoalReady(value: PlanGoalFormValue): boolean {
   const readiness = planGoalReadiness(value);
-  // 当前基础可以由后续基线任务补齐；主题、成果和验收方式必须由用户明确。
-  return readiness.topic && readiness.outcome && readiness.criteria;
+  // 一句话目标先启动；当前基础、成果和验收标准由图在确实缺失时追问。
+  return readiness.topic;
 }

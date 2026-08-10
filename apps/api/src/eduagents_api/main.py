@@ -40,6 +40,7 @@ from .routers import (
     ops,
     orgs,
     plans,
+    practice,
     preferences,
     profile,
     public_config,
@@ -200,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(orgs.router)
     app.include_router(threads.router)
     app.include_router(quiz.router)
+    app.include_router(practice.router)
     app.include_router(plans.router)
     app.include_router(plans.tutor_router)
     app.include_router(tutor_attachments.router)

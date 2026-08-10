@@ -238,7 +238,7 @@ export default function OrgsPage() {
                     <span className="flex items-center gap-1.5">
                       <span className="min-w-0 flex-1 truncate">{o.name}</span>
                       <span
-                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-medium ${
                           o.role === "admin"
                             ? "bg-indigo-100 text-indigo-700"
                             : "bg-slate-100 text-slate-500"

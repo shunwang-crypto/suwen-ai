@@ -90,7 +90,7 @@ function MyFeedbackList() {
               {FEEDBACK_CATEGORY_LABELS[it.category as FeedbackCategory] ?? it.category}
             </span>
             <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              className={`rounded-full px-2 py-0.5 text-caption font-medium ${
                 it.status === "closed"
                   ? "bg-slate-100 text-slate-500"
                   : "bg-amber-50 text-amber-700"
@@ -100,7 +100,7 @@ function MyFeedbackList() {
             </span>
           </div>
           <p className="mt-1 break-words text-xs text-slate-600">{it.content}</p>
-          <p className="mt-1 text-[10px] text-slate-400">
+          <p className="mt-1 text-caption text-slate-400">
             {new Date(it.created_at).toLocaleString("zh-CN")}
             {it.page_url && ` · ${it.page_url}`}
           </p>
@@ -256,7 +256,7 @@ export function FeedbackWidget() {
               />
               {error && <p className="text-xs text-red-600">{error}</p>}
               <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-[10px] text-slate-400">
+                <p className="min-w-0 truncate text-caption text-slate-400">
                   将附带页面路径{lastRequestId ? "与最近请求 ID" : ""}，便于排查
                 </p>
                 <button

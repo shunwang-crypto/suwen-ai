@@ -68,12 +68,29 @@ describe("PlanTaskDrawer", () => {
     );
     expect(screen.getByRole("link", { name: "进入分级辅导" })).toHaveAttribute(
       "href",
-      "/tutor?problem=%E8%83%BD%E5%A4%9F%E6%A0%B9%E6%8D%AE%E9%A1%B6%E7%82%B9%E5%BC%8F%E5%88%A4%E6%96%AD%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0%E7%9A%84%E5%BC%80%E5%8F%A3%E4%B8%8E%E9%A1%B6%E7%82%B9%E3%80%82&kb=11111111-1111-4111-8111-111111111111",
+      "/tutor?kb=11111111-1111-4111-8111-111111111111",
     );
     expect(screen.getByRole("link", { name: "复习相关错题" })).toHaveAttribute(
       "href",
       "/reviews",
     );
+  });
+
+  it("uses only owned plan/task identifiers for tutor context", () => {
+    render(
+      <PlanTaskDrawer
+        location={{
+          ...location(),
+          planId: "22222222-2222-4222-8222-222222222222",
+          task: { ...task(), task_key: "stage-0-day-0-task-0" },
+        }}
+        onClose={() => {}}
+      />,
+    );
+    const href = screen.getByRole("link", { name: "进入分级辅导" }).getAttribute("href") ?? "";
+    expect(href).toBe("/tutor?plan_id=22222222-2222-4222-8222-222222222222&task_key=stage-0-day-0-task-0&kb=11111111-1111-4111-8111-111111111111");
+    expect(href).not.toContain("problem=");
+    expect(href).not.toContain(encodeURIComponent("能够根据顶点式判断二次函数的开口与顶点。"));
   });
 
   it.each([

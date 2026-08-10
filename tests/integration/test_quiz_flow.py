@@ -105,7 +105,11 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
             client, "POST", intr["resume_url"], headers, {"value": {"approved": True}}
         )
         assert "done" in events2, events2
-        result = events2["done"][0]["result"]
+        done = events2["done"][0]
+        assert done["schema_version"] == 2
+        assert done["outcome"] == "succeeded"
+        assert done["error"] is None
+        result = done["result"]
         assert len(result["questions"]) == 2
         quiz_id = result["quiz_id"]
 

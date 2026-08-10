@@ -147,7 +147,7 @@ async def _register(client, prefix: str):
 async def _seed_kb(uid: str) -> dict:
     """知识库 + 三个 KC (无掌握度记录)。"""
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import Document, KnowledgeBase, KnowledgeComponent
+    from eduagents_api.models import Chunk, Document, KnowledgeBase, KnowledgeComponent
 
     tid = uuid.UUID(uid)
     async with tenant_session(uid) as s:
@@ -161,17 +161,43 @@ async def _seed_kb(uid: str) -> dict:
         s.add(doc)
         kcs = {
             "deriv": KnowledgeComponent(
-                tenant_id=tid, kb_id=kb.id, canonical_name="导数定义", aliases=["导数的定义"]
+                tenant_id=tid, kb_id=kb.id, canonical_name="导数定义",
+                aliases=["导数的定义"], source_kind="chapter_fallback",
             ),
             "extremum": KnowledgeComponent(
-                tenant_id=tid, kb_id=kb.id, canonical_name="极值判定", aliases=["极值"]
+                tenant_id=tid, kb_id=kb.id, canonical_name="极值判定",
+                aliases=["极值"], source_kind="chapter_fallback",
             ),
             "taylor": KnowledgeComponent(
-                tenant_id=tid, kb_id=kb.id, canonical_name="泰勒公式", aliases=[]
+                tenant_id=tid, kb_id=kb.id, canonical_name="泰勒公式",
+                aliases=[], source_kind="chapter_fallback",
             ),
         }
         s.add_all(list(kcs.values()))
         await s.flush()
+        parent = Chunk(
+            tenant_id=tid,
+            doc_id=doc.id,
+            text="高等数学讲义",
+            heading_path="高等数学",
+            content_hash=uuid.uuid4().hex,
+            embedding_status="parent",
+        )
+        s.add(parent)
+        await s.flush()
+        for key, name in (("deriv", "导数定义"), ("extremum", "极值判定"), ("taylor", "泰勒公式")):
+            s.add(
+                Chunk(
+                    tenant_id=tid,
+                    doc_id=doc.id,
+                    parent_id=parent.id,
+                    text=f"{name}章节内容",
+                    heading_path=name,
+                    kc_ids=[str(kcs[key].id)],
+                    content_hash=uuid.uuid4().hex,
+                    embedding_status="done",
+                )
+            )
         return {
             "kb_id": str(kb.id),
             "doc_id": str(doc.id),
@@ -404,14 +430,19 @@ async def test_quiz_from_weak_points(client):
     assert "薄弱点强化练习" in prompt  # topic 缺省值
 
 
-async def test_quiz_from_weak_points_without_data_rejected(client):
-    """无掌握度数据 -> 400 NO_WEAK_POINTS (不静默降级成普通出题)。"""
+async def test_quiz_from_weak_points_without_data_falls_back_to_assessment(client):
+    """无掌握度数据 -> 不再 400 NO_WEAK_POINTS, 转 Assessment Mode (§5.3)。
+
+    冷启动死锁的回归防线: 曾经"要有薄弱点才能出题, 要出题才能产生薄弱点", 前端
+    据此禁用入口, 新用户永远迈不出第一步。这个用户连知识库都没有, 所以 KC 图为空,
+    返回显式的前置缺失 NO_KC_AVAILABLE —— 那是真正无事可做, 与"证据不足"不同。
+    """
     _uid, headers = await _register(client, "vlse-nowp")
     r = await client.get("/api/profile/weak-points", headers=headers)
     assert r.json()["weak_points"] == []
     r = await client.post("/api/quiz", headers=headers, json={"from_weak_points": True})
-    assert r.status_code == 400
-    assert r.json()["code"] == "NO_WEAK_POINTS"
+    assert r.status_code == 409
+    assert r.json()["code"] == "NO_KC_AVAILABLE"
 
 
 async def test_quiz_from_weak_points_empty_kb_does_not_fallback_cross_subject(client):
@@ -459,8 +490,11 @@ async def test_quiz_from_weak_points_empty_kb_does_not_fallback_cross_subject(cl
         headers=headers,
         json={"from_weak_points": True, "kb_id": physics_id},
     )
-    assert r.status_code == 400
-    assert r.json()["code"] == "NO_WEAK_POINTS"
+    # 该库唯一的 KC 是 p=0.92 / confidence=0.6 —— 已验证掌握, 既不是薄弱点也不需要
+    # 诊断。这是成功状态而非前置缺失, 因此报 ALL_KC_MASTERED; 关键是**不得**回退到
+    # 高数库出题 (跨科目混卷才是这条测试要守的红线)。
+    assert r.status_code == 409
+    assert r.json()["code"] == "ALL_KC_MASTERED"
 
 
 # ---------- ③ Reflection 对话洞察 (§5.5) ----------

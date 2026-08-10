@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway import (
@@ -90,12 +92,19 @@ async def test_replay_hits_cassette(tmp_path):
     key = gw._cassette_key(req("固定问题"))
     Cassette(settings.gateway_cassette_dir).put(
         key,
-        {"text": "录制的真实回答", "model": "deepseek-chat", "prompt_tokens": 12, "completion_tokens": 34},
+        {
+            "text": "录制的真实回答",
+            "model": "deepseek-chat",
+            "prompt_tokens": 12,
+            "completion_tokens": 34,
+            "finish_reason": "length",
+        },
     )
     result = await gw.chat(req("固定问题"))
     assert result.text == "录制的真实回答"
     assert result.mode == "replay"
     assert result.prompt_tokens == 12
+    assert result.finish_reason == "length"
 
 
 async def test_replay_miss_falls_back_to_stub_when_allowed(tmp_path):
@@ -113,6 +122,37 @@ async def test_replay_miss_raises_when_stub_disallowed(tmp_path):
     with pytest.raises(GatewayError) as exc_info:
         await gw.chat(req("没录制过的问题"))
     assert exc_info.value.code == "CASSETTE_MISS"
+
+
+async def test_live_chat_preserves_provider_finish_reason(tmp_path, monkeypatch):
+    settings = make_settings(
+        tmp_path,
+        gateway_mode="live",
+        standard_api_key="standard-test-key",
+    )
+    gw = OpenAIGateway(settings)
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                async def create(**kwargs):
+                    return SimpleNamespace(
+                        model="fake-standard",
+                        usage=SimpleNamespace(prompt_tokens=3, completion_tokens=4),
+                        choices=[
+                            SimpleNamespace(
+                                finish_reason="length",
+                                message=SimpleNamespace(content='{"questions": []}'),
+                            )
+                        ],
+                    )
+
+    monkeypatch.setattr(gw, "_client", lambda tier: FakeClient())
+    result = await gw._call_tier(req(), Tier.standard)
+
+    assert result.text == '{"questions": []}'
+    assert result.finish_reason == "length"
 
 
 async def test_stream_yields_deltas_then_final_result(tmp_path):

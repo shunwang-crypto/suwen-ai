@@ -160,8 +160,12 @@ def install_error_handlers(app: FastAPI) -> None:
             "USER_QUERY_TOO_SHORT": "邮箱查询至少输入 3 个字符",
             "WALLET_ADJUST_REFERENCE_CONFLICT": "该业务凭证已用于不同的额度调整，请更换凭证",
             "CONTENT_REJECTED": "内容不符合平台规范，请修改后再试",
-            # 画像定向出题 (M4-D2): 掌握度数据不足时不静默降级成普通出题
+            # 画像定向出题 (M4-D2): 掌握度数据不足时不静默降级成普通出题。
+            # NO_WEAK_POINTS 已由 Assessment Mode 取代 (证据不足 -> 出诊断题),
+            # 保留文案是为了兼容仍可能回放该码的历史记录。
             "NO_WEAK_POINTS": "还没有识别到薄弱点，先做一次练习积累数据",
+            "NO_KC_AVAILABLE": "这个知识库还没有抽出知识点，先上传资料或等待解析完成",
+            "ALL_KC_MASTERED": "这个范围内的知识点都已验证掌握，换个知识库或自定义练习吧",
             # URL 网页导入 (parsing/web.py 的 WebFetchError.code)
             "URL_INVALID": "网址格式不合法",
             "URL_SCHEME_NOT_ALLOWED": "仅支持 http/https 网址",

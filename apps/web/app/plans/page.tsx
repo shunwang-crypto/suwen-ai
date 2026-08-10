@@ -32,6 +32,7 @@ import { MathText } from "@/lib/katex";
 import {
   PLAN_GOAL_EXAMPLES,
   isPlanGoalReady,
+  parsePlanIntent,
   planGoalReadiness,
 } from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
@@ -67,8 +68,8 @@ interface PendingPlanDraft {
     targetOutcome: string;
     successCriteria: string;
     kbId: string;
-    hours: number;
-    totalDays: number;
+    hours: number | null;
+    totalDays: number | null;
   };
 }
 
@@ -257,7 +258,7 @@ function TaskStatusControls({
         onClick={() =>
           taskKey && onStatus?.(taskKey, status === "skipped" ? "pending" : "skipped")
         }
-        className={`rounded px-1.5 py-0.5 text-[9px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`rounded px-1.5 py-0.5 text-caption font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
           status === "skipped"
             ? "bg-surface-muted text-ink-secondary"
             : "text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
@@ -296,22 +297,22 @@ function PlanCalendar({
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
         <section className="overflow-hidden rounded-[12px] border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-[10px] text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
         <ul className="divide-y divide-line">
           {currentDay.tasks.map((task, index) => {
             const key = task.task_key;
             const status = normalizedTaskStatus(task);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-[12px] hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-[10px] text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-[10px] text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
-        <p className="border-t border-line px-4 py-2.5 text-[10px] text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
+        <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
         </section>
 
         <section className="overflow-hidden rounded-[12px] border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-[10px] font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
-        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-[9px] font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-[12px] font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-[10px] text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-[10px] ${handled === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : day.day === currentDay.day ? `${done}/${day.tasks.length - skipped} 进行中` : "待开始"}</span></li>; })}</ol>
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-body-sm font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
+        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-caption font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-body-sm font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-caption text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-caption ${handled === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : day.day === currentDay.day ? `${done}/${day.tasks.length - skipped} 进行中` : "待开始"}</span></li>; })}</ol>
         </section>
       </div>
 
@@ -320,12 +321,12 @@ function PlanCalendar({
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-[13px] font-semibold text-ink">完整计划</h3>
-              <p className="mt-0.5 text-[10px] text-ink-muted">共 {structure.stages.length} 个阶段、{days.length} 天；可直接勾选任意一天的任务</p>
+              <p className="mt-0.5 text-caption text-ink-muted">共 {structure.stages.length} 个阶段、{days.length} 天；可直接勾选任意一天的任务</p>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {structure.stages.map((stage, index) => {
                 const color = STAGE_COLORS[index % STAGE_COLORS.length];
-                return <span key={`${stage.name}-${index}`} className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${color.chip}`}><span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${color.bar}`} />{stage.name} · {stage.days?.length ?? 0} 天</span>;
+                return <span key={`${stage.name}-${index}`} className={`rounded-full px-2.5 py-1 text-caption font-medium ${color.chip}`}><span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${color.bar}`} />{stage.name} · {stage.days?.length ?? 0} 天</span>;
               })}
             </div>
           </div>
@@ -334,13 +335,13 @@ function PlanCalendar({
               const color = STAGE_COLORS[stageIndex % STAGE_COLORS.length];
               return (
                 <div key={`${stage.name}-${stageIndex}`}>
-                  <h4 className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-ink"><span className={`h-2 w-2 rounded-full ${color.bar}`} />{stage.name}</h4>
+                  <h4 className="mb-2 flex items-center gap-2 text-body-sm font-semibold text-ink"><span className={`h-2 w-2 rounded-full ${color.bar}`} />{stage.name}</h4>
                   <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                     {(stage.days ?? []).map((day) => {
                       const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0);
                       return (
                         <article key={day.day} className={`overflow-hidden rounded-[10px] border bg-white ${day.day === currentDay.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
-                          <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-[11px] text-ink">第 {day.day} 天</strong><span className="text-[9px] text-ink-muted">{totalMinutes} 分钟</span></header>
+                          <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-body-sm text-ink">第 {day.day} 天</strong><span className="text-caption text-ink-muted">{totalMinutes} 分钟</span></header>
                           <ul className="divide-y divide-line/70">
                             {day.tasks.map((task, taskIndex) => {
                               const key = task.task_key;
@@ -350,7 +351,7 @@ function PlanCalendar({
                               return (
                                 <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
                                   <TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} compact onStatus={onStatus} />
-                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-[11px] leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-[9px] text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}<TaskLockBadge task={task} /></p></div>
+                                  <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-body-sm leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-body-sm text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}<TaskLockBadge task={task} /></p></div>
                                 </li>
                               );
                             })}
@@ -450,13 +451,13 @@ function PlanConfirmCard({
     });
 
   const iconBtn =
-    "rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
+    "rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-body-sm text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
 
   return (
     <div className="rounded-[14px] border border-line bg-white p-5">
-      <p className="text-[10px] font-medium text-brand-700">草案确认</p>
+      <p className="text-caption font-medium text-brand-700">草案确认</p>
       <h3 className="mt-2 text-[22px] font-semibold tracking-[-0.03em] text-ink">{totalDays} 天学习计划</h3>
-      <p className="mt-0.5 text-xs text-slate-500">
+      <p className="mt-0.5 text-caption text-slate-500">
         共 {draft.stages.length} 个阶段 / {totalDays} 天 / {totalTasks} 个任务
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
         ，可直接修改任务标题与时长，确认后才会保存。
@@ -465,9 +466,9 @@ function PlanConfirmCard({
       {goalAnalysis && (
         <section className="mt-4 rounded-xl border border-brand-100 bg-brand-50/40 p-3" aria-label="目标拆解">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-xs font-semibold text-ink">目标拆解</h4>
+            <h4 className="text-caption font-semibold text-ink">目标拆解</h4>
             <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              className={`rounded-full px-2 py-0.5 text-caption font-medium ${
                 goalAnalysis.quality === "clear"
                   ? "bg-success-50 text-success-700"
                   : "bg-warning-50 text-warning-700"
@@ -476,36 +477,36 @@ function PlanConfirmCard({
               {goalAnalysis.quality === "clear" ? "信息完整" : "建议后续补充"}
             </span>
           </div>
-          <p className="mt-2 text-xs leading-5 text-ink-secondary">
+          <p className="mt-2 text-caption leading-5 text-ink-secondary">
             {goalAnalysis.summary}
           </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <div className="rounded-lg bg-white px-2.5 py-2">
-              <p className="text-[10px] font-medium text-ink-muted">可验证成果</p>
+              <p className="text-caption font-medium text-ink-muted">可验证成果</p>
               {goalAnalysis.outcomes.length > 0 ? (
-                <ul className="mt-1 space-y-1 text-[11px] leading-4 text-ink-secondary">
+                <ul className="mt-1 space-y-1 text-body-sm leading-4 text-ink-secondary">
                   {goalAnalysis.outcomes.map((item) => <li key={item}>• {item}</li>)}
                 </ul>
-              ) : <p className="mt-1 text-[11px] text-warning-700">尚未明确</p>}
+              ) : <p className="mt-1 text-body-sm text-warning-700">尚未明确</p>}
             </div>
             <div className="rounded-lg bg-white px-2.5 py-2">
-              <p className="text-[10px] font-medium text-ink-muted">验收标准</p>
+              <p className="text-caption font-medium text-ink-muted">验收标准</p>
               {goalAnalysis.success_criteria.length > 0 ? (
-                <ul className="mt-1 space-y-1 text-[11px] leading-4 text-ink-secondary">
+                <ul className="mt-1 space-y-1 text-body-sm leading-4 text-ink-secondary">
                   {goalAnalysis.success_criteria.map((item) => <li key={item}>• {item}</li>)}
                 </ul>
-              ) : <p className="mt-1 text-[11px] text-warning-700">未提供，系统不会自行编造</p>}
+              ) : <p className="mt-1 text-body-sm text-warning-700">未提供，系统不会自行编造</p>}
             </div>
           </div>
           {goalAnalysis.missing_information.length > 0 && (
-            <p className="mt-2 text-[11px] text-warning-700">
+            <p className="mt-2 text-body-sm text-warning-700">
               待明确：{goalAnalysis.missing_information.map((item) => MISSING_GOAL_LABELS[item] ?? item).join("、")}。计划已在前段安排基线任务，也可返回补充后重新生成。
             </p>
           )}
           {skillGaps && skillGaps.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5" aria-label="优先补强技能">
               {skillGaps.map((gap) => (
-                <span key={`${gap.skill}-${gap.zone}`} className="rounded-full border border-warning-200 bg-white px-2 py-1 text-[10px] text-warning-700">
+                <span key={`${gap.skill}-${gap.zone}`} className="rounded-full border border-warning-200 bg-white px-2 py-1 text-caption text-warning-700">
                   优先补强：{gap.skill}（{gap.zone}）
                 </span>
               ))}
@@ -526,18 +527,18 @@ function PlanConfirmCard({
               <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-slate-800">
                 <span className={`h-2 w-2 rounded-full ${color.bar}`} />
                 {stage.name}
-                <span className="text-xs font-normal text-slate-400">
+                <span className="text-caption font-normal text-slate-400">
                   {stage.days?.length ?? 0} 天 · 约 {Math.round(minutes / 60)} 小时
                 </span>
               </p>
               <ul className="mt-2 space-y-2">
                 {(stage.days ?? []).map((d, di) => (
                   <li key={d.day} className="rounded-lg bg-slate-50/70 p-2">
-                    <p className="mb-1 text-[11px] font-medium text-slate-500">
+                    <p className="mb-1 text-body-sm font-medium text-slate-500">
                       第 {d.day} 天
                     </p>
                     {d.tasks.length === 0 ? (
-                      <p className="px-1 text-[11px] text-amber-600">
+                      <p className="px-1 text-body-sm text-amber-600">
                         本日已无任务，保存时服务端会按预算补一条自主复习
                       </p>
                     ) : (
@@ -557,7 +558,7 @@ function PlanConfirmCard({
                                 }
                                 aria-label={`第 ${d.day} 天任务 ${ti + 1} 标题`}
                                 aria-invalid={titleBad}
-                                className={`min-w-0 flex-1 rounded-lg border px-2 py-1 text-xs outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
+                                className={`min-w-0 flex-1 rounded-lg border px-2 py-1 text-caption outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
                                   titleBad
                                     ? "border-rose-300 bg-rose-50"
                                     : "border-slate-200 focus:border-indigo-300"
@@ -576,13 +577,13 @@ function PlanConfirmCard({
                                 }
                                 aria-label={`第 ${d.day} 天任务 ${ti + 1} 分钟数`}
                                 aria-invalid={minutesBad}
-                                className={`w-16 shrink-0 rounded-lg border px-1.5 py-1 text-right text-xs outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
+                                className={`w-16 shrink-0 rounded-lg border px-1.5 py-1 text-right text-caption outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
                                   minutesBad
                                     ? "border-rose-300 bg-rose-50"
                                     : "border-slate-200 focus:border-indigo-300"
                                 }`}
                               />
-                              <span className="shrink-0 text-[11px] text-slate-400">分钟</span>
+                              <span className="shrink-0 text-body-sm text-slate-400">分钟</span>
                               <span className="flex shrink-0 items-center gap-1">
                                 <button
                                   type="button"
@@ -609,7 +610,7 @@ function PlanConfirmCard({
                                   onClick={() => removeTask(si, di, ti)}
                                   title="删除该任务"
                                   aria-label="删除"
-                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:border-rose-300 hover:text-rose-600"
+                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-body-sm text-slate-400 transition-colors hover:border-rose-300 hover:text-rose-600"
                                 >
                                   删除
                                 </button>
@@ -629,13 +630,13 @@ function PlanConfirmCard({
 
       {resources.length > 0 && (
         <details className="mt-3 rounded-xl border border-indigo-100 bg-white p-3">
-          <summary className="cursor-pointer text-xs font-medium text-slate-600">
+          <summary className="cursor-pointer text-body-sm font-medium text-slate-600">
             学习资源（{resources.length}）
           </summary>
           <ul className="mt-1.5 space-y-0.5">
             {resources.map((r, i) => (
-              <li key={i} className="truncate text-xs text-slate-500">
-                <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-500">
+              <li key={i} className="truncate text-caption text-slate-500">
+                <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-caption text-slate-500">
                   {r.type === "kb" ? "知识库" : "网页"}
                 </span>
                 <MathText text={r.title} />
@@ -646,14 +647,14 @@ function PlanConfirmCard({
       )}
 
       {(invalid || emptied) && (
-        <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
+        <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-caption text-rose-700">
           {emptied
             ? "计划不能全部删空，至少保留一个任务。"
             : "请修正标红项：任务标题不能为空，时长需为 1–1440 之间的整数分钟。"}
         </p>
       )}
       {touched && !invalid && !emptied && (
-        <p className="mt-2 text-[11px] text-slate-400">
+        <p className="mt-2 text-body-sm text-slate-400">
           已修改草案；保存时服务端会重新校验总时长与先修顺序，并以校验后的版本为准。
         </p>
       )}
@@ -662,7 +663,7 @@ function PlanConfirmCard({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:bg-surface-muted"
+          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted"
         >
           返回修改目标
         </button>
@@ -670,7 +671,7 @@ function PlanConfirmCard({
           type="button"
           disabled={invalid || emptied}
           onClick={() => onConfirm(draft)}
-          className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {touched ? "确认并保存修改后的计划" : "确认并保存计划"}
         </button>
@@ -711,8 +712,9 @@ export default function PlansPage() {
   const [targetOutcome, setTargetOutcome] = useState("");
   const [successCriteria, setSuccessCriteria] = useState("");
   const [kbId, setKbId] = useState("");
-  const [hours, setHours] = useState(1.5);
-  const [totalDays, setTotalDays] = useState(14);
+  const [hours, setHours] = useState<number | null>(null);
+  const [totalDays, setTotalDays] = useState<number | null>(null);
+  const [deadline, setDeadline] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
   // SSE 流
@@ -758,8 +760,10 @@ export default function PlansPage() {
         setPlans([]);
         setListError("计划列表加载失败");
       }
-      setKbs(kbsRes.status === "fulfilled" ? kbsRes.value : []);
+      const availableKbs = kbsRes.status === "fulfilled" ? kbsRes.value : [];
+      setKbs(availableKbs);
       const pending = readPendingPlan(userId);
+      if (!pending && availableKbs.length === 1) setKbId(availableKbs[0].id);
       if (pending) {
         setGoal(pending.form.goal);
         setCurrentLevel(pending.form.currentLevel ?? "");
@@ -931,7 +935,7 @@ export default function PlansPage() {
                   status: "await_confirm",
                   interrupt,
                   startedAt: pending?.startedAt ?? Date.now(),
-                  form: {
+                  form: pending?.form ?? {
                     goal,
                     currentLevel,
                     targetOutcome,
@@ -1024,6 +1028,24 @@ export default function PlansPage() {
     e.preventDefault();
     const goalForm = { goal, currentLevel, targetOutcome, successCriteria };
     if (!isPlanGoalReady(goalForm) || phase !== "idle") return;
+    const intent = parsePlanIntent(goal);
+    const today = new Date();
+    const selectedDeadline = deadline || intent.deadline;
+    const deadlineDays = selectedDeadline
+      ? Math.max(1, Math.min(90, Math.ceil((new Date(`${selectedDeadline}T00:00:00`).getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86_400_000)))
+      : null;
+    const selectedHours = intent.dailyHours ?? hours;
+    const selectedTotalDays = deadlineDays ?? intent.totalDays ?? totalDays;
+    if (selectedHours == null || selectedTotalDays == null) {
+      setFlowError("请先确认截止日期/周期，以及每天可投入时间；系统不会替你猜默认值。");
+      return;
+    }
+    if (kbs.length > 1 && !kbId) {
+      setFlowError("请先选择这次计划使用的知识库范围。");
+      return;
+    }
+    setHours(selectedHours);
+    setTotalDays(selectedTotalDays);
     clearPendingPlan(userId);
     writePendingPlan(userId, {
       status: "generating",
@@ -1034,8 +1056,8 @@ export default function PlansPage() {
         targetOutcome: targetOutcome.trim(),
         successCriteria: successCriteria.trim(),
         kbId,
-        hours,
-        totalDays,
+        hours: selectedHours,
+        totalDays: selectedTotalDays,
       },
     });
     setTimeline([]);
@@ -1050,27 +1072,28 @@ export default function PlansPage() {
       target_outcome: targetOutcome.trim(),
       success_criteria: successCriteria.trim(),
       kb_id: kbId || undefined,
-      budget_hours_per_day: hours,
-      total_days: totalDays,
+      budget_hours_per_day: selectedHours,
+      total_days: selectedTotalDays,
     });
   };
 
   const resume = (approved: boolean, plan?: PlanStructure) => {
     if (!interruptData) return;
     const pending = readPendingPlan(userId);
+    const form = pending?.form ?? {
+      goal,
+      currentLevel,
+      targetOutcome,
+      successCriteria,
+      kbId,
+      hours,
+      totalDays,
+    };
     writePendingPlan(userId, {
       status: "resuming",
       interrupt: interruptData,
       startedAt: pending?.startedAt ?? Date.now(),
-      form: {
-        goal,
-        currentLevel,
-        targetOutcome,
-        successCriteria,
-        kbId,
-        hours,
-        totalDays,
-      },
+      form,
     });
     setPhase("resuming");
     // 编辑版随 approved 一起回传; 服务端 confirm_plan 会重跑硬校验并以其结果为准
@@ -1083,6 +1106,13 @@ export default function PlansPage() {
   const goalForm = { goal, currentLevel, targetOutcome, successCriteria };
   const goalReady = isPlanGoalReady(goalForm);
   const goalReadiness = planGoalReadiness(goalForm);
+  const planIntent = parsePlanIntent(goal);
+  const confirmedDeadline = deadline || planIntent.deadline;
+  const confirmedTotalDays = totalDays ?? planIntent.totalDays;
+  const scheduleReady =
+    (planIntent.dailyHours ?? hours) != null &&
+    Boolean(confirmedDeadline || confirmedTotalDays);
+  const scopeReady = kbs.length <= 1 || Boolean(kbId);
 
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
@@ -1093,7 +1123,7 @@ export default function PlansPage() {
           <button
             type="button"
             onClick={() => setShowCreate((value) => !value)}
-            className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-brand-800"
+            className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
           >
             新建计划
           </button>
@@ -1123,9 +1153,9 @@ export default function PlansPage() {
           {(showCreate || plans?.length === 0) && <Card title="制定学习计划">
             <form onSubmit={startPlan} className="space-y-3">
               <div className="rounded-xl border border-brand-100 bg-brand-50/40 p-3">
-                <p className="text-xs font-medium text-ink">用一个可验证的目标开始</p>
-                <p id="plan-goal-help" className="mt-1 text-[11px] leading-5 text-ink-muted">
-                  写清“学什么 → 想做到什么 → 怎样算完成”。当前基础可留空，计划会先安排短基线任务。
+                <p className="text-caption font-medium text-ink">你想在什么时候，达到什么结果？</p>
+                <p id="plan-goal-help" className="mt-1 text-body-sm leading-5 text-ink-muted">
+                  用一句话告诉我学习范围、希望达到的结果和时间；已有资料与画像会用于推导起点和节奏。
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5" aria-label="目标示例">
                   {PLAN_GOAL_EXAMPLES.map((example) => (
@@ -1138,7 +1168,7 @@ export default function PlansPage() {
                         setTargetOutcome(example.targetOutcome);
                         setSuccessCriteria(example.successCriteria);
                       }}
-                      className="rounded-full border border-brand-200 bg-white px-2.5 py-1 text-[10px] font-medium text-brand-700 hover:bg-brand-50"
+                      className="rounded-full border border-brand-200 bg-white px-2.5 py-1 text-caption font-medium text-brand-700 hover:bg-brand-50"
                     >
                       使用“{example.label}”示例
                     </button>
@@ -1146,8 +1176,8 @@ export default function PlansPage() {
                 </div>
               </div>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-500">
-                  学习主题 <span className="text-rose-500">*</span>
+                <span className="mb-1 block text-caption font-medium text-slate-500">
+                  一句话目标 <span className="text-rose-500">*</span>
                 </span>
                 <textarea
                   value={goal}
@@ -1160,8 +1190,52 @@ export default function PlansPage() {
                   className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
+              <div className="rounded-xl border border-line bg-surface-muted/60 p-3" aria-live="polite">
+                <p className="text-body-sm font-medium text-ink">请确认计划节奏</p>
+                <p className="mt-1 text-body-sm leading-5 text-ink-muted">
+                  {confirmedDeadline || confirmedTotalDays
+                    ? `${planIntent.deadline || planIntent.totalDays ? "已从目标识别出" : "已确认"}${confirmedDeadline ? `截止 ${confirmedDeadline}` : `周期 ${confirmedTotalDays} 天`}`
+                    : "这句话没有明确截止日期或周期，请补充一次。"}
+                  {planIntent.dailyHours != null
+                    ? `；每天 ${planIntent.dailyHours} 小时`
+                    : hours != null
+                      ? `；已确认每天 ${hours} 小时`
+                      : "；每天投入时间仍需确认。"}
+                </p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {!planIntent.deadline && !planIntent.totalDays && totalDays == null && (
+                    <label className="block text-body-sm text-ink-secondary">
+                      截止日期
+                      <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="mt-1 w-full rounded-lg border border-line-strong bg-white px-2.5 py-2 text-[13px] text-ink" />
+                    </label>
+                  )}
+                  {planIntent.dailyHours == null && (
+                    <label className="block text-body-sm text-ink-secondary">
+                      每天可投入（小时）
+                      <input type="number" min={0.5} max={12} step={0.5} value={hours ?? ""} onChange={(event) => setHours(event.target.value ? Math.max(0.5, Math.min(12, Number(event.target.value))) : null)} className="mt-1 w-full rounded-lg border border-line-strong bg-white px-2.5 py-2 text-[13px] text-ink" />
+                    </label>
+                  )}
+                </div>
+                {confirmedDeadline && <p className="mt-2 text-body-sm text-success-700">已确认截止日期：{confirmedDeadline}</p>}
+              </div>
+              {kbs.length > 1 && !kbId && (
+                <div className="rounded-xl border border-brand-100 bg-brand-50/40 p-3" aria-label="选择学习范围">
+                  <p className="text-body-sm font-medium text-ink">这次计划学习哪一份资料？</p>
+                  <p className="mt-1 text-caption text-ink-muted">请选择一次范围，其他背景和成果仍可稍后补充。</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {kbs.map((kb) => (
+                      <button type="button" key={kb.id} onClick={() => setKbId(kb.id)} className="rounded-full border border-brand-200 bg-white px-3 py-1.5 text-body-sm font-medium text-brand-700 hover:border-brand-400">
+                        {kb.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <details className="rounded-xl border border-line bg-white">
+                <summary className="cursor-pointer px-3 py-2.5 text-body-sm font-medium text-ink-secondary">补充背景、范围和计划时长（可选）</summary>
+                <div className="space-y-3 border-t border-line p-3">
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-500">
+                <span className="mb-1 block text-caption font-medium text-slate-500">
                   当前基础 <span className="font-normal text-slate-400">（可选）</span>
                 </span>
                 <input
@@ -1173,34 +1247,32 @@ export default function PlansPage() {
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-500">
-                  期望成果 <span className="text-rose-500">*</span>
+                <span className="mb-1 block text-caption font-medium text-slate-500">
+                  期望成果 <span className="font-normal text-slate-400">（可选）</span>
                 </span>
                 <textarea
                   value={targetOutcome}
                   onChange={(e) => setTargetOutcome(e.target.value)}
                   rows={2}
                   maxLength={500}
-                  required
                   placeholder="如：能独立判断常见极限题型并完成基础导数计算"
                   className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-500">
-                  验收标准 <span className="text-rose-500">*</span>
+                <span className="mb-1 block text-caption font-medium text-slate-500">
+                  验收标准 <span className="font-normal text-slate-400">（可选）</span>
                 </span>
                 <textarea
                   value={successCriteria}
                   onChange={(e) => setSuccessCriteria(e.target.value)}
                   rows={2}
                   maxLength={500}
-                  required
                   placeholder="如：不看提示完成 10 道教材基础题，至少正确 8 道并能说明错因"
                   className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
-              <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:grid-cols-4" aria-label="目标完整度" aria-live="polite">
+              <div className="grid grid-cols-2 gap-1.5 text-caption sm:grid-cols-4" aria-label="目标完整度" aria-live="polite">
                 {([
                   ["学习主题", goalReadiness.topic],
                   ["当前基础", goalReadiness.baseline],
@@ -1212,26 +1284,9 @@ export default function PlansPage() {
                   </span>
                 ))}
               </div>
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-500">
-                  绑定知识库（可选）
-                </span>
-                <select
-                  value={kbId}
-                  onChange={(e) => setKbId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                >
-                  <option value="">不绑定</option>
-                  {kbs.map((kb) => (
-                    <option key={kb.id} value={kb.id}>
-                      {kb.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-slate-500">
+                  <span className="mb-1 block text-caption font-medium text-slate-500">
                     每日小时
                   </span>
                   <input
@@ -1239,42 +1294,48 @@ export default function PlansPage() {
                     min={0.5}
                     max={12}
                     step={0.5}
-                    value={hours}
-                    onChange={(e) =>
-                      setHours(Math.max(0.5, Math.min(12, Number(e.target.value) || 0.5)))
-                    }
+                    value={hours ?? ""}
+                    onChange={(e) => setHours(e.target.value ? Math.max(0.5, Math.min(12, Number(e.target.value))) : null)}
                     className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-slate-500">
+                  <span className="mb-1 block text-caption font-medium text-slate-500">
                     总天数
                   </span>
                   <input
                     type="number"
                     min={1}
                     max={90}
-                    value={totalDays}
-                    onChange={(e) =>
-                      setTotalDays(
-                        Math.max(1, Math.min(90, Math.trunc(Number(e.target.value) || 1))),
-                      )
-                    }
+                    value={totalDays ?? ""}
+                    onChange={(e) => setTotalDays(e.target.value ? Math.max(1, Math.min(90, Math.trunc(Number(e.target.value)))) : null)}
                     className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </label>
               </div>
+                </div>
+              </details>
               <button
                 type="submit"
-                disabled={!goalReady || busy || phase === "await_confirm"}
-                className="flex w-full items-center justify-center gap-2 rounded-[8px] bg-brand-600 py-2.5 text-[12px] font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!goalReady || !scheduleReady || !scopeReady || busy || phase === "await_confirm"}
+                className="flex w-full items-center justify-center gap-2 rounded-[8px] bg-brand-600 py-2.5 text-body-sm font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                 {busy ? "正在规划…" : "生成计划草案"}
               </button>
               {!goalReady && (
-                <p className="text-center text-[10px] text-ink-muted">
-                  请至少补齐学习主题、期望成果和验收标准。
+                <p className="text-center text-caption text-ink-muted">
+                  请先写一句话目标。
+                </p>
+              )}
+              {goalReady && !scheduleReady && (
+                <p className="text-center text-caption text-warning-700">
+                  请确认截止日期/周期和每天投入时间后再生成计划。
+                </p>
+              )}
+              {goalReady && scheduleReady && !scopeReady && (
+                <p className="text-center text-caption text-warning-700">
+                  请先选择一次学习范围。
                 </p>
               )}
             </form>
@@ -1289,7 +1350,7 @@ export default function PlansPage() {
             {plans === null ? (
               <SkeletonList rows={3} />
             ) : plans.length === 0 ? (
-              <p className="py-4 text-center text-xs text-slate-400">
+              <p className="py-4 text-center text-caption text-slate-400">
                 还没有学习计划
               </p>
             ) : (
@@ -1299,14 +1360,14 @@ export default function PlansPage() {
                     <button
                       type="button"
                       onClick={() => selectPlan(p)}
-                      className={`w-full rounded-[9px] border px-3 py-2 text-left text-[12px] transition-colors ${
+                      className={`w-full rounded-[9px] border px-3 py-2 text-left text-body-sm transition-colors ${
                         selected?.id === p.id
                           ? "border-brand-300 bg-brand-50 text-brand-700"
                           : "border-line bg-white text-ink-secondary hover:border-brand-200"
                       }`}
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
-                      <span className="block text-xs font-normal text-slate-400">
+                      <span className="block text-caption font-normal text-slate-400">
                         {p.is_current ? "当前联动计划 · " : ""}每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
                       </span>
                     </button>
@@ -1350,7 +1411,7 @@ export default function PlansPage() {
                   <span className="block max-w-100 truncate">{selected.goal}</span>
                 }
                 extra={
-                  <span className="text-xs text-slate-400">
+                  <span className="text-caption text-slate-400">
                     {selected.is_current ? "当前联动计划 · " : ""}每日 {selected.budget_hours} 小时
                   </span>
                 }
@@ -1359,12 +1420,12 @@ export default function PlansPage() {
                 <div className="mb-3 flex flex-wrap items-center gap-3">
                   <div className="min-w-40 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-500">
+                      <span className="text-caption font-medium text-slate-500">
                         已完成 {detail?.progress.done ?? 0} / {detail?.progress.total ?? 0} 个任务
                         {(detail?.progress.skipped ?? 0) > 0 &&
                           ` · 跳过 ${detail?.progress.skipped ?? 0} 个`}
                       </span>
-                      <span className="font-mono text-xs text-slate-500">
+                      <span className="font-mono text-caption text-slate-500">
                         {fmtPct(detail?.progress.effective_ratio ?? detail?.progress.ratio ?? 0)}
                       </span>
                     </div>
@@ -1455,7 +1516,7 @@ export default function PlansPage() {
                         {adjustResult.inserted.map((t) => (
                           <li
                             key={t.task_key}
-                            className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs"
+                            className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-caption"
                           >
                             <span className="rounded bg-amber-500 px-1.5 py-0.5 font-medium text-white">
                               第 {t.day} 天
@@ -1474,28 +1535,28 @@ export default function PlansPage() {
 
                 {detail?.structure.goal_analysis && (
                   <details className="mb-3 rounded-xl border border-brand-100 bg-brand-50/30 px-3.5 py-3">
-                    <summary className="cursor-pointer text-xs font-medium text-brand-700">
+                    <summary className="cursor-pointer text-body-sm font-medium text-brand-700">
                       查看确认时的目标与验收标准
                     </summary>
-                    <p className="mt-2 text-xs leading-5 text-ink-secondary">
+                    <p className="mt-2 text-caption leading-5 text-ink-secondary">
                       {detail.structure.goal_analysis.summary}
                     </p>
-                    <div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2">
+                    <div className="mt-2 grid gap-2 text-body-sm sm:grid-cols-2">
                       <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
-                        <strong className="block text-[10px] text-ink-muted">可验证成果</strong>
+                        <strong className="block text-caption text-ink-muted">可验证成果</strong>
                         {detail.structure.goal_analysis.outcomes.map((item) => (
                           <p key={item} className="mt-1">• {item}</p>
                         ))}
                       </div>
                       <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
-                        <strong className="block text-[10px] text-ink-muted">验收标准</strong>
+                        <strong className="block text-caption text-ink-muted">验收标准</strong>
                         {detail.structure.goal_analysis.success_criteria.map((item) => (
                           <p key={item} className="mt-1">• {item}</p>
                         ))}
                       </div>
                     </div>
                     {detail.structure.skill_gaps && detail.structure.skill_gaps.length > 0 && (
-                      <p className="mt-2 text-[11px] text-warning-700">
+                      <p className="mt-2 text-body-sm text-warning-700">
                         创建时优先补强：{detail.structure.skill_gaps.map((gap) => `${gap.skill}（${gap.zone}）`).join("、")}
                       </p>
                     )}
@@ -1532,13 +1593,13 @@ export default function PlansPage() {
               <Card
                 title="调整历史"
                 extra={
-                  <span className="text-xs text-slate-400">
+                  <span className="text-caption text-slate-400">
                     共 {adjustments.length} 次
                   </span>
                 }
               >
                 {adjustments.length === 0 ? (
-                  <p className="py-3 text-center text-xs text-slate-400">
+                  <p className="py-3 text-center text-caption text-slate-400">
                     还没有调整记录；低分测评或点击「根据学情调整计划」都会在这里留痕
                   </p>
                 ) : (
@@ -1572,11 +1633,11 @@ export default function PlansPage() {
                           </span>
                           <div className="rounded-xl bg-slate-50/80 px-3 py-2.5 transition-colors hover:bg-slate-50">
                             <p className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs text-slate-400">
+                              <span className="text-caption text-slate-400">
                                 {fmtDateTime(a.at)}
                               </span>
                               <span
-                                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                className={`rounded-full px-2 py-0.5 text-caption font-medium ${
                                   auto
                                     ? "bg-amber-100/70 text-amber-700"
                                     : "bg-indigo-50 text-indigo-600"
@@ -1584,7 +1645,7 @@ export default function PlansPage() {
                               >
                                 {TRIGGER_LABELS[a.trigger] ?? a.trigger}
                               </span>
-                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-caption font-medium text-amber-700">
                                 插入 {a.inserted.length} 个任务
                               </span>
                             </p>

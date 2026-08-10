@@ -294,51 +294,51 @@ export default function KbPage() {
 
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-[10px] text-ink-muted">知识库 {selected ? <><span className="mx-1">/</span><span className="text-ink-secondary">{selected.name}</span></> : null}</p>
+          <p className="text-caption text-ink-muted">知识库 {selected ? <><span className="mx-1">/</span><span className="text-ink-secondary">{selected.name}</span></> : null}</p>
           <div className="mt-2 flex items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-50 text-[15px] font-semibold text-success-600">{selected?.name?.[0] ?? "知"}</span>
-            <div className="min-w-0"><h1 className="truncate text-[21px] font-semibold tracking-[-0.03em] text-ink">{selected?.name ?? "知识库"}</h1><p className="mt-0.5 text-[11px] text-ink-muted">{selected ? `${docs?.length ?? 0} 份资料 · ${docs?.filter((doc) => doc.status === "ready").length ?? 0} 就绪 · ${selected.subject}` : "把课程资料整理成可检索、可引用的学习空间"}</p></div>
+            <div className="min-w-0"><h1 className="truncate text-[21px] font-semibold tracking-[-0.03em] text-ink">{selected?.name ?? "知识库"}</h1><p className="mt-0.5 text-body-sm text-ink-muted">{selected ? `${docs?.length ?? 0} 份资料 · ${docs?.filter((doc) => doc.status === "ready").length ?? 0} 就绪 · ${selected.subject}` : "把课程资料整理成可检索、可引用的学习空间"}</p></div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-[12px] text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
-          <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-[12px] font-medium text-white hover:bg-brand-800">新建知识库</button>
-          {selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-[12px] text-danger-600 hover:bg-danger-50">删除</button>}
+          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
+          <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white hover:bg-brand-800">新建知识库</button>
+          {selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-danger-600 hover:bg-danger-50">删除</button>}
         </div>
       </header>
 
       {showCreate && (
         <form onSubmit={createKb} className="grid gap-2 rounded-[12px] border border-line bg-white p-4 sm:grid-cols-[minmax(0,1fr)_220px_auto]">
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={255} placeholder="知识库名称" className="h-9 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
-          <input value={newSubject} onChange={(e) => setNewSubject(e.target.value)} maxLength={64} placeholder="学科（可选）" className="h-9 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
-          <button type="submit" disabled={!newName.trim() || creating} className="flex h-9 items-center justify-center gap-1.5 rounded-[8px] bg-brand-600 px-4 text-[12px] font-medium text-white disabled:opacity-40">{creating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}创建</button>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={255} placeholder="知识库名称" className="h-9 rounded-[8px] border border-line-strong px-3 text-body-sm outline-none focus:border-brand-400" />
+          <input value={newSubject} onChange={(e) => setNewSubject(e.target.value)} maxLength={64} placeholder="学科（可选）" className="h-9 rounded-[8px] border border-line-strong px-3 text-body-sm outline-none focus:border-brand-400" />
+          <button type="submit" disabled={!newName.trim() || creating} className="flex h-9 items-center justify-center gap-1.5 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white disabled:opacity-40">{creating && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}创建</button>
         </form>
       )}
 
       {kbs === null ? <div className="rounded-[14px] border border-line bg-white p-5"><SkeletonList rows={4} /></div> : kbs.length === 0 ? (
-        <EmptyState title="建立第一个知识库" description="新账号不会显示示例教材。创建知识库后即可上传真实资料并生成学习指南。" illustration="docs"><button type="button" onClick={() => setShowCreate(true)} className="mt-2 rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white">新建知识库</button></EmptyState>
+        <EmptyState title="建立第一个知识库" description="新账号不会显示示例教材。创建知识库后即可上传真实资料并生成学习指南。" illustration="docs"><button type="button" onClick={() => setShowCreate(true)} className="mt-2 rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">新建知识库</button></EmptyState>
       ) : !selected ? (
         <EmptyState title="选择一个知识库" description="从上方选择已有知识库，或创建新的资料空间。" illustration="docs" />
       ) : (
         <>
           <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] bg-brand-700 px-5 py-4 text-white">
-            <div><h2 className="text-[13px] font-semibold">用这个知识库开始学习</h2><p className="mt-1 text-[10px] text-indigo-100">AI 只会引用这里的真实资料和来源；辅导与练习也可沿用当前范围。</p></div>
-            <div className="flex flex-wrap gap-2"><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white px-3.5 py-2 text-[11px] font-medium text-brand-700">对话</Link><Link href={`/tutor?kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-[11px] font-medium text-white ring-1 ring-inset ring-white/15">分级辅导</Link><Link href={`/quiz?kb=${encodeURIComponent(selected.id)}&topic=${encodeURIComponent(selected.name)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-[11px] font-medium text-white ring-1 ring-inset ring-white/15">智能练习</Link></div>
+            <div><h2 className="text-[13px] font-semibold">用这个知识库开始学习</h2><p className="mt-1 text-caption text-indigo-100">AI 只会引用这里的真实资料和来源；辅导与练习也可沿用当前范围。</p></div>
+            <div className="flex flex-wrap gap-2"><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white px-3.5 py-2 text-body-sm font-medium text-brand-700">对话</Link><Link href={`/tutor?kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-body-sm font-medium text-white ring-1 ring-inset ring-white/15">分级辅导</Link><Link href={`/quiz?kb=${encodeURIComponent(selected.id)}&topic=${encodeURIComponent(selected.name)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-body-sm font-medium text-white ring-1 ring-inset ring-white/15">智能练习</Link></div>
           </section>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_230px] lg:items-start">
-            <Card title="学习指南" extra={<span className="text-[10px] text-ink-muted">基于已就绪资料生成</span>}><StudyGuidePanel key={selected.id} kbId={selected.id} kbName={selected.name} writable={selected.writable} /></Card>
+            <Card title="学习指南" extra={<span className="text-caption text-ink-muted">基于已就绪资料生成</span>}><StudyGuidePanel key={selected.id} kbId={selected.id} kbName={selected.name} writable={selected.writable} /></Card>
             <aside className="space-y-4">
-              <section className="rounded-[14px] border border-line bg-white p-4"><h2 className="text-[12px] font-semibold text-ink">接入 AI 学习</h2><p className="mt-1 text-[10px] leading-4 text-ink-muted">在 AI 对话中使用当前知识库，回答会附带可打开的引用来源。</p><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="mt-3 flex h-8 items-center justify-center rounded-[7px] bg-brand-600 text-[11px] font-medium text-white">用这个知识库提问</Link>{selected.writable && <details className="mt-2"><summary className="cursor-pointer text-center text-[10px] text-ink-muted">检索检查（高级工具）</summary><div className="mt-3"><RetrieveDebug kbId={selected.id} /></div></details>}</section>
-              <section className="rounded-[14px] border border-line bg-white p-4 text-[11px]"><dl className="space-y-2.5"><div className="flex justify-between"><dt className="text-ink-muted">归属</dt><dd className="font-medium text-ink">{selected.owner_type === "org" ? selected.org_name ?? "机构" : "个人"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">权限</dt><dd className="font-medium text-ink">{selected.writable ? "可编辑" : "只读"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">版本</dt><dd className="font-medium text-ink">v{selected.kb_version}</dd></div></dl></section>
+              <section className="rounded-[14px] border border-line bg-white p-4"><h2 className="text-body-sm font-semibold text-ink">接入 AI 学习</h2><p className="mt-1 text-body-sm leading-4 text-ink-muted">在 AI 对话中使用当前知识库，回答会附带可打开的引用来源。</p><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="mt-3 flex h-8 items-center justify-center rounded-[7px] bg-brand-600 text-body-sm font-medium text-white">用这个知识库提问</Link>{selected.writable && <details className="mt-2"><summary className="cursor-pointer text-center text-body-sm text-ink-muted">检索检查（高级工具）</summary><div className="mt-3"><RetrieveDebug kbId={selected.id} /></div></details>}</section>
+              <section className="rounded-[14px] border border-line bg-white p-4 text-body-sm"><dl className="space-y-2.5"><div className="flex justify-between"><dt className="text-ink-muted">归属</dt><dd className="font-medium text-ink">{selected.owner_type === "org" ? selected.org_name ?? "机构" : "个人"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">权限</dt><dd className="font-medium text-ink">{selected.writable ? "可编辑" : "只读"}</dd></div><div className="flex justify-between"><dt className="text-ink-muted">版本</dt><dd className="font-medium text-ink">v{selected.kb_version}</dd></div></dl></section>
             </aside>
           </div>
 
-          <Card title={`学习资料 · ${docs?.length ?? 0}`} extra={selected.owner_type === "org" ? <span className="text-[10px] text-ink-muted">{selected.org_name ?? "机构"} · {selected.writable ? "可管理" : "成员只读"}</span> : undefined}>
+          <Card title={`学习资料 · ${docs?.length ?? 0}`} extra={selected.owner_type === "org" ? <span className="text-caption text-ink-muted">{selected.org_name ?? "机构"} · {selected.writable ? "可管理" : "成员只读"}</span> : undefined}>
             <div className="space-y-4">
-              {selected.writable ? <UploadZone uploading={uploading} importing={importing} onFiles={(files) => void uploadFiles(files)} onImportUrl={(url) => void importUrl(url)} /> : <p className="rounded-[9px] border border-dashed border-line-strong bg-[#fafaf9] px-4 py-3 text-[11px] text-ink-muted">机构库由管理员维护；你仍可以检索、对话和查看引用。</p>}
+              {selected.writable ? <UploadZone uploading={uploading} importing={importing} onFiles={(files) => void uploadFiles(files)} onImportUrl={(url) => void importUrl(url)} /> : <p className="rounded-[9px] border border-dashed border-line-strong bg-[#fafaf9] px-4 py-3 text-body-sm text-ink-muted">机构库由管理员维护；你仍可以检索、对话和查看引用。</p>}
               {docsError && <ErrorBanner message={docsError} onRetry={() => void loadDocs(selected.id)} />}
-              {docs === null || docsKbId !== selected.id ? <SkeletonList rows={3} /> : docs.length === 0 ? <p className="py-6 text-center text-[11px] text-ink-muted">{selected.writable ? "暂无资料。上传文件或导入网页后会自动解析、切块并建立索引。" : "该机构库暂无资料。"}</p> : <DocumentTable documents={docs} busyDocId={busyDocId} onPreview={setPreviewDoc} onReindex={(doc) => void reindexDoc(doc)} onDelete={(doc) => void deleteDoc(doc)} readOnly={!selected.writable} />}
+              {docs === null || docsKbId !== selected.id ? <SkeletonList rows={3} /> : docs.length === 0 ? <p className="py-6 text-center text-body-sm text-ink-muted">{selected.writable ? "暂无资料。上传文件或导入网页后会自动解析、切块并建立索引。" : "该机构库暂无资料。"}</p> : <DocumentTable documents={docs} busyDocId={busyDocId} onPreview={setPreviewDoc} onReindex={(doc) => void reindexDoc(doc)} onDelete={(doc) => void deleteDoc(doc)} readOnly={!selected.writable} />}
             </div>
           </Card>
         </>

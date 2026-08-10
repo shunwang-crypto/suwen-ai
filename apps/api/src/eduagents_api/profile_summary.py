@@ -48,7 +48,7 @@ from eduagents_core.mastery.thresholds import (
     mastery_band,
     zone_label,
 )
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 
 from .db import tenant_session
 from .models import ErrorItem, KnowledgeComponent, MasteryRecord, UserPreference
@@ -67,6 +67,9 @@ _ERROR_SCAN = 10  # 错因分布的近期错题扫描窗口
 # 定向出题口径 (M4-D2: "上午答错的概念下午自动出现在练习卷")
 QUIZ_WEAK_TOP = 5
 _RECENT_ERROR_DAYS = 7
+# confidence 低于此值视为"证据不足", 触发 Assessment Mode 而非判定无事可做 (§5.3)。
+# apply_mastery_evidence 每条证据 +0.1, 因此 0.3 约等于"至少测过三次"。
+_ASSESSMENT_CONFIDENCE_CEILING = 0.3
 # 题面 ↔ KC 名子串匹配的最短归一化长度 (同 services._MIN_KC_MATCH_LEN 口径):
 # 单字 KC 名 (如"角""集") 会命中几乎任意题面, 放行会把起始层级判飞。
 _MIN_BAND_MATCH_LEN = 2
@@ -526,3 +529,87 @@ async def weak_point_kcs(
     # 近 7 天真的错过的排前面 ("上午答错的概念下午就出现在练习卷"), 其余按掌握度升序
     items.sort(key=lambda x: (not x["recent_error"], x["p_mastery"]))
     return items[:limit]
+
+
+async def assessment_mode_kcs(
+    tenant_id: uuid.UUID | str,
+    user_id: uuid.UUID | str,
+    kb_ids=(),
+    limit: int = QUIZ_WEAK_TOP,
+) -> list[dict]:
+    """证据不足时的诊断出题目标 (§5.3 / §15 Assessment Mode)。
+
+    冷启动**不是异常分支**: p_mastery 高而 confidence 低意味着"还没测过", 该安排
+    一次快速验证, 而不是判定无事可做。weak_point_kcs 只看 p_mastery, 因此新用户
+    (p 全为先验 p_l0, confidence≈0) 在它眼里可能一个薄弱点都没有 —— 调用方过去
+    据此禁用了出题入口, 造成冷启动死锁。
+
+    这里按 confidence 升序取 KC: 证据最少的先测。KC 存在但完全没有 mastery_record
+    的情形一并覆盖 (LEFT JOIN, confidence 视作 0), 否则从未答题的用户仍然拿不到题。
+    """
+    uid = uuid.UUID(str(user_id))
+    ids = _norm_ids(kb_ids)
+    async with tenant_session(tenant_id) as session:
+        stmt = (
+            select(
+                KnowledgeComponent.id,
+                KnowledgeComponent.canonical_name,
+                KnowledgeComponent.kb_id,
+                MasteryRecord.confidence,
+                MasteryRecord.p_mastery,
+            )
+            .join(
+                MasteryRecord,
+                and_(
+                    MasteryRecord.kc_id == KnowledgeComponent.id,
+                    MasteryRecord.user_id == uid,
+                ),
+                isouter=True,
+            )
+            .order_by(
+                func.coalesce(MasteryRecord.confidence, 0.0).asc(),
+                KnowledgeComponent.canonical_name.asc(),
+            )
+        )
+        if ids:
+            stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(i) for i in ids]))
+        rows = (await session.execute(stmt)).all()
+
+    items: list[dict] = []
+    for kc_id, name, _kb, confidence, p in rows:
+        conf = float(confidence or 0.0)
+        if conf >= _ASSESSMENT_CONFIDENCE_CEILING:
+            continue
+        # 诊断题的难度固定走中档: 目的是量出水平, 不是照着未验证的 p_mastery 调难度。
+        items.append(
+            {
+                "kc_id": str(kc_id),
+                "name": name,
+                "p_mastery": round(float(p), 4) if p is not None else None,
+                "confidence": round(conf, 4),
+                "recent_error": False,
+                "zone": "unverified",
+                "difficulty": "mid",
+                "reason": f"{name}尚未测过，先做一次快速验证",
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+async def has_any_kc(
+    tenant_id: uuid.UUID | str,
+    kb_ids=(),
+) -> bool:
+    """作用域内是否存在任何 KC。
+
+    用于区分两种"出不了题": KC 图为空 (前置缺失, 该去传资料) vs KC 都已验证掌握
+    (成功状态, 无题可出)。二者对用户的含义相反, 合并成一个错误码会把文案说反。
+    """
+    ids = _norm_ids(kb_ids)
+    async with tenant_session(tenant_id) as session:
+        stmt = select(func.count()).select_from(KnowledgeComponent)
+        if ids:
+            stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(i) for i in ids]))
+        return bool(await session.scalar(stmt))

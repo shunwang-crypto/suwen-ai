@@ -35,18 +35,18 @@ function Stat({ label, value }: { label: string; value: string }) {
 function RankChange({ prev, next }: { prev: number | null; next: number }) {
   if (prev === null) {
     return (
-      <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-500">
+      <span className="rounded bg-slate-100 px-1 py-0.5 text-caption font-medium text-slate-500">
         新
       </span>
     );
   }
   const delta = prev - next;
   if (delta === 0) {
-    return <span className="px-0.5 font-mono text-[10px] text-slate-400">＝</span>;
+    return <span className="px-0.5 font-mono text-caption text-slate-400">＝</span>;
   }
   return (
     <span
-      className={`rounded px-1 py-0.5 font-mono text-[10px] font-semibold ${
+      className={`rounded px-1 py-0.5 font-mono text-caption font-semibold ${
         delta > 0 ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
       }`}
       title={delta > 0 ? `较上一阶段上升 ${delta} 名` : `较上一阶段下降 ${-delta} 名`}
@@ -79,11 +79,11 @@ function StageColumn({
     <div className="flex min-w-0 flex-col rounded-xl border border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-3 py-2">
         <p className={`text-xs font-semibold ${accent}`}>{title}</p>
-        <p className="text-[10px] text-slate-400">{scoreLabel}</p>
+        <p className="text-caption text-slate-400">{scoreLabel}</p>
       </div>
       <div className="min-h-24 flex-1 space-y-1.5 p-2">
         {entries.length === 0 ? (
-          <p className="py-4 text-center text-[11px] text-slate-400">
+          <p className="py-4 text-center text-body-sm text-slate-400">
             {disabledNote ?? "无召回结果"}
           </p>
         ) : (
@@ -96,17 +96,17 @@ function StageColumn({
                 title={meta ? `${meta.heading_path}\n${meta.text}` : e.chunk_id}
               >
                 <div className="flex items-center gap-1.5">
-                  <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded bg-slate-200/80 font-mono text-[10px] text-slate-600">
+                  <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded bg-slate-200/80 font-mono text-caption text-slate-600">
                     {i + 1}
                   </span>
                   {prevRank && (
                     <RankChange prev={prevRank.get(e.chunk_id) ?? null} next={i + 1} />
                   )}
-                  <span className="ml-auto shrink-0 font-mono text-[10px] text-slate-500">
+                  <span className="ml-auto shrink-0 font-mono text-caption text-slate-500">
                     {e.score != null ? e.score.toFixed(4) : "—"}
                   </span>
                 </div>
-                <div className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-600">
+                <div className="mt-1 line-clamp-2 text-body-sm leading-snug text-slate-600">
                   <MathText text={meta?.text || e.chunk_id.slice(0, 8)} />
                 </div>
               </div>

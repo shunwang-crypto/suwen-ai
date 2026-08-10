@@ -16,6 +16,7 @@ from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import (
+    ErrorItem,
     KcEdge,
     KnowledgeBase,
     KnowledgeComponent,
@@ -23,6 +24,7 @@ from ..models import (
     Plan,
     PlanAdjustment,
     PlanResource,
+    Question,
 )
 from ..plan_adjust import (
     PlanTaskAttributionError,
@@ -30,9 +32,13 @@ from ..plan_adjust import (
     complete_plan_task,
     compute_task_locks,
     enrich_structure,
+    iter_tasks,
+    latest_plan,
+    make_task_key,
     plan_progress,
     plan_schedule_snapshot,
     set_task_status,
+    task_status,
     validate_plan_task_attribution,
 )
 from ..profile_summary import (
@@ -58,8 +64,8 @@ class PlanCreate(BaseModel):
     target_outcome: str | None = Field(default=None, max_length=500)
     success_criteria: str | None = Field(default=None, max_length=500)
     kb_id: uuid.UUID | None = None
-    budget_hours_per_day: float = Field(default=1.5, gt=0, le=12)
-    total_days: int = Field(default=14, ge=1, le=90)
+    budget_hours_per_day: float = Field(..., gt=0, le=12)
+    total_days: int = Field(..., ge=1, le=90)
 
     @field_validator("goal")
     @classmethod
@@ -416,6 +422,32 @@ async def get_plan(
         return await _plan_detail(session, plan, now_dt.astimezone(CN_TZ).date())
 
 
+@router.get("/{plan_id}/tasks/{task_key}/tutor-context")
+async def get_plan_task_tutor_context(
+    plan_id: uuid.UUID,
+    task_key: str,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Resolve a plan task for Tutor without putting task text in a URL."""
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        plan = await _load_plan(session, plan_id, ctx)
+        for stage_index, day_index, task_index, _stage, _day, task in iter_tasks(
+            plan.structure_json or {}
+        ):
+            if make_task_key(stage_index, day_index, task_index) != task_key:
+                continue
+            problem = str(task.get("objective") or task.get("title") or "").strip()
+            if not problem:
+                raise HTTPException(status_code=404, detail="TASK_NOT_FOUND")
+            return {
+                "problem": problem[:4000],
+                "kb_id": str(plan.kb_id) if plan.kb_id else None,
+                "plan_id": str(plan.id),
+                "task_key": task_key,
+            }
+    raise HTTPException(status_code=404, detail="TASK_NOT_FOUND")
+
+
 @router.post("/{plan_id}/tasks/{task_key}/toggle")
 async def toggle_task(
     plan_id: uuid.UUID,
@@ -501,6 +533,60 @@ async def list_adjustments(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_ra
 
 
 tutor_router = APIRouter(prefix="/api/tutor", tags=["tutor"])
+
+
+@tutor_router.get("/entrypoints")
+async def tutor_entrypoints(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    """Return safe IDs for context-aware Tutor entry cards."""
+    now_dt = await timectl.now(request.app.state.redis)
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        plan = await latest_plan(session, ctx.user_id)
+        today_task = None
+        if plan is not None:
+            snapshot = plan_schedule_snapshot(
+                plan.created_at.astimezone(CN_TZ).date(),
+                plan.structure_json,
+                now_dt.astimezone(CN_TZ).date(),
+            )
+            due_keys = set(snapshot["today_tasks"]) | set(snapshot["overdue_tasks"])
+            for stage_idx, day_idx, task_idx, _stage, _day, task in iter_tasks(
+                plan.structure_json
+            ):
+                task_key = make_task_key(stage_idx, day_idx, task_idx)
+                if task_key in due_keys and task_status(task) == "pending":
+                    today_task = {
+                        "status": "ready",
+                        "plan_id": str(plan.id),
+                        "task_key": task_key,
+                    }
+                    break
+        if today_task is None:
+            today_task = {
+                "status": "empty",
+                "reason": "NO_PENDING_TODAY_TASK",
+            }
+        error_ids = [
+            str(error_id)
+            for error_id in (
+                await session.scalars(
+                    select(ErrorItem.id)
+                    .join(Question, Question.id == ErrorItem.question_id)
+                    .where(
+                        ErrorItem.user_id == ctx.user_id,
+                        ErrorItem.verification_status == "verified",
+                        ErrorItem.state.in_(("new", "reviewing")),
+                    )
+                    .order_by(ErrorItem.created_at.desc(), ErrorItem.id.desc())
+                    .limit(20)
+                )
+            ).all()
+        ]
+    errors = (
+        {"status": "ready", "error_ids": error_ids}
+        if error_ids
+        else {"status": "empty", "reason": "NO_AVAILABLE_ERRORS", "error_ids": []}
+    )
+    return {"today_task": today_task, "errors": errors}
 
 
 @tutor_router.get("/{thread_local_id}")

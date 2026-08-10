@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -121,5 +121,39 @@ describe("resource PDF summary and review display", () => {
     render(<ResourceReview resource={resource({ metadata: { recognition: { page_count: 3, pages: [] } } })} questions={[question("q1", 1, "pending")]} onBack={() => {}} onReload={async () => {}} onResourceChanged={() => {}} onStartAssessment={() => {}} />);
     expect(screen.queryByText(/失败页：/)).not.toBeInTheDocument();
     expect(screen.queryByText("部分页面未识别")).not.toBeInTheDocument();
+  });
+
+  it("keeps the student's original answer editable during confidence review", () => {
+    render(<ResourceReview resource={resource()} questions={[question("q1", 1, "pending")]} onBack={() => {}} onReload={async () => {}} onResourceChanged={() => {}} onStartAssessment={() => {}} />);
+    expect(screen.getByRole("textbox", { name: "学生原答案" })).toBeEnabled();
+  });
+
+  it("opens only the low-confidence field in the selected question", () => {
+    const entry = { confidence: 0.95, source: "parser" as const, warnings: [] };
+    const questions = Array.from({ length: 20 }, (_, index) => ({
+      ...question(`q-${index + 1}`, index + 1, "pending"),
+      field_confidence: {
+        schema_version: "resource-question-field-confidence-v1",
+        applicable_fields: ["question_no", "page_no", "type", "stem", "answer"],
+        fields: {
+          question_no: entry,
+          page_no: entry,
+          type: entry,
+          stem: index === 7 ? { ...entry, confidence: 0.7 } : entry,
+          options: { confidence: null, source: "unknown" as const, warnings: [] },
+          detected_student_answer: { confidence: null, source: "unknown" as const, warnings: [] },
+          answer: entry,
+        },
+      },
+    }));
+
+    render(<ResourceReview resource={resource()} questions={questions} onBack={() => {}} onReload={async () => {}} onResourceChanged={() => {}} onStartAssessment={() => {}} />);
+    const eighth = Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim().startsWith("8"));
+    expect(eighth).toBeDefined();
+    fireEvent.click(eighth!);
+
+    expect(screen.getByText("编辑题干/公式源码").closest("details")).toHaveProperty("open", true);
+    expect(screen.getByText("编辑解析/公式源码").closest("details")).toHaveProperty("open", false);
+    expect(screen.getByText("修正识别（知识点、难度、分值、解析）").closest("details")).toHaveProperty("open", false);
   });
 });

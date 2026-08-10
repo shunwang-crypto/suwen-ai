@@ -106,7 +106,7 @@ function KindBadge({ kind }: { kind: EvalKind }) {
 /** 数据口径脚注：评分加分项，每张卡片底部固定出现。 */
 function BasisNote({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-3 border-t border-slate-100 pt-2 text-[11px] leading-relaxed text-slate-400">
+    <p className="mt-3 border-t border-slate-100 pt-2 text-body-sm leading-relaxed text-slate-400">
       数据口径：{children}
     </p>
   );
@@ -127,7 +127,7 @@ function MetricTile({
       <p className="mt-0.5 font-mono text-xl font-semibold tracking-tight text-slate-900">
         {value}
       </p>
-      {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
+      {sub && <p className="mt-0.5 text-body-sm text-slate-400">{sub}</p>}
     </div>
   );
 }
@@ -227,7 +227,7 @@ function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
           >
             <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
               <span className="text-xs font-semibold text-slate-700">{r.category}</span>
-              <span className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span className="flex items-center gap-2 text-body-sm text-slate-400">
                 {weak && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">
                     最弱分桶 · 优先补语料
@@ -241,7 +241,7 @@ function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
                 const v = r[s.key];
                 return (
                   <div key={s.key} className="flex items-center gap-2">
-                    <span className="w-12 shrink-0 font-mono text-[11px] text-slate-500">
+                    <span className="w-12 shrink-0 font-mono text-body-sm text-slate-500">
                       {s.label}
                     </span>
                     <div className="h-3 min-w-0 flex-1 rounded-full bg-slate-100">
@@ -256,7 +256,7 @@ function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
                         />
                       )}
                     </div>
-                    <span className="w-14 shrink-0 text-right font-mono text-[11px] text-slate-700">
+                    <span className="w-14 shrink-0 text-right font-mono text-body-sm text-slate-700">
                       {fmtNum(v)}
                     </span>
                   </div>
@@ -410,7 +410,7 @@ function RetrievalDetail({
             {Object.entries(cfg).map(([k, v]) => (
               <span
                 key={k}
-                className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600"
+                className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-body-sm text-slate-600"
               >
                 {k}={String(v)}
               </span>
@@ -649,7 +649,7 @@ function ComparisonsTable({
                     </span>
                   )}
                   {c.method && (
-                    <span className="ml-1.5 font-mono text-[11px] text-slate-400">
+                    <span className="ml-1.5 font-mono text-body-sm text-slate-400">
                       {c.method}
                     </span>
                   )}
@@ -821,7 +821,7 @@ function SimulationDetail({
                     <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
                       {fmtNum(a.min_mae, 4)}
                       {a.min_mae_round != null && (
-                        <span className="ml-1 text-[11px] text-slate-400">
+                        <span className="ml-1 text-body-sm text-slate-400">
                           @{a.min_mae_round}
                         </span>
                       )}
@@ -949,7 +949,7 @@ function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }
                   <KindBadge kind={side.kind} />
                   {side.label}
                 </p>
-                <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+                <p className="mt-0.5 font-mono text-body-sm text-slate-400">
                   {fmtDateTime(side.at)} · {side.source}
                 </p>
               </div>
@@ -1032,7 +1032,7 @@ function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }
               </div>
             </div>
           )}
-          <p className="text-[11px] text-slate-400">
+          <p className="text-body-sm text-slate-400">
             Δ 与相对变化按 B−A 计算；绿色 ↑ 表示 B 更高，红色 ↓ 表示 B 更低。
             指标方向请结合语义判断（hit/MRR 越高越好，毕业题量越低越好）。
           </p>
@@ -1362,7 +1362,7 @@ export default function EvalsPage() {
                 </button>
               </div>
             </div>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-body-sm text-slate-400">
               发起后每 {POLL_INTERVAL_MS / 1000}s 轮询一次任务状态（最多{" "}
               {POLL_MAX_TICKS} 次），完成后自动刷新列表。
               消融开关会写进报告的 report_config，用于做 A/B 对比。
@@ -1447,7 +1447,7 @@ export default function EvalsPage() {
                           {r.label}
                         </span>
                         <span
-                          className="ml-1.5 font-mono text-[11px] text-slate-400"
+                          className="ml-1.5 font-mono text-body-sm text-slate-400"
                           title={r.source}
                         >
                           {r.source}
@@ -1464,7 +1464,7 @@ export default function EvalsPage() {
                             {r.summary.map((s) => (
                               <span
                                 key={s.key}
-                                className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700"
+                                className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-body-sm text-slate-700"
                                 title={`${s.key} = ${s.value}`}
                               >
                                 {s.key} {s.display}
@@ -1473,7 +1473,7 @@ export default function EvalsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 text-[11px] text-slate-400">
+                      <td className="py-2.5 text-body-sm text-slate-400">
                         {r.data_basis ?? "—"}
                         {r.corpus_version ? (
                           <>
@@ -1506,7 +1506,7 @@ export default function EvalsPage() {
                 setPickA(null);
                 setPickB(null);
               }}
-              className="ml-3 rounded-md border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+              className="ml-3 rounded-md border border-slate-300 px-2 py-0.5 text-body-sm text-slate-600 hover:bg-slate-100"
             >
               清空选择
             </button>

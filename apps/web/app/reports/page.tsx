@@ -66,7 +66,7 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
   const hasData = trend.some((t) => t.attempts > 0);
   if (!hasData) {
     return (
-      <p className="py-6 text-center text-xs text-slate-400">
+      <p className="py-6 text-center text-caption text-slate-400">
         近 30 天暂无作答记录，完成练习后这里会出现趋势
       </p>
     );
@@ -105,7 +105,7 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
     <div className="overflow-x-auto">
       <div className="min-w-120">
         {/* 上联：答题数（单系列，标题即图例） */}
-        <p className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
+        <p className="mb-1 flex items-center gap-1.5 text-caption text-slate-500">
           <span className="h-2 w-2 rounded-full bg-indigo-500" aria-hidden />
           每日答题数
         </p>
@@ -154,7 +154,7 @@ function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
         </svg>
 
         {/* 下联：正确率（固定 0–100%） */}
-        <p className="mb-1 mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+        <p className="mb-1 mt-2 flex items-center gap-1.5 text-caption text-slate-500">
           <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
           每日正确率（无作答日断线）
         </p>
@@ -353,13 +353,13 @@ function StatTiles({
           key={t.key}
           className="border-r border-line bg-white px-4 py-3 last:border-r-0"
         >
-          <p className="text-xs text-slate-500">{t.label}</p>
+          <p className="text-caption text-slate-500">{t.label}</p>
           <p className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-ink">
             {t.value}
           </p>
           {t.delta && (
             <p
-              className={`mt-0.5 flex items-center gap-0.5 text-[11px] font-medium ${
+              className={`mt-0.5 flex items-center gap-0.5 text-body-sm font-medium ${
                 t.delta.up ? "text-emerald-600" : "text-orange-600"
               }`}
             >
@@ -367,7 +367,7 @@ function StatTiles({
               {t.delta.text}
             </p>
           )}
-          {t.sub && <p className="mt-0.5 text-[11px] text-amber-600">{t.sub}</p>}
+          {t.sub && <p className="mt-0.5 text-body-sm text-amber-600">{t.sub}</p>}
         </div>
       ))}
     </div>
@@ -386,7 +386,7 @@ function AxisBars({ axes }: { axes: RadarAxis[] }) {
               ? "bg-amber-400"
               : "bg-indigo-500";
         return (
-          <li key={a.kc_id || a.name} className="flex items-center gap-2 text-xs">
+          <li key={a.kc_id || a.name} className="flex items-center gap-2 text-caption">
             <span
               className="w-24 shrink-0 truncate text-slate-600 sm:w-32"
               title={a.name}
@@ -422,7 +422,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
           key={a.kc_id || a.name}
           className="rounded-lg bg-slate-50/70 px-2.5 py-1.5"
         >
-          <summary className="flex cursor-pointer flex-wrap items-center gap-1.5 text-xs">
+          <summary className="flex cursor-pointer flex-wrap items-center gap-1.5 text-body-sm">
             <span
               className="min-w-0 flex-1 truncate font-medium text-slate-700"
               title={a.name}
@@ -433,12 +433,12 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
               {fmtPct(a.p_mastery)}
             </span>
             {a.kc_count != null && (
-              <span className="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-[10px] text-slate-600">
+              <span className="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-caption text-slate-600">
                 {a.kc_count} 个知识点
               </span>
             )}
             {a.weak_count != null && a.weak_count > 0 && (
-              <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-600">
+              <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-caption font-medium text-rose-600">
                 {a.weak_count} 个薄弱
               </span>
             )}
@@ -448,7 +448,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
               {a.kcs.map((kc, i) => (
                 <li
                   key={kc.kc_id ?? `${kc.name}-${i}`}
-                  className="flex items-center justify-between gap-2 text-[11px]"
+                  className="flex items-center justify-between gap-2 text-body-sm"
                 >
                   <span className="min-w-0 truncate text-slate-600" title={kc.name}>
                     {kc.name ?? "未命名知识点"}
@@ -460,7 +460,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
               ))}
             </ul>
           ) : (
-            <p className="mt-1 text-[11px] text-slate-400">该轴暂无下钻明细</p>
+            <p className="mt-1 text-body-sm text-slate-400">该轴暂无下钻明细</p>
           )}
         </details>
       ))}
@@ -472,7 +472,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
 function RadarPanel({ axes, isChapter }: { axes: RadarAxis[]; isChapter: boolean }) {
   if (axes.length === 0) {
     return (
-      <p className="py-6 text-center text-xs text-slate-400">
+      <p className="py-6 text-center text-caption text-slate-400">
         暂无掌握度证据，完成练习后这里会出现掌握度轴
       </p>
     );
@@ -515,7 +515,7 @@ function WeakPointCard({
           {wp.name}
         </span>
         <span
-          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+          className={`rounded-full px-2 py-0.5 text-caption font-medium ${
             isRedline ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"
           }`}
           title={
@@ -526,11 +526,11 @@ function WeakPointCard({
         >
           {isRedline ? "红线" : "待巩固"}
         </span>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-caption text-slate-600">
           掌握度 {fmtPct(wp.p_mastery)}
         </span>
         {wp.error_count > 0 && (
-          <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">
+          <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">
             {wp.error_count} 道错题
           </span>
         )}
@@ -545,7 +545,7 @@ function WeakPointCard({
         <Link
           href="/quiz?weak=1"
           title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
-          className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
+          className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-caption font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
         >
           针对此点练习
         </Link>
@@ -560,10 +560,10 @@ function WeakPointCard({
                   className="flex min-w-0 flex-1 flex-col rounded-lg border border-violet-200 bg-violet-50/70 px-2 py-1"
                   title={`前置知识点：${rc.name}`}
                 >
-                  <span className="truncate text-xs font-medium text-violet-800">
+                  <span className="truncate text-caption font-medium text-violet-800">
                     {rc.name}
                   </span>
-                  <span className="font-mono text-[10px] text-violet-500">
+                  <span className="font-mono text-caption text-violet-500">
                     前置 · {fmtPct(rc.p_mastery)}
                   </span>
                 </span>
@@ -583,15 +583,15 @@ function WeakPointCard({
                   className="flex min-w-0 flex-1 flex-col rounded-lg border border-amber-200 bg-amber-50/70 px-2 py-1"
                   title={`当前薄弱点：${wp.name}`}
                 >
-                  <span className="truncate text-xs font-medium text-amber-800">
+                  <span className="truncate text-caption font-medium text-amber-800">
                     {wp.name}
                   </span>
-                  <span className="font-mono text-[10px] text-amber-500">
+                  <span className="font-mono text-caption text-amber-500">
                     当前 · {fmtPct(wp.p_mastery)}
                   </span>
                 </span>
               </div>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-caption text-slate-500">
                 可能源于《{rc.name}》未掌握（{fmtPct(rc.p_mastery)}），建议先补前置
               </p>
             </div>
@@ -716,7 +716,7 @@ function DiagnosisBody({ narrative }: { narrative: string }) {
         >
           <h3 className="text-sm font-semibold text-slate-800">
             <span
-              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+              className={`rounded-full px-2 py-0.5 text-caption font-semibold ${
                 SECTION_BADGE_STYLE[s.title] ?? "bg-slate-100 text-slate-600"
               }`}
             >
@@ -909,7 +909,7 @@ export default function ReportsPage() {
             type="button"
             onClick={reload}
             disabled={loading || diagnosisLoading}
-            className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading || diagnosisLoading ? "更新中…" : "刷新报告"}
           </button>
@@ -919,7 +919,7 @@ export default function ReportsPage() {
       {/* 知识库切换 tab：全部=全站聚合；选中某库时后端按 ?kb_id= 下发章节聚合轴 */}
       {kbs.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="按知识库查看报告">
-          <span className="mr-0.5 text-xs text-slate-500">范围：</span>
+          <span className="mr-0.5 text-caption text-slate-500">范围：</span>
           {[{ id: "", name: "全部", subject: "" }, ...kbs].map((kb) => {
             const active = kbId === kb.id;
             return (
@@ -930,7 +930,7 @@ export default function ReportsPage() {
                 aria-selected={active}
                 title={kb.subject || undefined}
                 onClick={() => switchKb(kb.id)}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-full border px-3 py-1 text-caption font-medium transition-colors ${
                   active
                     ? "border-indigo-600 bg-indigo-600 text-white"
                     : "border-slate-300 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
@@ -953,8 +953,8 @@ export default function ReportsPage() {
               illustration="chart"
             />
             <div className="flex justify-center gap-2">
-              <Link href="/quiz" className="rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-800">开始摸底练习</Link>
-              <Link href="/plans" className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700">制定学习计划</Link>
+              <Link href="/quiz" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800">开始摸底练习</Link>
+              <Link href="/plans" className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700">制定学习计划</Link>
             </div>
           </div>
         )}
@@ -975,7 +975,7 @@ export default function ReportsPage() {
             <Card
               title="掌握度雷达"
               extra={
-                <span className="text-xs text-slate-400">
+                <span className="text-caption text-slate-400">
                   {isChapterAxes
                     ? `章节聚合 · ${radarAxes.length} 轴`
                     : `按证据活动量 Top ${Math.min(radarAxes.length, RADAR_MAX_DIMS)}`}
@@ -996,13 +996,13 @@ export default function ReportsPage() {
             title="薄弱知识点"
             className="order-4"
             extra={
-              <span className="text-xs text-slate-400">
+              <span className="text-caption text-slate-400">
                 红线 &lt;{redPct}% · 待巩固 &lt;{consolidatePct}% · 附归因下钻
               </span>
             }
           >
             {weakPoints.length === 0 ? (
-              <p className="py-3 text-center text-xs text-slate-400">
+              <p className="py-3 text-center text-caption text-slate-400">
                 暂无薄弱点，继续保持
               </p>
             ) : (
@@ -1016,11 +1016,11 @@ export default function ReportsPage() {
                     <section key={groupKey}>
                       <header className="mb-2 flex flex-wrap items-center gap-2">
                         {hasSubjectSections && (
-                          <span className="rounded-lg bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                          <span className="rounded-lg bg-indigo-50 px-2 py-0.5 text-caption font-semibold text-indigo-700">
                             {g.key || "未分科"}
                           </span>
                         )}
-                        <span className="text-xs text-slate-500">
+                        <span className="text-caption text-slate-500">
                           红线{" "}
                           <b className="font-semibold text-rose-600">{g.red}</b> 个 ·
                           待巩固{" "}
@@ -1051,7 +1051,7 @@ export default function ReportsPage() {
                                 [groupKey]: !expanded,
                               }))
                             }
-                            className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-caption font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
                           >
                             {expanded
                               ? "收起"
@@ -1069,17 +1069,17 @@ export default function ReportsPage() {
 
         {hasAnyData && <Card title="下一步建议" className="order-5">
           {actions.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">暂无建议</p>
+            <p className="py-3 text-center text-caption text-slate-400">暂无建议</p>
           ) : (
             <ul className="grid gap-3 md:grid-cols-2">
               {actions.map((a, i) => (
                 <li key={i}>
                   <Link
                     href={a.href}
-                    className="group flex items-start justify-between gap-3 rounded-[11px] border border-line px-4 py-3 text-[12px] text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/30"
+                    className="group flex items-start justify-between gap-3 rounded-[11px] border border-line px-4 py-3 text-body-sm text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/30"
                   >
-                    <span className="flex min-w-0 flex-1 gap-2"><b className="text-[10px] font-medium text-ink-muted">{String(i + 1).padStart(2, "0")}</b><span>{a.label}</span></span>
-                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-indigo-600">
+                    <span className="flex min-w-0 flex-1 gap-2"><b className="text-caption font-medium text-ink-muted">{String(i + 1).padStart(2, "0")}</b><span>{a.label}</span></span>
+                    <span className="flex shrink-0 items-center gap-1 text-caption font-medium text-indigo-600">
                       去处理
                       <svg
                         viewBox="0 0 24 24"
@@ -1106,17 +1106,17 @@ export default function ReportsPage() {
           className="order-2"
           extra={
             diagnosisLoading ? (
-              <span className="flex items-center gap-1.5 text-xs text-ink-muted">
+              <span className="flex items-center gap-1.5 text-caption text-ink-muted">
                 <Spinner className="h-3.5 w-3.5" />
                 后台更新中
               </span>
             ) : report.report_status === "completed" ? (
-              <span className="text-xs text-success-600">已更新</span>
+              <span className="text-caption text-success-600">已更新</span>
             ) : null
           }
         >
           {refreshError && (
-            <p className="mb-3 rounded-control bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <p className="mb-3 rounded-control bg-amber-50 px-3 py-2 text-caption text-amber-700">
               {refreshError}
             </p>
           )}
@@ -1124,7 +1124,7 @@ export default function ReportsPage() {
             <div className={diagnosisLoading ? "opacity-75" : ""}>
               <DiagnosisBody narrative={narrative} />
               {diagnosisLoading && (
-                <p className="mt-3 text-xs text-ink-muted">
+                <p className="mt-3 text-caption text-ink-muted">
                   当前先显示最近一次诊断，更新完成后会自动替换。
                 </p>
               )}
@@ -1134,13 +1134,13 @@ export default function ReportsPage() {
               <Spinner className="h-5 w-5 shrink-0" />
               <div>
                 <p className="text-sm font-medium text-ink">正在生成最新诊断</p>
-                <p className="mt-0.5 text-xs text-ink-muted">
+                <p className="mt-0.5 text-caption text-ink-muted">
                   雷达、趋势和行动建议已经可以查看，你可以继续浏览其它内容。
                 </p>
               </div>
             </div>
           ) : (
-            <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs text-slate-500">
+            <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-caption text-slate-500">
               {narrative_note ?? "暂无诊断"}
               {report.report_status === "unavailable" &&
                 "：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。"}

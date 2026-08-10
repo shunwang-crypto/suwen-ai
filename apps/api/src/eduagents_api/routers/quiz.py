@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.thresholds import DIFFICULTIES, difficulty_for_mastery
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import or_, select
 
@@ -13,8 +15,15 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
 from ..plan_adjust import PlanTaskAttributionError, validate_plan_task_attribution
-from ..profile_summary import build_profile_context, weak_point_kcs
-from ..services import record_attempts
+from ..practice_recommendation import PracticeAdjustmentUnavailable
+from ..profile_summary import (
+    assessment_mode_kcs,
+    build_profile_context,
+    has_any_kc,
+    weak_point_kcs,
+)
+from ..services import quiz_kc_readiness, record_attempts
+from .practice import PracticeRequest, load_recommendation
 from .threads import stream_graph_run
 
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
@@ -29,10 +38,15 @@ def adaptive_difficulty_mix(weak: list[dict], num_questions: int) -> dict:
     档位与阈值同源仿真自适应臂 (thresholds.difficulty_for_mastery): 题目按薄弱点
     轮转分配 (蓝图要求覆盖均衡), 第 i 题难度 = 对应 KC 的匹配档, 故各档之和恒等于
     num_questions。由后端计算, 不信任前端传的 difficulty_mix (可篡改)。
+
+    Assessment Mode 的 KC 可能没有 mastery_record (p_mastery=None): 这类 KC 的目的
+    是"量出水平", 没有可信 p 值可依, 一律走中档 —— 照未验证的先验值调难度会把
+    诊断题也偏到极端档, 反而测不准。
     """
     counts = dict.fromkeys(DIFFICULTIES, 0)
     for i in range(num_questions):
-        counts[difficulty_for_mastery(float(weak[i % len(weak)]["p_mastery"]))] += 1
+        p = weak[i % len(weak)].get("p_mastery")
+        counts["mid" if p is None else difficulty_for_mastery(float(p))] += 1
     return counts
 
 
@@ -47,6 +61,7 @@ class QuizCreate(BaseModel):
     from_weak_points: bool = False
     plan_id: uuid.UUID | None = None
     task_key: str | None = Field(default=None, max_length=96)
+    confirmation_mode: Literal["auto", "required"] = "required"
 
     @model_validator(mode="after")
     def _topic_required(self) -> QuizCreate:
@@ -72,6 +87,53 @@ class AttemptIn(BaseModel):
     answers: list[AttemptAnswerIn] = Field(min_length=1, max_length=20)
 
 
+@router.post("/recommended")
+async def create_recommended_quiz(
+    body: PracticeRequest,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Start the server-selected student practice flow.
+
+    The recommendation is re-evaluated inside the same request.  A stale
+    browser decision never silently becomes a different quiz.
+    """
+    try:
+        recommendation = await load_recommendation(request, ctx, body)
+    except PracticeAdjustmentUnavailable as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": exc.code,
+                "message": str(exc),
+                "recommendation": exc.recommendation.to_dict()
+                if exc.recommendation is not None
+                else None,
+            },
+        )
+    if recommendation.status != "ready" or recommendation.action != "quiz":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "PRACTICE_DECISION_CHANGED",
+                "message": "练习建议已变化，请使用最新建议。",
+                "recommendation": recommendation.to_dict(),
+            },
+        )
+    kb_id = uuid.UUID(recommendation.kb["id"]) if recommendation.kb else None
+    quiz_body = QuizCreate(
+        topic=recommendation.title,
+        kb_id=kb_id,
+        num_questions=recommendation.question_count,
+        difficulty_mix=recommendation.difficulty_mix,
+        kc_names=list(recommendation.target_kc_names),
+        plan_id=uuid.UUID(recommendation.plan_id) if recommendation.plan_id else None,
+        task_key=recommendation.task_key,
+        confirmation_mode="auto",
+    )
+    return await create_quiz(quiz_body, request, ctx)
+
+
 @router.post("")
 async def create_quiz(
     body: QuizCreate, request: Request, ctx: AuthContext = Depends(api_rate_limited)
@@ -85,6 +147,31 @@ async def create_quiz(
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
+    # Wave 1B barrier: a KB-backed cold-start Quiz must not enter the graph
+    # while its usable KC set is still being built.  Personalized and ordinary
+    # Quiz paths share this barrier; weak-point requests must not spend
+    # generation budget before their KB can support learning evidence.
+    if body.kb_id is not None:
+        gateway_mode = getattr(getattr(request.app.state, "settings", None), "gateway_mode", None)
+        if not isinstance(gateway_mode, str) or not gateway_mode:
+            from eduagents_core.config import get_settings
+
+            gateway_mode = get_settings().gateway_mode
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+            readiness = await quiz_kc_readiness(
+                session,
+                tenant_id=ctx.tenant_id,
+                kb_id=body.kb_id,
+                gateway_mode=gateway_mode,
+                org_ids=ctx.org_ids,
+            )
+        if readiness.code == "KB_NOT_FOUND":
+            raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
+        if readiness.status in {"preparing", "not_ready"}:
+            raise HTTPException(
+                status_code=409,
+                detail=readiness.code or "QUIZ_KC_NOT_READY",
+            )
     if body.plan_id is not None and body.task_key is not None:
         async with tenant_session(ctx.tenant_id) as session:
             try:
@@ -104,6 +191,7 @@ async def create_quiz(
     difficulty_mix = dict(body.difficulty_mix)
     difficulty_reasons: list[dict] = []
     trace_prelude: list[dict] = []
+    quiz_mode = "practice"
     if body.from_weak_points:
         weak = await weak_point_kcs(
             ctx.tenant_id,
@@ -111,8 +199,25 @@ async def create_quiz(
             [str(body.kb_id)] if body.kb_id else [],
         )
         if not weak:
-            # 无薄弱点不静默降级成普通出题: 前端据此提示"先做一次练习积累数据"
-            raise HTTPException(status_code=400, detail="NO_WEAK_POINTS")
+            # 证据不足不是"无事可做": 转 Assessment Mode 出诊断题 (§5.3 / §15)。
+            # 这里曾直接 400 NO_WEAK_POINTS, 前端据此禁用入口 —— 新用户因此永远
+            # 迈不出第一步 (要有薄弱点才能出题, 要出题才能产生薄弱点)。
+            weak = await assessment_mode_kcs(
+                ctx.tenant_id,
+                ctx.user_id,
+                [str(body.kb_id)] if body.kb_id else [],
+            )
+            quiz_mode = "assessment"
+        if not weak:
+            # 两种"出不了题"含义相反, 必须分开: KC 图为空 = 前置缺失 (去传资料);
+            # KC 都已验证掌握 = 成功状态 (确实没什么可练的)。
+            scope = [str(body.kb_id)] if body.kb_id else []
+            code = (
+                "ALL_KC_MASTERED"
+                if await has_any_kc(ctx.tenant_id, scope)
+                else "NO_KC_AVAILABLE"
+            )
+            raise HTTPException(status_code=409, detail=code)
         kc_names = [w["name"] for w in weak]
         topic = topic or _WEAK_TOPIC
         # ZPD 难度自适应 (P1-1): 分布由后端按掌握度算; 理由只带定性词 (P2-7)
@@ -130,11 +235,18 @@ async def create_quiz(
             {
                 "node": "weak_points",
                 "event": "weak_points_selected",
+                "mode": quiz_mode,
                 "count": len(weak),
                 "kc_names": kc_names,
                 "p_mastery": [w["p_mastery"] for w in weak],
                 "recent_error": [w["name"] for w in weak if w["recent_error"]],
                 "difficulty_mix": difficulty_mix,
+                # §31 rationale: 让前端能直接展示"为什么是这些题", 不必自己编理由
+                "rationale": (
+                    "这些知识点还没有测过，先做一次快速验证摸清水平"
+                    if quiz_mode == "assessment"
+                    else "根据你的掌握度挑出最薄弱的知识点，并按难度自适应配比"
+                ),
             }
         )
     # 画像注入 (P1-2): 摘要已按 P2-7 脱敏 (定性词, 无题干原文), 供 generate 调整
@@ -157,6 +269,8 @@ async def create_quiz(
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
         "request_id": getattr(request.state, "request_id", ""),
+        "thread_id": thread_id,
+        "confirmation_mode": body.confirmation_mode,
         "kb_id": str(body.kb_id) if body.kb_id else "",
         "topic": topic,
         "num_questions": body.num_questions,

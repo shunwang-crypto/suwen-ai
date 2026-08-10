@@ -274,12 +274,12 @@ export function SessionList({
               return (
                 <Fragment key={s.id}>
                   {index === 0 && pinned && (
-                    <li className="px-1.5 pb-0.5 pt-1 text-[10px] font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-1 text-caption font-normal text-slate-400">
                       置顶
                     </li>
                   )}
                   {!pinned && (index === 0 || previousPinned) && (
-                    <li className="px-1.5 pb-0.5 pt-2 text-[10px] font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-2 text-caption font-normal text-slate-400">
                       最近 7 天
                     </li>
                   )}
@@ -299,7 +299,7 @@ export function SessionList({
                         <button
                           type="button"
                           onClick={() => onSelect(s.id)}
-                          className={`flex h-9 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-[12px] transition-[background-color,color,padding] group-hover:pr-9 ${
+                          className={`flex h-9 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-body-sm transition-[background-color,color,padding] group-hover:pr-9 ${
                             active
                               ? "bg-surface-muted font-medium text-ink"
                               : "text-ink-secondary hover:bg-surface-muted hover:text-ink"
@@ -375,7 +375,7 @@ export function SessionList({
         )}
       </div>
 
-      <p className="shrink-0 border-t border-slate-200 px-3 py-2 text-[10px] text-slate-400">
+      <p className="shrink-0 border-t border-slate-200 px-3 py-2 text-caption text-slate-400">
         共 {sessions.length} 个对话 · 自动保存
       </p>
 

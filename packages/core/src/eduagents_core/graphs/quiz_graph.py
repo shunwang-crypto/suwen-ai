@@ -32,6 +32,14 @@ MAX_CRITIC_RETRIES = 1  # 独立评审最多返工 1 轮，避免无限增加成
 MAX_CRITIC_ISSUES = 5
 MAX_CRITIC_REASON_CHARS = 120
 MAX_CRITIC_MATERIAL_CHARS = 20_000
+_DIAGNOSTIC_TOP_LEVEL_KEYS = frozenset(
+    {"questions", "items", "summary", "schema_version", "data", "error"}
+)
+MAX_DIAGNOSTIC_TOP_LEVEL_KEYS = 8
+QUIZ_GENERATION_BASE_TOKENS = 6_000
+QUIZ_GENERATION_TOKENS_PER_QUESTION = 1_200
+QUIZ_GENERATION_RETRY_TOKENS = 2_000
+QUIZ_GENERATION_MAX_TOKENS = 16_000
 
 _TYPES = ("single", "multi", "blank", "short")
 _DIFFICULTIES = ("easy", "mid", "hard")
@@ -116,6 +124,25 @@ class QuestionModel(BaseModel):
 QUESTION_SCHEMA: dict[str, Any] = QuestionModel.model_json_schema()
 
 
+def quiz_generation_max_tokens(num_questions: int, retry_count: int) -> int:
+    """Reserve room for provider reasoning plus the structured question body.
+
+    Some OpenAI-compatible reasoning models count hidden reasoning against
+    ``max_tokens``. The previous ``400 * questions + 300`` budget could end
+    with ``finish_reason=length`` before any visible JSON was emitted. Repair
+    rounds receive additional room, while the hard cap keeps large quizzes
+    bounded.
+    """
+    questions = min(20, max(1, int(num_questions)))
+    retries = max(0, int(retry_count))
+    return min(
+        QUIZ_GENERATION_MAX_TOKENS,
+        QUIZ_GENERATION_BASE_TOKENS
+        + QUIZ_GENERATION_TOKENS_PER_QUESTION * questions
+        + QUIZ_GENERATION_RETRY_TOKENS * retries,
+    )
+
+
 def grade_objective(question: dict, response: str) -> bool:
     """客观题纯函数判分 (API 层调用, 不进图)。
 
@@ -161,6 +188,20 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(data, dict):
             return data
     return None
+
+
+def _diagnostic_top_level_keys(raw: dict[str, Any] | None) -> list[str]:
+    """Return a bounded, content-safe summary of a model JSON object's keys."""
+    if raw is None:
+        return []
+    keys: list[str] = []
+    for key in raw:
+        safe_key = key if key in _DIAGNOSTIC_TOP_LEVEL_KEYS else "<other>"
+        if safe_key not in keys:
+            keys.append(safe_key)
+        if len(keys) >= MAX_DIAGNOSTIC_TOP_LEVEL_KEYS:
+            break
+    return sorted(keys)
 
 
 def _mix_deficit(items: list[dict], num_questions: int, difficulty_mix: dict) -> list[str]:
@@ -324,17 +365,22 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
     def confirm_blueprint(state: _QuizGraphState) -> dict:
         # difficulty_reasons: 定向出题时路由层产出的逐 KC 分档理由 (P1-1 可解释),
         # 随 interrupt 平铺进 SSE, 前端蓝图确认卡渲染"为什么这套题"
-        decision = interrupt(
-            {
-                "kind": "blueprint_confirm",
-                "blueprint": state.get("blueprint", {}),
-                "difficulty_reasons": state.get("difficulty_reasons") or [],
-            }
-        )
+        if state.get("confirmation_mode", "required") == "auto":
+            decision: Any = {"approved": True}
+        else:
+            decision = interrupt(
+                {
+                    "kind": "blueprint_confirm",
+                    "blueprint": state.get("blueprint", {}),
+                    "difficulty_reasons": state.get("difficulty_reasons") or [],
+                }
+            )
         approved = isinstance(decision, dict) and bool(decision.get("approved"))
         if not approved:
             return {
                 "blueprint_confirmed": False,
+                "terminal_outcome": "cancelled_by_user",
+                "failure_code": "QUIZ_CANCELLED_BY_USER",
                 "trace": [{"node": "confirm_blueprint", "event": "rejected"}],
             }
         update: dict[str, Any] = {"blueprint_confirmed": True}
@@ -415,6 +461,10 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{PROFILE_SECTION}}", profile_block)
             .replace("{{FIX_INSTRUCTIONS}}", fix_block)
         )
+        retry_round = int(state.get("retry_count") or 0)
+        generation_max_tokens = quiz_generation_max_tokens(
+            int(state.get("num_questions", 5)), retry_round
+        )
         result = await deps.gateway.chat(
             ChatRequest(
                 messages=(ChatMessage(role="user", content=prompt),),
@@ -425,8 +475,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 tenant_id=state.get("tenant_id", ""),
                 user_id=state.get("user_id", ""),
                 request_id=state.get("request_id", ""),
-                # P1-15: 输出上限按题数动态 (单题含解析约 300-400 token)
-                max_tokens=400 * int(state.get("num_questions", 5)) + 300,
+                max_tokens=generation_max_tokens,
             )
         )
         raw = _parse_json_object(result.text)
@@ -442,40 +491,115 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 else:
                     item.setdefault("source_chunk_id", None)
                 questions.append(item)
+        raw_question_count = len(raw_questions) if isinstance(raw_questions, list) else 0
+        schema_passed_count = 0
+        for item in questions:
+            try:
+                QuestionModel.model_validate(item)
+                schema_passed_count += 1
+            except ValidationError:
+                pass
+        generation_status = (
+            "invalid_json"
+            if raw is None
+            else "invalid_shape"
+            if not isinstance(raw_questions, list)
+            else "empty"
+            if raw_question_count == 0
+            else "ok"
+        )
+        diagnostic = {
+            "node": "generate_diagnostic",
+            "event": "response_diagnostic",
+            "provider": result.provider or "unknown",
+            "model": result.model,
+            "feature": "quiz_generate",
+            "response_chars": len(result.text),
+            "finish_reason": result.finish_reason,
+            "json_parsed": raw is not None,
+            "top_level_keys": _diagnostic_top_level_keys(raw),
+            "raw_question_count": raw_question_count,
+            "schema_passed_count": schema_passed_count,
+            "truncated": result.finish_reason in {"length", "max_tokens"},
+            "retry_round": retry_round,
+            "max_tokens": generation_max_tokens,
+            "request_id": state.get("request_id", ""),
+            "thread_id": state.get("thread_id", ""),
+        }
+        log.info(
+            "quiz_generation_diagnostic",
+            **{key: value for key, value in diagnostic.items() if key not in {"node", "event"}},
+        )
         return {
             "questions": questions,
+            "generation_status": generation_status,
+            # A non-empty array whose members all fail schema validation is a
+            # validation failure, not an empty generation. Keep this bit over
+            # every repair round.
+            "ever_generated_nonempty": bool(raw_question_count)
+            or bool(state.get("ever_generated_nonempty")),
             "trace": [
                 {
                     "node": "generate",
                     "event": "generated",
                     "count": len(questions),
                     "materials": len(chunk_ids),
-                    "round": int(state.get("retry_count") or 0),
+                    "round": retry_round,
                     # 画像是否注入可观测 (前端时间线可核对, 同 qa 的 profile_injected)
                     "profile_injected": bool(profile_summary),
-                }
+                },
+                diagnostic,
             ],
         }
 
     def validate(state: QuizState) -> dict:
         raw_questions = state.get("questions") or []
         expected = int(state.get("num_questions") or 0)
+        target_kcs = {
+            normalize_kc_name(str(name))
+            for name in (state.get("kc_names") or [])
+            if isinstance(name, str) and normalize_kc_name(name)
+        }
         errors: list[str] = []
         validated: list[dict] = []
         if len(raw_questions) != expected:
             errors.append(f"整卷数量不符: 需要 {expected} 题, 实得 {len(raw_questions)} 题")
         for i, question in enumerate(raw_questions, start=1):
             try:
-                validated.append(QuestionModel.model_validate(question).model_dump())
+                parsed = QuestionModel.model_validate(question)
+                if target_kcs:
+                    out_of_scope = [
+                        name
+                        for name in parsed.kc_names
+                        if normalize_kc_name(name) not in target_kcs
+                    ]
+                    if out_of_scope:
+                        errors.append(f"第 {i} 题 kc_names: 未命中目标 KC 白名单")
+                        continue
+                validated.append(parsed.model_dump())
             except ValidationError as exc:
                 for err in exc.errors():
                     loc = ".".join(str(part) for part in err["loc"]) or "整题"
                     errors.append(f"第 {i} 题 {loc}: {err['msg']}")
         retry_count = int(state.get("retry_count") or 0)
         if errors:
+            retry_exhausted = retry_count >= MAX_RETRIES
+            ever_generated_nonempty = bool(state.get("ever_generated_nonempty"))
             return {
                 "validation_errors": errors,
                 "retry_count": retry_count + 1,
+                **(
+                    {
+                        "terminal_outcome": "validation_failed"
+                        if ever_generated_nonempty
+                        else "generation_failed",
+                        "failure_code": "QUIZ_VALIDATION_FAILED"
+                        if ever_generated_nonempty
+                        else "QUIZ_GENERATION_EMPTY",
+                    }
+                    if retry_exhausted
+                    else {}
+                ),
                 "trace": [
                     {
                         "node": "validate",
@@ -489,6 +613,8 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
         return {
             "questions": validated,
             "validation_errors": [],
+            "terminal_outcome": "succeeded",
+            "failure_code": "",
             "trace": [
                 {
                     "node": "validate",

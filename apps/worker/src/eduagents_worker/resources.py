@@ -35,11 +35,15 @@ log = get_logger("worker.resources")
 
 _PROMPT = """你是试题资料识别助手。请忠实识别原文件中的所有题目。
 每个元素必须包含：question_no, page_no, type, stem, options, detected_student_answer,
-detected_reference_answer, explanation, points, kc_names, difficulty, confidence。
+detected_reference_answer, explanation, points, kc_names, difficulty, confidence，以及逐字段的
+field_confidence。field_confidence 必须覆盖 question_no、page_no、type、stem、options、
+detected_student_answer、detected_reference_answer、answer、explanation、kc_names、difficulty、points；
+每个字段只填写 confidence（0 到 1）和 warnings 数组，不填写 source。缺失或无法辨认的字段
+confidence 必须为 null，不能猜测。
 不清楚的字段必须是空字符串、空数组或 null，绝不能猜答案、补造题干或知识点。
 type 只能是 single、multi、blank、short；difficulty 只能是 easy、mid、hard；
 confidence 是 0 到 1。只输出一个 JSON 对象，格式严格为：
-{"questions":[{...}]}。不要输出数组顶层、Markdown 或解释文字。
+{"questions":[{"field_confidence":{"stem":{"confidence":0.95,"warnings":[]}}}]}。不要输出数组顶层、Markdown 或解释文字。
 数学公式必须使用展示定界符：行内公式严格使用 $...$；独立长公式使用 $$...$$，开始和结束的 $$ 各自独占一行，并在 JSON 字符串中把换行编码为 \\n。不要省略闭合定界符，不要把中文正文放进公式定界符，不要裸输出 \\frac、\\lim、\\sum、\\int、\\sqrt、\\left 等完整公式。
 不要把 PDF 标题、知识点讲义、页眉页脚或说明文字当成题目。"""
 
@@ -121,6 +125,12 @@ def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
     """开发/无模型时的保守文本回退，便于人工校对多题草稿。"""
     import re
 
+    def split_answer(block: str) -> tuple[str, str]:
+        match = re.search(r"(?m)^\s*(?:参考)?答案\s*[:：]\s*(.+?)\s*$", block)
+        if not match:
+            return block.strip(), ""
+        return block[: match.start()].strip(), match.group(1).strip()[:8000]
+
     if not text.strip():
         return [
             {
@@ -139,7 +149,19 @@ def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
         ]
     matches = list(re.finditer(r"(?m)^\s*(\d{1,4})\s*[.、)）:]\s*", text))
     if not matches:
-        return [{"question_no": "1", "stem": text.strip()[:12000], "confidence": 0.0}]
+        stem, answer = split_answer(text)
+        return [
+            {
+                "question_no": "1",
+                "stem": stem[:12000],
+                "type": "short",
+                "options": [],
+                "detected_student_answer": "",
+                "detected_reference_answer": answer,
+                "answer": answer,
+                "confidence": 0.0,
+            }
+        ]
     result: list[dict] = []
     selected_matches = matches if max_questions <= 0 else matches[:max_questions]
     for index, match in enumerate(selected_matches):
@@ -148,7 +170,7 @@ def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
             if index + 1 < len(selected_matches)
             else len(text)
         )
-        block = text[match.end() : end].strip()
+        block, answer = split_answer(text[match.end() : end])
         result.append(
             {
                 "question_no": match.group(1),
@@ -157,7 +179,8 @@ def _numbered_blocks(text: str, max_questions: int) -> list[dict]:
                 "stem": block[:12000],
                 "options": [],
                 "detected_student_answer": "",
-                "detected_reference_answer": "",
+                "detected_reference_answer": answer,
+                "answer": answer,
                 "explanation": "",
                 "points": None,
                 "kc_names": [],
@@ -605,7 +628,17 @@ async def extract_learning_resource(
         )
         if settings.max_learning_resource_questions > 0:
             raw_questions = raw_questions[: settings.max_learning_resource_questions]
-        questions = [normalize_extracted_question(raw, i + 1) for i, raw in enumerate(raw_questions)]
+        confidence_source = "rule" if settings.gateway_mode == "stub" else "model_reported"
+        paginated = Path(filename).suffix.lower() == ".pdf"
+        questions = [
+            normalize_extracted_question(
+                raw,
+                i + 1,
+                confidence_source=confidence_source,
+                paginated=paginated,
+            )
+            for i, raw in enumerate(raw_questions)
+        ]
         questions = [question for question in questions if question["stem"]]
         questions = _filter_questions_to_retry_pages(questions, retry_pages)
         if not questions:
@@ -723,6 +756,7 @@ async def extract_learning_resource(
                         source_region_json=question_data["source_region"],
                         points=question_data["points"],
                         extraction_confidence=question_data["confidence"],
+                        field_confidence_json=question_data["field_confidence"],
                         verification_status="pending",
                     )
                 )

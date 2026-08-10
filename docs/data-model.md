@@ -112,6 +112,16 @@ erDiagram
 有界错误码，不保存全文、图片/Base64 或模型原始响应。Qdrant 只存可重建的向量投影，关系库
 是文档元数据和状态的权威来源。
 
+`KnowledgeComponent` 的 `source_kind` 区分真实语义增强的 `enrichment` 与 stub 摄取建立的
+`chapter_fallback`；章节 fallback 使用 KB 内稳定 key 和确定性 UUID，重跑不会生成重复身份。
+`superseded_by_id` 只表达有界的 KC 映射关系，采用 `ON DELETE SET NULL`，不删除依赖它的历史题目、
+掌握度或学习事件。`stable_key` 仅在非空时受 `(kb_id, stable_key)` 条件唯一索引约束。
+
+stub 文档在 `ready` 前完成章节 KC 与 child chunk 回写；live/record/replay 在语义 KC 覆盖并完成
+前保持 enrichment barrier，不能把 fallback 或空词表当作 `enriched`。面向画像的 Quiz 只有在
+每道题的 KC 快照通过当前 tenant/KB 校验后才能写入 Attempt、LearningEvent、MasteryRecord 和
+MasteryLog；作答链路复用同一批已归一化 KC ID。
+
 ## 普通测验与学习状态
 
 | 实体 | 语义 |
@@ -160,8 +170,10 @@ review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户
 
 ### ResourceQuestion
 
-连接资源与 `Question`，保存 ordinal、题号、章节、页码、原图区域、分值、识别置信度和
-`pending/verified/rejected`。核验状态和学习证据会约束后续编辑。
+连接资源与 `Question`，保存 ordinal、题号、章节、页码、原图区域、分值、兼容的整题识别
+置信度和逐字段 `field_confidence_json`，以及 `pending/verified/rejected`。逐字段对象只允许
+白名单字段，记录有界的 `confidence/source/warnings`；服务端依据关键字段和结构字段阈值计算
+是否可确认。核验状态和学习证据会约束后续编辑。
 
 ### AssessmentAttempt 与 AssessmentAnswer
 

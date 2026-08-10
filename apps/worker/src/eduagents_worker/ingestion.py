@@ -376,6 +376,16 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
                 .where(Chunk.doc_id == uuid.UUID(doc_id), Chunk.parent_id.isnot(None))
                 .values(embedding_status="done")
             )
+        # Stub has no semantic enrichment call to wait for, but it must not
+        # expose a ready document with empty child KC bindings.  Bootstrap is
+        # intentionally before the terminal status write: a missing/invalid
+        # child set follows the normal failed-ingestion path instead of being
+        # presented as a usable cold-start source.
+        if settings.gateway_mode == "stub":
+            from .kc_bootstrap import bootstrap_document_kcs
+
+            await bootstrap_document_kcs(tenant_id, doc_id)
+
         terminal_status = "partial_ready" if partial_warning else "ready"
         await _set_status(
             doc_id,
@@ -388,7 +398,8 @@ async def ingest_document(ctx: dict, tenant_id: str, doc_id: str) -> str:
         log.info(
             "ingest_done", doc_id=doc_id, parents=len(parents), children=len(child_rows)
         )
-        # Stage 2 自动串联 (stub 网关下 enrich 无意义, 跳过; 见 enrichment.py)
+        # Stage 2 自动串联: live/record/replay retain the enrichment barrier;
+        # stub was completed synchronously by chapter bootstrap above.
         if redis is not None and settings.gateway_mode != "stub":
             await redis.enqueue_job("enrich_document", tenant_id, doc_id, None, user_id)
         return terminal_status

@@ -28,6 +28,7 @@ from ..models import (
     ResourceQuestion,
     TutorProblemDraft,
 )
+from ..ocr_confidence import clean_field_confidence, evaluate_question_eligibility
 from ..resource_utils import (
     DIFFICULTIES,
     QUESTION_TYPES,
@@ -143,6 +144,15 @@ def _question_dict(
     content_editable: bool = True,
 ) -> dict:
     meta = question.source_meta_json or {}
+    eligibility = evaluate_question_eligibility(
+        row.field_confidence_json or {},
+        question_type=question.type,
+        paginated=row.page_no is not None,
+        has_student_answer=bool(meta.get("detected_student_answer")),
+        stem=question.stem,
+        answer=question.answer,
+        options=question.options_json or [],
+    )
     return {
         "id": str(row.id),
         "resource_question_id": str(row.id),
@@ -154,6 +164,8 @@ def _question_dict(
         "source_region": row.source_region_json or {},
         "points": row.points,
         "extraction_confidence": row.extraction_confidence,
+        "field_confidence": clean_field_confidence(row.field_confidence_json or {}),
+        "eligibility": eligibility,
         "verification_status": row.verification_status,
         "type": question.type,
         "stem": question.stem,
@@ -920,6 +932,7 @@ async def add_manual_question(
             source_region_json=values.get("source_region") or {},
             points=values.get("points"),
             extraction_confidence=values.get("extraction_confidence"),
+            field_confidence_json=clean_field_confidence({}),
             verification_status="pending",
         )
         session.add(rq)
@@ -1011,6 +1024,61 @@ async def confirm_resource_questions(
             "status": resource.status,
             "error_item_ids": created,
             "confirmed_question_count": len(selected),
+        }
+
+
+@router.post("/{resource_id}/confirm-eligible")
+async def confirm_eligible_resource_questions(
+    resource_id: uuid.UUID,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Confirm only rows that the server currently considers auto-eligible.
+
+    The browser cannot submit a confidence value or a selected low-confidence
+    row to this endpoint; eligibility is recomputed while the rows are locked.
+    """
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        resource = await _owned_resource(session, resource_id, ctx, lock=True)
+        rows = (
+            await session.execute(
+                select(ResourceQuestion, Question)
+                .join(Question, Question.id == ResourceQuestion.question_id)
+                .where(ResourceQuestion.resource_id == resource.id)
+                .with_for_update()
+            )
+        ).all()
+        confirmed: list[str] = []
+        for row, question in rows:
+            if row.verification_status != "pending":
+                continue
+            meta = question.source_meta_json or {}
+            eligibility = evaluate_question_eligibility(
+                row.field_confidence_json or {},
+                question_type=question.type,
+                paginated=row.page_no is not None,
+                has_student_answer=bool(meta.get("detected_student_answer")),
+                stem=question.stem,
+                answer=question.answer,
+                options=question.options_json or [],
+            )
+            if eligibility["eligible"]:
+                row.verification_status = "verified"
+                confirmed.append(str(row.id))
+        pending = await session.scalar(
+            select(func.count())
+            .select_from(ResourceQuestion)
+            .where(
+                ResourceQuestion.resource_id == resource.id,
+                ResourceQuestion.verification_status == "pending",
+            )
+        )
+        if not pending:
+            resource.status = "ready"
+        return {
+            "resource_id": str(resource.id),
+            "status": resource.status,
+            "confirmed_resource_question_ids": confirmed,
+            "confirmed_question_count": len(confirmed),
         }
 
 
@@ -1106,6 +1174,29 @@ async def _edit_resource_question(
             if key in values:
                 meta[key] = values[key]
         question.source_meta_json = meta
+        field_confidence = clean_field_confidence(rq.field_confidence_json or {})
+        changed_fields = {
+            "type": "type",
+            "options": "options",
+            "stem": "stem",
+            "detected_student_answer": "detected_student_answer",
+            "detected_reference_answer": "detected_reference_answer",
+            "answer": "answer",
+            "explanation": "explanation",
+            "kc_names": "kc_names",
+            "difficulty": "difficulty",
+            "question_no": "question_no",
+            "page_no": "page_no",
+            "points": "points",
+        }
+        for input_name, field_name in changed_fields.items():
+            if input_name in values:
+                field_confidence["fields"][field_name] = {
+                    "confidence": 1.0,
+                    "source": "user_correction",
+                    "warnings": [],
+                }
+        rq.field_confidence_json = field_confidence
         for key, attr in (
             ("question_no", "question_no"),
             ("section_path", "section_path"),

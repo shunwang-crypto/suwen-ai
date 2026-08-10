@@ -25,7 +25,7 @@ function MixInput({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs text-slate-500">{label}</span>
+      <span className="text-caption text-slate-500">{label}</span>
       <input
         type="number"
         min={0}
@@ -82,7 +82,7 @@ export function QuizForm({
   return (
     <form onSubmit={submit} className="space-y-3">
       <label className="block">
-        <span className="mb-1 block text-xs font-medium text-slate-500">练习主题</span>
+        <span className="mb-1 block text-caption font-medium text-slate-500">练习主题</span>
         <input
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
@@ -93,7 +93,7 @@ export function QuizForm({
       </label>
 
       <label className="block">
-        <span className="mb-1 block text-xs font-medium text-slate-500">
+        <span className="mb-1 block text-caption font-medium text-slate-500">
           绑定知识库（可选，出题将取材于库内文档）
         </span>
         <select
@@ -111,7 +111,7 @@ export function QuizForm({
       </label>
 
       <div>
-        <span className="mb-1 block text-xs font-medium text-slate-500">
+        <span className="mb-1 block text-caption font-medium text-slate-500">
           难度配比（题数 = 三档之和，共 {total} 题，上限 20）
         </span>
         <div className="grid grid-cols-3 gap-2">
@@ -120,10 +120,10 @@ export function QuizForm({
           <MixInput label="困难" value={hard} onChange={setHard} />
         </div>
         {total > 20 && (
-          <p className="mt-1 text-xs text-red-600">总题数不能超过 20</p>
+          <p className="mt-1 text-body-sm text-red-600">总题数不能超过 20</p>
         )}
         {total === 0 && (
-          <p className="mt-1 text-xs text-slate-400">至少需要 1 题</p>
+          <p className="mt-1 text-body-sm text-slate-400">至少需要 1 题</p>
         )}
       </div>
 

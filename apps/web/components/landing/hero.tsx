@@ -74,7 +74,7 @@ function ProductMock() {
             </div>
           </div>
           {/* 过程时间线 chip */}
-          <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+          <div className="flex items-center gap-1.5 text-caption text-slate-500">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -93,7 +93,7 @@ function ProductMock() {
           <div className="flex justify-start">
             <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3.5 py-2 text-xs leading-relaxed text-slate-700 shadow-sm">
               贝叶斯定理描述了在已知相关证据时，如何更新事件的概率
-              <span className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-indigo-100 px-1 text-[10px] font-semibold text-indigo-700">
+              <span className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-indigo-100 px-1 text-caption font-semibold text-indigo-700">
                 1
               </span>
               ：P(A|B) = P(B|A)·P(A)/P(B)。
@@ -103,35 +103,35 @@ function ProductMock() {
           <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80 p-2.5 pl-3.5">
             <span className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-indigo-500 to-sky-400" />
             <div className="flex items-center gap-1.5">
-              <span className="flex h-4 min-w-4 items-center justify-center rounded bg-indigo-600 px-1 text-[10px] font-semibold text-white">
+              <span className="flex h-4 min-w-4 items-center justify-center rounded bg-indigo-600 px-1 text-caption font-semibold text-white">
                 1
               </span>
-              <span className="truncate text-[11px] font-medium text-slate-700">
+              <span className="truncate text-body-sm font-medium text-slate-700">
                 概率论讲义.pdf
               </span>
-              <span className="ml-auto shrink-0 text-[10px] text-slate-400">
+              <span className="ml-auto shrink-0 text-caption text-slate-400">
                 第 12 页
               </span>
             </div>
-            <p className="mt-1 line-clamp-2 border-l-2 border-indigo-200 pl-2 text-[10px] leading-relaxed text-slate-500">
+            <p className="mt-1 line-clamp-2 border-l-2 border-indigo-200 pl-2 text-caption leading-relaxed text-slate-500">
               条件概率公式 P(A|B) = P(AB)/P(B)，结合全概率公式即可推出贝叶斯定理……
             </p>
           </div>
           {/* 苏格拉底式追问：展示“给出依据后继续引导思考”的产品差异 */}
           <div className="rounded-xl border border-violet-200/80 bg-violet-50/70 px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-violet-700">
-              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-violet-600 text-[9px] text-white">
+            <div className="flex items-center gap-1.5 text-caption font-semibold text-violet-700">
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-violet-600 text-caption text-white">
                 问
               </span>
               苏格拉底式辅导
             </div>
-            <p className="mt-1 text-[10px] leading-relaxed text-violet-700/80">
+            <p className="mt-1 text-caption leading-relaxed text-violet-700/80">
               先别急着套公式：当证据 B 出现时，哪些先验信息会影响你对 A 的判断？
             </p>
           </div>
           {/* 掌握度小徽章 */}
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-caption font-medium text-emerald-700">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -146,7 +146,7 @@ function ProductMock() {
               </svg>
               条件概率 掌握度 72%（+6%）
             </span>
-            <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-600">
+            <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-caption font-medium text-indigo-600">
               3 天后到期复习
             </span>
           </div>

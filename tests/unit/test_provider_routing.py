@@ -139,6 +139,18 @@ async def test_text_success_does_not_call_fallback(monkeypatch, tmp_path):
     assert FakeProvider.calls[0]["model"] == "deepseek-v4-flash-free"
 
 
+async def test_cheap_text_uses_explicit_opencode_route(monkeypatch, tmp_path):
+    install_fake(monkeypatch)
+    gateway = OpenAIGateway(settings(tmp_path))
+
+    result = await gateway.chat(request(tier=Tier.cheap, json_mode=True))
+
+    assert result.provider == "opencode"
+    assert result.model == "deepseek-v4-flash-free"
+    assert [call["api_key"] for call in FakeProvider.calls] == ["opencode-key"]
+    assert FakeProvider.calls[0]["response_format"] == {"type": "json_object"}
+
+
 async def test_text_429_falls_back_to_siliconflow(monkeypatch, tmp_path):
     install_fake(monkeypatch)
     FakeProvider.failures["opencode-key"] = GatewayError("UPSTREAM_RATE_LIMITED", "hidden")

@@ -43,6 +43,7 @@ class FakeGateway:
 def _settings(**values) -> Settings:
     defaults = {
         "gateway_mode": "live",
+        "model_routing_enabled": False,
         "vision_model": "fake-vision",
         "tutor_recognition_timeout_seconds": 2,
         "tutor_ocr_timeout_seconds": 1,

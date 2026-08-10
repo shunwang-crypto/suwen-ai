@@ -107,6 +107,103 @@ def _all_tasks(structure: dict) -> list[dict]:
     return [t for st in structure["stages"] for d in st["days"] for t in d["tasks"]]
 
 
+async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client):
+    """Tutor context returns owned text only after the server resolves an ID pair."""
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import ErrorItem, Plan, Question, Quiz
+    from eduagents_api.plan_adjust import make_task_key
+
+    owner_email = f"tutor-context-owner-{uuid.uuid4().hex[:8]}@test.eduagents.cn"
+    other_email = f"tutor-context-other-{uuid.uuid4().hex[:8]}@test.eduagents.cn"
+    owner_headers = await _register_login(client, owner_email)
+    other_headers = await _register_login(client, other_email)
+    owner_id = await _uid(owner_email)
+    structure = _structure(day_count=1)
+    task_key = make_task_key(0, 0, 0)
+
+    async with tenant_session(owner_id) as session:
+        plan = Plan(
+            tenant_id=owner_id,
+            user_id=owner_id,
+            goal="掌握极限基础",
+            budget_hours=1.5,
+            structure_json=structure,
+        )
+        quiz = Quiz(
+            tenant_id=owner_id,
+            user_id=owner_id,
+            title="Tutor context test",
+            status="ready",
+        )
+        session.add_all([plan, quiz])
+        await session.flush()
+        question = Question(
+            tenant_id=owner_id,
+            quiz_id=quiz.id,
+            type="single",
+            stem="这是仅归属本人错题的题干",
+            options_json=["A", "B"],
+            answer="A",
+            explanation="测试解析",
+            kc_ids=[],
+        )
+        session.add(question)
+        await session.flush()
+        error_item = ErrorItem(
+            tenant_id=owner_id,
+            user_id=owner_id,
+            question_id=question.id,
+            kc_ids=[],
+            state="new",
+        )
+        session.add(error_item)
+        await session.flush()
+        plan_id = str(plan.id)
+        error_item_id = str(error_item.id)
+
+    response = await client.get(f"/api/errors/{error_item_id}/tutor-context", headers=owner_headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "problem": "这是仅归属本人错题的题干",
+        "error_item_id": error_item_id,
+        "kc_ids": [],
+    }
+
+    response = await client.get(f"/api/errors/{error_item_id}/tutor-context", headers=other_headers)
+    assert response.status_code == 404, response.text
+
+    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_key}/tutor-context", headers=owner_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["plan_id"] == plan_id
+    assert response.json()["task_key"] == task_key
+    assert response.json()["problem"] == structure["stages"][0]["days"][0]["tasks"][0]["title"]
+
+    response = await client.get(f"/api/plans/{plan_id}/tasks/not-a-real-task/tutor-context", headers=owner_headers)
+    assert response.status_code == 404, response.text
+    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_key}/tutor-context", headers=other_headers)
+    assert response.status_code == 404, response.text
+
+    response = await client.get("/api/tutor/entrypoints", headers=owner_headers)
+    assert response.status_code == 200, response.text
+    entrypoints = response.json()
+    assert entrypoints["today_task"] == {
+        "status": "ready",
+        "plan_id": plan_id,
+        "task_key": task_key,
+    }
+    assert entrypoints["errors"]["status"] == "ready"
+    assert entrypoints["errors"]["error_ids"] == [error_item_id]
+    assert "problem" not in str(entrypoints)
+    assert "这是仅归属本人错题的题干" not in str(entrypoints)
+
+    response = await client.get("/api/tutor/entrypoints", headers=other_headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "today_task": {"status": "empty", "reason": "NO_PENDING_TODAY_TASK"},
+        "errors": {"status": "empty", "reason": "NO_AVAILABLE_ERRORS", "error_ids": []},
+    }
+
+
 async def test_plan_alive_and_error_book(client):
     from eduagents_api import timectl
     from eduagents_api.db import tenant_session
@@ -145,7 +242,13 @@ async def test_plan_alive_and_error_book(client):
             structure_json=_structure(),
         )
         session.add(plan)
-        quiz = Quiz(tenant_id=uid, user_id=uid, title="低分测评卷", status="ready")
+        quiz = Quiz(
+            tenant_id=uid,
+            user_id=uid,
+            kb_id=kb.id,
+            title="低分测评卷",
+            status="ready",
+        )
         session.add(quiz)
         await session.flush()
         q_quiz = Question(

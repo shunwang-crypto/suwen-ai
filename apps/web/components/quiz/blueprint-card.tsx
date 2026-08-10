@@ -63,19 +63,19 @@ export function BlueprintCard({
         </span>
         <div>
           <h3 className="text-[16px] font-semibold text-ink">练习蓝图</h3>
-          <p className="text-xs text-slate-500">
+          <p className="text-caption text-slate-500">
             确认无误后再生成正式题目；每一题都可以单独调整。
           </p>
         </div>
       </div>
 
       {blueprint.summary && (
-        <div className="mb-2 rounded-lg bg-white/70 px-3 py-1.5 text-xs text-slate-600">
+        <div className="mb-2 rounded-lg bg-white/70 px-3 py-1.5 text-caption text-slate-600">
           <MathText text={blueprint.summary} />
         </div>
       )}
 
-      <div className="mb-3 grid gap-3 border-y border-brand-100 py-3 text-[11px] sm:grid-cols-4"><div><span className="block text-ink-muted">总题数</span><strong className="mt-1 block text-[14px] text-ink">{items.length} 题</strong></div><div><span className="block text-ink-muted">简单</span><strong className="mt-1 block text-success-600">{items.filter((item) => item.difficulty === "easy").length} 题</strong></div><div><span className="block text-ink-muted">中等</span><strong className="mt-1 block text-brand-700">{items.filter((item) => item.difficulty === "mid").length} 题</strong></div><div><span className="block text-ink-muted">困难</span><strong className="mt-1 block text-warning-600">{items.filter((item) => item.difficulty === "hard").length} 题</strong></div></div>
+      <div className="mb-3 grid gap-3 border-y border-brand-100 py-3 text-body-sm sm:grid-cols-4"><div><span className="block text-ink-muted">总题数</span><strong className="mt-1 block text-[14px] text-ink">{items.length} 题</strong></div><div><span className="block text-ink-muted">简单</span><strong className="mt-1 block text-success-600">{items.filter((item) => item.difficulty === "easy").length} 题</strong></div><div><span className="block text-ink-muted">中等</span><strong className="mt-1 block text-brand-700">{items.filter((item) => item.difficulty === "mid").length} 题</strong></div><div><span className="block text-ink-muted">困难</span><strong className="mt-1 block text-warning-600">{items.filter((item) => item.difficulty === "hard").length} 题</strong></div></div>
 
       <ul className="space-y-2">
         {items.map((it, i) => (
@@ -84,18 +84,18 @@ export function BlueprintCard({
             className="rounded-[10px] border border-line bg-white p-3"
           >
             <div className="flex items-center gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[#efede9] text-[11px] font-semibold text-ink-secondary">{i + 1}</span>
-              <div className="min-w-0 flex-1"><p className="truncate text-[12px] font-semibold text-ink">{it.kc_name || "未命名知识点"}</p><p className="mt-0.5 text-[10px] text-ink-muted">{TYPE_OPTIONS.find((option) => option.value === it.type)?.label ?? it.type} · {DIFFICULTY_OPTIONS.find((option) => option.value === it.difficulty)?.label ?? it.difficulty}</p></div>
-              <button type="button" onClick={() => setEditingIndex(editingIndex === i ? null : i)} className="rounded-[6px] px-2 py-1 text-[10px] font-medium text-ink-secondary hover:bg-surface-muted hover:text-brand-700">{editingIndex === i ? "完成" : "调整"}</button>
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[#efede9] text-body-sm font-semibold text-ink-secondary">{i + 1}</span>
+              <div className="min-w-0 flex-1"><p className="truncate text-body-sm font-semibold text-ink">{it.kc_name || "未命名知识点"}</p><p className="mt-0.5 text-caption text-ink-muted">{TYPE_OPTIONS.find((option) => option.value === it.type)?.label ?? it.type} · {DIFFICULTY_OPTIONS.find((option) => option.value === it.difficulty)?.label ?? it.difficulty}</p></div>
+              <button type="button" onClick={() => setEditingIndex(editingIndex === i ? null : i)} className="rounded-[6px] px-2 py-1 text-caption font-medium text-ink-secondary hover:bg-surface-muted hover:text-brand-700">{editingIndex === i ? "完成" : "调整"}</button>
             </div>
             {editingIndex === i && <div className="mt-3 grid gap-2 border-t border-line pt-3 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
-              <label className="flex flex-col gap-0.5"><span className="text-[10px] text-ink-muted">知识点</span><input value={it.kc_name} onChange={(e) => patch(i, { kc_name: e.target.value })} className="h-8 rounded-[7px] border border-line-strong px-2 text-[12px] outline-none focus:border-brand-400" /></label>
+              <label className="flex flex-col gap-0.5"><span className="text-caption text-ink-muted">知识点</span><input value={it.kc_name} onChange={(e) => patch(i, { kc_name: e.target.value })} className="h-8 rounded-[7px] border border-line-strong px-2 text-body-sm outline-none focus:border-brand-400" /></label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] text-ink-muted">题型</span>
+                <span className="text-caption text-ink-muted">题型</span>
                 <select
                   value={it.type}
                   onChange={(e) => patch(i, { type: e.target.value })}
-                  className="h-8 rounded-[7px] border border-line-strong bg-white px-2 text-[12px] outline-none focus:border-brand-400"
+                  className="h-8 rounded-[7px] border border-line-strong bg-white px-2 text-body-sm outline-none focus:border-brand-400"
                 >
                   {TYPE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -105,11 +105,11 @@ export function BlueprintCard({
                 </select>
               </label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-[10px] text-ink-muted">难度</span>
+                <span className="text-caption text-ink-muted">难度</span>
                 <select
                   value={it.difficulty}
                   onChange={(e) => patch(i, { difficulty: e.target.value })}
-                  className="h-8 rounded-[7px] border border-line-strong bg-white px-2 text-[12px] outline-none focus:border-brand-400"
+                  className="h-8 rounded-[7px] border border-line-strong bg-white px-2 text-body-sm outline-none focus:border-brand-400"
                 >
                   {DIFFICULTY_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -128,7 +128,7 @@ export function BlueprintCard({
           type="button"
           disabled={busy}
           onClick={onCancel}
-          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-[12px] font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
         >
           取消
         </button>
@@ -136,7 +136,7 @@ export function BlueprintCard({
           type="button"
           disabled={busy}
           onClick={() => onConfirm({ items, summary: blueprint.summary })}
-          className="flex items-center gap-2 rounded-[8px] bg-brand-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center gap-2 rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
           确认并生成题目

@@ -35,7 +35,7 @@ export function ResourceExtractionSteps({ resource }: { resource: LearningResour
           />
         ))}
       </div>
-      <div className="mt-1.5 grid grid-cols-4 text-center text-[9px] text-ink-muted">
+      <div className="mt-1.5 grid grid-cols-4 text-center text-caption text-ink-muted">
         {STEPS.map((label) => <span key={label}>{label}</span>)}
       </div>
     </div>

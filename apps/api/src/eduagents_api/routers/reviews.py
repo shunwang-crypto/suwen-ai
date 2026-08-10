@@ -433,11 +433,15 @@ async def answer_review(
             )
         cause = item.cause
         kc_ids = [str(k) for k in (question.kc_ids or [])]
+        # 一次复习事件才是一条掌握度证据；ErrorItem.id 是长期复用的卡片身份，
+        # 不能用作 evidence_id，否则同一卡片的后续合法复习会被误判为幂等重放。
+        review_event_id = uuid.uuid4()
         changes = await _update_mastery_review(
-            session, ctx, kc_ids, correct, weight, item.id, now_dt
+            session, ctx, kc_ids, correct, weight, review_event_id, now_dt
         )
         session.add(
             FsrsReviewEvent(
+                id=review_event_id,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 error_item_id=item.id,
@@ -840,6 +844,31 @@ async def list_errors(
     }
 
 
+@errors_router.get("/{error_item_id}/tutor-context")
+async def error_tutor_context(
+    error_item_id: uuid.UUID,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Resolve an owned wrong answer for Tutor without exposing its text in a URL."""
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.scalar(
+            select(ErrorItem).where(
+                ErrorItem.id == error_item_id,
+                ErrorItem.user_id == ctx.user_id,
+            )
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        question = await session.get(Question, row.question_id)
+        if question is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        return {
+            "problem": question.stem[:4000],
+            "error_item_id": str(row.id),
+            "kc_ids": [str(kc_id) for kc_id in (row.kc_ids or [])],
+        }
+
+
 @errors_router.get("/stats")
 async def error_stats(ctx: AuthContext = Depends(api_rate_limited)):
     """错题聚合 (F6): 总数 + 按错因五分类 / 按状态 / 按 KC top10 计数。"""
@@ -1012,7 +1041,7 @@ async def appeal_score(
     - 复核结果非 live (stub/replay 桩) 或解析失败 -> 202 如实登记待人工复核, 不假复核;
     - |新分-原分| ≥ 0.3 -> 修正 attempt (llm_score/scored_reason 加复核修正标记);
       若跨越 0.6 及格线 -> 按 mastery_log 里该 evidence 的 old_p 回滚掌握度,
-      再以新判定走 services._update_mastery 重写 (evidence_type="appeal_regrade");
+      再以新判定走 services.apply_mastery_evidence 重写 (evidence_type="appeal_regrade");
     - 分差 <0.3 -> 维持原判, scored_reason 追加复核说明。响应始终含前后分数。
     """
     request_id = getattr(request.state, "request_id", "")
@@ -1116,8 +1145,6 @@ async def appeal_score(
         }
 
     # 分差 ≥0.3: 修正判分; 跨越及格线时回滚并重写掌握度
-    from ..services import _update_mastery  # 只调用不改 (P2-3 所有权约定)
-
     new_correct = new_score >= _SHORT_PASS_SCORE
     crossed = new_correct != old_correct
     changes: list[dict] = []
@@ -1156,7 +1183,7 @@ async def appeal_score(
                 if record is not None:
                     record.p_mastery = old_p  # confidence 无法精确还原, 如实保留
             # 重写: 以复核后的判定作为新证据 (审计链保留原始行 + 新增 appeal_regrade 行)
-            changes = await _update_mastery(
+            changes = await apply_mastery_evidence(
                 session,
                 ctx,
                 kc_ids,

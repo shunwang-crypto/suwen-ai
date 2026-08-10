@@ -183,7 +183,13 @@ async def _seed_quiz(uid: uuid.UUID, questions: list[dict]) -> dict:
         kb = KnowledgeBase(tenant_id=uid, name="高数", subject="math")
         s.add(kb)
         await s.flush()
-        quiz = Quiz(tenant_id=uid, user_id=uid, title="申诉流测试卷", status="ready")
+        quiz = Quiz(
+            tenant_id=uid,
+            user_id=uid,
+            kb_id=kb.id,
+            title="申诉流测试卷",
+            status="ready",
+        )
         s.add(quiz)
         await s.flush()
         q_ids, kc_ids = [], []

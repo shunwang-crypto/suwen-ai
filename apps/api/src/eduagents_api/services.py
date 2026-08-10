@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
@@ -40,6 +43,202 @@ _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重进 BKT (写死)
 _SHORT_PASS_SCORE = 0.6
 _TUTOR_EVIDENCE_WEIGHT = 0.5  # 辅导小结证据权重 (与主观题同档: 间接证据减半)
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
+
+
+@dataclass(frozen=True)
+class KcReadiness:
+    """The server-side barrier state for a KB-backed diagnostic quiz."""
+
+    status: Literal["not_applicable", "preparing", "ready", "not_ready"]
+    code: str | None
+    eligible_kc_ids: tuple[str, ...] = ()
+    reason: str = ""
+
+
+class QuizKCError(ValueError):
+    """Stable, safe error raised before a quiz can write partial evidence."""
+
+    def __init__(self, code: str, message: str | None = None):
+        self.code = code
+        self.message = message or code
+        super().__init__(self.message)
+
+
+def _optional_kc_attr(row, field_name: str):
+    """Read Wave 1B ORM fields while remaining compatible with pre-migration rows."""
+
+    return getattr(row, field_name, None)
+
+
+def _effective_kc_map(
+    kc_rows: Sequence[tuple[str, str | None, str | None]],
+) -> dict[str, str]:
+    """Resolve superseded IDs without leaving the scoped KC set.
+
+    ``kc_rows`` is deliberately a small, already tenant/KB-scoped projection:
+    (id, source_kind, superseded_by_id).  A broken chain is rejected by
+    omitting it; callers then return a stable not-found/not-ready error rather
+    than inventing a replacement KC.
+    """
+
+    by_id = {str(row[0]): row for row in kc_rows}
+    resolved: dict[str, str] = {}
+    for raw_id in by_id:
+        current = raw_id
+        seen: set[str] = set()
+        while True:
+            if current in seen or current not in by_id:
+                current = ""
+                break
+            seen.add(current)
+            next_id = by_id[current][2]
+            if not next_id:
+                break
+            current = str(next_id)
+        if current:
+            resolved[raw_id] = current
+    return resolved
+
+
+def assess_quiz_kc_readiness(
+    *,
+    gateway_mode: str,
+    document_statuses: Sequence[str],
+    kc_rows: Sequence[tuple[str, str | None, str | None]],
+    child_kc_ids: Sequence[Sequence[str]],
+    has_source_kind: bool = True,
+) -> KcReadiness:
+    """Pure readiness policy used by the API barrier and unit tests.
+
+    A KB without documents is intentionally ``not_applicable`` so existing
+    no-material/high-level Quiz paths remain usable.  Once documents exist,
+    stub accepts only chapter fallback KCs; live/record/replay accepts only
+    enrichment KCs and only after every document is enriched.
+    """
+
+    if not document_statuses:
+        return KcReadiness("not_applicable", None, reason="no_documents")
+
+    statuses = {str(status) for status in document_statuses}
+    if "failed" in statuses:
+        return KcReadiness("not_ready", "QUIZ_KC_NOT_READY", reason="document_failed")
+
+    if gateway_mode == "stub":
+        terminal_statuses = {"ready", "partial_ready", "enriched"}
+        if not statuses <= terminal_statuses:
+            return KcReadiness("preparing", "QUIZ_KC_PREPARING", reason="document_processing")
+    elif statuses != {"enriched"}:
+        return KcReadiness("preparing", "QUIZ_KC_PREPARING", reason="enrichment_pending")
+
+    effective = _effective_kc_map(kc_rows)
+    row_by_id = {str(row[0]): row for row in kc_rows}
+    allowed_kinds = (
+        {"chapter_fallback"} if gateway_mode == "stub" else {"enrichment"}
+    )
+    eligible: list[str] = []
+    for raw_id, effective_id in effective.items():
+        if raw_id != effective_id:
+            continue
+        source_kind = row_by_id[raw_id][1]
+        # Before the Wave 1B migration there is no source_kind column.  Treat
+        # those pre-existing rows as legacy-compatible, while the new schema
+        # is strict and must label every row explicitly.
+        if not has_source_kind or source_kind in allowed_kinds:
+            if effective_id not in eligible:
+                eligible.append(effective_id)
+    if not eligible:
+        return KcReadiness("not_ready", "QUIZ_KC_NOT_READY", reason="no_eligible_kc")
+
+    if has_source_kind:
+        if not child_kc_ids or any(not ids for ids in child_kc_ids):
+            return KcReadiness(
+                "not_ready", "QUIZ_KC_NOT_READY", reason="child_chunk_kc_missing"
+            )
+        for raw_ids in child_kc_ids:
+            child_effective_ids: set[str] = set()
+            for raw_id in raw_ids:
+                effective_id = effective.get(str(raw_id))
+                if effective_id is None:
+                    return KcReadiness(
+                        "not_ready", "QUIZ_KC_NOT_READY", reason="child_chunk_kc_out_of_scope"
+                    )
+                child_effective_ids.add(effective_id)
+            # A child may retain a historical fallback (or another already
+            # scoped binding) after semantic enrichment. Readiness requires at
+            # least one KC from the mode's eligible set per child; it must not
+            # invalidate a complete semantic binding merely because evidence
+            # preserving fallback IDs remain in the JSON snapshot.
+            if not child_effective_ids & set(eligible):
+                return KcReadiness(
+                    "not_ready", "QUIZ_KC_NOT_READY", reason="child_chunk_kc_out_of_scope"
+                )
+
+    return KcReadiness("ready", None, tuple(eligible), reason="kc_ready")
+
+
+async def quiz_kc_readiness(
+    session,
+    *,
+    tenant_id: uuid.UUID | str,
+    kb_id: str | uuid.UUID,
+    gateway_mode: str,
+    org_ids: Sequence[str] = (),
+) -> KcReadiness:
+    """Load and enforce tenant/KB-scoped readiness for a Quiz preflight."""
+
+    try:
+        kb_uuid = uuid.UUID(str(kb_id))
+        tenant_uuid = uuid.UUID(str(tenant_id))
+    except (TypeError, ValueError):
+        return KcReadiness("not_ready", "KB_NOT_FOUND", reason="invalid_scope")
+
+    kb = await session.scalar(select(KnowledgeBase).where(KnowledgeBase.id == kb_uuid))
+    if kb is None:
+        return KcReadiness("not_ready", "KB_NOT_FOUND", reason="kb_missing")
+    if kb.owner_type == "user" and kb.tenant_id != tenant_uuid:
+        return KcReadiness("not_ready", "KB_NOT_FOUND", reason="kb_owner_mismatch")
+    if kb.owner_type == "org" and str(kb.tenant_id) not in {str(item) for item in org_ids}:
+        return KcReadiness("not_ready", "KB_NOT_FOUND", reason="org_membership_missing")
+
+    documents = (
+        await session.scalars(select(Document.status).where(Document.kb_id == kb_uuid))
+    ).all()
+    kc_rows_orm = (
+        await session.scalars(
+            select(KnowledgeComponent).where(
+                KnowledgeComponent.kb_id == kb_uuid,
+                KnowledgeComponent.tenant_id == kb.tenant_id,
+            )
+        )
+    ).all()
+    children = (
+        await session.scalars(
+            select(Chunk.kc_ids).where(
+                Chunk.doc_id.in_(
+                    select(Document.id).where(Document.kb_id == kb_uuid)
+                ),
+                Chunk.parent_id.isnot(None),
+            )
+        )
+    ).all()
+    has_source_kind = hasattr(KnowledgeComponent, "source_kind")
+    kc_rows = [
+        (
+            str(row.id),
+            _optional_kc_attr(row, "source_kind"),
+            str(_optional_kc_attr(row, "superseded_by_id"))
+            if _optional_kc_attr(row, "superseded_by_id")
+            else None,
+        )
+        for row in kc_rows_orm
+    ]
+    return assess_quiz_kc_readiness(
+        gateway_mode=gateway_mode,
+        document_statuses=[str(status) for status in documents],
+        kc_rows=kc_rows,
+        child_kc_ids=[list(ids or []) for ids in children],
+        has_source_kind=has_source_kind,
+    )
 
 
 async def write_learning_event(
@@ -181,7 +380,13 @@ async def persist_learner_insights(
 
 
 async def _resolve_kc_ids(
-    session, kb_id: str | None, kc_names: list[str], user_id: uuid.UUID | None = None
+    session,
+    kb_id: str | None,
+    kc_names: list[str],
+    user_id: uuid.UUID | None = None,
+    *,
+    tenant_id: uuid.UUID | str | None = None,
+    org_ids: Sequence[str] = (),
 ) -> list[str]:
     """kc_name -> 归一化 kc_id (F5-A2: 禁止裸字符串)。无词表/未命中 -> 丢弃该名。
 
@@ -194,24 +399,72 @@ async def _resolve_kc_ids(
     from eduagents_core.kc import KcEntry, KcVocabulary
 
     if kb_id:
-        query = select(KnowledgeComponent).where(KnowledgeComponent.kb_id == uuid.UUID(kb_id))
+        try:
+            kb_uuid = uuid.UUID(str(kb_id))
+        except (TypeError, ValueError):
+            return []
+        kb = await session.scalar(select(KnowledgeBase).where(KnowledgeBase.id == kb_uuid))
+        if kb is None:
+            return []
+        if tenant_id is not None:
+            tenant_uuid = uuid.UUID(str(tenant_id))
+            if kb.owner_type == "user" and kb.tenant_id != tenant_uuid:
+                return []
+            if kb.owner_type == "org" and str(kb.tenant_id) not in {
+                str(item) for item in org_ids
+            }:
+                return []
+        query = select(KnowledgeComponent).where(
+            KnowledgeComponent.kb_id == kb_uuid,
+            KnowledgeComponent.tenant_id == kb.tenant_id,
+        )
+        mastery_effective_ids: set[str] | None = None
     else:
-        query = (
-            select(KnowledgeComponent)
-            .join(MasteryRecord, MasteryRecord.kc_id == KnowledgeComponent.id)
-            .where(MasteryRecord.user_id == user_id)
+        scope_tenant = tenant_id or user_id
+        query = select(KnowledgeComponent).where(
+            KnowledgeComponent.tenant_id == scope_tenant,
         )
     rows = (await session.scalars(query)).all()
+    row_projections = [
+        (
+            str(row.id),
+            _optional_kc_attr(row, "source_kind"),
+            str(_optional_kc_attr(row, "superseded_by_id"))
+            if _optional_kc_attr(row, "superseded_by_id")
+            else None,
+        )
+        for row in rows
+    ]
+    effective_map = _effective_kc_map(row_projections)
+    if kb_id:
+        mastery_effective_ids = None
+    else:
+        mastery_ids = set(
+            str(kc_id)
+            for kc_id in (
+                await session.scalars(
+                    select(MasteryRecord.kc_id).where(
+                        MasteryRecord.tenant_id == (tenant_id or user_id),
+                        MasteryRecord.user_id == user_id,
+                    )
+                )
+            ).all()
+        )
+        mastery_effective_ids = {
+            effective_map[kc_id] for kc_id in mastery_ids if kc_id in effective_map
+        }
     vocab = KcVocabulary(
         entries=[
             KcEntry(
-                kc_id=str(r.id),
+                kc_id=effective_map[str(r.id)],
                 canonical_name=r.canonical_name,
                 aliases=list(r.aliases),
                 description=r.description,
                 embedding=None,
             )
             for r in rows
+            if effective_map.get(str(r.id)) == str(r.id)
+            and (mastery_effective_ids is None or str(r.id) in mastery_effective_ids)
         ]
     )
     resolved: list[str] = []
@@ -222,11 +475,144 @@ async def _resolve_kc_ids(
     return resolved
 
 
+async def _resolve_persisted_kc_ids(
+    session,
+    raw_kc_ids: Sequence[object],
+    *,
+    kb_id: uuid.UUID | None,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    org_ids: Sequence[str] = (),
+) -> list[str]:
+    """Validate a persisted Question KC snapshot without creating anything."""
+
+    mastery_ids: set[str] = set()
+    if kb_id is not None:
+        kb = await session.scalar(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+        if kb is None:
+            raise QuizKCError("QUIZ_KC_NOT_FOUND")
+        if kb.owner_type == "user" and kb.tenant_id != tenant_id:
+            raise QuizKCError("QUIZ_KC_NOT_FOUND")
+        if kb.owner_type == "org" and str(kb.tenant_id) not in {
+            str(item) for item in org_ids
+        }:
+            raise QuizKCError("QUIZ_KC_NOT_FOUND")
+        rows = (
+            await session.scalars(
+                select(KnowledgeComponent).where(
+                    KnowledgeComponent.kb_id == kb_id,
+                    KnowledgeComponent.tenant_id == kb.tenant_id,
+                )
+            )
+        ).all()
+    else:
+        rows = (
+            await session.scalars(
+                select(KnowledgeComponent).where(KnowledgeComponent.tenant_id == tenant_id)
+            )
+        ).all()
+        mastery_ids = {
+            str(kc_id)
+            for kc_id in (
+                await session.scalars(
+                    select(MasteryRecord.kc_id).where(
+                        MasteryRecord.tenant_id == tenant_id,
+                        MasteryRecord.user_id == user_id,
+                    )
+                )
+            ).all()
+        }
+
+    projections = [
+        (
+            str(row.id),
+            _optional_kc_attr(row, "source_kind"),
+            str(_optional_kc_attr(row, "superseded_by_id"))
+            if _optional_kc_attr(row, "superseded_by_id")
+            else None,
+        )
+        for row in rows
+    ]
+    effective_map = _effective_kc_map(projections)
+    allowed_effective_ids = {
+        effective_map[mastery_id]
+        for mastery_id in mastery_ids
+        if mastery_id in effective_map
+    }
+    resolved: list[str] = []
+    for raw_id in raw_kc_ids:
+        try:
+            source_id = str(uuid.UUID(str(raw_id)))
+        except (TypeError, ValueError):
+            raise QuizKCError("QUIZ_KC_NOT_FOUND") from None
+        effective_id = effective_map.get(source_id)
+        if effective_id is None:
+            raise QuizKCError("QUIZ_KC_NOT_FOUND")
+        if kb_id is None and effective_id not in allowed_effective_ids:
+            raise QuizKCError("QUIZ_KC_NOT_FOUND")
+        if effective_id not in resolved:
+            resolved.append(effective_id)
+    return resolved
+
+
 async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
     """quiz 图完成 -> Quiz + Questions 落库 (kc_names 归一为 kc_ids)。"""
     questions = state.get("questions") or []
+    if not isinstance(questions, list) or not questions:
+        raise ValueError("QUIZ_FINALIZE_EMPTY")
     kb_id = state.get("kb_id") or None
-    async with tenant_session(ctx.tenant_id) as session:
+    gateway_mode = state.get("gateway_mode")
+    if not isinstance(gateway_mode, str) or not gateway_mode:
+        from eduagents_core.config import get_settings
+
+        gateway_mode = get_settings().gateway_mode
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        readiness = None
+        kb_uuid = None
+        if kb_id:
+            try:
+                kb_uuid = uuid.UUID(str(kb_id))
+            except (TypeError, ValueError):
+                raise QuizKCError("KB_NOT_FOUND") from None
+            readiness = await quiz_kc_readiness(
+                session,
+                tenant_id=ctx.tenant_id,
+                kb_id=kb_uuid,
+                gateway_mode=gateway_mode,
+                org_ids=ctx.org_ids,
+            )
+            if readiness.status in {"preparing", "not_ready"}:
+                raise QuizKCError(readiness.code or "QUIZ_KC_NOT_READY")
+
+        resolved_questions: list[tuple[dict, list[str]]] = []
+        eligible = set(readiness.eligible_kc_ids) if readiness else set()
+        for question in questions:
+            if not isinstance(question, dict):
+                raise QuizKCError("QUIZ_KC_REQUIRED")
+            kc_ids = await _resolve_kc_ids(
+                session,
+                kb_id,
+                question.get("kc_names", []),
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                org_ids=ctx.org_ids,
+            )
+            if readiness is not None and readiness.status == "ready":
+                if not kc_ids or not set(kc_ids) <= eligible:
+                    raise QuizKCError("QUIZ_KC_REQUIRED")
+            elif readiness is not None and readiness.status == "not_applicable" and kc_ids:
+                # A documentless KB keeps the old path, but any explicit KC
+                # still has to be a real, scoped row.
+                kc_ids = await _resolve_persisted_kc_ids(
+                    session,
+                    kc_ids,
+                    kb_id=kb_uuid,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    org_ids=ctx.org_ids,
+                )
+            resolved_questions.append((question, kc_ids))
+
         blueprint = dict(state.get("blueprint") or {})
         if state.get("plan_id") and state.get("task_key"):
             blueprint["_plan_task_attribution"] = {
@@ -246,10 +632,7 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
         # 先 flush 父行: UoW 跨表排序不看数据库外键 (同 enrichment.py 的教训)
         await session.flush()
         out = []
-        for q in questions:
-            kc_ids = await _resolve_kc_ids(
-                session, kb_id, q.get("kc_names", []), user_id=ctx.user_id
-            )
+        for q, kc_ids in resolved_questions:
             source_chunk = q.get("source_chunk_id")
             row = Question(
                 tenant_id=ctx.tenant_id,
@@ -431,7 +814,11 @@ async def apply_mastery_evidence(
     evidence_type: str = "quiz_attempt",
     now_dt: datetime | None = None,
 ) -> list[dict]:
-    """BKT 直写 (确定性, 不经 LLM) + mastery_log 审计 (F8-A3)。
+    """掌握度的**唯一**写入口 (EvidenceUpdater): BKT 直写 + mastery_log 审计 (F8-A3)。
+
+    §16 要求所有学习证据走同一条更新链路。此前 quiz / review / 手动覆盖三处各自
+    复制了同一段 BKT 逻辑, 其中 review 一路漏掉了幂等去重 —— 复习接口重试会重复
+    推同一条证据。新增证据来源请调用本函数, 不要再复制这段逻辑。
 
     evidence_type 区分证据来源 (quiz_attempt | tutor_summary | ...), 默认值保持向后兼容。
 
@@ -578,6 +965,60 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
     return [{**c, "name": name_by_id.get(c["kc_id"], "")} for c in changes]
 
 
+async def _validated_quiz_kc_snapshots(
+    session,
+    ctx: AuthContext,
+    quiz: Quiz,
+    questions: Sequence[Question],
+) -> dict[str, list[str]]:
+    """Validate every Quiz question before the first Attempt is inserted."""
+
+    from eduagents_core.config import get_settings
+
+    readiness = None
+    if quiz.kb_id is not None:
+        readiness = await quiz_kc_readiness(
+            session,
+            tenant_id=ctx.tenant_id,
+            kb_id=quiz.kb_id,
+            gateway_mode=get_settings().gateway_mode,
+            org_ids=ctx.org_ids,
+        )
+        if readiness.status in {"preparing", "not_ready"}:
+            raise HTTPException(
+                status_code=409,
+                detail=readiness.code or "QUIZ_KC_NOT_READY",
+            )
+
+    eligible = set(readiness.eligible_kc_ids) if readiness else set()
+    snapshots: dict[str, list[str]] = {}
+    for question in questions:
+        raw_ids = list(question.kc_ids or [])
+        if not raw_ids:
+            # No KB/no documents is the deliberately preserved historical
+            # validation path. A document-backed Quiz is different: it is a
+            # candidate for the profile loop and cannot silently skip KC.
+            if readiness is not None and readiness.status == "ready":
+                raise HTTPException(status_code=409, detail="QUIZ_KC_REQUIRED")
+            snapshots[str(question.id)] = []
+            continue
+        try:
+            normalized = await _resolve_persisted_kc_ids(
+                session,
+                raw_ids,
+                kb_id=quiz.kb_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                org_ids=ctx.org_ids,
+            )
+        except QuizKCError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from None
+        if readiness is not None and readiness.status == "ready" and not set(normalized) <= eligible:
+            raise HTTPException(status_code=409, detail="QUIZ_KC_REQUIRED")
+        snapshots[str(question.id)] = normalized
+    return snapshots
+
+
 async def record_attempts(
     ctx: AuthContext,
     gateway,
@@ -610,6 +1051,9 @@ async def record_attempts(
                 await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
             ).all()
         }
+        kc_snapshots = await _validated_quiz_kc_snapshots(
+            session, ctx, quiz, list(questions.values())
+        )
         for item in answers:
             q = questions.get(str(item["question_id"]))
             if q is None or str(q.id) in seen_question_ids:
@@ -691,7 +1135,9 @@ async def record_attempts(
             confidence_at_error, confidence_probability, confidence_scale_version = (
                 confidence_snapshot(predicted_confidence, predicted_correct)
             )
-            kc_ids = [str(k) for k in (q.kc_ids or [])]
+            # The same normalized snapshot feeds ErrorItem, LearningEvent,
+            # MasteryRecord and MasteryLog in this transaction.
+            kc_ids = kc_snapshots[str(q.id)]
             changes = await apply_mastery_evidence(
                 session,
                 ctx,

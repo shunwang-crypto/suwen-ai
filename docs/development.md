@@ -166,6 +166,25 @@ MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0023_0027.py
 `MIGRATION_DATABASE_URL` 指向生产或共享远程数据库。它验证 0023–0027 的 upgrade/downgrade、
 0024 的从零 ORM 已有列与旧库缺列路径，以及 0025/0027 的 RLS/约束元数据。
 
+Wave 1B 的 `0028` 为 KnowledgeComponent 增加来源类型、稳定 key 和可空的 superseded 关系；
+定向门禁为：
+
+~~~bash
+MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0028.py -q
+~~~
+
+它覆盖从零升级、旧 KC 回填、条件唯一索引、来源约束、自引用删除语义、RLS 新字段读写以及
+`0027` 往返升级。应用与 worker 的 KC 冷启动定向测试另见 `test_kc_bootstrap.py` 和
+`test_quiz_kc_loop.py`。
+
+Wave 3 的 `0029` 为 `resource_questions` 增加非空默认 `{}` 的
+`field_confidence_json`；旧的 `extraction_confidence` 保留兼容，逐字段置信度由服务端 eligibility
+判定。定向门禁为：
+
+~~~bash
+MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0029.py -q
+~~~
+
 常用命令：
 
 ~~~bash

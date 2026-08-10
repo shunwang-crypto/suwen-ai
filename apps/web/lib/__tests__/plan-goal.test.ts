@@ -3,27 +3,34 @@ import { describe, expect, it } from "vitest";
 import {
   PLAN_GOAL_EXAMPLES,
   isPlanGoalReady,
+  parsePlanIntent,
   planGoalReadiness,
 } from "@/lib/plan-goal";
 
 describe("plan goal guidance", () => {
-  it("requires a topic, observable outcome and success criteria", () => {
-    expect(
-      isPlanGoalReady({
-        goal: "高等数学",
-        currentLevel: "",
-        targetOutcome: "",
-        successCriteria: "",
-      }),
-    ).toBe(false);
-    expect(
-      isPlanGoalReady({
-        goal: " 高等数学 ",
-        currentLevel: "",
-        targetOutcome: " 能独立完成极限基础题 ",
-        successCriteria: " 10 道题至少正确 8 道 ",
-      }),
-    ).toBe(true);
+  it("starts with a single user-owned goal sentence", () => {
+    expect(isPlanGoalReady({ goal: "高等数学", currentLevel: "", targetOutcome: "", successCriteria: "" })).toBe(true);
+    expect(isPlanGoalReady({ goal: " 高等数学 ", currentLevel: "", targetOutcome: "", successCriteria: "" })).toBe(true);
+  });
+
+  it("extracts only explicit deadline and daily time, leaving missing facts to confirm", () => {
+    expect(parsePlanIntent("我想在 9月20日 达到能独立做极限题，每天 1.5 小时", new Date(2026, 7, 9))).toMatchObject({
+      deadline: "2026-09-20",
+      dailyHours: 1.5,
+      totalDays: null,
+      missing: [],
+    });
+    expect(parsePlanIntent("14天内掌握导数", new Date(2026, 7, 9))).toMatchObject({
+      deadline: null,
+      totalDays: 14,
+      missing: ["daily_hours"],
+    });
+    expect(parsePlanIntent("两周内掌握导数，每天 1 小时", new Date(2026, 7, 9))).toMatchObject({
+      deadline: null,
+      totalDays: 14,
+      dailyHours: 1,
+      missing: [],
+    });
   });
 
   it("reports each field independently and ships complete examples", () => {

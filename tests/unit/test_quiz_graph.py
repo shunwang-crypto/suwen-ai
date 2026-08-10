@@ -16,6 +16,7 @@ from eduagents_core.graphs.quiz_graph import (
     QUESTION_SCHEMA,
     build_quiz_graph,
     grade_objective,
+    quiz_generation_max_tokens,
 )
 from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
@@ -159,6 +160,13 @@ BLANK_Q = {
 # --- 主流程 ---
 
 
+def test_quiz_generation_token_budget_covers_reasoning_and_stays_bounded():
+    assert quiz_generation_max_tokens(1, 0) == 7_200
+    assert quiz_generation_max_tokens(2, 0) == 8_400
+    assert quiz_generation_max_tokens(5, 1) == 14_000
+    assert quiz_generation_max_tokens(20, 2) == 16_000
+
+
 async def test_happy_path_interrupt_resume_bad_schema_retry_then_pass():
     bad = good_q()
     bad.pop("explanation")  # 坏 schema: 缺 explanation
@@ -201,6 +209,8 @@ async def test_happy_path_interrupt_resume_bad_schema_retry_then_pass():
     assert gateway.requests[0].tier == Tier.cheap
     assert all(r.json_mode for r in gateway.requests)
     assert gateway.requests[1].tier == Tier.standard
+    assert gateway.requests[1].max_tokens == 8_400
+    assert gateway.requests[2].max_tokens == 10_400
     retry_prompt = gateway.requests[2].messages[0].content
     assert "上一轮输出未通过校验" in retry_prompt
     assert "explanation" in retry_prompt
@@ -216,6 +226,7 @@ async def test_reject_blueprint_ends_without_questions():
     final = await app.ainvoke(Command(resume={"approved": False}), config)
 
     assert final["blueprint_confirmed"] is False
+    assert final["terminal_outcome"] == "cancelled_by_user"
     assert "questions" not in final  # 未生成任何题目
     assert len(gateway.requests) == 1  # 只调了蓝图, 未调生成
     assert any(
@@ -256,6 +267,79 @@ async def test_validation_retry_exhausted_ends_with_errors():
     failed = [e for e in final["trace"] if e["node"] == "validate" and e["event"] == "failed"]
     assert len(failed) == 3
     assert failed[-1]["will_retry"] is False
+    assert final["terminal_outcome"] == "validation_failed"
+    assert final["ever_generated_nonempty"] is True
+
+
+async def test_three_empty_generation_rounds_are_generation_failed_with_bounded_diagnostics():
+    gateway = FakeGateway([bp_json([bp_item()]), "", "{}", '{"questions": []}'])
+    app = make_app(gateway)
+    config = cfg("empty-generation")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["terminal_outcome"] == "generation_failed"
+    assert final["generation_status"] == "empty"
+    assert final["ever_generated_nonempty"] is False
+    diagnostics = [e for e in final["trace"] if e["node"] == "generate_diagnostic"]
+    assert len(diagnostics) == 3
+    assert {"provider", "model", "feature", "response_chars", "finish_reason", "json_parsed", "top_level_keys", "raw_question_count", "schema_passed_count", "truncated", "retry_round", "max_tokens", "request_id"} <= diagnostics[0].keys()
+    assert all("stem" not in json.dumps(event, ensure_ascii=False) for event in diagnostics)
+
+
+async def test_nonempty_invalid_questions_are_validation_failed():
+    bad = good_q(answer="E")
+    gateway = FakeGateway([bp_json([bp_item()]), gen_json([bad]), gen_json([bad]), gen_json([bad])])
+    app = make_app(gateway)
+    config = cfg("invalid-generation")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["terminal_outcome"] == "validation_failed"
+    assert final["ever_generated_nonempty"] is True
+    assert final["generation_status"] == "ok"
+
+
+async def test_nonempty_question_array_with_non_object_items_is_validation_failed():
+    gateway = FakeGateway(
+        [
+            bp_json([bp_item()]),
+            json.dumps({"questions": ["not a question"]}),
+            json.dumps({"questions": [None]}),
+            json.dumps({"questions": [123]}),
+        ]
+    )
+    app = make_app(gateway)
+    config = cfg("invalid-question-array")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["terminal_outcome"] == "validation_failed"
+    assert final["ever_generated_nonempty"] is True
+    assert final["generation_status"] == "ok"
+
+
+async def test_auto_confirmation_skips_interrupt_but_keeps_success_outcome():
+    gateway = FakeGateway([bp_json([bp_item()]), gen_json([good_q()])])
+    app = make_app(gateway)
+    config = cfg("auto-confirm")
+
+    final = await app.ainvoke(
+        base_state(
+            num_questions=1,
+            difficulty_mix={"easy": 1},
+            confirmation_mode="auto",
+            thread_id="quiz:u1:auto-confirm",
+        ),
+        config,
+    )
+
+    assert "__interrupt__" not in final
+    assert final["blueprint_confirmed"] is True
+    assert final["terminal_outcome"] == "succeeded"
 
 
 # --- 蓝图数量程序性修正 ---

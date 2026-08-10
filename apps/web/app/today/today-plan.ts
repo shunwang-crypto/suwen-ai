@@ -36,14 +36,16 @@ export function taskExecutionHref(task: PlanTask, kbId?: string | null, planId?:
     case "practice":
       return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}${attribution}`;
     case "read":
-      return task.resource?.url || (task.resource?.kb_id || kbId ? `/kb?kb=${encodeURIComponent(task.resource?.kb_id || kbId || "")}` : `/tutor?problem=${encodeURIComponent(task.objective || task.title)}`);
+      return task.resource?.url || (task.resource?.kb_id || kbId ? `/kb?kb=${encodeURIComponent(task.resource?.kb_id || kbId || "")}` : "/tutor");
     case "review_errors":
       return attribution ? `/reviews?${attribution.slice(1)}` : "/reviews";
     case "mixed":
       return `/quiz?topic=${encodeURIComponent(topic)}${kb}&count=${count}${difficulty}${attribution}`;
     case "tutor":
     default:
-      return `/tutor?problem=${encodeURIComponent(task.objective || task.title)}${kb}${attribution}`;
+      return planId && task.task_key
+        ? `/tutor?plan_id=${encodeURIComponent(planId)}&task_key=${encodeURIComponent(task.task_key)}${kb}`
+        : "/tutor";
   }
 }
 

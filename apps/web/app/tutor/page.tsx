@@ -14,6 +14,7 @@ import {
   Spinner,
 } from "@/components/common";
 import { MarkdownAnswer } from "@/components/chat/markdown-answer";
+import { TutorEntrypoints } from "@/components/tutor/tutor-entrypoints";
 import { TutorProblemInput } from "@/components/tutor/tutor-problem-input";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -24,6 +25,8 @@ import type {
   TutorSessionState,
   TutorSessionSummary,
   TutorProblemDraft,
+  TutorContextOut,
+  TutorEntrypointsOut,
   TutorTurnResult,
 } from "@/lib/types";
 
@@ -107,7 +110,7 @@ function HintBadge({ level }: { level: number }) {
   const idx = Math.min(Math.max(level, 0), 3);
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${HINT_BADGE_STYLES[idx]}`}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-caption font-medium ${HINT_BADGE_STYLES[idx]}`}
     >
       第 {idx} 层 · {HINT_LEVELS[idx]}
     </span>
@@ -134,7 +137,7 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
               />
             )}
             <span
-              className={`z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition-all duration-300 ${
+              className={`z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-body-sm font-semibold transition-all duration-300 ${
                 current
                   ? "scale-110 bg-indigo-600 text-white shadow-[0_2px_10px_-2px_rgba(79,70,229,0.6)] ring-4 ring-indigo-100 motion-reduce:scale-100"
                   : passed
@@ -160,7 +163,7 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
               )}
             </span>
             <span
-              className={`flex min-w-0 flex-1 items-center rounded-lg px-2 py-1 text-xs transition-colors duration-300 ${
+              className={`flex min-w-0 flex-1 items-center rounded-lg px-2 py-1 text-caption transition-colors duration-300 ${
                 current
                   ? "bg-indigo-50 font-semibold text-indigo-700"
                   : reached
@@ -170,7 +173,7 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
             >
               {label}
               {i === 3 && (
-                <span className="ml-auto text-[10px] text-slate-400">仅此层给答案</span>
+                <span className="ml-auto text-caption text-slate-400">仅此层给答案</span>
               )}
             </span>
           </li>
@@ -221,12 +224,12 @@ function ReviewCard({
             opacity=".7"
           />
         </svg>
-        <p className="relative text-[11px] font-semibold uppercase tracking-widest text-emerald-100">
+        <p className="relative text-body-sm font-semibold uppercase tracking-widest text-emerald-100">
           本次收获
         </p>
         <div className="relative mt-0.5 flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-white">本次辅导复盘</h3>
-          <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium text-white ring-1 ring-inset ring-white/40">
+          <span className="rounded-full bg-white/20 px-2 py-0.5 text-caption font-medium text-white ring-1 ring-inset ring-white/40">
             已解决
           </span>
         </div>
@@ -234,11 +237,11 @@ function ReviewCard({
 
       <div className="space-y-3 p-4 text-sm">
         <div>
-          <p className="mb-1 text-xs font-semibold text-slate-500">
+          <p className="mb-1 text-caption font-semibold text-slate-500">
             本次暴露的误解
           </p>
           {summary.misconceptions.length === 0 ? (
-            <p className="text-xs text-slate-400">本次未发现明显误解</p>
+            <p className="text-caption text-slate-400">本次未发现明显误解</p>
           ) : (
             <ul className="space-y-1">
               {summary.misconceptions.map((m, i) => (
@@ -252,9 +255,9 @@ function ReviewCard({
         </div>
 
         <div>
-          <p className="mb-1 text-xs font-semibold text-slate-500">复习建议</p>
+          <p className="mb-1 text-caption font-semibold text-slate-500">复习建议</p>
           {summary.review_suggestions.length === 0 ? (
-            <p className="text-xs text-slate-400">暂无</p>
+            <p className="text-caption text-slate-400">暂无</p>
           ) : (
             <ul className="space-y-1">
               {summary.review_suggestions.map((s, i) => (
@@ -269,7 +272,7 @@ function ReviewCard({
 
         {changes.length > 0 && (
           <div>
-            <p className="mb-1 text-xs font-semibold text-slate-500">
+            <p className="mb-1 text-caption font-semibold text-slate-500">
               掌握度变化（辅导小结已写入画像）
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -310,6 +313,7 @@ export default function TutorPage() {
   );
   const urlParams = new URLSearchParams(search);
   const prefilledProblem = urlParams.get("problem") ?? "";
+  const errorId = urlParams.get("error_id") ?? "";
   const sourceKbId = urlParams.get("kb") ?? "";
   const requestedDraftId = urlParams.get("draft") ?? "";
   const planId = urlParams.get("plan_id") ?? "";
@@ -329,11 +333,33 @@ export default function TutorPage() {
   const [summary, setSummary] = useState<TutorSessionSummary | null>(null);
   const [masteryChanges, setMasteryChanges] = useState<MasteryChange[]>([]);
   const [hintsExpanded, setHintsExpanded] = useState(false);
+  const [entryChoice, setEntryChoice] = useState<"new" | null>(null);
+  const [entrypoints, setEntrypoints] = useState<TutorEntrypointsOut | null>(null);
+  const [entrypointsLoading, setEntrypointsLoading] = useState(true);
 
   const started = messages.length > 0;
   const ended = summary !== null;
   const effectiveProblem = problemTouched ? problem : prefilledProblem;
+  const hasProblemContext = Boolean(effectiveProblem.trim());
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (prefilledProblem || errorId || planId || taskKey || requestedDraftId) return;
+    let alive = true;
+    void apiJson<TutorEntrypointsOut>("/api/tutor/entrypoints")
+      .then((value) => {
+        if (alive) setEntrypoints(value);
+      })
+      .catch(() => {
+        if (alive) setEntrypoints(null);
+      })
+      .finally(() => {
+        if (alive) setEntrypointsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [errorId, planId, prefilledProblem, requestedDraftId, taskKey]);
 
   useEffect(() => {
     if (!sourceKbId) return;
@@ -349,6 +375,43 @@ export default function TutorPage() {
       alive = false;
     };
   }, [sourceKbId]);
+
+  useEffect(() => {
+    if (!errorId) return;
+    let alive = true;
+    void apiJson<TutorContextOut>(`/api/errors/${errorId}/tutor-context`)
+      .then((context) => {
+        if (!alive) return;
+        setProblem(context.problem);
+        setProblemTouched(true);
+        if (context.kc_ids?.length) setSourceKb(null);
+      })
+      .catch((caught) => {
+        if (alive) setError(caught instanceof ApiError ? caught.message : "错题加载失败");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [errorId]);
+
+  useEffect(() => {
+    if (!planId || !taskKey || hasProblemContext) return;
+    let alive = true;
+    void apiJson<TutorContextOut>(
+      `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskKey)}/tutor-context`,
+    )
+      .then((context) => {
+        if (!alive) return;
+        setProblem(context.problem);
+        setProblemTouched(true);
+      })
+      .catch((caught) => {
+        if (alive) setError(caught instanceof ApiError ? caught.message : "今日任务加载失败");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [hasProblemContext, planId, taskKey]);
 
   useEffect(() => {
     if (!requestedDraftId) return;
@@ -523,6 +586,7 @@ export default function TutorPage() {
     setStuckType("");
     setSummary(null);
     setMasteryChanges([]);
+    setEntryChoice(null);
   };
 
   return (
@@ -530,11 +594,11 @@ export default function TutorPage() {
       <section className="relative overflow-hidden rounded-[12px] border border-line bg-white px-5 py-4">
         <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-brand-700">题目</span><span className="rounded-full bg-danger-50 px-1.5 py-0.5 font-medium text-danger-600">必填</span><span className="text-ink-muted">根据题目建立本次辅导上下文</span></div>
-          {(started || (draftId && threadId)) && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-[11px] text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
+          <div className="flex items-center gap-2 text-caption"><span className="font-semibold text-brand-700">题目</span><span className="rounded-full bg-danger-50 px-1.5 py-0.5 font-medium text-danger-600">必填</span><span className="text-ink-muted">根据题目建立本次辅导上下文</span></div>
+          {(started || (draftId && threadId)) && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-body-sm text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
         {sourceKbId && (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-[10px] text-brand-700">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-caption text-brand-700">
             <span>
               来自知识库：{sourceKb?.name ?? "正在确认资料范围…"}。分级辅导围绕具体题目逐层引导，不会把资料库名称当成题目内容。
             </span>
@@ -543,25 +607,34 @@ export default function TutorPage() {
             </Link>
           </div>
         )}
-        <TutorProblemInput
-          key={inputVersion}
-          initialProblem={effectiveProblem}
-          initialDraftId={draftId}
-          locked={Boolean(draftId && threadId)}
-          onDraftChange={(nextDraftId) => {
-            setDraftId(nextDraftId);
-            if (nextDraftId) writeTutorSession(userId, { draftId: nextDraftId, ...(threadId ? { threadId } : {}) });
-            else window.localStorage.removeItem(tutorSessionKey(userId));
-          }}
-          onConfirmed={(confirmed) => {
-            setProblem(confirmed.confirmed_problem_text);
-            setProblemTouched(true);
-            setDraftId(confirmed.id);
-            setThreadId(confirmed.thread_local_id);
-            void send(START_PHRASE, confirmed);
-          }}
-        />
-        <p className="mt-2 text-[10px] text-ink-muted">确认后题目与附件锁定；换题会建立新的辅导对话。</p>
+        {!started && !draftId && !hasProblemContext && !entryChoice && (
+          <TutorEntrypoints
+            data={entrypoints}
+            loading={entrypointsLoading}
+            onChooseNew={() => setEntryChoice("new")}
+          />
+        )}
+        {(hasProblemContext || entryChoice === "new" || draftId) && (
+          <TutorProblemInput
+            key={inputVersion}
+            initialProblem={effectiveProblem}
+            initialDraftId={draftId}
+            locked={Boolean(draftId && threadId)}
+            onDraftChange={(nextDraftId) => {
+              setDraftId(nextDraftId);
+              if (nextDraftId) writeTutorSession(userId, { draftId: nextDraftId, ...(threadId ? { threadId } : {}) });
+              else window.localStorage.removeItem(tutorSessionKey(userId));
+            }}
+            onConfirmed={(confirmed) => {
+              setProblem(confirmed.confirmed_problem_text);
+              setProblemTouched(true);
+              setDraftId(confirmed.id);
+              setThreadId(confirmed.thread_local_id);
+              void send(START_PHRASE, confirmed);
+            }}
+          />
+        )}
+        <p className="mt-2 text-caption text-ink-muted">确认后题目与附件锁定；换题会建立新的辅导对话。</p>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_266px] lg:items-start">
@@ -569,43 +642,43 @@ export default function TutorPage() {
           {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
           {messages.map((message, index) => message.role === "user" ? (
             <article key={index} className="ml-10 overflow-hidden rounded-[10px] border border-line bg-white">
-              <div className="px-4 py-3"><p className="text-[10px] font-medium text-ink-muted">你的第 {Math.floor(index / 2) + 1} 步</p><div className="mt-2 text-[13px] leading-6 text-ink"><MathText text={message.content} /></div></div>
-              {stuckType && index === messages.length - 2 && <div className="border-t border-warning-100 bg-warning-50 px-4 py-2.5"><div className="flex items-center gap-2 text-[10px]"><span className="font-semibold text-warning-700">↩ 建议调整</span><span className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700">卡点 · {STUCK_LABELS[stuckType] ?? stuckType}</span></div></div>}
+              <div className="px-4 py-3"><p className="text-caption font-medium text-ink-muted">你的第 {Math.floor(index / 2) + 1} 步</p><div className="mt-2 text-[13px] leading-6 text-ink"><MathText text={message.content} /></div></div>
+              {stuckType && index === messages.length - 2 && <div className="border-t border-warning-100 bg-warning-50 px-4 py-2.5"><div className="flex items-center gap-2 text-caption"><span className="font-semibold text-warning-700">↩ 建议调整</span><span className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700">卡点 · {STUCK_LABELS[stuckType] ?? stuckType}</span></div></div>}
             </article>
           ) : (
             <div key={index} className="flex items-start gap-3 py-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-[11px] font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MarkdownAnswer text={message.content} /></div></div>
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-body-sm font-semibold text-white">E</span>
+              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-caption font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MarkdownAnswer text={message.content} /></div></div>
             </div>
           ))}
 
-          {sending && <div className="ml-10 flex items-center gap-2 py-2 text-[11px] text-ink-muted"><Spinner className="h-3.5 w-3.5" />老师正在整理下一步提示…</div>}
+          {sending && <div className="ml-10 flex items-center gap-2 py-2 text-body-sm text-ink-muted"><Spinner className="h-3.5 w-3.5" />老师正在整理下一步提示…</div>}
 
           {!ended && !sending && hintLevel === 3 && started && (
-            <div className="ml-10 rounded-[10px] border border-warning-200 bg-warning-50 p-3 text-[12px] text-warning-700"><p>完整解答已经展开。确认理解后，系统会把本次真实卡点写入复盘。</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void send(FINISH_PHRASE)} className="rounded-[7px] bg-brand-600 px-3 py-1.5 font-medium text-white">我已理解，生成复盘</button><button type="button" onClick={reset} className="rounded-[7px] border border-line-strong bg-white px-3 py-1.5">换一道题</button></div></div>
+            <div className="ml-10 rounded-[10px] border border-warning-200 bg-warning-50 p-3 text-body-sm text-warning-700"><p>完整解答已经展开。确认理解后，系统会把本次真实卡点写入复盘。</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void send(FINISH_PHRASE)} className="rounded-[7px] bg-brand-600 px-3 py-1.5 font-medium text-white">我已理解，生成复盘</button><button type="button" onClick={reset} className="rounded-[7px] border border-line-strong bg-white px-3 py-1.5">换一道题</button></div></div>
           )}
 
           {ended && summary && <ReviewCard summary={summary} changes={masteryChanges} onReset={reset} />}
 
           {!ended && Boolean(draftId && threadId) && (
             <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-[12px] border border-line bg-white p-3 shadow-subtle sm:ml-10">
-              <div className="mb-2 flex items-center gap-1.5 px-1 text-[10px]"><span className="font-semibold text-ink-secondary">你的思路</span>{!started && <span className="text-ink-muted">选填</span>}</div>
+              <div className="mb-2 flex items-center gap-1.5 px-1 text-caption"><span className="font-semibold text-ink-secondary">你的思路</span>{!started && <span className="text-ink-muted">选填</span>}</div>
               <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!effectiveProblem.trim() || sending} placeholder={effectiveProblem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "可以先写下思路或卡点，也可以直接开始解题……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
-              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-[10px] text-ink-muted sm:block">Ctrl / ⌘ + Enter {started ? "继续" : "开始"}</span><span className="flex-1" /><button type="button" disabled={!effectiveProblem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要提示</button><button type="submit" disabled={!effectiveProblem.trim() || (started && !input.trim()) || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-[11px] font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}{started ? "继续解题" : "开始解题"}</button></div>
+              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-body-sm text-ink-muted sm:block">Ctrl / ⌘ + Enter {started ? "继续" : "开始"}</span><span className="flex-1" /><button type="button" disabled={!effectiveProblem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要提示</button><button type="submit" disabled={!effectiveProblem.trim() || (started && !input.trim()) || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}{started ? "继续解题" : "开始解题"}</button></div>
             </form>
           )}
         </main>
 
         {started && <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
-          <div className="flex items-center justify-between"><h2 className="text-[12px] font-semibold text-ink">提示支持</h2><span className="text-[10px] text-ink-muted">卡了再用</span></div>
-          <button type="button" aria-expanded={hintsExpanded} onClick={() => setHintsExpanded((value) => !value)} className="mt-4 flex w-full items-center justify-between rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-left text-[11px] font-medium text-brand-700">
+          <div className="flex items-center justify-between"><h2 className="text-body-sm font-semibold text-ink">提示支持</h2><span className="text-caption text-ink-muted">卡了再用</span></div>
+          <button type="button" aria-expanded={hintsExpanded} onClick={() => setHintsExpanded((value) => !value)} className="mt-4 flex w-full items-center justify-between rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-left text-body-sm font-medium text-brand-700">
             <span>当前提示：第 {hintLevel + 1} 层 · {HINT_LEVELS[Math.min(hintLevel, HINT_LEVELS.length - 1)]}</span>
             <span aria-hidden>{hintsExpanded ? "收起" : "展开"}</span>
           </button>
           {hintsExpanded && <div className="mt-3"><HintLadder level={hintLevel} active={started} /></div>}
-          <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
-          {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-[11px] font-medium text-success-700">我认为已解出，进入理解确认</button>}
-          <p className="mt-3 text-[10px] leading-5 text-ink-muted">提示会根据你的回答逐层加深，尽量帮助你自己找到下一步，而不是直接给出答案。</p>
+          <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
+          {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-body-sm font-medium text-success-700">我认为已解出，进入理解确认</button>}
+          <p className="mt-3 text-caption leading-5 text-ink-muted">提示会根据你的回答逐层加深，尽量帮助你自己找到下一步，而不是直接给出答案。</p>
         </aside>}
       </div>
     </div>

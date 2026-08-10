@@ -500,7 +500,15 @@ async def recognize_tutor_problem(
             ),
             timeout=settings.tutor_recognition_timeout_seconds,
         )
-        questions = [normalize_extracted_question(item, index + 1) for index, item in enumerate(raw)]
+        questions = [
+            normalize_extracted_question(
+                item,
+                index + 1,
+                confidence_source="model_reported",
+                paginated=True,
+            )
+            for index, item in enumerate(raw)
+        ]
         questions = [item for item in questions if item["stem"]]
         failed_pages = _failed_pages_from_warnings(warnings)
         if not questions:

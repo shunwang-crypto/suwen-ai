@@ -120,7 +120,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
         })}
       </svg>
       {/* 图例：数据面含义 + 网格环刻度说明 */}
-      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-slate-400">
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden

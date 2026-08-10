@@ -55,7 +55,7 @@ const EMPTY_FORM: DraftForm = {
 };
 
 const fieldClass =
-  "w-full rounded-[8px] border border-line-strong bg-white px-3 py-2 text-[12px] text-ink outline-none placeholder:text-ink-muted focus:border-ink-muted";
+  "w-full rounded-[8px] border border-line-strong bg-white px-3 py-2 text-body-sm text-ink outline-none placeholder:text-ink-muted focus:border-ink-muted";
 
 function fromItem(item: ErrorItemOut): DraftForm {
   const sourceKb = item.question?.source_meta?.kb_id;
@@ -297,7 +297,7 @@ export function ErrorImportDialog({
             <h2 className="text-[17px] font-semibold text-ink">
               {editItem ? "编辑并核验错题" : "录入错题"}
             </h2>
-            <p className="mt-1 text-[11px] text-ink-muted">
+            <p className="mt-1 text-body-sm text-ink-muted">
               识别内容只作为草稿，保存前请核对题干和答案。
             </p>
           </div>
@@ -319,14 +319,14 @@ export function ErrorImportDialog({
                 <button
                   type="button"
                   onClick={() => setMode("upload")}
-                  className={`rounded-[6px] px-3 py-1.5 text-[11px] font-medium ${mode === "upload" ? "bg-ink text-white" : "text-ink-secondary"}`}
+                  className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mode === "upload" ? "bg-ink text-white" : "text-ink-secondary"}`}
                 >
                   拍照或上传
                 </button>
                 <button
                   type="button"
                   onClick={() => void switchToManual()}
-                  className={`rounded-[6px] px-3 py-1.5 text-[11px] font-medium ${mode === "manual" ? "bg-ink text-white" : "text-ink-secondary"}`}
+                  className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mode === "manual" ? "bg-ink text-white" : "text-ink-secondary"}`}
                 >
                   手动录入
                 </button>
@@ -345,10 +345,10 @@ export function ErrorImportDialog({
                   />
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="text-[12px] font-medium text-ink">
+                      <p className="text-body-sm font-medium text-ink">
                         {imported?.filename ?? "选择一道题的图片或文件"}
                       </p>
-                      <p className="mt-1 text-[10px] text-ink-muted">
+                      <p className="mt-1 text-caption text-ink-muted">
                         支持图片、PDF、Word、PPT；单个文件不超过 {capabilities?.max_file_mb ?? 20}MB
                       </p>
                     </div>
@@ -356,14 +356,14 @@ export function ErrorImportDialog({
                       type="button"
                       disabled={uploading}
                       onClick={() => fileRef.current?.click()}
-                      className="flex h-9 items-center gap-2 rounded-[8px] bg-ink px-4 text-[11px] font-medium text-white disabled:opacity-40"
+                      className="flex h-9 items-center gap-2 rounded-[8px] bg-ink px-4 text-body-sm font-medium text-white disabled:opacity-40"
                     >
                       {uploading && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
                       {uploading ? "正在识别" : imported ? "重新选择" : "选择文件"}
                     </button>
                   </div>
                   {imported?.recognition_warning && (
-                    <p className="mt-3 rounded-[7px] bg-warning-50 px-3 py-2 text-[10px] text-warning-700">
+                    <p className="mt-3 rounded-[7px] bg-warning-50 px-3 py-2 text-caption text-warning-700">
                       {imported.recognition_warning}
                     </p>
                   )}
@@ -373,7 +373,7 @@ export function ErrorImportDialog({
           )}
 
           {error && (
-            <div className="mb-4 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-700">
+            <div className="mb-4 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">
               {error}
             </div>
           )}
@@ -382,8 +382,8 @@ export function ErrorImportDialog({
             <section className="mb-5 rounded-[10px] border border-line bg-white p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-[10px] font-semibold text-ink-muted">原始来源（仅本人可读）</p>
-                  <p className="mt-1 text-[11px] font-medium text-ink">{currentSourceFilename ?? "来源文件"}</p>
+                  <p className="text-caption font-semibold text-ink-muted">原始来源（仅本人可读）</p>
+                  <p className="mt-1 text-body-sm font-medium text-ink">{currentSourceFilename ?? "来源文件"}</p>
                 </div>
                 {sourceUrl && (
                   <a
@@ -391,7 +391,7 @@ export function ErrorImportDialog({
                     target="_blank"
                     rel="noreferrer"
                     download={currentSourceType === "document" && !/\.pdf$/i.test(currentSourceFilename ?? "")}
-                    className="rounded-[7px] border border-line-strong px-3 py-1.5 text-[10px] font-medium text-ink-secondary"
+                    className="rounded-[7px] border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary"
                   >
                     {currentSourceType === "image" || /\.pdf$/i.test(currentSourceFilename ?? "")
                       ? "打开来源"
@@ -399,7 +399,7 @@ export function ErrorImportDialog({
                   </a>
                 )}
               </div>
-              {sourceLoading && <p className="mt-3 text-[10px] text-ink-muted">正在加载来源预览…</p>}
+              {sourceLoading && <p className="mt-3 text-caption text-ink-muted">正在加载来源预览…</p>}
               {!sourceLoading && sourceUrl && currentSourceType === "image" && (
                 <Image
                   src={sourceUrl}
@@ -418,32 +418,32 @@ export function ErrorImportDialog({
                 />
               )}
               {!sourceLoading && !sourceUrl && (
-                <p className="mt-3 text-[10px] text-danger-600">来源文件暂时无法读取。</p>
+                <p className="mt-3 text-caption text-danger-600">来源文件暂时无法读取。</p>
               )}
             </section>
           )}
 
           {semanticsLocked && (
-            <p className="mb-4 rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 text-[10px] leading-4 text-warning-700">
+            <p className="mb-4 rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 text-caption leading-4 text-warning-700">
               这道题已经复习过，题型、选项、正确答案和知识点已锁定；题干说明、解析和错因仍可修正。
             </p>
           )}
 
           <div className="grid gap-4 sm:grid-cols-3">
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">题型</span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">题型</span>
               <select disabled={semanticsLocked} value={form.type} onChange={(event) => set("type", event.target.value as DraftForm["type"])} className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`}>
                 {TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">难度</span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">难度</span>
               <select value={form.difficulty} onChange={(event) => set("difficulty", event.target.value as DraftForm["difficulty"])} className={fieldClass}>
                 {DIFFICULTY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">错因</span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">错因</span>
               <select value={form.cause} onChange={(event) => set("cause", event.target.value)} className={fieldClass}>
                 {CAUSE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
@@ -451,13 +451,13 @@ export function ErrorImportDialog({
           </div>
 
           <label className="mt-4 block">
-            <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">题目 <span className="text-danger-600">必填</span></span>
+            <span className="mb-1.5 block text-caption font-medium text-ink-secondary">题目 <span className="text-danger-600">必填</span></span>
             <textarea value={form.stem} onChange={(event) => set("stem", event.target.value)} rows={4} maxLength={12000} placeholder="完整输入题干和条件" className={`${fieldClass} resize-y leading-5`} />
           </label>
 
           {(form.type === "single" || form.type === "multi") && (
             <label className="mt-4 block">
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">选项 <span className="text-danger-600">必填</span></span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">选项 <span className="text-danger-600">必填</span></span>
               <textarea
                 disabled={semanticsLocked}
                 value={form.options.join("\n")}
@@ -471,30 +471,30 @@ export function ErrorImportDialog({
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">我的错误答案 <span className="text-ink-muted">选填</span></span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">我的错误答案 <span className="text-ink-muted">选填</span></span>
               <textarea value={form.my_answer} onChange={(event) => set("my_answer", event.target.value)} rows={3} maxLength={8000} placeholder="当时写下的答案或解题过程" className={`${fieldClass} resize-y`} />
             </label>
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">正确答案 <span className="text-ink-muted">可稍后核验</span></span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">正确答案 <span className="text-ink-muted">可稍后核验</span></span>
               <textarea disabled={semanticsLocked} value={form.answer} onChange={(event) => set("answer", event.target.value)} rows={3} maxLength={8000} placeholder="不确定时可以暂时留空" className={`${fieldClass} resize-y disabled:bg-surface-muted disabled:text-ink-muted`} />
             </label>
           </div>
 
           <label className="mt-4 block">
-            <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">解析 <span className="text-ink-muted">选填</span></span>
+            <span className="mb-1.5 block text-caption font-medium text-ink-secondary">解析 <span className="text-ink-muted">选填</span></span>
             <textarea value={form.explanation} onChange={(event) => set("explanation", event.target.value)} rows={3} maxLength={12000} placeholder="记录老师讲解或自己的订正思路" className={`${fieldClass} resize-y`} />
           </label>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">关联资料范围 <span className="text-ink-muted">选填</span></span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">关联资料范围 <span className="text-ink-muted">选填</span></span>
               <select disabled={semanticsLocked} value={form.kb_id} onChange={(event) => set("kb_id", event.target.value)} className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`}>
                 <option value="">不关联知识库</option>
                 {knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
               </select>
             </label>
             <label>
-              <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">知识点 <span className="text-ink-muted">最多 3 个</span></span>
+              <span className="mb-1.5 block text-caption font-medium text-ink-secondary">知识点 <span className="text-ink-muted">最多 3 个</span></span>
               <input disabled={semanticsLocked} value={form.kc_names.join("，")} onChange={(event) => set("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：极限，洛必达法则" className={`${fieldClass} disabled:bg-surface-muted disabled:text-ink-muted`} />
             </label>
           </div>
@@ -508,8 +508,8 @@ export function ErrorImportDialog({
               className="mt-0.5 h-4 w-4 accent-ink"
             />
             <span>
-              <span className="block text-[11px] font-medium text-ink">我已核对正确答案</span>
-              <span className="mt-0.5 block text-[10px] leading-4 text-ink-muted">
+              <span className="block text-body-sm font-medium text-ink">我已核对正确答案</span>
+              <span className="mt-0.5 block text-caption leading-4 text-ink-muted">
                 未勾选时保存为待核验，不进入今日复习，也不会影响学习画像。
               </span>
             </span>
@@ -517,10 +517,10 @@ export function ErrorImportDialog({
         </form>
 
         <footer className="flex items-center justify-between gap-3 border-t border-line bg-white px-5 py-4">
-          <p className="text-[10px] text-ink-muted">上传文件不会自动加入知识库。</p>
+          <p className="text-caption text-ink-muted">上传文件不会自动加入知识库。</p>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void closeDialog()} disabled={saving || uploading} className="h-9 rounded-[8px] border border-line-strong px-4 text-[11px] font-medium text-ink-secondary disabled:opacity-40">取消</button>
-            <button type="submit" form="error-import-form" disabled={saving || uploading} className="flex h-9 items-center gap-2 rounded-[8px] bg-brand-600 px-4 text-[11px] font-medium text-white disabled:opacity-40">
+            <button type="button" onClick={() => void closeDialog()} disabled={saving || uploading} className="h-9 rounded-[8px] border border-line-strong px-4 text-body-sm font-medium text-ink-secondary disabled:opacity-40">取消</button>
+            <button type="submit" form="error-import-form" disabled={saving || uploading} className="flex h-9 items-center gap-2 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white disabled:opacity-40">
               {saving && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
               {saving ? "保存中" : form.answer_verified ? "确认并加入复习" : "保存为待核验"}
             </button>

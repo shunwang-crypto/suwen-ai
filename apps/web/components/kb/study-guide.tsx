@@ -184,7 +184,7 @@ export function StudyGuidePanel({
                       className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
                     >
                       <ChevronIcon open={open} />
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-[11px] font-semibold text-indigo-600">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-body-sm font-semibold text-indigo-600">
                         {idx + 1}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
@@ -203,7 +203,7 @@ export function StudyGuidePanel({
                             {item.kc_names.map((kc) => (
                               <span
                                 key={kc}
-                                className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-100"
+                                className="rounded-full bg-white px-2 py-0.5 text-body-sm font-medium text-indigo-600 ring-1 ring-indigo-100"
                               >
                                 {kc}
                               </span>
@@ -261,7 +261,7 @@ export function StudyGuidePanel({
             </section>
           )}
 
-          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3 text-body-sm text-slate-400">
             <span>生成于 {fmtDateTime(guide.generated_at)} · 基于 {guide.doc_count} 篇文档</span>
             {writable && (
               <button

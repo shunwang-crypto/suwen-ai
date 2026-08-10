@@ -45,6 +45,7 @@ test-web:
 
 lint:
 	$(PY) -m ruff check packages apps tests alembic eval scripts loadtest
+	$(PY) scripts/check_web_font_sizes.py
 
 docs-check:
 	$(PY) scripts/check_docs.py

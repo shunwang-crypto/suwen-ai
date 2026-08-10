@@ -95,7 +95,7 @@ function StateBadge({ state }: { state: string }) {
     className: "bg-slate-100 text-slate-600",
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}>
+    <span className={`rounded-full px-2 py-0.5 text-caption font-medium ${meta.className}`}>
       {meta.label}
     </span>
   );
@@ -324,20 +324,20 @@ export default function ErrorsPage() {
                 setEditingItem(null);
                 setImportOpen(true);
               }}
-              className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-[12px] font-medium text-white hover:bg-brand-800"
+              className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-body-sm font-medium text-white hover:bg-brand-800"
             >
               录入错题
             </button>
             <Link
               href="/resources"
-              className="rounded-[8px] border border-brand-200 bg-brand-50 px-3.5 py-1.5 text-[12px] font-medium text-brand-700 hover:bg-brand-100"
+              className="rounded-[8px] border border-brand-200 bg-brand-50 px-3.5 py-1.5 text-body-sm font-medium text-brand-700 hover:bg-brand-100"
             >
               导入整份题目资料
             </Link>
             <button
               type="button"
               onClick={reload}
-              className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-[12px] font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700"
+              className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-body-sm font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700"
             >
               刷新
             </button>
@@ -375,7 +375,7 @@ export default function ErrorsPage() {
                   : "border-line bg-white hover:border-brand-200"
               }`}
             >
-              <p className="text-xs text-slate-500">{card.label}</p>
+              <p className="text-caption text-slate-500">{card.label}</p>
               <p
                 className={`mt-0.5 font-mono text-2xl font-semibold ${
                   active ? "text-indigo-700" : "text-slate-800"
@@ -389,7 +389,7 @@ export default function ErrorsPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-line bg-white p-2.5">
-        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索全部错题 · 题目、知识点、解析" aria-label="搜索全部错题" className="h-9 min-w-[220px] flex-1 rounded-[8px] border border-line-strong px-3 text-[12px] outline-none focus:border-brand-400" />
+        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索全部错题 · 题目、知识点、解析" aria-label="搜索全部错题" className="h-9 min-w-[220px] flex-1 rounded-[8px] border border-line-strong px-3 text-body-sm outline-none focus:border-brand-400" />
         {kbs.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             {[{ id: null, name: "全部科目" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
@@ -402,7 +402,7 @@ export default function ErrorsPage() {
                     onClick={() => {
                       pickKb(tab.id);
                     }}
-                    className={`rounded-[7px] border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                    className={`rounded-[7px] border px-2.5 py-1.5 text-body-sm font-medium transition-colors ${
                       on
                         ? "border-indigo-300 bg-indigo-50 text-indigo-700"
                         : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
@@ -417,7 +417,7 @@ export default function ErrorsPage() {
         )}
       </div>
 
-      <Card title="错题洞察" extra={<span className="text-[10px] text-ink-muted">包含已归档记录 · 点击分布快速筛选</span>}>
+      <Card title="错题洞察" extra={<span className="text-caption text-ink-muted">包含已归档记录 · 点击分布快速筛选</span>}>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card
           title="错因分布"
@@ -427,7 +427,7 @@ export default function ErrorsPage() {
               <button
                 type="button"
                 onClick={() => pickCause(causeFilter)}
-                className="text-xs text-indigo-600 hover:underline"
+                className="text-caption text-indigo-600 hover:underline"
               >
                 清除筛选
               </button>
@@ -435,7 +435,7 @@ export default function ErrorsPage() {
           }
         >
           {stats && stats.total === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+            <p className="py-3 text-center text-caption text-slate-400">暂无数据</p>
           ) : (
             <ul className="space-y-2">
               {causeEntries.map((entry) => {
@@ -446,7 +446,7 @@ export default function ErrorsPage() {
                     <button
                       type="button"
                       onClick={() => pickCause(entry.key)}
-                      className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-xs transition-colors hover:bg-slate-50"
+                      className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-caption transition-colors hover:bg-slate-50"
                     >
                       <span
                         className={`w-16 shrink-0 truncate text-left ${
@@ -478,13 +478,13 @@ export default function ErrorsPage() {
 
         <Card title="高频知识点" className="border-0">
           {!stats || stats.by_kc.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+            <p className="py-3 text-center text-caption text-slate-400">暂无数据</p>
           ) : (
             <ul className="space-y-1.5">
               {stats.by_kc.map((kc) => (
                 <li
                   key={kc.kc_id}
-                  className="flex items-center justify-between gap-2 text-xs"
+                  className="flex items-center justify-between gap-2 text-caption"
                 >
                   <span className="min-w-0 truncate text-slate-600" title={kc.name}>
                     {kc.name || `KC ${kc.kc_id.slice(0, 8)}`}
@@ -501,7 +501,7 @@ export default function ErrorsPage() {
       </Card>
 
       {filtered && (
-        <p className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <p className="flex flex-wrap items-center gap-2 text-caption text-slate-500">
           当前筛选：
           {stateFilter && (
             <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700">
@@ -560,7 +560,7 @@ export default function ErrorsPage() {
         />
       ) : (
         <>
-          <div className="flex items-center justify-between text-[10px] text-ink-muted"><span>{filtered || searchQuery ? "已应用筛选条件" : "未使用筛选条件"}</span><span>{list.total} 条结果</span></div>
+          <div className="flex items-center justify-between text-caption text-ink-muted"><span>{filtered || searchQuery ? "已应用筛选条件" : "未使用筛选条件"}</span><span>{list.total} 条结果</span></div>
           <ul className="space-y-2">
             {list.items.map((item) => {
               const busy = busyId === item.id;
@@ -568,10 +568,10 @@ export default function ErrorsPage() {
                 <li key={item.id} className="rounded-[12px] border border-line bg-white p-4">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[13px] font-semibold text-ink">{item.question?.stem ? <MathText text={item.question.stem} singleLine /> : "原题已删除"}</h2><StateBadge state={item.state} />{item.verification_status === "pending" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium text-warning-700">答案待核验</span>}</div>
+                        <div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[13px] font-semibold text-ink">{item.question?.stem ? <MathText text={item.question.stem} singleLine /> : "原题已删除"}</h2><StateBadge state={item.state} />{item.verification_status === "pending" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-caption font-medium text-warning-700">答案待核验</span>}</div>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <label
-                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ring-inset ${
+                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-caption ring-1 ring-inset ${
                           (CAUSE_COLORS[item.cause] ?? CAUSE_COLOR_FALLBACK).badge
                         }`}
                       >
@@ -580,7 +580,7 @@ export default function ErrorsPage() {
                           value={item.cause}
                           onChange={(e) => void changeCause(item, e.target.value)}
                           aria-label="修改错因"
-                          className="bg-transparent text-xs font-medium text-current outline-none"
+                          className="bg-transparent text-caption font-medium text-current outline-none"
                         >
                           {CAUSE_ORDER.map((c) => (
                             <option key={c} value={c}>
@@ -592,17 +592,17 @@ export default function ErrorsPage() {
                       {item.kc_names.map((kc) => (
                         <span
                           key={kc}
-                          className="max-w-32 truncate rounded-full bg-brand-50 px-2 py-0.5 text-xs text-brand-700"
+                          className="max-w-32 truncate rounded-full bg-brand-50 px-2 py-0.5 text-caption text-brand-700"
                         >
                           {kc}
                         </span>
                       ))}
                       {item.is_variant && (
-                        <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+                        <span className="rounded-full bg-brand-50 px-2 py-0.5 text-caption font-medium text-brand-700">
                           变式题
                         </span>
                       )}
-                      <span className="text-[10px] text-ink-muted">{item.question?.source_type && item.question.source_type !== "generated" ? "手动收录" : `错 ${item.error_count} 次`}{item.next_due && ` · 下次 ${fmtRelative(item.next_due)}`}</span>
+                      <span className="text-caption text-ink-muted">{item.question?.source_type && item.question.source_type !== "generated" ? "手动收录" : `错 ${item.error_count} 次`}{item.next_due && ` · 下次 ${fmtRelative(item.next_due)}`}</span>
                         </div>
                       </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -610,12 +610,12 @@ export default function ErrorsPage() {
                         type="button"
                         disabled={busy || item.verification_status !== "verified"}
                         onClick={() => void makeVariant(item)}
-                        className="flex items-center gap-1.5 rounded-[7px] bg-brand-50 px-3 py-1.5 text-[11px] font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-50"
+                        className="flex items-center gap-1.5 rounded-[7px] bg-brand-50 px-3 py-1.5 text-body-sm font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-50"
                       >
                         {busy && <Spinner className="h-3.5 w-3.5" />}
                         变式练习
                       </button>
-                      <button type="button" onClick={() => setSelectedItemId(item.id)} className="rounded-[7px] px-3 py-1.5 text-[11px] font-medium text-ink-secondary hover:bg-surface-muted">查看详情</button>
+                      <button type="button" onClick={() => setSelectedItemId(item.id)} className="rounded-[7px] px-3 py-1.5 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted">查看详情</button>
                     </div>
                     </div>
                 </li>
@@ -636,7 +636,7 @@ export default function ErrorsPage() {
               >
                 上一页
               </button>
-              <span className="text-xs text-slate-500">
+              <span className="text-caption text-slate-500">
                 第 {list.page} / {list.pages} 页 · 共 {list.total} 题
               </span>
               <button
@@ -659,14 +659,14 @@ export default function ErrorsPage() {
         <div className="fixed inset-0 z-50 flex justify-end">
           <button type="button" aria-label="关闭错题详情" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setSelectedItemId(null)} />
           <aside className="relative flex h-full w-full max-w-[580px] flex-col border-l border-line bg-white shadow-floating">
-            <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><div className="flex items-center gap-2"><StateBadge state={selectedItem.state} /><span className="text-[10px] text-ink-muted">{selectedItem.kc_names.join(" · ") || "未关联知识点"}</span></div><h2 className="mt-2 text-[18px] font-semibold text-ink">错题详情</h2></div><button type="button" onClick={() => setSelectedItemId(null)} className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted" aria-label="关闭">✕</button></header>
+            <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><div className="flex items-center gap-2"><StateBadge state={selectedItem.state} /><span className="text-body-sm text-ink-muted">{selectedItem.kc_names.join(" · ") || "未关联知识点"}</span></div><h2 className="mt-2 text-[18px] font-semibold text-ink">错题详情</h2></div><button type="button" onClick={() => setSelectedItemId(null)} className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted" aria-label="关闭">✕</button></header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
-              {selectedItem.verification_status === "pending" && <section className="rounded-[10px] border border-warning-200 bg-warning-50 p-4"><p className="text-[11px] font-medium text-warning-700">这道题的正确答案尚未核验</p><p className="mt-1 text-[10px] leading-4 text-warning-700">核验前不会进入今日复习、生成变式题或影响学习画像。</p></section>}
-              {selectedItem.question ? <><section><p className="text-[10px] font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-[10px] font-semibold text-danger-600">我的答案</p><div className="mt-2 text-[12px] text-ink-secondary"><MathText text={selectedItem.my_answer || "（未作答）"} /></div></div><div className={`rounded-[10px] border p-4 ${selectedItem.verification_status === "verified" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}><p className={`text-[10px] font-semibold ${selectedItem.verification_status === "verified" ? "text-success-600" : "text-warning-700"}`}>{selectedItem.verification_status === "verified" ? "正确答案" : "待核验答案"}</p><div className="mt-2 text-[12px] text-ink-secondary">{selectedItem.question.answer ? <MathText text={selectedItem.question.answer} /> : "尚未填写"}</div></div></div>{selectedItem.question.explanation && <section><p className="text-[10px] font-semibold text-ink-muted">解析</p><div className="mt-2 text-[12px] leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-[12px] text-ink-muted">原题已删除，历史记录仍保留。</p>}
-              <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-[11px] text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-[11px] text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
-              <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">加入日期</p><strong className="mt-1 block text-[11px] text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-[10px] text-ink-muted">下次复习</p><strong className="mt-1 block text-[11px] text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
+              {selectedItem.verification_status === "pending" && <section className="rounded-[10px] border border-warning-200 bg-warning-50 p-4"><p className="text-body-sm font-medium text-warning-700">这道题的正确答案尚未核验</p><p className="mt-1 text-caption leading-4 text-warning-700">核验前不会进入今日复习、生成变式题或影响学习画像。</p></section>}
+              {selectedItem.question ? <><section><p className="text-caption font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-caption font-semibold text-danger-600">我的答案</p><div className="mt-2 text-body-sm text-ink-secondary"><MathText text={selectedItem.my_answer || "（未作答）"} /></div></div><div className={`rounded-[10px] border p-4 ${selectedItem.verification_status === "verified" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}><p className={`text-caption font-semibold ${selectedItem.verification_status === "verified" ? "text-success-600" : "text-warning-700"}`}>{selectedItem.verification_status === "verified" ? "正确答案" : "待核验答案"}</p><div className="mt-2 text-body-sm text-ink-secondary">{selectedItem.question.answer ? <MathText text={selectedItem.question.answer} /> : "尚未填写"}</div></div></div>{selectedItem.question.explanation && <section><p className="text-caption font-semibold text-ink-muted">解析</p><div className="mt-2 text-body-sm leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-body-sm text-ink-muted">原题已删除，历史记录仍保留。</p>}
+              <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-body-sm text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-body-sm text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
+              <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">加入日期</p><strong className="mt-1 block text-body-sm text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">下次复习</p><strong className="mt-1 block text-body-sm text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
             </div>
-            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]">{selectedItem.resource_id && <Link href={`/resources?resource_id=${encodeURIComponent(selectedItem.resource_id)}${selectedItem.resource_question_id ? `&question_id=${encodeURIComponent(selectedItem.resource_question_id)}` : ""}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-center text-[12px] font-medium text-brand-700">查看原题资料</Link>}{selectedItem.question?.source_type && selectedItem.question.source_type !== "generated" ? <button type="button" onClick={() => { setEditingItem(selectedItem); setImportOpen(true); }} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white">{selectedItem.verification_status === "verified" ? "编辑题目" : "编辑并核验"}</button> : <button type="button" disabled={busyId === selectedItem.id || selectedItem.verification_status !== "verified"} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40">生成变式题去练习</button>}<Link href={selectedItem.question ? `/tutor?problem=${encodeURIComponent(selectedItem.question.stem)}` : "/tutor"} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-[12px] font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-[12px] font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-[12px] text-ink-secondary">归档</button>}</footer>
+            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]">{selectedItem.resource_id && <Link href={`/resources?resource_id=${encodeURIComponent(selectedItem.resource_id)}${selectedItem.resource_question_id ? `&question_id=${encodeURIComponent(selectedItem.resource_question_id)}` : ""}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-center text-body-sm font-medium text-brand-700">查看原题资料</Link>}{selectedItem.question?.source_type && selectedItem.question.source_type !== "generated" ? <button type="button" onClick={() => { setEditingItem(selectedItem); setImportOpen(true); }} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white">{selectedItem.verification_status === "verified" ? "编辑题目" : "编辑并核验"}</button> : <button type="button" disabled={busyId === selectedItem.id || selectedItem.verification_status !== "verified"} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white disabled:opacity-40">生成变式题去练习</button>}<Link href={`/tutor?error_id=${encodeURIComponent(selectedItem.id)}`} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-body-sm font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-body-sm font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-body-sm text-ink-secondary">归档</button>}</footer>
           </aside>
         </div>
       )}

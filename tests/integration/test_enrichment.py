@@ -50,6 +50,8 @@ class FakeGateway:
 
     def __init__(self):
         self.calls = {"vocab": 0, "extract": 0, "prefix": 0}
+        self.extract_prompts = []
+        self.return_fallback = False
 
     async def chat(self, req):
         from eduagents_core.gateway import ChatResult
@@ -60,7 +62,11 @@ class FakeGateway:
             text = _VOCAB_JSON
         elif req.json_mode:
             self.calls["extract"] += 1
-            kcs = ["拉格朗日余项"] if "余项" in prompt else ["Taylor 公式"]
+            self.extract_prompts.append(prompt)
+            if self.return_fallback and "未映射片段" in prompt:
+                kcs = ["定义"]
+            else:
+                kcs = ["拉格朗日余项"] if "余项" in prompt else ["Taylor 公式"]
             text = json.dumps({"kcs": kcs}, ensure_ascii=False)
         else:
             self.calls["prefix"] += 1
@@ -118,7 +124,6 @@ async def test_enrich_stage_full_cycle(client):
                 )
             )
         ).all()
-        names = {k.canonical_name for k in kcs}
         kc_ids = {str(k.id) for k in kcs}
         edges = (await session.scalars(select(KcEdge))).all()
         children = (
@@ -129,10 +134,20 @@ async def test_enrich_stage_full_cycle(client):
             )
         ).all()
 
-    # 词表落库 (3 个 KC)
-    assert {"泰勒公式", "拉格朗日余项", "导数"} <= names
+    # 语义词表落库 (3 个 enrichment KC)。stub 摄取留下的未命中章节
+    # fallback 不能被静默删除，否则已有题目/画像证据会断链。
+    enrichment_names = {
+        k.canonical_name for k in kcs if k.source_kind == "enrichment"
+    }
+    fallback_names = {
+        k.canonical_name for k in kcs if k.source_kind == "chapter_fallback"
+    }
+    assert {"泰勒公式", "拉格朗日余项", "导数"} <= enrichment_names
+    assert "定义" in fallback_names
+    assert gw.extract_prompts
+    assert all(name in gw.extract_prompts[0] for name in ("泰勒公式", "拉格朗日余项", "导数"))
     # KC-A1 归一化路径: chunk 抽取返回 "Taylor 公式" 但挂载的是已有"泰勒公式"的 kc_id, 无新建
-    assert len(names) == 3
+    assert len(enrichment_names) == 3
     # 成环边 (拉格朗日余项→导数) 被丢弃: 只入 2 条
     assert len(edges) == 2
     # 每个子块 kc_ids 挂载且外键有效 (禁止裸字符串)
@@ -141,3 +156,24 @@ async def test_enrich_stage_full_cycle(client):
         assert c.kc_ids, "chunk 应挂载 KC"
         assert set(c.kc_ids) <= kc_ids
         assert c.context_prefix  # 前缀已生成
+
+    fallback = next(k for k in kcs if k.source_kind == "chapter_fallback")
+    parent_id = children[0].parent_id
+    async with tenant_session(tenant_id) as session:
+        session.add(
+            Chunk(
+                tenant_id=uuid.UUID(tenant_id),
+                doc_id=uuid.UUID(doc_id),
+                parent_id=parent_id,
+                text="未映射片段",
+                heading_path="定义",
+                kc_ids=[str(fallback.id)],
+                content_hash=uuid.uuid4().hex,
+                embedding_status="done",
+            )
+        )
+    gw.return_fallback = True
+    assert await enrich_document({}, tenant_id, doc_id, gateway=gw) == "enriched"
+    async with tenant_session(tenant_id) as session:
+        promoted = await session.get(KnowledgeComponent, fallback.id)
+    assert promoted.source_kind == "enrichment"

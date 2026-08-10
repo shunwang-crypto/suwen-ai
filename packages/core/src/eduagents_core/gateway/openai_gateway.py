@@ -233,6 +233,7 @@ class OpenAIGateway:
                         "model": result.model,
                         "prompt_tokens": result.prompt_tokens,
                         "completion_tokens": result.completion_tokens,
+                        "finish_reason": result.finish_reason,
                     },
                 )
             await self._emit_usage(
@@ -394,8 +395,13 @@ class OpenAIGateway:
         return BusinessRoute.text
 
     def _routing_for_request(self, req: ChatRequest) -> bool:
-        """Cheap internal tasks retain their historical SiliconFlow semantics."""
-        return self._s.model_routing_enabled and req.tier != Tier.cheap
+        """Use explicit business routes for every platform tier when enabled.
+
+        ``Tier`` remains a budget/quality hint; it must not silently select a
+        legacy provider.  In particular, quiz blueprint and critic requests
+        use ``Tier.cheap`` and still need to follow the configured text route.
+        """
+        return self._s.model_routing_enabled
 
     @staticmethod
     def _enforce_visual_policy(req: ChatRequest, visual_request: bool) -> None:
@@ -524,6 +530,7 @@ class OpenAIGateway:
             cost_cny=0.0,
             latency_ms=int((perf_counter() - started) * 1000),
             mode="replay",
+            finish_reason=hit.get("finish_reason"),
         )
 
     def _client(self, tier: Tier) -> AsyncOpenAI:
@@ -667,42 +674,58 @@ class OpenAIGateway:
     async def _routed_chat(self, req: ChatRequest, *, allow_cassette: bool = False) -> ChatResult:
         del allow_cassette  # routed platform responses never enter shared cassettes
         route = self._route_for(req)
-        if route == BusinessRoute.vision and req.json_mode:
-            # MiMo/Qwen-VL is deliberately used as a faithful Markdown
-            # transcriber.  A second text call performs JSON structuring, so
-            # response_format is never sent to a visual candidate that lacks it.
-            vision_req = replace(req, json_mode=False, allow_tier_fallback=False)
-            vision_result = await self._routed_chat_single(vision_req, BusinessRoute.vision)
-            await self._emit_usage(
-                vision_req,
-                vision_result,
-                reserved_tier=vision_result.reserved_tier,
-                billing_reference=f"{req.request_id}:vision" if req.request_id else "",
-            )
-            plain_messages = tuple(
-                ChatMessage(role=message.role, content=message_text(message.content))
-                for message in req.messages
-                if message_text(message.content)
-            )
-            structure_messages = plain_messages + (
-                ChatMessage(
-                    role="user",
-                    content=(
-                        "请根据以下视觉模型忠实转写的 Markdown，完成原请求要求的结构化输出。"
-                        "只输出符合 JSON schema 的 JSON，不要添加解释。\n\n"
-                        + vision_result.text
+        try:
+            if route == BusinessRoute.vision and req.json_mode:
+                # MiMo/Qwen-VL is deliberately used as a faithful Markdown
+                # transcriber.  A second text call performs JSON structuring, so
+                # response_format is never sent to a visual candidate that lacks it.
+                vision_req = replace(req, json_mode=False, allow_tier_fallback=False)
+                vision_result = await self._routed_chat_single(vision_req, BusinessRoute.vision)
+                await self._emit_usage(
+                    vision_req,
+                    vision_result,
+                    reserved_tier=vision_result.reserved_tier,
+                    billing_reference=f"{req.request_id}:vision" if req.request_id else "",
+                )
+                plain_messages = tuple(
+                    ChatMessage(role=message.role, content=message_text(message.content))
+                    for message in req.messages
+                    if message_text(message.content)
+                )
+                structure_messages = plain_messages + (
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "请根据以下视觉模型忠实转写的 Markdown，完成原请求要求的结构化输出。"
+                            "只输出符合 JSON schema 的 JSON，不要添加解释。\n\n"
+                            + vision_result.text
+                        ),
                     ),
-                ),
-            )
-            structure_req = replace(
-                req,
-                messages=structure_messages,
-                model_override=None,
-                json_mode=True,
-                credential_policy="platform",
-            )
-            return await self._routed_chat_single(structure_req, BusinessRoute.text)
-        return await self._routed_chat_single(req, route)
+                )
+                structure_req = replace(
+                    req,
+                    messages=structure_messages,
+                    model_override=None,
+                    json_mode=True,
+                    credential_policy="platform",
+                )
+                return await self._routed_chat_single(structure_req, BusinessRoute.text)
+            return await self._routed_chat_single(req, route)
+        except GatewayError as exc:
+            # Keep the long-standing development fault-injection contract for
+            # the explicit provider routes too.  A real production request
+            # never becomes a stub response, and request-shape/auth failures
+            # still surface as errors instead of being masked.
+            if (
+                exc.code.endswith("_ROUTE_UNAVAILABLE")
+                and self._s.gateway_replay_fallback_stub
+                and self._s.app_env != "prod"
+            ):
+                log.error("routed_live_failed_fallback_stub", route=route.value)
+                result = self._stub_result(req, perf_counter())
+                result.degraded = True
+                return result
+            raise
 
     async def _routed_chat_single(
         self, req: ChatRequest, route: BusinessRoute
@@ -995,6 +1018,7 @@ class OpenAIGateway:
             credential_source=CredentialSource.platform.value,
             provider="platform",
             platform_billed_cost_cny=cost,
+            finish_reason=getattr(resp.choices[0], "finish_reason", None),
         )
 
     async def _call_user_tier(
@@ -1038,6 +1062,7 @@ class OpenAIGateway:
                 credential_source=CredentialSource.user.value,
                 provider=credential.provider,
                 platform_billed_cost_cny=0.0,
+                finish_reason=getattr(resp.choices[0], "finish_reason", None),
             )
         except AuthenticationError as exc:
             raise GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效") from exc

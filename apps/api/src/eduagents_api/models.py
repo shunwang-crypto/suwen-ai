@@ -311,6 +311,19 @@ class Chunk(Base):
 
 class KnowledgeComponent(Base):
     __tablename__ = "knowledge_components"
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN ('enrichment', 'chapter_fallback')",
+            name="ck_knowledge_components_source_kind",
+        ),
+        Index(
+            "uq_knowledge_components_kb_stable_key",
+            "kb_id",
+            "stable_key",
+            unique=True,
+            postgresql_where=text("stable_key IS NOT NULL"),
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     kb_id: Mapped[uuid.UUID] = mapped_column(
@@ -319,6 +332,20 @@ class KnowledgeComponent(Base):
     canonical_name: Mapped[str] = mapped_column(String(255), nullable=False)
     aliases: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="enrichment", server_default="enrichment"
+    )
+    stable_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "knowledge_components.id",
+            name="fk_knowledge_components_superseded_by_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -692,6 +719,9 @@ class ResourceQuestion(Base):
     source_region_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     points: Mapped[float | None] = mapped_column(Float, nullable=True)
     extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Additive Wave 3 contract.  ``extraction_confidence`` remains for old
+    # clients and historical rows; this object is the eligibility authority.
+    field_confidence_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     verification_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending"
     )

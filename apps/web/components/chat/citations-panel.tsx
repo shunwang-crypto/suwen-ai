@@ -77,7 +77,7 @@ export function CitationsPanel({
       {groups.map((group) => (
         <section key={group.key}>
           {showGroupLabels && (
-            <h3 className="sticky top-0 z-10 border-b border-line bg-white py-2.5 text-[11px] font-medium text-ink-muted">
+            <h3 className="sticky top-0 z-10 border-b border-line bg-white py-2.5 text-body-sm font-medium text-ink-muted">
               {group.label} · {group.items.length}
             </h3>
           )}
@@ -118,16 +118,16 @@ export function CitationsPanel({
                 {c.doc_name || "未知文档"}
               </span>
               {c.source_type === "web" && (
-                <span className="text-[10px] text-ink-muted">打开网页 ↗</span>
+                <span className="text-caption text-ink-muted">打开网页 ↗</span>
               )}
               {c.cited && (
-                <span className="rounded-full bg-success-50 px-1.5 py-0.5 text-[10px] font-medium text-success-700">
+                <span className="rounded-full bg-success-50 px-1.5 py-0.5 text-caption font-medium text-success-700">
                   正文引用
                 </span>
               )}
               {c.kb_name && (
                 <span
-                  className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-caption font-medium ${
                     ownerType === "org"
                       ? "border-amber-200 bg-amber-50 text-amber-700"
                       : "border-sky-200 bg-sky-50 text-sky-700"
@@ -155,7 +155,7 @@ export function CitationsPanel({
               )}
               {c.sanitized && (
                 <span
-                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-600"
+                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-caption font-medium text-rose-600"
                   title="该引用块中检测到疑似提示词注入内容，已被过滤"
                 >
                   <svg

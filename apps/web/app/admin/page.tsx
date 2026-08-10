@@ -444,7 +444,7 @@ function FaultInjectionSection() {
               className="w-full accent-indigo-600"
               aria-label="附加延迟（毫秒）"
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-body-sm text-slate-400">
               每次上游调用额外 sleep 这么久，用来触发超时与 p95 抬升。
             </p>
           </div>
@@ -469,7 +469,7 @@ function FaultInjectionSection() {
               className="w-full accent-indigo-600"
               aria-label="随机错误率"
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-body-sm text-slate-400">
               按该概率随机抛错，用来演示重试与熔断阈值的累积过程。
             </p>
           </div>
@@ -556,7 +556,7 @@ function FaultInjectionSection() {
                         title={candidate.last_failure_code ?? "无最近失败"}
                       >
                         <span className="block truncate font-mono text-xs">{candidate.id}</span>
-                        <span className="mt-1 block truncate text-[11px] opacity-80">
+                        <span className="mt-1 block truncate text-body-sm opacity-80">
                           {candidate.provider} · {candidate.model || "未配置"}
                         </span>
                         <span className="mt-1 flex items-center gap-1.5 text-xs font-semibold">
@@ -701,7 +701,7 @@ function FeedbackAdminSection() {
                   <td className="max-w-80 py-2 pr-2 text-xs leading-relaxed text-slate-700">
                     {it.content}
                   </td>
-                  <td className="max-w-52 py-2 pr-2 font-mono text-[10px] text-slate-400">
+                  <td className="max-w-52 py-2 pr-2 font-mono text-caption text-slate-400">
                     <span className="block truncate" title={it.page_url}>
                       {it.page_url || "—"}
                     </span>

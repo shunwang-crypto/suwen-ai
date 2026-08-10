@@ -203,7 +203,7 @@ function AggRadarChart({
           );
         })}
       </svg>
-      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-slate-400">
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
@@ -270,14 +270,14 @@ function AxisBars({
               {fmtPct(a.mean)}
             </span>
             {a.weakCount > 0 && (
-              <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
+              <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-body-sm font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
                 薄弱 {a.weakCount}
               </span>
             )}
           </button>
         );
       })}
-      <p className="pt-1 text-center text-[11px] text-slate-400">
+      <p className="pt-1 text-center text-body-sm text-slate-400">
         聚合轴不足 {MIN_RADAR_AXES} 个，已降级为条形图（避免无形状的少轴雷达）
       </p>
     </div>
@@ -324,7 +324,7 @@ function DrillDownPanel({ axis, onClose }: { axis: AggAxis; onClose: () => void 
             <span className="w-9 shrink-0 text-right font-mono text-slate-600">
               {fmtPct(k.p_mastery)}
             </span>
-            <span className="w-7 shrink-0 text-right text-[11px] font-medium text-amber-600">
+            <span className="w-7 shrink-0 text-right text-body-sm font-medium text-amber-600">
               {k.p_mastery < WEAK_THRESHOLD ? "薄弱" : ""}
             </span>
           </li>
@@ -440,7 +440,7 @@ export function MasteryRadarPanel({ items }: { items: RadarSourceItem[] }) {
         ) : (
           <>
             <AggRadarChart axes={shownAxes} selected={drill} onSelect={toggleDrill} />
-            <p className="text-center text-[11px] text-slate-400">
+            <p className="text-center text-body-sm text-slate-400">
               {axes.length > shownAxes.length ? `仅显示前 ${RADAR_MAX_DIMS} 章 · ` : ""}
               点击任意轴可下钻查看该{activeTab === ALL_TAB ? "库" : "章"}的知识点
             </p>

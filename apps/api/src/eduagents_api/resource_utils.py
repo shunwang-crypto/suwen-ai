@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import uuid
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import HTTPException
+
+from .ocr_confidence import clean_field_confidence
 
 QUESTION_TYPES = ("single", "multi", "blank", "short")
 DIFFICULTIES = ("easy", "mid", "hard")
@@ -157,7 +160,13 @@ def parse_json_payload(text: str) -> object:
         return []
 
 
-def normalize_extracted_question(raw: object, ordinal: int) -> dict:
+def normalize_extracted_question(
+    raw: object,
+    ordinal: int,
+    *,
+    confidence_source: str = "model_reported",
+    paginated: bool | None = None,
+) -> dict:
     value = raw if isinstance(raw, dict) else {}
     qtype = str(value.get("type") or "short").strip()
     if qtype not in QUESTION_TYPES:
@@ -167,7 +176,11 @@ def normalize_extracted_question(raw: object, ordinal: int) -> dict:
         options = []
     confidence = value.get("confidence")
     try:
-        confidence = max(0.0, min(1.0, float(confidence))) if confidence is not None else None
+        confidence = (
+            max(0.0, min(1.0, float(confidence)))
+            if confidence is not None and math.isfinite(float(confidence))
+            else None
+        )
     except (TypeError, ValueError):
         confidence = None
     points = value.get("points")
@@ -186,6 +199,61 @@ def normalize_extracted_question(raw: object, ordinal: int) -> dict:
     kc_names = list(
         dict.fromkeys(str(x).strip()[:255] for x in (value.get("kc_names") or []) if str(x).strip())
     )[:3]
+    answer = str(
+        value.get("answer") or value.get("detected_reference_answer") or ""
+    ).strip()[:8000]
+    detected_student_answer = str(value.get("detected_student_answer") or "").strip()[:8000]
+    if paginated is None:
+        paginated = page is not None
+    applicable_fields = ["question_no", "type", "stem", "answer"]
+    if qtype in {"single", "multi"}:
+        applicable_fields.append("options")
+    if paginated:
+        applicable_fields.append("page_no")
+    if detected_student_answer or value.get("student_answer_expected") is True:
+        applicable_fields.append("detected_student_answer")
+
+    field_confidence = value.get("field_confidence") or value.get("field_confidence_json")
+    if not field_confidence:
+        if confidence_source == "model_reported" and confidence is not None:
+            # Legacy model output has one uncalibrated score only. Preserve
+            # that fact explicitly instead of promoting it to parser/OCR
+            # evidence. New prompts use the per-field shape below.
+            field_confidence = {
+                field: {"confidence": confidence, "source": "model_reported"}
+                for field in applicable_fields
+            }
+        elif confidence_source in {"parser", "rule", "ocr_provider"}:
+            # These values are assigned by trusted server code from parsed
+            # structure, never from a model-provided source claim.
+            observed = {
+                "question_no": True,
+                "type": bool(value.get("type")),
+                "stem": bool(str(value.get("stem") or "").strip()),
+                "answer": bool(answer),
+                "options": bool(options),
+                "page_no": paginated and page is not None,
+                "detected_student_answer": bool(detected_student_answer),
+                "detected_reference_answer": bool(
+                    str(value.get("detected_reference_answer") or "").strip()
+                ),
+                "explanation": bool(str(value.get("explanation") or "").strip()),
+                "kc_names": bool(kc_names),
+                "difficulty": value.get("difficulty") in DIFFICULTIES,
+                "points": points is not None,
+            }
+            field_confidence = {
+                field: {"confidence": 0.99, "source": confidence_source}
+                for field, present in observed.items()
+                if present
+            }
+        else:
+            field_confidence = {}
+    if isinstance(field_confidence, dict):
+        field_confidence = {
+            **field_confidence,
+            "applicable_fields": applicable_fields,
+        }
     return {
         "ordinal": ordinal,
         "question_no": str(value.get("question_no") or ordinal).strip()[:64],
@@ -195,11 +263,14 @@ def normalize_extracted_question(raw: object, ordinal: int) -> dict:
         "type": qtype,
         "stem": str(value.get("stem") or "").strip()[:12000],
         "options": options,
-        "detected_student_answer": str(value.get("detected_student_answer") or "").strip()[:8000],
-        "detected_reference_answer": str(value.get("detected_reference_answer") or "").strip()[:8000],
+        "detected_student_answer": detected_student_answer,
+        "detected_reference_answer": answer,
         "explanation": str(value.get("explanation") or "").strip()[:12000],
         "points": points,
         "kc_names": kc_names,
         "difficulty": difficulty,
         "confidence": confidence,
+        "field_confidence": clean_field_confidence(
+            field_confidence, source_override=confidence_source
+        ),
     }

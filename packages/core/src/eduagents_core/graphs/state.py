@@ -67,6 +67,8 @@ class QuizState(TypedDict, total=False):
     tenant_id: str
     user_id: str
     request_id: str
+    thread_id: str
+    confirmation_mode: str  # auto | required
     plan_id: str  # safe plan attribution; never contains task/problem content
     task_key: str
     kb_id: str
@@ -79,6 +81,10 @@ class QuizState(TypedDict, total=False):
     questions: list[dict]  # 严格 schema 见 quiz_graph.QUESTION_SCHEMA
     validation_errors: list[str]
     retry_count: int
+    terminal_outcome: str  # succeeded | cancelled_by_user | generation_failed | validation_failed
+    generation_status: str  # ok | empty | invalid_json | invalid_shape
+    ever_generated_nonempty: bool
+    failure_code: str
     trace: Annotated[list[dict], operator.add]
 
 

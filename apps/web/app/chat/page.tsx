@@ -250,7 +250,7 @@ function WebSearchStatus({
     <button
       type="button"
       onClick={onOpen}
-      className="mb-3 inline-flex items-center gap-2 rounded-full bg-surface-muted px-3 py-1.5 text-[12px] text-ink-secondary hover:bg-line hover:text-ink"
+      className="mb-3 inline-flex items-center gap-2 rounded-full bg-surface-muted px-3 py-1.5 text-body-sm text-ink-secondary hover:bg-line hover:text-ink"
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden>
         <circle cx="11" cy="11" r="7" />
@@ -1258,7 +1258,7 @@ function ChatView() {
               >
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6" />
               </svg>
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-caption font-semibold text-white">
                 {panelCitations.length}
               </span>
             </button>
@@ -1321,7 +1321,7 @@ function ChatView() {
                           {m.attachments.map((attachment) => (
                             <span
                               key={attachment.id}
-                              className="inline-flex max-w-56 items-center gap-1.5 rounded-[7px] border border-brand-100 bg-white/80 px-2 py-1 text-[11px] text-ink-secondary"
+                              className="inline-flex max-w-56 items-center gap-1.5 rounded-[7px] border border-brand-100 bg-white/80 px-2 py-1 text-body-sm text-ink-secondary"
                               title={attachment.filename}
                             >
                               <span aria-hidden>
@@ -1449,7 +1449,7 @@ function ChatView() {
                       {/* 断流角标（P0-6）：服务端已保存半截答案，可一键重问 */}
                       {!m.streaming && m.truncated && (
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-body-sm font-medium text-amber-700">
                             <svg
                               viewBox="0 0 24 24"
                               fill="none"
@@ -1610,7 +1610,7 @@ function ChatView() {
             {(attachments.length > 0 || kbIds.length > 0) && (
               <div className="flex flex-wrap gap-1.5 px-2 pb-2 pt-1">
                 {kbIds.length > 0 && (
-                  <span className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-[11px] text-ink-secondary">
+                  <span className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary">
                     <button
                       type="button"
                       onClick={() => setComposerPanel("scope")}
@@ -1632,7 +1632,7 @@ function ChatView() {
                 {attachments.map((attachment) => (
                   <span
                     key={attachment.id}
-                    className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-[11px] text-ink-secondary"
+                    className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary"
                   >
                     <span aria-hidden>
                       {attachment.kind === "image" ? "图片" : "文件"}
@@ -1759,8 +1759,8 @@ function ChatView() {
                       <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg border border-line text-lg" aria-hidden>＋</span>
                       <span>
                         <span className="block text-[13px] font-medium text-ink">添加图片和文件</span>
-                        <span className="block text-[11px] leading-5 text-ink-muted">选择文件，或在输入框直接粘贴截图</span>
-                        <span className="block text-[10px] leading-4 text-ink-muted">最多 4 个，合计 20MB</span>
+                        <span className="block text-body-sm leading-5 text-ink-muted">选择文件，或在输入框直接粘贴截图</span>
+                        <span className="block text-caption leading-4 text-ink-muted">最多 4 个，合计 20MB</span>
                       </span>
                     </button>
                     <button
@@ -1771,7 +1771,7 @@ function ChatView() {
                       <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg border border-line text-xs" aria-hidden>▤</span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-[13px] font-medium text-ink">选择知识库</span>
-                        <span className="block truncate text-[11px] leading-5 text-ink-muted">
+                        <span className="block truncate text-body-sm leading-5 text-ink-muted">
                           {kbIds.length > 0 ? `当前：${selectedKbLabel}` : "基于指定资料回答"}
                         </span>
                       </span>
@@ -1781,7 +1781,7 @@ function ChatView() {
 
                 {composerPanel === "mode" && (
                   <div className="absolute bottom-[58px] right-0 z-30 w-[300px] rounded-2xl border border-line bg-white p-2 shadow-floating">
-                    <p className="px-3 pb-1.5 pt-1 text-[11px] font-medium text-ink-muted">回答方式</p>
+                    <p className="px-3 pb-1.5 pt-1 text-body-sm font-medium text-ink-muted">回答方式</p>
                     {([
                       ["fast", "极速", "快速直接回答"],
                       ["think", "深度思考", "用于复杂推理与综合分析"],
@@ -1818,7 +1818,7 @@ function ChatView() {
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] font-medium text-ink">{title}</span>
-                            <span className="block text-[11px] leading-5 text-ink-muted">
+                            <span className="block text-body-sm leading-5 text-ink-muted">
                               {(mode === "web" || mode === "research") &&
                               attachments.length > 0
                                 ? "移除附件后可使用"
@@ -1851,7 +1851,7 @@ function ChatView() {
                         if (group.length === 0) return null;
                         return (
                           <div key={ownerType} className="mt-1">
-                            <p className="px-2.5 py-1 text-[10px] text-ink-muted">{ownerType === "user" ? "个人知识库" : "机构知识库"}</p>
+                            <p className="px-2.5 py-1 text-caption text-ink-muted">{ownerType === "user" ? "个人知识库" : "机构知识库"}</p>
                             {group.map((kb) => (
                               <label key={kb.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-secondary hover:bg-surface-muted">
                                 <input

@@ -11,6 +11,7 @@
 
 import json
 
+import pytest
 from eduagents_api.routers.plans import (
     PlanCreate,
     _diagnosis_from_rows,
@@ -23,6 +24,7 @@ from eduagents_core.graphs.plan_graph import build_plan_graph
 from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.graphs.tutor_graph import build_tutor_graph
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import ValidationError
 
 
 class FakeGateway:
@@ -627,12 +629,19 @@ def test_plan_create_trims_optional_goal_context():
         current_level="  会基本代数  ",
         target_outcome="  能独立完成基础题  ",
         success_criteria="  10 题正确 8 题  ",
+        budget_hours_per_day=1.0,
+        total_days=2,
     )
     assert body.goal == "极限与导数"
     assert body.current_level == "会基本代数"
     assert body.target_outcome == "能独立完成基础题"
     assert body.success_criteria == "10 题正确 8 题"
-    assert PlanCreate(goal="导数", current_level="  ").current_level is None
+    assert PlanCreate(goal="导数", current_level="  ", budget_hours_per_day=1.0, total_days=2).current_level is None
+
+
+def test_plan_create_requires_explicit_schedule_values():
+    with pytest.raises(ValidationError):
+        PlanCreate(goal="导数", current_level="  ")
 
 
 async def test_explicit_goal_context_overrides_model_and_reaches_confirmation():

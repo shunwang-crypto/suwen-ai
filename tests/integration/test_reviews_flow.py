@@ -89,6 +89,7 @@ async def test_reviews_fsrs_time_travel_flow(client):
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
         ErrorItem,
+        FsrsReviewEvent,
         KnowledgeBase,
         KnowledgeComponent,
         MasteryLog,
@@ -212,6 +213,15 @@ async def test_reviews_fsrs_time_travel_flow(client):
         ).all()
         assert len(logs) == 4  # b/d/e + 同语义合法重答各一条审计
         assert any(entry.new_p < entry.old_p for entry in logs)
+        review_events = (
+            await session.scalars(
+                select(FsrsReviewEvent).where(FsrsReviewEvent.user_id == uid)
+            )
+        ).all()
+        assert len(review_events) == 4
+        assert {entry.evidence_id for entry in logs} == {
+            event.id for event in review_events
+        }
 
     # f) 变式重练: FakeGateway 返回合法题 → 新题落库 (quiz_id 沿用) + variant_of 指向原题
     old_gateway = app.state.gateway

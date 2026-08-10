@@ -209,7 +209,7 @@ function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: str
       <nav className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         {NAV_GROUPS.map((group, index) => (
           <section key={group.label ?? "today"} className={index === 0 ? "pt-2" : collapsed ? "pt-2" : "pt-[18px]"}>
-            {group.label && !collapsed && <h2 className="mb-1.5 px-2.5 text-[10px] font-medium tracking-[0.06em] text-[#a1a19d]">{group.label}</h2>}
+            {group.label && !collapsed && <h2 className="mb-1.5 px-2.5 text-caption font-medium tracking-[0.06em] text-[#a1a19d]">{group.label}</h2>}
             <div className="space-y-0.5">
               {group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
             </div>
@@ -243,7 +243,7 @@ function Brand({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?
           <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
           <span className="flex flex-col leading-none">
             <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
-            <span className="mt-1 text-[9px] font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
+            <span className="mt-1 text-caption font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
           </span>
         </Link>
       )}
@@ -298,8 +298,8 @@ function AccountMenu({
     >
       <div className="px-3 pb-3 pt-2.5">
         <p className="truncate text-[13px] font-semibold text-ink">{displayName}</p>
-        <p className="mt-0.5 truncate text-[11px] text-ink-muted">{email}</p>
-        <span className="mt-2 inline-flex rounded-full bg-[#f3f2ef] px-2 py-0.5 text-[10px] font-medium text-ink-secondary">{role}</span>
+        <p className="mt-0.5 truncate text-body-sm text-ink-muted">{email}</p>
+        <span className="mt-2 inline-flex rounded-full bg-[#f3f2ef] px-2 py-0.5 text-caption font-medium text-ink-secondary">{role}</span>
       </div>
       <div className="border-t border-line pt-1.5">
         <Link href="/settings?section=profile" onClick={onClose} className={menuClass}>账户设置</Link>
@@ -411,7 +411,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {pathname === "/today" ? (
                 <div className="min-w-0">
                   <h1 className="truncate text-[14px] font-semibold leading-5 text-ink">{greeting}，{displayName}</h1>
-                  <p className="truncate text-[10px] leading-4 text-ink-muted">{todayLabel}</p>
+                  <p className="truncate text-caption leading-4 text-ink-muted">{todayLabel}</p>
                 </div>
               ) : (
                 <h1 className="truncate text-[13px] font-semibold text-ink md:text-[14px]">{title}</h1>
@@ -427,8 +427,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 aria-expanded={menuOpen}
                 className={`relative z-50 flex h-9 items-center gap-2 rounded-[8px] px-1.5 text-ink transition-colors hover:bg-[#eeedea] ${menuOpen ? "bg-[#eeedea]" : ""}`}
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2f2f2c] text-[11px] font-semibold text-white">{initial}</span>
-                <span className="hidden max-w-40 truncate text-[12px] font-medium sm:block">{displayName}</span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2f2f2c] text-body-sm font-semibold text-white">{initial}</span>
+                <span className="hidden max-w-40 truncate text-body-sm font-medium sm:block">{displayName}</span>
                 <ChevronIcon open={menuOpen} />
               </button>
               <AnimatePresence>
