@@ -35,10 +35,12 @@ class FakeGateway:
         *,
         critic_texts: list[str] | None = None,
         critic_errors: list[Exception] | None = None,
+        finish_reasons: list[str | None] | None = None,
     ) -> None:
         self.texts = list(texts)
         self.critic_texts = list(critic_texts or [])
         self.critic_errors = list(critic_errors or [])
+        self.finish_reasons = list(finish_reasons or [])
         self.requests: list[ChatRequest] = []
 
     async def chat(self, req: ChatRequest) -> ChatResult:
@@ -58,6 +60,11 @@ class FakeGateway:
             cost_cny=0.0,
             latency_ms=0,
             mode="stub",
+            finish_reason=(
+                self.finish_reasons.pop(0)
+                if req.feature == "quiz_generate" and self.finish_reasons
+                else None
+            ),
         )
 
 
@@ -286,6 +293,26 @@ async def test_three_empty_generation_rounds_are_generation_failed_with_bounded_
     assert len(diagnostics) == 3
     assert {"provider", "model", "feature", "response_chars", "finish_reason", "json_parsed", "top_level_keys", "raw_question_count", "schema_passed_count", "truncated", "retry_round", "max_tokens", "request_id"} <= diagnostics[0].keys()
     assert all("stem" not in json.dumps(event, ensure_ascii=False) for event in diagnostics)
+
+
+async def test_truncated_generation_retries_and_succeeds_with_diagnostic_flag():
+    gateway = FakeGateway(
+        [bp_json([bp_item()]), "", gen_json([good_q()])],
+        finish_reasons=["length", None],
+    )
+    app = make_app(gateway)
+    config = cfg("truncated-generation")
+
+    await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
+    final = await app.ainvoke(Command(resume={"approved": True}), config)
+
+    assert final["terminal_outcome"] == "succeeded"
+    assert final["retry_count"] == 1
+    assert len(final["questions"]) == 1
+    diagnostics = [event for event in final["trace"] if event["node"] == "generate_diagnostic"]
+    assert diagnostics[0]["finish_reason"] == "length"
+    assert diagnostics[0]["truncated"] is True
+    assert diagnostics[1]["truncated"] is False
 
 
 async def test_nonempty_invalid_questions_are_validation_failed():

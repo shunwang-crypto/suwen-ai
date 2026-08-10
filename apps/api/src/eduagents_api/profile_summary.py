@@ -69,7 +69,9 @@ QUIZ_WEAK_TOP = 5
 _RECENT_ERROR_DAYS = 7
 # confidence 低于此值视为"证据不足", 触发 Assessment Mode 而非判定无事可做 (§5.3)。
 # apply_mastery_evidence 每条证据 +0.1, 因此 0.3 约等于"至少测过三次"。
-_ASSESSMENT_CONFIDENCE_CEILING = 0.3
+# 这是服务端策略阈值，不进入推荐公开结果、SSE 或模型 prompt。
+ASSESSMENT_CONFIDENCE_CEILING = 0.3
+_ASSESSMENT_CONFIDENCE_CEILING = ASSESSMENT_CONFIDENCE_CEILING
 # 题面 ↔ KC 名子串匹配的最短归一化长度 (同 services._MIN_KC_MATCH_LEN 口径):
 # 单字 KC 名 (如"角""集") 会命中几乎任意题面, 放行会把起始层级判飞。
 _MIN_BAND_MATCH_LEN = 2
@@ -479,56 +481,105 @@ async def weak_point_kcs(
     reason 是逐 KC 的难度分档与定性理由 (difficulty_rationale, P1-1 可解释出题)。
     无薄弱点返回空列表 (调用方须显式提示, 不得静默降级成普通出题)。
     """
-    uid = uuid.UUID(str(user_id))
-    ids = _norm_ids(kb_ids)
-    since = datetime.now(UTC) - timedelta(days=_RECENT_ERROR_DAYS)
     async with tenant_session(tenant_id) as session:
-        rows = (
-            await session.execute(
-                select(
-                    MasteryRecord.kc_id,
-                    MasteryRecord.p_mastery,
-                    KnowledgeComponent.canonical_name,
-                    KnowledgeComponent.kb_id,
-                )
-                .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
-                .where(MasteryRecord.user_id == uid, MasteryRecord.p_mastery < threshold)
-                .order_by(MasteryRecord.p_mastery.asc())
+        return await _load_weak_point_candidates(
+            session,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            kb_ids=kb_ids,
+            threshold=threshold,
+            limit=limit,
+        )
+
+
+async def _load_weak_point_candidates(
+    session,
+    *,
+    tenant_id: uuid.UUID | str,
+    user_id: uuid.UUID | str,
+    kb_ids=(),
+    threshold: float = QUIZ_WEAK_THRESHOLD,
+    limit: int = QUIZ_WEAK_TOP,
+) -> list[dict]:
+    """Load and order the server-owned weak-KC facts for every consumer.
+
+    Profile preview and practice recommendation intentionally share this one
+    query and ordering policy.  ``p_mastery`` stays in this internal result so
+    the recommendation can choose a difficulty, but callers that leave this
+    module must decide separately whether that fact is safe to expose.
+    """
+    uid = uuid.UUID(str(user_id))
+    tid = uuid.UUID(str(tenant_id))
+    ids = _norm_ids(kb_ids)
+    stmt = (
+        select(
+            MasteryRecord.kc_id,
+            MasteryRecord.p_mastery,
+            KnowledgeComponent.canonical_name,
+            KnowledgeComponent.created_at,
+        )
+        .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+        .where(
+            MasteryRecord.tenant_id == tid,
+            MasteryRecord.user_id == uid,
+            MasteryRecord.p_mastery < threshold,
+        )
+        .order_by(
+            MasteryRecord.p_mastery.asc(),
+            KnowledgeComponent.created_at.asc(),
+            KnowledgeComponent.id.asc(),
+        )
+    )
+    if ids:
+        stmt = stmt.where(
+            KnowledgeComponent.kb_id.in_([uuid.UUID(item) for item in ids])
+        )
+    rows = (await session.execute(stmt)).all()
+    since = datetime.now(UTC) - timedelta(days=_RECENT_ERROR_DAYS)
+    recent_rows = (
+        await session.execute(
+            select(ErrorItem.kc_ids).where(
+                ErrorItem.tenant_id == tid,
+                ErrorItem.user_id == uid,
+                ErrorItem.verification_status == "verified",
+                ErrorItem.created_at >= since,
             )
-        ).all()
-        recent = (
-            await session.scalars(
-                select(ErrorItem).where(
-                    ErrorItem.user_id == uid,
-                    ErrorItem.verification_status == "verified",
-                    ErrorItem.created_at >= since,
-                )
-            )
-        ).all()
-    recent_kc_ids = {str(k) for item in recent for k in (item.kc_ids or [])}
-    kb_set = set(ids)
-    # 显式传入知识库时必须严格限定范围：该库没有薄弱点就返回空，
-    # 不得回退到其他库，否则前端选“大学物理”仍会拿到高数题。
-    scoped = [r for r in rows if str(r[3]) in kb_set] if kb_set else list(rows)
+        )
+    ).all()
+    recent_kc_ids = {
+        str(kc_id)
+        for (kc_ids_for_error,) in recent_rows
+        for kc_id in (kc_ids_for_error or [])
+    }
     items = []
-    for kc_id, p, name, _kb in scoped:
-        recent = str(kc_id) in recent_kc_ids
-        rationale = difficulty_rationale(name, float(p), recent)
+    for kc_id, p, name, created_at in rows:
+        recent_error = str(kc_id) in recent_kc_ids
+        rationale = difficulty_rationale(name, float(p), recent_error)
         items.append(
             {
                 "kc_id": str(kc_id),
                 "name": name,
                 # 精确数值仅供站内鉴权接口展示 (P2-7); 出境理由只用下面的定性字段
                 "p_mastery": round(float(p), 4),
-                "recent_error": recent,
+                "recent_error": recent_error,
                 "zone": rationale["zone"],
                 "difficulty": rationale["difficulty"],
                 "reason": rationale["reason"],
+                "_stable_order": (created_at, str(kc_id)),
             }
         )
-    # 近 7 天真的错过的排前面 ("上午答错的概念下午就出现在练习卷"), 其余按掌握度升序
-    items.sort(key=lambda x: (not x["recent_error"], x["p_mastery"]))
-    return items[:limit]
+    # 近 7 天真的错过的排前面，随后按掌握度，再按稳定 KC 数据库顺序。
+    items.sort(
+        key=lambda item: (
+            not item["recent_error"],
+            item["p_mastery"],
+            item["_stable_order"],
+        )
+    )
+    bounded_limit = max(0, int(limit))
+    for item in items:
+        item.pop("_stable_order", None)
+    return items[:bounded_limit]
 
 
 async def assessment_mode_kcs(
@@ -578,7 +629,7 @@ async def assessment_mode_kcs(
     items: list[dict] = []
     for kc_id, name, _kb, confidence, p in rows:
         conf = float(confidence or 0.0)
-        if conf >= _ASSESSMENT_CONFIDENCE_CEILING:
+        if conf >= ASSESSMENT_CONFIDENCE_CEILING:
             continue
         # 诊断题的难度固定走中档: 目的是量出水平, 不是照着未验证的 p_mastery 调难度。
         items.append(

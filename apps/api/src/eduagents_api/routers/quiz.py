@@ -15,13 +15,11 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
 from ..plan_adjust import PlanTaskAttributionError, validate_plan_task_attribution
-from ..practice_recommendation import PracticeAdjustmentUnavailable
-from ..profile_summary import (
-    assessment_mode_kcs,
-    build_profile_context,
-    has_any_kc,
-    weak_point_kcs,
+from ..practice_recommendation import (
+    PracticeAdjustmentUnavailable,
+    _difficulty_mix_from_reasons,
 )
+from ..profile_summary import build_profile_context
 from ..services import quiz_kc_readiness, record_attempts
 from .practice import PracticeRequest, load_recommendation
 from .threads import stream_graph_run
@@ -112,10 +110,15 @@ async def create_recommended_quiz(
             },
         )
     if recommendation.status != "ready" or recommendation.action != "quiz":
+        barrier_code = (
+            "QUIZ_KC_PREPARING"
+            if recommendation.status == "preparing"
+            else recommendation.readiness_code
+        )
         return JSONResponse(
             status_code=409,
             content={
-                "code": "PRACTICE_DECISION_CHANGED",
+                "code": barrier_code or "PRACTICE_DECISION_CHANGED",
                 "message": "练习建议已变化，请使用最新建议。",
                 "recommendation": recommendation.to_dict(),
             },
@@ -147,11 +150,14 @@ async def create_quiz(
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
+    effective_kb_id = body.kb_id
+    effective_plan_id = body.plan_id
+    effective_task_key = body.task_key
     # Wave 1B barrier: a KB-backed cold-start Quiz must not enter the graph
     # while its usable KC set is still being built.  Personalized and ordinary
     # Quiz paths share this barrier; weak-point requests must not spend
     # generation budget before their KB can support learning evidence.
-    if body.kb_id is not None:
+    if effective_kb_id is not None:
         gateway_mode = getattr(getattr(request.app.state, "settings", None), "gateway_mode", None)
         if not isinstance(gateway_mode, str) or not gateway_mode:
             from eduagents_core.config import get_settings
@@ -161,7 +167,7 @@ async def create_quiz(
             readiness = await quiz_kc_readiness(
                 session,
                 tenant_id=ctx.tenant_id,
-                kb_id=body.kb_id,
+                kb_id=effective_kb_id,
                 gateway_mode=gateway_mode,
                 org_ids=ctx.org_ids,
             )
@@ -172,83 +178,153 @@ async def create_quiz(
                 status_code=409,
                 detail=readiness.code or "QUIZ_KC_NOT_READY",
             )
-    if body.plan_id is not None and body.task_key is not None:
-        async with tenant_session(ctx.tenant_id) as session:
-            try:
-                await validate_plan_task_attribution(
-                    session,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    plan_id=body.plan_id,
-                    task_key=body.task_key,
-                    source_type="quiz_attempt",
-                )
-            except PlanTaskAttributionError as exc:
-                status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
-                raise HTTPException(status_code=status, detail=exc.code) from None
     topic = body.topic.strip()
     kc_names = list(body.kc_names)
     difficulty_mix = dict(body.difficulty_mix)
     difficulty_reasons: list[dict] = []
     trace_prelude: list[dict] = []
     quiz_mode = "practice"
+    effective_count = body.num_questions
     if body.from_weak_points:
-        weak = await weak_point_kcs(
-            ctx.tenant_id,
-            ctx.user_id,
-            [str(body.kb_id)] if body.kb_id else [],
+        # Compatibility entry point: use the same server-owned selector as
+        # GET /api/practice/next and POST /api/quiz/recommended. This keeps
+        # due-review/plan/cold-start priority in one place.
+        recommendation = await load_recommendation(
+            request,
+            ctx,
+            PracticeRequest(scope_kb_id=body.kb_id),
         )
-        if not weak:
-            # 证据不足不是"无事可做": 转 Assessment Mode 出诊断题 (§5.3 / §15)。
-            # 这里曾直接 400 NO_WEAK_POINTS, 前端据此禁用入口 —— 新用户因此永远
-            # 迈不出第一步 (要有薄弱点才能出题, 要出题才能产生薄弱点)。
-            weak = await assessment_mode_kcs(
-                ctx.tenant_id,
-                ctx.user_id,
-                [str(body.kb_id)] if body.kb_id else [],
+        if recommendation.status != "ready" or recommendation.action != "quiz":
+            if recommendation.status == "needs_upload":
+                code = recommendation.readiness_code or "NO_KC_AVAILABLE"
+            elif recommendation.status == "preparing":
+                code = "QUIZ_KC_PREPARING"
+            else:
+                code = "PRACTICE_DECISION_CHANGED"
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": code,
+                    "message": recommendation.reason,
+                    "recommendation": recommendation.to_dict(),
+                },
             )
-            quiz_mode = "assessment"
-        if not weak:
-            # 两种"出不了题"含义相反, 必须分开: KC 图为空 = 前置缺失 (去传资料);
-            # KC 都已验证掌握 = 成功状态 (确实没什么可练的)。
-            scope = [str(body.kb_id)] if body.kb_id else []
-            code = (
-                "ALL_KC_MASTERED"
-                if await has_any_kc(ctx.tenant_id, scope)
-                else "NO_KC_AVAILABLE"
+        if recommendation.source == "plan_task":
+            recommendation_plan_id = recommendation.plan_id
+            recommendation_task_key = recommendation.task_key
+            if not recommendation_plan_id or not recommendation_task_key:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": "PRACTICE_DECISION_CHANGED",
+                        "message": "练习建议已变化，请使用最新建议。",
+                        "recommendation": recommendation.to_dict(),
+                    },
+                )
+            # A legacy browser may send the task context it saw before this
+            # server-side decision was refreshed.  Omitted context is allowed,
+            # but a stale pair must not silently become another plan task.
+            if (
+                effective_plan_id is not None
+                and (
+                    str(effective_plan_id) != recommendation_plan_id
+                    or effective_task_key != recommendation_task_key
+                )
+            ):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": "PRACTICE_DECISION_CHANGED",
+                        "message": "练习建议已变化，请使用最新建议。",
+                        "recommendation": recommendation.to_dict(),
+                    },
+                )
+            try:
+                effective_plan_id = uuid.UUID(recommendation_plan_id)
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": "PRACTICE_DECISION_CHANGED",
+                        "message": "练习建议已变化，请使用最新建议。",
+                        "recommendation": recommendation.to_dict(),
+                    },
+                )
+            effective_task_key = recommendation_task_key
+        elif effective_plan_id is not None:
+            # Ordinary weak/cold-start/maintenance recommendations own no
+            # plan attribution.  Browser-supplied context is stale or forged.
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "PRACTICE_DECISION_CHANGED",
+                    "message": "练习建议已变化，请使用最新建议。",
+                    "recommendation": recommendation.to_dict(),
+                },
             )
-            raise HTTPException(status_code=409, detail=code)
-        kc_names = [w["name"] for w in weak]
+        if not recommendation.kb or not recommendation.target_kc_names:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "NO_KC_AVAILABLE",
+                    "message": "当前没有可用于练习的知识点。",
+                    "recommendation": recommendation.to_dict(),
+                },
+            )
+        effective_kb_id = uuid.UUID(recommendation.kb["id"])
+        kc_names = list(recommendation.target_kc_names)
         topic = topic or _WEAK_TOPIC
-        # ZPD 难度自适应 (P1-1): 分布由后端按掌握度算; 理由只带定性词 (P2-7)
-        difficulty_mix = adaptive_difficulty_mix(weak, body.num_questions)
-        difficulty_reasons = [
-            {
-                "kc_name": w["name"],
-                "zone": w["zone"],
-                "difficulty": w["difficulty"],
-                "reason": w["reason"],
-            }
-            for w in weak
-        ]
+        quiz_mode = {
+            "cold_start": "assessment",
+            "weak_kc": "weak_kc",
+            "mastery": "mastery",
+        }.get(recommendation.source, "practice")
+        # Preserve the historical explicit question-count input for weak-point
+        # callers. Cold-start assessment remains a fixed three-question mode.
+        effective_count = (
+            recommendation.question_count
+            if recommendation.source == "cold_start"
+            else body.num_questions
+        )
+        difficulty_mix = _difficulty_mix_from_reasons(
+            recommendation.difficulty_reasons,
+            effective_count,
+            recommendation.difficulty_mix,
+        )
+        difficulty_reasons = list(recommendation.difficulty_reasons)
         trace_prelude.append(
             {
                 "node": "weak_points",
                 "event": "weak_points_selected",
                 "mode": quiz_mode,
-                "count": len(weak),
+                "count": len(kc_names),
                 "kc_names": kc_names,
-                "p_mastery": [w["p_mastery"] for w in weak],
-                "recent_error": [w["name"] for w in weak if w["recent_error"]],
                 "difficulty_mix": difficulty_mix,
-                # §31 rationale: 让前端能直接展示"为什么是这些题", 不必自己编理由
                 "rationale": (
-                    "这些知识点还没有测过，先做一次快速验证摸清水平"
+                    "资料已经准备好，先做一次快速验证摸清起点"
                     if quiz_mode == "assessment"
-                    else "根据你的掌握度挑出最薄弱的知识点，并按难度自适应配比"
+                    else "根据近期作答挑出需要巩固的知识点，并按难度安排短练习"
+                    if quiz_mode == "weak_kc"
+                    else "已有作答记录，先做一组短练习保持熟练度"
                 ),
             }
         )
+    if (effective_plan_id is None) != (effective_task_key is None):
+        raise HTTPException(status_code=409, detail="PRACTICE_DECISION_CHANGED")
+    if effective_plan_id is not None and effective_task_key is not None:
+        async with tenant_session(ctx.tenant_id) as session:
+            try:
+                await validate_plan_task_attribution(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    plan_id=effective_plan_id,
+                    task_key=effective_task_key,
+                    source_type="quiz_attempt",
+                )
+            except PlanTaskAttributionError as exc:
+                status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
+                raise HTTPException(status_code=status, detail=exc.code) from None
     # 画像注入 (P1-2): 摘要已按 P2-7 脱敏 (定性词, 无题干原文), 供 generate 调整
     # 干扰项设计; 读画像失败一律降级为"无画像"继续出题, 不拖垮主链路
     profile_summary = ""
@@ -256,7 +332,7 @@ async def create_quiz(
         profile = await build_profile_context(
             ctx.tenant_id,
             ctx.user_id,
-            [str(body.kb_id)] if body.kb_id else [],
+            [str(effective_kb_id)] if effective_kb_id else [],
             redis=getattr(request.app.state, "redis", None),
             role="quiz",
         )
@@ -271,17 +347,17 @@ async def create_quiz(
         "request_id": getattr(request.state, "request_id", ""),
         "thread_id": thread_id,
         "confirmation_mode": body.confirmation_mode,
-        "kb_id": str(body.kb_id) if body.kb_id else "",
+        "kb_id": str(effective_kb_id) if effective_kb_id else "",
         "topic": topic,
-        "num_questions": body.num_questions,
+        "num_questions": effective_count if body.from_weak_points else body.num_questions,
         "difficulty_mix": difficulty_mix,
         "kc_names": kc_names,
         "profile_summary": profile_summary,
         "difficulty_reasons": difficulty_reasons,
     }
-    if body.plan_id is not None and body.task_key is not None:
-        payload["plan_id"] = str(body.plan_id)
-        payload["task_key"] = body.task_key
+    if effective_plan_id is not None and effective_task_key is not None:
+        payload["plan_id"] = str(effective_plan_id)
+        payload["task_key"] = effective_task_key
     return await stream_graph_run(
         runtime, "quiz", thread_id, ctx, payload, trace_prelude=trace_prelude
     )

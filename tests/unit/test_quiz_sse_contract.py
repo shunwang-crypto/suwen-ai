@@ -75,6 +75,46 @@ async def test_quiz_failure_done_v2_classifies_user_cancellation_at_confirmation
 
 
 @pytest.mark.asyncio
+async def test_quiz_selection_trace_is_qualitative_and_bounded():
+    response = await threads.stream_graph_run(
+        EndRuntime({
+            "terminal_outcome": "generation_failed",
+            "retry_count": 3,
+        }),
+        "quiz",
+        "quiz:user:local",
+        auth_context(),
+        None,
+        trace_prelude=[
+            {
+                "node": "weak_points",
+                "event": "weak_points_selected",
+                "mode": "assessment",
+                "count": 3,
+                "kc_names": ["极限", "导数"],
+                "difficulty_mix": {"easy": 1, "mid": 2, "hard": 0},
+                "rationale": "先做一次快速验证摸清起点",
+            }
+        ],
+    )
+
+    events = await collect_events(response)
+    trace = event_data(events, "trace_event")
+    assert set(trace) == {
+        "node",
+        "event",
+        "mode",
+        "count",
+        "kc_names",
+        "difficulty_mix",
+        "rationale",
+    }
+    assert "p_mastery" not in trace
+    assert "confidence" not in trace
+    assert "mastery_band" not in trace
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("outcome", "code", "stage"),
     [

@@ -222,6 +222,48 @@ async def test_weak_point_quiz_cannot_bypass_kc_readiness_barrier(client):
     assert response.json()["code"] == "QUIZ_KC_NOT_READY"
 
 
+async def test_explicit_kb_preparing_uses_preparing_barrier_code(client):
+    uid, headers = await _register(client, "quiz-kc-preparing-explicit")
+    seeded = await _seed_kb(uid, document_status="ready")
+    client._transport.app.state.settings.gateway_mode = "live"
+
+    response = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={"topic": "章节诊断", "kb_id": seeded["kb_id"], "num_questions": 1},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "QUIZ_KC_PREPARING"
+
+
+async def test_legacy_automatic_preparing_kb_uses_same_barrier_code(client):
+    uid, headers = await _register(client, "quiz-kc-preparing-auto")
+    await _seed_kb(uid, document_status="ready")
+    client._transport.app.state.settings.gateway_mode = "live"
+
+    response = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={"from_weak_points": True},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "QUIZ_KC_PREPARING"
+
+
+async def test_legacy_automatic_failed_enrichment_uses_not_ready_barrier_code(client):
+    uid, headers = await _register(client, "quiz-kc-not-ready-auto")
+    await _seed_kb(uid, document_status="failed", with_kcs=False, with_children=False)
+    client._transport.app.state.settings.gateway_mode = "live"
+
+    response = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={"from_weak_points": True},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "QUIZ_KC_NOT_READY"
+
+
 async def test_kc_resolution_is_scoped_and_never_creates_on_a_miss(client):
     uid, _headers = await _register(client, "quiz-kc-scope")
     seeded = await _seed_kb(uid)

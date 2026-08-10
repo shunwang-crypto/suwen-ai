@@ -25,6 +25,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
+import { KcDependencyPath } from "@/components/plans/kc-dependency-path";
 import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -1114,6 +1115,25 @@ export default function PlansPage() {
     Boolean(confirmedDeadline || confirmedTotalDays);
   const scopeReady = kbs.length <= 1 || Boolean(kbId);
 
+  const openDependencyTask = (taskKey: string) => {
+    if (!detail) return;
+    for (const stage of detail.structure.stages) {
+      for (const day of stage.days ?? []) {
+        const task = (day.tasks ?? []).find((item) => item.task_key === taskKey);
+        if (task) {
+          setOpenTask({
+            task,
+            stageName: stage.name,
+            day: day.day,
+            planId: detail.id,
+            planKbId: detail.kb_id,
+          });
+          return;
+        }
+      }
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
@@ -1562,6 +1582,13 @@ export default function PlansPage() {
                     )}
                   </details>
                 )}
+
+                {detail?.kc_dependency?.levels.length ? (
+                  <KcDependencyPath
+                    dependency={detail.kc_dependency}
+                    onTaskOpen={openDependencyTask}
+                  />
+                ) : null}
 
                 {detailError && (
                   <div className="mb-3">

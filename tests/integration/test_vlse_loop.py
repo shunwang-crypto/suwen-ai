@@ -205,7 +205,7 @@ async def _seed_kb(uid: str) -> dict:
         }
 
 
-async def _seed_profile(uid: str, ids: dict) -> None:
+async def _seed_profile(uid: str, ids: dict, *, error_state: str = "new") -> None:
     """薄弱点画像: 导数定义 0.24 / 极值判定 0.31 / 泰勒公式 0.92 + 一道概念混淆错题。"""
     from eduagents_api.db import tenant_session
     from eduagents_api.models import ErrorItem, MasteryRecord, Question, Quiz
@@ -232,7 +232,7 @@ async def _seed_profile(uid: str, ids: dict) -> None:
         s.add(
             ErrorItem(
                 tenant_id=tid, user_id=tid, question_id=question.id,
-                kc_ids=[ids["deriv"]], cause="concept_confusion", state="new",
+                kc_ids=[ids["deriv"]], cause="concept_confusion", state=error_state,
             )
         )
 
@@ -364,7 +364,7 @@ async def test_no_profile_no_injection(client):
 async def test_quiz_from_weak_points(client):
     uid, headers = await _register(client, "vlse-quiz")
     ids = await _seed_kb(uid)
-    await _seed_profile(uid, ids)
+    await _seed_profile(uid, ids, error_state="archived")
 
     # 预览接口 = 出题实际取的薄弱点 (所见即所练)
     r = await client.get("/api/profile/weak-points", headers=headers)
@@ -416,7 +416,19 @@ async def test_quiz_from_weak_points(client):
     ]
     assert len(weak_traces) == 1, events.get("trace_event")
     assert weak_traces[0]["kc_names"] == preview_names
-    assert "导数定义" in weak_traces[0]["recent_error"]
+    assert set(weak_traces[0]) == {
+        "node",
+        "event",
+        "mode",
+        "count",
+        "kc_names",
+        "difficulty_mix",
+        "rationale",
+    }
+    assert weak_traces[0]["mode"] == "weak_kc"
+    assert "p_mastery" not in weak_traces[0]
+    assert "confidence" not in weak_traces[0]
+    assert "mastery_band" not in weak_traces[0]
 
     # blueprint 的 kc_name 全部落在薄弱点集合内
     intr = events["interrupt"][0]
@@ -490,11 +502,10 @@ async def test_quiz_from_weak_points_empty_kb_does_not_fallback_cross_subject(cl
         headers=headers,
         json={"from_weak_points": True, "kb_id": physics_id},
     )
-    # 该库唯一的 KC 是 p=0.92 / confidence=0.6 —— 已验证掌握, 既不是薄弱点也不需要
-    # 诊断。这是成功状态而非前置缺失, 因此报 ALL_KC_MASTERED; 关键是**不得**回退到
-    # 高数库出题 (跨科目混卷才是这条测试要守的红线)。
-    assert r.status_code == 409
-    assert r.json()["code"] == "ALL_KC_MASTERED"
+    # 该库没有资料，因此必须进入 needs_upload；不能因为另一个数学库有 KC
+    # 就跨范围混卷。已有记录但资料已 ready 的 maintenance 分支由统一 selector 覆盖。
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "NO_KC_AVAILABLE"
 
 
 # ---------- ③ Reflection 对话洞察 (§5.5) ----------

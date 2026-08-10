@@ -30,7 +30,10 @@ from .plan_adjust import (
     plan_schedule_snapshot,
     task_status,
 )
-from .profile_summary import difficulty_rationale
+from .profile_summary import (
+    ASSESSMENT_CONFIDENCE_CEILING,
+    _load_weak_point_candidates,
+)
 from .services import quiz_kc_readiness
 
 Adjustment = Literal["easier", "harder", "switch_kc", "switch_kb"]
@@ -104,6 +107,26 @@ def _weak_mix(points: list[dict]) -> dict[str, int]:
     return counts
 
 
+def _difficulty_mix_from_reasons(
+    reasons: tuple[dict[str, str], ...],
+    count: int,
+    fallback: dict[str, int] | None = None,
+) -> dict[str, int]:
+    """Resize an internal qualitative target list without exposing source facts."""
+    counts = {key: 0 for key in ("easy", "mid", "hard")}
+    if reasons:
+        for index in range(max(1, count)):
+            difficulty = reasons[index % len(reasons)].get("difficulty")
+            counts[difficulty if difficulty in counts else "mid"] += 1
+        return counts
+    if fallback:
+        source = {key: max(0, int(fallback.get(key, 0))) for key in counts}
+        if sum(source.values()) == count:
+            return source
+    counts["mid"] = max(1, count)
+    return counts
+
+
 @dataclass(frozen=True, slots=True)
 class PracticeContext:
     due_count: int = 0
@@ -111,6 +134,7 @@ class PracticeContext:
     weak_points: list[dict[str, Any]] = field(default_factory=list)
     ready_kbs: list[dict[str, Any]] = field(default_factory=list)
     preparing_kbs: list[dict[str, Any]] = field(default_factory=list)
+    empty_kbs: list[dict[str, Any]] = field(default_factory=list)
     scope_options: list[dict[str, str]] = field(default_factory=list)
     adjustment: str | None = None
 
@@ -129,8 +153,14 @@ class PracticeRecommendation:
     adjustments: tuple[str, ...] = ()
     target_kc_ids: tuple[str, ...] = ()
     target_kc_names: tuple[str, ...] = ()
+    # Server-only qualitative detail for the legacy Quiz adapter.  It is
+    # deliberately absent from ``to_dict`` and contains no mastery/confidence.
+    difficulty_reasons: tuple[dict[str, str], ...] = ()
     plan_id: str | None = None
     task_key: str | None = None
+    # Internal readiness fact used by compatibility Quiz adapters.  It is not
+    # part of the public recommendation JSON.
+    readiness_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Public, bounded JSON shape; no task text or mastery decimals."""
@@ -214,6 +244,16 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
 
     if context.weak_points:
         points = list(context.weak_points[:5])
+        reasons = tuple(
+            {
+                "kc_name": str(point.get("name") or "")[:120],
+                "zone": str(point.get("zone") or "待巩固"),
+                "difficulty": str(point.get("difficulty") or "mid"),
+                "reason": str(point.get("reason") or "按近期作答情况安排练习")[:240],
+            }
+            for point in points
+            if point.get("name")
+        )
         return PracticeRecommendation(
             status="ready",
             action="quiz",
@@ -227,13 +267,22 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             adjustments=_quiz_adjustments(len(context.ready_kbs)),
             target_kc_ids=tuple(str(p["kc_id"]) for p in points if p.get("kc_id")),
             target_kc_names=tuple(str(p["name"]) for p in points if p.get("name")),
+            difficulty_reasons=reasons,
         )
 
     if len(context.ready_kbs) == 1:
         kb = context.ready_kbs[0]
         names = tuple(str(x) for x in (kb.get("kc_names") or [])[:3])
         ids = tuple(str(x) for x in (kb.get("kc_ids") or [])[:3])
-        if kb.get("has_mastery"):
+        assessment = [
+            item
+            for item in (kb.get("assessment_kcs") or [])
+            if isinstance(item, dict) and item.get("id") and item.get("name")
+        ][:3]
+        if assessment:
+            ids = tuple(str(item["id"]) for item in assessment)
+            names = tuple(str(item["name"]) for item in assessment)
+        if kb.get("has_mastery") and not assessment:
             all_names = tuple(str(x) for x in (kb.get("kc_names") or [])[:5])
             all_ids = tuple(str(x) for x in (kb.get("kc_ids") or [])[:5])
             return PracticeRecommendation(
@@ -263,6 +312,15 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             adjustments=_quiz_adjustments(len(context.ready_kbs)),
             target_kc_ids=ids,
             target_kc_names=names,
+            difficulty_reasons=tuple(
+                {
+                    "kc_name": name,
+                    "zone": "未验证",
+                    "difficulty": "mid",
+                    "reason": f"「{name}」尚未测过，先做一次快速验证",
+                }
+                for name in names
+            ),
         )
 
     if len(context.ready_kbs) > 1:
@@ -290,6 +348,19 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             reason="资料已收到，系统正在整理知识点；完成后会自动准备第一组练习。",
             question_count=0,
             kb=_kb_public(kb),
+        )
+
+    if context.empty_kbs:
+        kb = context.empty_kbs[0]
+        return PracticeRecommendation(
+            status="needs_upload",
+            action="upload",
+            source="sample",
+            title="先上传这份资料",
+            reason="这份知识库还没有可用资料；上传后才能建立章节知识点和练习。",
+            question_count=0,
+            kb=_kb_public(kb),
+            readiness_code=kb.get("_readiness_code"),
         )
 
     return PracticeRecommendation(
@@ -345,6 +416,7 @@ async def _ready_kb_snapshots(session, *, gateway_mode: str, org_ids=()):
     rows = (await session.scalars(select(KnowledgeBase).order_by(KnowledgeBase.created_at))).all()
     ready: list[dict[str, Any]] = []
     preparing: list[dict[str, Any]] = []
+    empty: list[dict[str, Any]] = []
     for kb in rows:
         readiness = await quiz_kc_readiness(
             session,
@@ -362,21 +434,40 @@ async def _ready_kb_snapshots(session, *, gateway_mode: str, org_ids=()):
                     )
                 )
             ).all()
-            kc_rows.sort(key=lambda row: str(row.id))
+            kc_rows.sort(key=lambda row: (row.created_at, str(row.id)))
             public["kc_ids"] = [str(row.id) for row in kc_rows]
             public["kc_names"] = [row.canonical_name for row in kc_rows]
-            public["has_mastery"] = bool(
-                await session.scalar(
-                    select(MasteryRecord.id).where(
-                        MasteryRecord.user_id == session.info.get("user_id"),
-                        MasteryRecord.kc_id.in_([row.id for row in kc_rows]),
-                    ).limit(1)
-                )
-            ) if session.info.get("user_id") else False
+            mastery_rows = []
+            if session.info.get("user_id"):
+                mastery_rows = (
+                    await session.execute(
+                        select(MasteryRecord.kc_id, MasteryRecord.confidence).where(
+                            MasteryRecord.user_id == session.info["user_id"],
+                            MasteryRecord.kc_id.in_([row.id for row in kc_rows]),
+                        )
+                    )
+                ).all()
+            confidence_by_kc = {
+                str(kc_id): float(confidence or 0.0)
+                for kc_id, confidence in mastery_rows
+            }
+            public["has_mastery"] = bool(mastery_rows)
+            # Internal selector facts only.  PracticeRecommendation.to_dict()
+            # never serializes this list or the confidence values behind it.
+            public["assessment_kcs"] = [
+                {"id": str(row.id), "name": row.canonical_name}
+                for row in kc_rows
+                if confidence_by_kc.get(str(row.id), 0.0) < ASSESSMENT_CONFIDENCE_CEILING
+            ]
             ready.append(public)
         elif readiness.status == "preparing":
             preparing.append(public)
-    return ready, preparing
+        elif readiness.status == "not_applicable":
+            empty.append(public)
+        elif readiness.status == "not_ready":
+            public["_readiness_code"] = readiness.code or "QUIZ_KC_NOT_READY"
+            empty.append(public)
+    return ready, preparing, empty
 
 
 async def recommend_practice(
@@ -416,7 +507,7 @@ async def recommend_practice(
     # the recommendation response.
     session.info["user_id"] = user_id
     session.info["tenant_id"] = tenant_id
-    ready, preparing = await _ready_kb_snapshots(
+    ready, preparing, empty = await _ready_kb_snapshots(
         session, gateway_mode=gateway_mode, org_ids=org_ids
     )
     if scope_kb_id is not None:
@@ -425,6 +516,10 @@ async def recommend_practice(
             if any(kb["id"] == str(scope_kb_id) for kb in preparing):
                 return build_recommendation(
                     PracticeContext(preparing_kbs=[next(kb for kb in preparing if kb["id"] == str(scope_kb_id))])
+                )
+            if any(kb["id"] == str(scope_kb_id) for kb in empty):
+                return build_recommendation(
+                    PracticeContext(empty_kbs=[next(kb for kb in empty if kb["id"] == str(scope_kb_id))])
                 )
             raise LookupError("KB_NOT_FOUND")
         ready_for_decision = [selected]
@@ -461,7 +556,9 @@ async def recommend_practice(
             # normal weak/cold/upload branch explain the current state.
             task_context = None
 
-    weak_points = await _load_weak_points(session, user_id, ready_for_decision)
+    weak_points = await _load_weak_points(
+        session, tenant_id, user_id, ready_for_decision
+    )
     scope_options = tuple({"id": kb["id"], "name": kb["name"]} for kb in ready)
     base_context = PracticeContext(
         due_count=len(due_rows),
@@ -469,6 +566,7 @@ async def recommend_practice(
         weak_points=weak_points,
         ready_kbs=ready_for_decision,
         preparing_kbs=preparing,
+        empty_kbs=empty,
         scope_options=scope_options,
     )
 
@@ -526,6 +624,12 @@ async def recommend_practice(
                         )
                         if str(kc_id) not in previous_kc_ids
                     ],
+                    "assessment_kcs": [
+                        item
+                        for item in previous_kb.get("assessment_kcs", [])
+                        if isinstance(item, dict)
+                        and str(item.get("id")) not in previous_kc_ids
+                    ],
                 }
             ]
         decision_weak_points = [
@@ -549,7 +653,7 @@ async def recommend_practice(
                 ),
             )
         decision_weak_points = await _load_weak_points(
-            session, user_id, decision_ready_for_decision
+            session, tenant_id, user_id, decision_ready_for_decision
         )
 
     if adjustment == "switch_kb" and previous_quiz is not None:
@@ -569,7 +673,7 @@ async def recommend_practice(
                 ),
             )
         decision_weak_points = await _load_weak_points(
-            session, user_id, decision_ready_for_decision
+            session, tenant_id, user_id, decision_ready_for_decision
         )
 
     try:
@@ -580,6 +684,7 @@ async def recommend_practice(
                 weak_points=decision_weak_points,
                 ready_kbs=decision_ready_for_decision,
                 preparing_kbs=preparing,
+                empty_kbs=empty,
                 scope_options=scope_options,
                 adjustment=adjustment,
             )
@@ -598,31 +703,12 @@ async def _due_rows(session, user_id, now_dt):
     return await due_error_items(session, user_id, now_dt)
 
 
-async def _load_weak_points(session, user_id, ready_kbs):
+async def _load_weak_points(session, tenant_id, user_id, ready_kbs):
     if not ready_kbs:
         return []
-    from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD
-
-    kb_ids = [uuid.UUID(kb["id"]) for kb in ready_kbs]
-    rows = (
-        await session.execute(
-            select(MasteryRecord.kc_id, MasteryRecord.p_mastery, KnowledgeComponent.canonical_name)
-            .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
-            .where(
-                MasteryRecord.user_id == user_id,
-                KnowledgeComponent.kb_id.in_(kb_ids),
-                MasteryRecord.p_mastery < QUIZ_WEAK_THRESHOLD,
-            )
-            .order_by(MasteryRecord.p_mastery.asc())
-            .limit(5)
-        )
-    ).all()
-    return [
-        {
-            "kc_id": str(kc_id),
-            "name": name,
-            "p_mastery": float(p_mastery),
-            **difficulty_rationale(name, float(p_mastery), False),
-        }
-        for kc_id, p_mastery, name in rows
-    ]
+    return await _load_weak_point_candidates(
+        session,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kb_ids=[kb["id"] for kb in ready_kbs],
+    )

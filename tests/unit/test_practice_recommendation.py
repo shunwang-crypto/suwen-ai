@@ -76,6 +76,25 @@ def test_cold_start_is_three_questions_with_fixed_mix_and_real_kcs():
     assert recommendation.adjustments == ("easier", "harder", "switch_kc")
 
 
+def test_low_confidence_kcs_stay_in_assessment_mode_before_maintenance():
+    kb = _kb()
+    kb["has_mastery"] = True
+    kb["assessment_kcs"] = [
+        {"id": kb["kc_ids"][1], "name": kb["kc_names"][1]},
+        {"id": kb["kc_ids"][2], "name": kb["kc_names"][2]},
+    ]
+
+    recommendation = build_recommendation(PracticeContext(ready_kbs=[kb]))
+
+    assert recommendation.source == "cold_start"
+    assert recommendation.question_count == 3
+    assert recommendation.target_kc_ids == tuple(kb["kc_ids"][1:])
+    public = recommendation.to_dict()
+    assert "p_mastery" not in public
+    assert "confidence" not in public
+    assert "mastery_band" not in public
+
+
 def test_adjustment_cannot_repeat_when_no_difficulty_step_remains():
     with pytest.raises(ValueError, match="无法继续"):
         _adjust_mix({"easy": 3, "mid": 0, "hard": 0}, "easier")

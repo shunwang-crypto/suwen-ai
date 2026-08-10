@@ -24,6 +24,8 @@ docs/evidence/*
 !docs/evidence/README.md
 !docs/evidence/production-2026-08-09/
 !docs/evidence/production-2026-08-09/**
+!docs/evidence/ai-first-remaining-local-2026-08-10/
+!docs/evidence/ai-first-remaining-local-2026-08-10/**
 cassettes/
 **/cassettes/
 uploads/

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import defaultdict
 from typing import Literal
 
-from eduagents_core.kc.dag import topological_order
+from eduagents_core.kc.dag import add_edge_safe, topological_order, validate_acyclic
 from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -172,6 +173,146 @@ def _kc_order_from_edges(
     constrained = {name for e in edges for name in (e.from_kc, e.to_kc)}
     ordered_names = [name for name in names_by_id.values() if name in constrained]
     return topological_order(ordered_names, edges)
+
+
+def _build_kc_dependency(
+    structure: dict | None,
+    kc_rows: list[tuple[uuid.UUID | str, str]],
+    edge_rows: list[tuple[uuid.UUID | str, uuid.UUID | str]],
+    locks: dict[str, dict] | None = None,
+) -> dict:
+    """Build a read-only, task-scoped KC dependency view.
+
+    ``kc_rows`` is already in stable database order.  Tasks are matched to
+    canonical names only inside the plan's KB; prerequisite closure is then
+    expanded over real ``KcEdge`` ids.  The helper is deliberately pure so
+    malformed data can be covered without a database or a browser.
+    """
+    names_by_id: dict[str, str] = {}
+    id_by_name: dict[str, str] = {}
+    for raw_id, name in kc_rows:
+        kc_id = str(raw_id)
+        if not kc_id or not isinstance(name, str) or not name.strip():
+            continue
+        names_by_id.setdefault(kc_id, name)
+        id_by_name.setdefault(normalize_kc_name(name), kc_id)
+    if not names_by_id:
+        return {"levels": [], "edges": []}
+
+    task_keys_by_kc: dict[str, list[str]] = defaultdict(list)
+    task_statuses_by_kc: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for stage_index, day_index, task_index, _stage, _day, task in iter_tasks(structure):
+        task_key = make_task_key(stage_index, day_index, task_index)
+        status = task_status(task)
+        seen_in_task: set[str] = set()
+        for raw_name in task.get("kc_names") or []:
+            if not isinstance(raw_name, str):
+                continue
+            kc_id = id_by_name.get(normalize_kc_name(raw_name))
+            if not kc_id or kc_id in seen_in_task:
+                continue
+            seen_in_task.add(kc_id)
+            task_keys_by_kc[kc_id].append(task_key)
+            task_statuses_by_kc[kc_id].append({"task_key": task_key, "status": status})
+
+    direct_ids = set(task_keys_by_kc)
+    if not direct_ids:
+        return {"levels": [], "edges": []}
+
+    raw_edges: list[PrereqEdge] = []
+    for raw_from, raw_to in edge_rows:
+        from_id, to_id = str(raw_from), str(raw_to)
+        if (
+            from_id in names_by_id
+            and to_id in names_by_id
+            and from_id != to_id
+        ):
+            raw_edges.append(PrereqEdge(from_kc=from_id, to_kc=to_id))
+
+    # Existing storage may contain a cycle despite write-time validation.  A
+    # stable, incrementally accepted edge set gives the UI a safe degraded
+    # view and keeps the bad row from turning a plan detail into HTTP 500.
+    if not validate_acyclic(raw_edges):
+        log.warning(
+            "plan_kc_dependency_cycle",
+            node_count=len(names_by_id),
+            edge_count=len(raw_edges),
+        )
+    safe_edges: list[PrereqEdge] = []
+    for edge in raw_edges:
+        if not add_edge_safe(safe_edges, edge):
+            log.warning("plan_kc_dependency_edge_ignored", reason="cycle_or_self_edge")
+
+    included_ids = set(direct_ids)
+    changed = True
+    while changed:
+        changed = False
+        for edge in safe_edges:
+            if edge.to_kc in included_ids and edge.from_kc not in included_ids:
+                included_ids.add(edge.from_kc)
+                changed = True
+
+    stable_ids = [kc_id for kc_id in names_by_id if kc_id in included_ids]
+    scoped_edges = [
+        edge
+        for edge in safe_edges
+        if edge.from_kc in included_ids and edge.to_kc in included_ids
+    ]
+    ordered_ids = topological_order(stable_ids, scoped_edges)
+    order_index = {kc_id: index for index, kc_id in enumerate(ordered_ids)}
+
+    depth: dict[str, int] = {kc_id: 0 for kc_id in ordered_ids}
+    outgoing: dict[str, list[str]] = defaultdict(list)
+    for edge in scoped_edges:
+        outgoing[edge.from_kc].append(edge.to_kc)
+    for kc_id in ordered_ids:
+        for target in outgoing.get(kc_id, []):
+            depth[target] = max(depth[target], depth[kc_id] + 1)
+
+    blocking_by_kc: dict[str, list[str]] = defaultdict(list)
+    for task_key, lock in (locks or {}).items():
+        for blocker in lock.get("blockers") or []:
+            if not isinstance(blocker, dict):
+                continue
+            raw_name = blocker.get("kc_name")
+            if not isinstance(raw_name, str):
+                continue
+            kc_id = id_by_name.get(normalize_kc_name(raw_name))
+            if kc_id and task_key not in blocking_by_kc[kc_id]:
+                blocking_by_kc[kc_id].append(task_key)
+
+    nodes_by_id: dict[str, dict] = {}
+    for kc_id in ordered_ids:
+        task_keys = task_keys_by_kc.get(kc_id, [])
+        blocking_task_keys = blocking_by_kc.get(kc_id, [])
+        nodes_by_id[kc_id] = {
+            "kc_id": kc_id,
+            "kc_name": names_by_id[kc_id],
+            "task_keys": list(task_keys),
+            "task_statuses": list(task_statuses_by_kc.get(kc_id, [])),
+            "is_current_task": bool(task_keys),
+            "is_prerequisite": not bool(task_keys),
+            "is_blocking": bool(blocking_task_keys),
+            "blocking_task_keys": list(blocking_task_keys),
+        }
+
+    levels_by_index: dict[int, list[str]] = defaultdict(list)
+    for kc_id in ordered_ids:
+        levels_by_index[depth[kc_id]].append(kc_id)
+    levels = [
+        {
+            "index": level_index,
+            "nodes": [nodes_by_id[kc_id] for kc_id in sorted(node_ids, key=order_index.get)],
+        }
+        for level_index, node_ids in sorted(levels_by_index.items())
+    ]
+    return {
+        "levels": levels,
+        "edges": [
+            {"from_kc_id": edge.from_kc, "to_kc_id": edge.to_kc}
+            for edge in scoped_edges
+        ],
+    }
 
 
 async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str, float], list[str]]:
@@ -379,6 +520,41 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
     return compute_task_locks(plan.structure_json, mastery_by_kc, prereq_by_kc)
 
 
+async def _load_kc_dependency(
+    session, plan: Plan, locks: dict[str, dict] | None = None
+) -> dict:
+    """Load real KC rows/edges and derive only the current plan's dependency closure."""
+    if plan.kb_id is None:
+        return {"levels": [], "edges": []}
+    kc_rows = (
+        await session.execute(
+            select(KnowledgeComponent.id, KnowledgeComponent.canonical_name)
+            .where(KnowledgeComponent.kb_id == plan.kb_id)
+            .order_by(KnowledgeComponent.created_at.asc(), KnowledgeComponent.id.asc())
+        )
+    ).all()
+    if not kc_rows:
+        return {"levels": [], "edges": []}
+    kc_ids = [kc_id for kc_id, _name in kc_rows]
+    edge_rows = (
+        await session.execute(
+            select(KcEdge.from_kc, KcEdge.to_kc)
+            .where(
+                KcEdge.type == "prerequisite",
+                KcEdge.from_kc.in_(kc_ids),
+                KcEdge.to_kc.in_(kc_ids),
+            )
+            .order_by(KcEdge.id.asc())
+        )
+    ).all()
+    return _build_kc_dependency(
+        plan.structure_json,
+        [(str(kc_id), name) for kc_id, name in kc_rows],
+        [(str(from_kc), str(to_kc)) for from_kc, to_kc in edge_rows],
+        locks,
+    )
+
+
 async def _plan_detail(session, plan: Plan, today) -> dict:
     resource_rows = (
         await session.scalars(
@@ -390,6 +566,7 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
     resources = {str(row.id): _plan_resource_public(row) for row in resource_rows}
     kb = await session.get(KnowledgeBase, plan.kb_id) if plan.kb_id else None
     locks = await _load_task_locks(session, plan)
+    kc_dependency = await _load_kc_dependency(session, plan, locks)
     structure = enrich_structure(plan.structure_json, resources, locks)
     schedule = plan_schedule_snapshot(
         plan.created_at.astimezone(CN_TZ).date(), plan.structure_json, today
@@ -405,6 +582,7 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
         "resources": list(resources.values()),
         "schedule": schedule,
         "progress": plan_progress(plan.structure_json),
+        "kc_dependency": kc_dependency,
         "created_at": plan.created_at,
     }
 

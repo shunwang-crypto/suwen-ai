@@ -179,12 +179,16 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
   system prompt，并下发 `trace_event {type:"profile", weak_points:[], chars}`；
   **有画像时答案语义缓存禁用**（答案已按该学生个性化，跨用户复用即错答案）。
   SSE `done` 之后每会话每 5 轮入队一次后台 Reflection。
-- `POST /api/quiz` 请求体新增 `from_weak_points: bool`（true 时后端按掌握度自动填
+- `POST /api/quiz` 请求体新增 `from_weak_points: bool`（true 时兼容路径委托同一服务端练习推荐，自动填
   `kc_names`，`topic` 可省略并缺省为“薄弱点强化练习”，入图前先行下发
-  `trace_event {node:"weak_points", event:"weak_points_selected", kc_names, p_mastery, recent_error}`；
-  无薄弱点 → `400 NO_WEAK_POINTS`，不静默降级成普通出题）。
+  `trace_event {node:"weak_points", event:"weak_points_selected", mode, count, kc_names, difficulty_mix, rationale}`；
+  trace 不含 `p_mastery`、`confidence` 或 `mastery_band`。若推荐命中 `plan_task`，计划归因由
+  recommendation 的 `plan_id/task_key` 服务端回填并在入图前校验；浏览器带来的过期任务不会静默切换，
+  其他 weak/cold-start/maintenance 分支不携带计划归因。KC enrichment 进行中返回 `409 QUIZ_KC_PREPARING`，
+  已终止或无合法 KC 返回 `409 QUIZ_KC_NOT_READY`）。
 - `GET /api/profile/weak-points[?kb_id=]` → `{threshold, limit, weak_points:[{kc_id, name,
-  p_mastery, recent_error}]}`；与出题走同一函数，预览即所练。
+  p_mastery, recent_error}]}`；与出题共享同一个服务端薄弱 KC 候选 loader（近 7 天 verified 错题优先，
+  再按 p_mastery 升序和稳定 KC 顺序），预览即所练；精确 p_mastery 只保留在该鉴权画像接口。
 - 对话洞察由 worker `reflect_session(tenant_id, user_id, session_id)` 异步写画像：
   mastery_log `evidence_type="chat_reflection"`、`weight=0.3`（弱于测评 1.0 / 辅导小结 0.5），
   stub 网关下跳过。
@@ -202,7 +206,7 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
 | POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
 | POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认，服务端不再静默补默认值；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。服务端重新校验 KB 访问、任务结构与资源引用 |
 | GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
-| GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}` 与 `progress{total,done,ratio}` |
+| GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges}`。`kc_dependency` 只包含当前计划任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_keys/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_keys`，不含 `p_mastery`/`confidence`；空图返回空 `levels/edges`，不写回计划结构。 |
 | GET | /api/plans/{id}/tasks/{task_key}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_key`；任务文字不进入 URL，非法或他人任务统一 404 |
 | POST | /api/plans/{id}/tasks/{task_key}/toggle | {done?} 勾选/取消任务（缺省取反）；done 内嵌 structure_json，不另建列 |
 | POST | /api/plans/{id}/tasks/{task_key}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |

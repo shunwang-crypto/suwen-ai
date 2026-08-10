@@ -643,6 +643,32 @@ export interface PlanSchedule {
   upcoming_tasks: string[];
 }
 
+export interface PlanKcDependencyTaskStatus {
+  task_key: string;
+  status: "pending" | "done" | "skipped";
+}
+
+export interface PlanKcDependencyNode {
+  kc_id: string;
+  kc_name: string;
+  task_keys: string[];
+  task_statuses: PlanKcDependencyTaskStatus[];
+  is_current_task: boolean;
+  is_prerequisite: boolean;
+  is_blocking: boolean;
+  blocking_task_keys: string[];
+}
+
+export interface PlanKcDependencyLevel {
+  index: number;
+  nodes: PlanKcDependencyNode[];
+}
+
+export interface PlanKcDependency {
+  levels: PlanKcDependencyLevel[];
+  edges: Array<{ from_kc_id: string; to_kc_id: string }>;
+}
+
 export interface PlanDetail {
   id: string;
   goal: string;
@@ -654,6 +680,8 @@ export interface PlanDetail {
   resources: PlanResource[];
   schedule?: PlanSchedule;
   progress: PlanProgress;
+  /** 只读的当前计划 KC 及递归先修闭包；不含掌握度数值。 */
+  kc_dependency?: PlanKcDependency;
   created_at: string;
 }
 

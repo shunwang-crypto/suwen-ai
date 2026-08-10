@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from eduagents_api.db import tenant_session
-from eduagents_api.models import Plan, Question, Quiz
+from eduagents_api.models import ErrorItem, MasteryRecord, Plan, Question, Quiz
 from eduagents_api.practice_recommendation import recommend_practice
+from sqlalchemy import select
 
 from .conftest import requires_services
 from .test_quiz_kc_loop import _LoopGateway, _register, _seed_kb, _sse
@@ -91,6 +93,310 @@ async def test_recommended_cold_start_uses_auto_confirmation_and_real_kcs(client
     questions = events["done"][0]["result"]["questions"]
     assert len(questions) == 3
     assert all(question["kc_ids"] for question in questions)
+
+
+async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client):
+    """The compatibility entry point must persist the selected plan task."""
+    uid, headers = await _register(client, "practice-legacy-plan")
+    seeded = await _seed_kb(uid)
+    user_id = uuid.UUID(uid)
+    async with tenant_session(user_id) as session:
+        plan = Plan(
+            tenant_id=user_id,
+            user_id=user_id,
+            kb_id=uuid.UUID(seeded["kb_id"]),
+            goal="按章节完成计划",
+            structure_json={
+                "stages": [{
+                    "name": "基础",
+                    "days": [{
+                        "day": 1,
+                        "tasks": [{
+                            "title": "章节一练习",
+                            "action_type": "practice",
+                            "kc_names": ["章节一"],
+                            "practice_count": 3,
+                        }],
+                    }],
+                }],
+            },
+        )
+        session.add(plan)
+        await session.flush()
+        plan_id = str(plan.id)
+
+    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_core.config import get_settings
+    from eduagents_core.gateway import ChatResult
+    from eduagents_core.graphs.state import GraphDeps
+
+    class PlanGateway:
+        async def chat(self, request):
+            if request.feature == "quiz_blueprint":
+                payload = {
+                    "items": [
+                        {"kc_name": "章节一", "type": "single", "difficulty": "mid"}
+                        for _ in range(3)
+                    ],
+                    "summary": "章节一计划练习",
+                }
+            elif request.feature == "quiz_verify":
+                payload = {"issues": [], "summary": "题目质量合格"}
+            else:
+                payload = {
+                    "questions": [
+                        {
+                            "type": "single",
+                            "stem": f"章节一第 {index} 题",
+                            "options": ["A", "B", "C", "D"],
+                            "answer": "A",
+                            "explanation": "章节一基础概念。",
+                            "kc_names": ["章节一"],
+                            "difficulty": "mid",
+                            "source_hint": None,
+                        }
+                        for index in range(3)
+                    ]
+                }
+            return ChatResult(
+                text=__import__("json").dumps(payload, ensure_ascii=False),
+                model="legacy-plan-test",
+                tier=request.tier.value,
+                prompt_tokens=1,
+                completion_tokens=1,
+                cost_cny=0.0,
+                latency_ms=1,
+                mode="stub",
+            )
+
+    app = client._transport.app
+    app.state.settings.gateway_mode = "stub"
+    settings = get_settings()
+    runtime = GraphRuntime(
+        settings,
+        GraphDeps(settings=settings, gateway=PlanGateway(), retrieval=None, web_search=None),
+    )
+    await runtime.start()
+    previous = app.state.graphs
+    app.state.graphs = runtime
+    try:
+        events = await _sse(
+            client,
+            "/api/quiz",
+            headers,
+            {"from_weak_points": True, "num_questions": 3},
+        )
+        if "interrupt" in events:
+            interrupt = events["interrupt"][0]
+            events = await _sse(
+                client,
+                interrupt["resume_url"],
+                headers,
+                {"value": {"approved": True}},
+            )
+    finally:
+        app.state.graphs = previous
+        await runtime.stop()
+
+    assert "done" in events, events
+    done = events["done"][0]
+    assert done["outcome"] == "succeeded", events
+    quiz_id = done["result"]["quiz_id"]
+    async with tenant_session(user_id) as session:
+        quiz = await session.get(Quiz, uuid.UUID(quiz_id))
+        assert quiz is not None
+        assert quiz.blueprint_json["_plan_task_attribution"] == {
+            "plan_id": plan_id,
+            "task_key": "stage0.day0.task0",
+        }
+        questions = (await session.scalars(
+            select(Question).where(Question.quiz_id == quiz.id)
+        )).all()
+        assert len(questions) == 3
+        question_ids = [str(question.id) for question in questions]
+
+    submitted = await client.post(
+        f"/api/quiz/{quiz_id}/attempts",
+        headers=headers,
+        json={
+            "answers": [
+                {"question_id": question_id, "response": "A"}
+                for question_id in question_ids
+            ]
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    completion = submitted.json()["plan_task_completion"]
+    assert completion["completed"] is True
+    assert completion["task_key"] == "stage0.day0.task0"
+
+
+async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_changes(
+    client, monkeypatch
+):
+    uid, headers = await _register(client, "practice-legacy-stale-plan")
+    seeded = await _seed_kb(uid)
+    user_id = uuid.UUID(uid)
+    now = datetime.now(UTC)
+    async with tenant_session(user_id) as session:
+        old_plan = Plan(
+            tenant_id=user_id,
+            user_id=user_id,
+            kb_id=uuid.UUID(seeded["kb_id"]),
+            goal="旧计划",
+            created_at=now,
+            structure_json={
+                "stages": [{"name": "旧", "days": [{"day": 1, "tasks": [{
+                    "title": "旧任务", "action_type": "practice", "kc_names": ["章节一"]
+                }]}]}],
+            },
+        )
+        new_plan = Plan(
+            tenant_id=user_id,
+            user_id=user_id,
+            kb_id=uuid.UUID(seeded["kb_id"]),
+            goal="新计划",
+            created_at=now + timedelta(seconds=1),
+            structure_json={
+                "stages": [{"name": "新", "days": [{"day": 1, "tasks": [{
+                    "title": "新任务", "action_type": "practice", "kc_names": ["章节二"]
+                }]}]}],
+            },
+        )
+        session.add_all([old_plan, new_plan])
+        await session.flush()
+        old_plan_id = str(old_plan.id)
+
+    app = client._transport.app
+    app.state.settings.gateway_mode = "stub"
+
+    async def unexpected_graph(*_args, **_kwargs):
+        pytest.fail("stale legacy plan must be rejected before entering the Quiz graph")
+
+    monkeypatch.setattr("eduagents_api.routers.quiz.stream_graph_run", unexpected_graph)
+    response = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={
+            "from_weak_points": True,
+            "plan_id": old_plan_id,
+            "task_key": "stage0.day0.task0",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "PRACTICE_DECISION_CHANGED"
+
+
+async def test_legacy_non_plan_recommendation_does_not_add_plan_payload(client, monkeypatch):
+    uid, headers = await _register(client, "practice-legacy-no-plan")
+    await _seed_kb(uid)
+    app = client._transport.app
+    app.state.settings.gateway_mode = "stub"
+    captured: dict = {}
+
+    async def capture_payload(_runtime, _kind, _thread_id, _ctx, payload, **_kwargs):
+        captured.update(payload)
+        return {"captured": True}
+
+    monkeypatch.setattr("eduagents_api.routers.quiz.stream_graph_run", capture_payload)
+    response = await client.post(
+        "/api/quiz",
+        headers=headers,
+        json={"from_weak_points": True, "num_questions": 3},
+    )
+    assert response.status_code == 200, response.text
+    assert "plan_id" not in captured
+    assert "task_key" not in captured
+
+
+async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_error_order(client):
+    uid, headers = await _register(client, "practice-weak-order")
+    seeded = await _seed_kb(uid)
+    user_id = uuid.UUID(uid)
+    async with tenant_session(user_id) as session:
+        session.add_all([
+            MasteryRecord(
+                tenant_id=user_id,
+                user_id=user_id,
+                kc_id=uuid.UUID(seeded["kc_1"]),
+                p_mastery=0.18,
+                confidence=0.8,
+            ),
+            MasteryRecord(
+                tenant_id=user_id,
+                user_id=user_id,
+                kc_id=uuid.UUID(seeded["kc_2"]),
+                p_mastery=0.32,
+                confidence=0.8,
+            ),
+        ])
+        quiz = Quiz(tenant_id=user_id, user_id=user_id, title="近期错题", status="ready")
+        session.add(quiz)
+        await session.flush()
+        question = Question(
+            tenant_id=user_id,
+            quiz_id=quiz.id,
+            type="single",
+            stem="章节二题",
+            options_json=["A", "B"],
+            answer="A",
+            explanation="",
+            kc_ids=[seeded["kc_2"]],
+        )
+        session.add(question)
+        await session.flush()
+        session.add(ErrorItem(
+            tenant_id=user_id,
+            user_id=user_id,
+            question_id=question.id,
+            kc_ids=[seeded["kc_2"]],
+            state="archived",
+            verification_status="verified",
+        ))
+
+    app = client._transport.app
+    app.state.settings.gateway_mode = "stub"
+    preview = await client.get("/api/profile/weak-points", headers=headers)
+    assert preview.status_code == 200, preview.text
+    preview_names = [item["name"] for item in preview.json()["weak_points"]]
+    assert preview_names[:2] == ["章节二", "章节一"]
+
+    async with tenant_session(user_id) as session:
+        recommendation = await recommend_practice(
+            session,
+            tenant_id=user_id,
+            user_id=user_id,
+            gateway_mode="stub",
+            now_dt=datetime.now(UTC),
+        )
+    assert list(recommendation.target_kc_names[:2]) == preview_names[:2]
+    assert all(key not in str(recommendation.to_dict()) for key in ("p_mastery", "confidence", "mastery_band"))
+
+    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_core.config import get_settings
+    from eduagents_core.graphs.state import GraphDeps
+
+    settings = get_settings()
+    runtime = GraphRuntime(
+        settings,
+        GraphDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
+    )
+    await runtime.start()
+    previous = app.state.graphs
+    app.state.graphs = runtime
+    try:
+        events = await _sse(
+            client,
+            "/api/quiz",
+            headers,
+            {"from_weak_points": True, "num_questions": 2},
+        )
+    finally:
+        app.state.graphs = previous
+        await runtime.stop()
+
+    selected = [event for event in events["trace_event"] if event.get("event") == "weak_points_selected"]
+    assert selected[0]["kc_names"] == preview_names
 
 
 async def test_plan_task_switch_kc_overrides_plan_default_and_changes_target(client):
