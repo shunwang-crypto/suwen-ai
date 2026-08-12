@@ -67,3 +67,23 @@ def test_check_repository_rejects_links_outside_repository(tmp_path: Path) -> No
     )
 
     assert errors == ["docs/guide.md:1: link escapes repository: ../../outside.md"]
+
+
+def test_check_repository_rejects_noncanonical_docs_artifacts_when_enabled(tmp_path: Path) -> None:
+    _write(tmp_path / "docs/README.md")
+    _write(tmp_path / "docs/old-implementation-prompt.md")
+    (tmp_path / "docs/stale-screenshot.png").write_bytes(b"stale")
+
+    errors = check_repository(
+        tmp_path,
+        active_documents=("docs/README.md",),
+        require_core_index=False,
+        enforce_canonical_docs=True,
+    )
+
+    assert errors == [
+        "docs/old-implementation-prompt.md: non-canonical docs artifact; merge current facts "
+        "into the documentation index or move generated output outside the repository",
+        "docs/stale-screenshot.png: non-canonical docs artifact; merge current facts "
+        "into the documentation index or move generated output outside the repository",
+    ]

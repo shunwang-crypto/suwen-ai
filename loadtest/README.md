@@ -273,7 +273,7 @@ stub 档要求 < 1%; live 档断流 (未收到 `event: done`) 要求为 0。
 ```bash
 /home/shunw/miniforge3/envs/eduagents/bin/python - <<'PY'
 import csv, glob
-path = sorted(glob.glob("docs/evidence/m5/loadtest_stub_*_stats.csv"))[-1]
+path = sorted(glob.glob("/tmp/eduagents-evidence/loadtest_stub_*_stats.csv"))[-1]
 for row in csv.DictReader(open(path)):
     if row["Name"] in ("chat_ttfe", "chat_ttft", "chat_stream_total") or "chat" in row["Name"]:
         print(f'{row["Name"]:<24} n={row["Request Count"]:>6} '

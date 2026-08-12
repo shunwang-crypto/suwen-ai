@@ -1,7 +1,7 @@
-# 扩展性演进路径 (§7) — 现在 → 十万级 → 亿级
+# 扩展性演进路径：现在 → 十万级 → 亿级
 
-> 纪律 (提示词 §2): **绝不宣称"支撑亿级"**, 只宣称"按可演进到亿级的架构原则设计,
-> 并用当前量级的真实数据证明每一个决策"。本文"现状"列如实描述单机事实,
+> 纪律：**绝不宣称“支撑亿级”**，只描述可演进的架构原则，
+> 并用当前量级的真实数据证明每一个决策。本文“现状”列如实描述单机事实，
 > 不把论证写成已实现。
 >
 > 历史压测和评测输出已在上线前清除。当前没有可引用的生产并发基线；正式环境建立后，
@@ -19,17 +19,14 @@
 | 队列 | Redis + ARQ (asyncio 原生, 与 FastAPI 同并发模型, §4.2 选型) | 仍是 Redis——单 Redis 队列在此量级远未饱和 | 迁 Kafka: 任务 payload 协议不变, 生产/消费两端各换一个适配器; 保序需求按 tenant_id 分区 | enqueue 调用点集中在 API/worker 边界, 无业务代码直连队列实现 |
 | 对象存储 | 开发用本地目录 (`~/.local/share/eduagents/objects`), 部署用 MinIO | MinIO 分布式模式 (4 节点纠删码) | 直接换云对象存储——S3 协议零改动 (§4.2 选 MinIO 的理由), 按 `tenant_id/kb_id/` 前缀 + 预签名 URL 不变 | 存储层已抽象 (`packages/core/src/eduagents_core/storage.py` / `storage_minio.py`) |
 | 租户模型 | `tenant_id = user_id` (个人即租户); 机构库已实装 `owner_type` 判别列 + tenant_id 语义泛化为 owner_id (decisions.md D14, **迁移零回填、向量零迁移**) | org 作为一等租户: 配额/计费/审计按 org 聚合; 邀请码轮换与成员移除补齐 (评审 P1-4) | org 分级 (学校→年级→班级) 仍复用同一 owner 语义; 分片键 tenant_id 语义不变 | D14 的判别列设计使 documents/chunks/Qdrant payload 传播链一行不改 |
-| 模型网关 | 自研三档路由/熔断/降级链, 单进程内存态熔断器 (**多实例下失效**, 评审 P1-15 已知) | 熔断/预算计数状态外置 Redis; 多 Provider 分流 | 瓶颈在上游 LLM 而非本层: 多供应商配额池 + 语义缓存 (答辩口径见 docs/defense/QA_TOP10.md Q6) | 所有调用必经 `ModelGateway` Protocol, 计量/缓存/降级/录制在同一 choke point |
+| 模型网关 | 自研三档路由/熔断/降级链，单进程内存态熔断器（**多实例下失效**） | 熔断/预算计数状态外置 Redis；多 Provider 分流 | 瓶颈在上游 LLM：多供应商配额池 + 语义缓存 | 所有调用必经 `ModelGateway` Protocol，计量/缓存/降级/录制在同一入口 |
 
-## 现状的诚实清单 (答辩先自曝, 不等评委问)
+## 现状边界
 
-- 单机部署, 全部组件**无 HA**; `docker compose up` 在开发机被 Docker DNS 污染阻塞
-  (STATUS M1-D1 ⛔, 修复命令见 README「Docker 修复」)。
-- 备份/恢复是本轮刚补的 (`scripts/backup.sh` / `scripts/restore.sh` + 14 份轮转 +
-  cron 建议行), 之前为零——生产化差距审查 (docs/PRODUCTION_GAP_REVIEW.md) 明确列为已知短板。
-- 压测只有 30 并发缩水初测 (上表口径), 100 并发阶梯与 live 档 10 并发端到端未跑。
-- 进程内熔断器多实例失效、迁移内联在启动命令里 (多副本竞态) 等问题已被生产化审查
-  逐条定位 (P1-14/P1-15), 属"扩副本前必修"清单。
+- 单机部署，全部组件**无 HA**。
+- 已提供 `scripts/backup.sh` / `scripts/restore.sh` 和 14 份轮转；生产恢复演练仍需执行。
+- 当前没有可引用的生产并发基线，目标环境需重新运行阶梯压测。
+- 进程内熔断器多实例失效、迁移内联在启动命令里存在多副本竞态，属于扩副本前必修项。
 
 ## compose → K8s 迁移要点
 
@@ -66,8 +63,6 @@ spec:
 
 ## 单位经济学 (口径声明)
 
-成本归因数据面已就位: `usage_log` 按 request_id/tenant_id/user_id/feature/model/tier
-落库 (STATUS M1-D4 ✅)。但当前运营面板数字是 **stub 桩伪定价, 不是真实成本**
-(docs/defense/QA_TOP10.md Q10 自曝口径); 且生产化审查测得 rerank/embedding/worker
-后台调用尚未计量 (P0-2/P2-12, 并行修复中)——真实单位成本数字待 live 压测后再引用,
-本文不编造。
+成本归因数据面已就位：`usage_log` 按 request_id/tenant_id/user_id/feature/model/tier
+落库。但当前运营面板数字是 **stub 桩伪定价，不是真实成本**；真实单位成本必须在 live
+环境完成全链路计量和压测后再引用。

@@ -12,13 +12,17 @@
 - Qdrant；对象存储相关链路需要 MinIO 或兼容实现
 - 可选 Docker 20+ 与 Compose v2
 
-当前 Makefile 为开发机提供了默认 conda Python 路径。其他环境应显式覆盖：
+本机项目环境固定为：
 
 ~~~bash
-make PY=/path/to/python PIP=/path/to/pip install
+/home/shunw/miniforge3/envs/eduagents/bin/python
 ~~~
 
-不要把本机绝对路径写入新文档、代码或共享配置。
+即使当前 shell 仍处于 base，所有本地 Python 命令也必须通过 Makefile 执行；禁止裸跑
+`python`、`pip`、`pytest` 或 `alembic`。`make env-check` 会确认 `sys.prefix` 指向该环境且版本
+为 Python 3.12，不满足时立即失败。其他机器使用
+`make PY_ENV=/path/to/conda-env <target>` 覆盖环境根目录。CI 由 workflow 固定 Python 3.12，
+不受本机路径约束。
 
 ## 首次初始化
 
@@ -94,7 +98,7 @@ HTTPS，密钥只放服务器 Secrets 或未提交的 `.env`。`OPENCODE_ZEN_API
 
 ~~~bash
 make lint
-python -m compileall -q packages apps tests alembic
+make compile
 make test-unit
 ~~~
 
@@ -114,11 +118,10 @@ Qdrant 本地 client，再删除精确匹配的临时数据库、Redis 容器和
 make test-integration
 ~~~
 
-直接运行时使用：
+定向迁移测试使用统一目标：
 
 ~~~bash
-INTEGRATION=1 python -m pytest tests/integration -q
-MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0012.py -q
+make test-migration TEST=tests/integration/test_migration_0012.py
 ~~~
 
 `test-integration` 已经包含隔离资源生命周期；`test-integration-isolated` 是同一入口的
@@ -159,7 +162,7 @@ make docs-check
 当前 0023–0027 的隔离门禁为：
 
 ~~~bash
-MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0023_0027.py -q
+make test-migration TEST=tests/integration/test_migration_0023_0027.py
 ~~~
 
 该命令只适用于已确认的本机开发 PostgreSQL；测试会创建随机临时库并在结束时删除，不能把
@@ -170,7 +173,7 @@ Wave 1B 的 `0028` 为 KnowledgeComponent 增加来源类型、稳定 key 和可
 定向门禁为：
 
 ~~~bash
-MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0028.py -q
+make test-migration TEST=tests/integration/test_migration_0028.py
 ~~~
 
 它覆盖从零升级、旧 KC 回填、条件唯一索引、来源约束、自引用删除语义、RLS 新字段读写以及
@@ -182,15 +185,14 @@ Wave 3 的 `0029` 为 `resource_questions` 增加非空默认 `{}` 的
 判定。定向门禁为：
 
 ~~~bash
-MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0029.py -q
+make test-migration TEST=tests/integration/test_migration_0029.py
 ~~~
 
 常用命令：
 
 ~~~bash
 make migrate
-python -m alembic current
-python -m alembic heads
+make migration-check
 ~~~
 
 ## API 与数据变更规范
@@ -222,7 +224,7 @@ git diff --check
 
 | 现象 | 检查 |
 |---|---|
-| API 报缺表或列 | `make migrate`，再看 `python -m alembic current` |
+| API 报缺表或列 | `make migrate`，再运行 `make migration-check` |
 | PostgreSQL/Redis 未就绪 | `make dev-infra`，检查对应端口和日志 |
 | Qdrant 不可用 | `curl http://127.0.0.1:6333/healthz`；检查本地模式是否被多进程占用 |
 | 异步任务不执行 | 只保留一个预期开发 Worker，检查 ready 心跳与 ARQ 日志 |
@@ -230,7 +232,7 @@ git diff --check
 | 页面 API 认证异常 | 使用 `127.0.0.1` 保持同源代理和 cookie 口径一致 |
 | stub 输出被误认为真实模型 | 检查 `.env` 的 `GATEWAY_MODE` 和页面环境提示 |
 | 对象删除失败 | 查看 pending cleanup 的 `cleanup_outbox_metrics`、`cleanup_outbox_retry/stuck` 结构化日志、对象存储连接和退避时间，不手工删数据库掩盖问题 |
-| 知识库能问但检索永远 0 命中 | 向量库与 PG 脱节，跑 `python scripts/check_vector_drift.py`（见下） |
+| 知识库能问但检索永远 0 命中 | 向量库与 PG 脱节，使用项目解释器运行 `scripts/check_vector_drift.py`（见下） |
 
 ### 向量库对账
 
@@ -241,10 +243,10 @@ PG 侧仍标着 `embedding_status='done'`，检索会静默返回 0 命中并降
 ~~~bash
 export READONLY_DATABASE_URL='<目标 PostgreSQL 只读 DSN>'
 export READONLY_QDRANT_URL='<目标 Qdrant 只读 endpoint>'
-python scripts/check_vector_drift.py            # 全量，只列有问题的库
-python scripts/check_vector_drift.py --all      # 连一致的库一起列
-python scripts/check_vector_drift.py --kb <id>  # 只看一个库
-python scripts/check_vector_drift.py --json     # 机器可读，供 cron/告警接管
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --all
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --kb <id>
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --json
 ~~~
 
 对账 CLI 不会回退到普通 `DATABASE_URL/QDRANT_URL`；没有目标只读连接时应停止并报告权限阻塞。
@@ -264,9 +266,9 @@ python scripts/check_vector_drift.py --json     # 机器可读，供 cron/告警
 清理孤儿向量（`missing_vectors` 不适用，那要重新摄取原文档）：
 
 ~~~bash
-python scripts/purge_orphan_vectors.py             # 预演，只打印将删什么
-python scripts/purge_orphan_vectors.py --execute   # 真删，删后自动复核
-python scripts/purge_orphan_vectors.py --execute --kb <id>
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py --execute
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py --execute --kb <id>
 ~~~
 
 默认 dry-run，删除必须显式 `--execute`。只删 PG 中已无对应 `knowledge_bases` 行的

@@ -3,7 +3,7 @@
 运行 (默认 --host http://127.0.0.1:8001, 即专供压测的 stub 档实例; 8000 上的 replay 实例不要动):
 
     locust -f loadtest/locustfile.py --headless -u 30 -r 5 -t 90s \
-        --host http://127.0.0.1:8001 --csv docs/evidence/m5/loadtest_stub --html ... --only-summary
+        --host http://127.0.0.1:8001 --csv /tmp/eduagents-evidence/loadtest_stub --html ... --only-summary
 
 或直接 `bash scripts/run_loadtest.sh` (带健康检查与 gateway_mode 断言)。
 账号池路径可用环境变量 LOADTEST_ACCOUNTS 覆盖, 默认 loadtest/accounts.json。
@@ -88,7 +88,8 @@ def _load_accounts() -> list[dict]:
     if not ACCOUNTS_PATH.exists():
         raise RuntimeError(
             f"账号池不存在: {ACCOUNTS_PATH}\n"
-            f"先执行: python scripts/seed_loadtest.py --count 10 --out loadtest/accounts.json"
+            "先执行: /home/shunw/miniforge3/envs/eduagents/bin/python "
+            "scripts/seed_loadtest.py --count 10 --out loadtest/accounts.json"
         )
     payload = json.loads(ACCOUNTS_PATH.read_text(encoding="utf-8"))
     accounts = payload.get("accounts") or []

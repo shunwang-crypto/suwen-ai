@@ -2,15 +2,16 @@
 
 用法 (cwd = 仓库根)::
 
-    export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
-    python eval/simulation/run_experiment.py --experiment both --seeds 10 \
+    make env-check
+    /home/shunw/miniforge3/envs/eduagents/bin/python \
+        eval/simulation/run_experiment.py --experiment both --seeds 10 \
         --output /tmp/eduagents-evidence/
 
 产出: results.json (原始数据) + report.md (统计检验表) + 4 张图 (纯 matplotlib):
 fig1 收敛曲线 / fig2 毕业生存曲线 / fig3 校准散点 / fig4 三臂毕业题量箱线图。
 
-实验设计与"为什么不是循环论证"的论证见同目录 README.md。参数全部定案于
-docs/research/ACTION_PLAN.md Wave2-1 与 brief"M5 四件套执行方案", 禁止随意改动。
+实验设计与“为什么不是循环论证”的论证见同目录 README.md。参数属于实验契约，修改时
+必须同步单元测试、该 README 和结果口径，不能为追求更好数字而调参。
 """
 
 from __future__ import annotations

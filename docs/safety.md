@@ -172,11 +172,7 @@ FSRS ReviewLog 与统一 learning event 属于用户学习证据：写入时带 
 
 ~~~bash
 make test-unit
-INTEGRATION=1 python -m pytest tests/integration/test_tenant_isolation.py -q
-INTEGRATION=1 python -m pytest tests/integration/test_prompt_injection.py -q
-INTEGRATION=1 python -m pytest tests/integration/test_import_guide.py -q
-INTEGRATION=1 python -m pytest tests/integration/test_error_imports.py -q
-INTEGRATION=1 python -m pytest tests/integration/test_learning_resources.py -q
+make test-integration
 ~~~
 
 更详细的数据关系见[数据模型](data-model.md)，生产操作见[部署手册](../deploy/README-deploy.md)。

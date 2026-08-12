@@ -133,7 +133,7 @@ corpus_version: 3 文档
     r = await client.post("/api/evals/import", headers=headers)
     assert r.status_code == 200, r.text
     first = r.json()
-    assert first["items"], "docs/evidence 下应有可导入的评估产物"
+    assert first["items"], "临时评估目录中应有可导入的评估产物"
     assert not [i for i in first["items"] if i["status"] == "error"], first["items"]
     total_first = first["imported"] + first["skipped"]
 

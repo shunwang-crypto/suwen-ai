@@ -1,4 +1,4 @@
-"""数据生命周期与合规线集成测试 (docs/PRODUCTION_GAP_REVIEW.md 数据方向):
+"""数据生命周期与合规线集成测试：
 
 - P0-4 注销: 12+ 张表零残留 + pending_cleanup 落 tenant 行 + 登录 401 + 旧 token 拒绝
   + purge_tenant 清 checkpoint/Redis/对象存储 (outbox 消费, 幂等)

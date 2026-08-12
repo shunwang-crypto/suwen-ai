@@ -20,12 +20,6 @@ node_modules/
 *.log
 coverage/
 htmlcov/
-docs/evidence/*
-!docs/evidence/README.md
-!docs/evidence/production-2026-08-09/
-!docs/evidence/production-2026-08-09/**
-!docs/evidence/ai-first-remaining-local-2026-08-10/
-!docs/evidence/ai-first-remaining-local-2026-08-10/**
 cassettes/
 **/cassettes/
 uploads/
@@ -33,7 +27,6 @@ exports/
 
 # data / artifacts
 *.lock.tmp
-docs/evidence/**/*.log
 
 # 压测账号池 (含明文密码与预签 access token, 不入库; 通配覆盖 live 档的 accounts_live.json)
 loadtest/accounts.json

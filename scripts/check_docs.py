@@ -16,8 +16,10 @@ ACTIVE_DOCUMENTS = (
     "docs/api-contract.md",
     "docs/data-model.md",
     "docs/decisions.md",
+    "docs/learning-plan.md",
     "docs/safety.md",
     "docs/scaling.md",
+    "docs/tradeoffs.md",
     "docs/vlse.md",
     "deploy/README-deploy.md",
     "apps/web/README.md",
@@ -71,6 +73,7 @@ def check_repository(
     *,
     active_documents: tuple[str, ...] = ACTIVE_DOCUMENTS,
     require_core_index: bool = True,
+    enforce_canonical_docs: bool = False,
 ) -> list[str]:
     """Return human-readable validation errors for ``root``."""
     root = root.resolve()
@@ -106,12 +109,26 @@ def check_repository(
             if target not in indexed_targets:
                 errors.append(f"docs/README.md: core document is not indexed: {relative_path}")
 
+    if enforce_canonical_docs:
+        canonical = {
+            (root / relative_path).resolve()
+            for relative_path in active_documents
+            if relative_path.startswith("docs/")
+        }
+        docs_root = root / "docs"
+        for path in sorted(item for item in docs_root.rglob("*") if item.is_file()) if docs_root.is_dir() else ():
+            if path.resolve() not in canonical:
+                errors.append(
+                    f"{path.relative_to(root)}: non-canonical docs artifact; merge current facts "
+                    "into the documentation index or move generated output outside the repository"
+                )
+
     return errors
 
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    errors = check_repository(root)
+    errors = check_repository(root, enforce_canonical_docs=True)
     if errors:
         print("Documentation check failed:", file=sys.stderr)
         for error in errors:

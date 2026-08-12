@@ -1,7 +1,7 @@
 # VLSE 一图流 — 可验证学习者状态引擎 (Verifiable Learner State Engine)
 
-> 本文是 §2 要求的核心创新叙事图: **五个能力模块读写同一个学习者状态引擎**。
-> 每条边都标注真实代码文件路径 (答辩现场可当场打开); 数字与状态以
+> 核心约束：**五个能力模块读写同一个学习者状态引擎**。
+> 每条边都标注真实代码文件路径；数字与状态以
 > [STATUS.md](../STATUS.md) 为唯一事实源, 未完成的边如实标注, 不夸大。
 
 ## 一句话
@@ -79,10 +79,9 @@ Reflection 节点异步抽取——掌握度若由 LLM 生成则不可复现, �
 2. **审计流水**: 每次掌握度变化一行 `mastery_log(old_p, new_p, evidence_type, evidence_id, weight)`,
    逐条 evidence_id 可关联回 attempt (STATUS M4-D4 ✅, `tests/integration/test_reviews_flow.py`);
    用量三维归因 `usage_log(user/feature/model)` (STATUS M1-D4 ✅)。
-3. **可复现评测**: 检索评估 CLI + 黄金集版本冻结 (`eval/run_retrieval_eval.py`,
-   数字存档 `docs/evidence/m2/ablation_summary.md`); 合成学生闭环实验 10 seeds 配对设计,
-   自适应比随机平均少 54.9 题毕业 (p=0.0020, `docs/evidence/m5/report.md`), 快速复现:
-   `make demo-m5` (3 seeds, 秒级)。
+3. **可复现评测**：检索评估 CLI + 黄金集版本冻结（`eval/run_retrieval_eval.py`）；
+   合成学生闭环实验由 `eval/simulation/` 生成。`make demo-m5` 提供快速算法回归，正式
+   数字必须在明确环境重新生成并保存到外部制品存储。
 
 ## 诚实边界 (与 STATUS.md 对齐, 不夸大)
 
@@ -96,14 +95,14 @@ Reflection 节点异步抽取——掌握度若由 LLM 生成则不可复现, �
   (`tests/integration/test_vlse_loop.py::test_profile_injected_into_qa`); 辅导开场
   关联卡点已接线 (题目命中薄弱 KC 时开场点明, `tutor_graph.py` 确定性匹配);
   chat 新会话首屏主动开场卡片仍待后续波次 (STATUS M4-D3 🟡)。
-- 合成学生实验是**算法层验证** (估计器正确性 + 策略相对优劣), 不宣称等于真人教学效果
-  (`docs/evidence/m5/report.md` 方法论说明)。
+- 合成学生实验是**算法层验证**（估计器正确性 + 策略相对优劣），不宣称等于真人教学效果；
+  方法和口径见 `eval/simulation/README.md`。
 
 ## 验证命令
 
 ```bash
 make demo-m3     # 出题 interrupt→resume + VLSE 闭环 (quiz→BKT→FSRS→复习) 集成测试
 make demo-m4     # 错题→time-travel→到期复习 + 画像审计一致性
-make demo-m5     # 闭环实验快速版 (3 seeds); 正式版报告 docs/evidence/m5/report.md
+make demo-m5     # 闭环实验快速版（3 seeds，输出到临时目录）
 make time-travel DAYS=3   # 虚拟时钟推进, FSRS 到期与 BKT 衰减可断言 (§9)
 ```

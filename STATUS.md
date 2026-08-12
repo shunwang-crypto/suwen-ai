@@ -1,7 +1,7 @@
 # 苏问 AI课堂当前发布状态
 
 > 状态：Active
-> 最近人工复核：2026-08-09
+> 最近人工复核：2026-08-13
 > 用途：记录“已实现 / 部分实现 / 计划中”和上线门槛。代码、migration 与自动化测试仍是
 > 最终技术事实。历史运行数据和 evidence 已在上线前清除，不能作为当前生产验收依据。
 
@@ -83,16 +83,17 @@
 ~~~bash
 make docs-check
 make lint
-python -m compileall -q packages apps tests alembic
+make compile
 make test-unit
 make test-integration
-(cd apps/web && npm run lint && npm run build)
+make migration-check
+make test-web
 ~~~
 
 专项迁移测试按变更运行，例如：
 
 ~~~bash
-MIGRATION_TESTS=1 python -m pytest tests/integration/test_migration_0012.py -q
+make test-migration TEST=tests/integration/test_migration_0012.py
 ~~~
 
 不在本文件维护固定测试总数；CI 和当前执行结果才代表当前基线。

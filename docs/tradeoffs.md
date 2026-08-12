@@ -1,9 +1,8 @@
-# 选型对比论证 (§12.6) — 六组取舍成文
+# 技术选型与可替换边界
 
-> 使用方式: 每组"结论一句话 + 三条理由 + 何时会翻案"。素材来源全部标注
-> (提示词 §4.2 选型表 / decisions.md / 调研简报 / 消融真实数字), 不编造对比数据。
-> 通用前提: `ModelGateway` / `VectorStore` / `DocumentParser` / `Clock` 四个 Protocol
-> 先定义后实现 (§4.4 架构铁律), 因此下列每一组"翻案"都是实现替换而非架构手术。
+> 每组保留“结论、理由和何时翻案”，只引用当前代码、测试和正式文档，不保留历史答辩口径。
+> 通用前提：`ModelGateway` / `VectorStore` / `DocumentParser` / `Clock` 四个 Protocol
+> 先定义后实现，因此下列每一组“翻案”都是实现替换而非架构手术。
 
 ## 1. Qdrant vs Milvus / pgvector
 
@@ -35,11 +34,9 @@
    每次更新一行 `mastery_log(old_p→new_p, evidence_id, weight)` (docs/vlse.md 审计
    流水支柱); DKT 的隐状态向量点不开给用户看, 与"可验证"定位冲突。
 2. **冷启动零数据可用**: 我们没有百万级作答日志, DKT 无从训练; BKT 用文献先验
-   四参数即可上线, 合成学生实验对参数 ±50% 做了敏感性分析, 10/10 变体方向不变
-   (docs/evidence/m5/report.md 敏感性表)。
+   四参数即可上线；参数敏感性应通过 `eval/simulation/` 在目标环境重新验证。
 3. **纯函数可测试可复现**: `packages/core/src/eduagents_core/mastery/bkt.py` +
-   `tests/unit/test_bkt.py`; 掌握度若不可复现, 闭环实验就没有因变量
-   (docs/defense/QA_TOP10.md Q3 追问预案同口径)。
+   `tests/unit/test_bkt.py`；掌握度若不可复现，闭环实验就没有可靠因变量。
 
 何时翻案: 真实作答日志积累到可训练量级、离线评估显示 DKT 类模型预测增益显著,
 且能配套可解释性方案 (如注意力可视化) 时——estimator 是可替换接口, BKT 的
@@ -53,18 +50,17 @@ evidence 流水本身就是未来的训练集。
 1. **record/replay/stub 四模式是刚需不是锦上添花**: 没有 record/replay, 黄金集
    评测数字每跑一次都变, "可复现评测"卖点不成立; replay 让现场断网可演示; stub
    让 CI 零 API 成本 (decisions.md D2, stub 强制带"非真实模型输出"横幅防冒充)。
-   LiteLLM 无此机制 (docs/defense/QA_TOP10.md Q7)。
+   当前选型由项目自身实现并测试这些模式。
 2. **单一 choke point 承载全部治理**: 三档路由/重试退避/熔断状态机/降级链/token
    计量三维归因/预算预检全部长在网关层 (`packages/core/src/eduagents_core/gateway/`),
-   LLM 调用发生在图节点与 ARQ 任务里, HTTP 中间件拦不全 (brief-3 §4 论证)。
-3. **完全可控可答辩**: 熔断阈值、降级顺序、计价口径逐行自己写的, 单测锁行为
+   LLM 调用发生在图节点与 ARQ 任务里，HTTP 中间件无法覆盖后台任务。
+3. **行为完全可控**：熔断阈值、降级顺序、计价口径由项目实现，单测锁行为
    (`tests/unit/test_gateway.py` / `test_circuit.py`); 引入 LiteLLM 则这些行为
-   由外部项目版本决定, 排障和答辩都多一层不可控。
+   由外部项目版本决定，升级和排障多一层不确定性。
 
 何时翻案: Provider 数量增长到需要企业级 key 管理/代理集群时——届时 LiteLLM 可以
 作为 `ModelGateway` Protocol 的一个 Provider 实现接进来, 治理层不动。
-(已知代价也如实记: 自研熔断器是进程内状态, 多实例失效, 见
-docs/PRODUCTION_GAP_REVIEW.md P1-15, 修复方向是状态外置 Redis。)
+(已知代价：自研熔断器是进程内状态，多实例部署前需要将状态外置 Redis。)
 
 ## 4. 自建记忆/画像 Store vs mem0
 
@@ -73,7 +69,7 @@ docs/PRODUCTION_GAP_REVIEW.md P1-15, 修复方向是状态外置 Redis。)
 理由:
 1. **schema 贴合教育域且带外键约束**: mastery_records 的 kc_id 外键引用归一化 KC
    表, 禁止裸字符串 (§5.8/§14); mem0 的通用记忆是自然语言条目, 无法承载
-   "掌握度参与 FSRS 调度决策"这种可计算语义 (docs/defense/QA_TOP10.md Q1 追问)。
+   “掌握度参与 FSRS 调度决策”这种可计算语义。
 2. **确定性直写纪律与 LLM 抽取式记忆冲突**: 我们写死"测评/辅导结果确定性直写,
    不经 LLM" (§5.5), 只有对话洞察走 Reflection 异步抽取 (权重 0.3,
    `apps/worker/src/eduagents_worker/reflection.py`); mem0 全链路 LLM 抽取,
@@ -89,14 +85,13 @@ schema 表达力时, 可在 Reflection 层引入专用记忆组件, 但掌握度
 **结论**: sparse 通道用本地 BM25 + jieba 预分词, 不用 M3 原生 lexical weights。
 
 理由:
-1. **API 现实约束**: SiliconFlow 的 embedding API 不返回 M3 的 lexical weights,
-   原生 sparse 拿不到 (§4.2 主动答辩点)。
+1. **API 现实约束**：SiliconFlow 的 embedding API 不返回 M3 的 lexical weights，
+   因而无法取得原生 sparse 输出。
 2. **自托管 M3 违反资源预算**: 为拿 sparse 权重而自托管 BGE-M3 违反 8G 单机内存
    预算 (§10 部署约束), 且引入 GPU/大内存依赖破坏"15 分钟复现"。
 3. **本地 BM25 零成本零外部依赖**: jieba 分词写死 (中文 BM25 翻车点, §14 反模式
-   清单), 离线可复现; 消融真实数字如实呈现——当前小语料上稀疏通道零增益
-   (hit_rate@5 与 MRR 与关稀疏配置完全相同, docs/evidence/m2/ablation_summary.md),
-   其预期价值在专有名词/公式编号/生僻术语查询, 待黄金集 v2 难例重测。
+   清单), 离线可复现；稀疏通道的真实增益必须在当前黄金集重新测量，
+   其预期价值在专有名词、公式编号和生僻术语查询。
    开关保留 (`eval/run_retrieval_eval.py --no-sparse`), 用数据说话。
 
 何时翻案: SiliconFlow (或替代供应商) 开放 lexical weights 返回, 或部署形态升级到
@@ -110,7 +105,7 @@ embedding 相似度断点的语义分块。
 
 理由:
 1. **结构信息是溯源的载体**: heading_path 面包屑 ("第3章 函数 > 3.2 导数定义")
-   直接进 citation 卡片与 chunk 预览器, 是引用定位和答辩演示的关键
+   直接进 citation 卡片与 chunk 预览器，是引用定位和用户核验的关键
    (`packages/core/src/eduagents_core/chunking/`); 语义分块以相似度曲线切割,
    丢结构边界, 页码/章节锚点退化。
 2. **原子性硬约束与相似度切割冲突**: 表格禁止跨块切分、LaTeX 公式必须完整存活

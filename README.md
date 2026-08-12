@@ -74,9 +74,10 @@ flowchart TB
 
 ## 本地快速启动
 
-要求 Python 3.12、Node.js 20+、npm，以及可用的 PostgreSQL、Redis 和 Qdrant。仓库
-`Makefile` 在当前开发机有默认 Python 路径；其他机器可通过
-`make PY=/path/to/python PIP=/path/to/pip <target>` 覆盖。
+要求 Python 3.12、Node.js 20+、npm，以及可用的 PostgreSQL、Redis 和 Qdrant。本机项目
+环境固定为 `/home/shunw/miniforge3/envs/eduagents`；Makefile 会检查解释器来源和版本，
+不会因为 shell 仍在 base 环境而回退。其他机器通过 `make PY_ENV=/path/to/conda-env <target>`
+覆盖环境根目录。
 
 ~~~bash
 git clone <repo-url> eduagents
@@ -118,10 +119,10 @@ make worker
 ~~~bash
 make docs-check
 make lint
+make compile
 make test-unit
 make test-integration
-python -m compileall -q packages apps tests alembic
-(cd apps/web && npm run lint && npm run build)
+make test-web
 ~~~
 
 集成测试需要 PostgreSQL 和 Redis。测试数量会随实现增长，因此文档只维护可复现命令，

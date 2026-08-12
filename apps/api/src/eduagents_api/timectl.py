@@ -6,7 +6,7 @@
 
 P1-13 护栏: ENABLE_TIME_TRAVEL 环境变量显式开关 (未设置时 dev/test 默认开,
 prod 默认关)。admin 入口须先判 is_enabled() 再调 set_offset/advance
-(admin.py 由主线接线, 见 PRODUCTION_GAP_REVIEW P1-13)。偏移键带 30 天 TTL,
+(admin.py 负责权限和开关接线)。偏移键带 30 天 TTL,
 演示残留不再永久污染 FSRS/预算日界。
 """
 

@@ -1,6 +1,6 @@
 """数据留存清理 (P2-9): 监管可答的"留多久、怎么删"。
 
-留存口径 (docs/PRODUCTION_GAP_REVIEW.md P2-9):
+留存口径（当前权威说明见 docs/safety.md）：
 - usage_log        > 180 天删 (可还原个人每日用量画像, 不长留);
 - mastery_log      > 730 天删 (学情审计流水, 保留 2 年);
 - checkpoints 三表 > 30 天删 (LangGraph 检查点, JSONB 明文含问答原文,

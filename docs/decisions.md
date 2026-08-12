@@ -7,7 +7,7 @@
 ## D1 · 开发环境用 conda + 国内源（2026-07-26）
 用户指示。conda env `eduagents`（Python 3.12，miniforge），pip 走 TUNA 源。
 锁定方式：`make lock` 生成 `requirements.lock`（pip freeze，排除 editable 包）。
-提示词的"lockfile 固定"由此满足；部署镜像内 pip 同样走 TUNA。
+本地 Makefile 直接绑定该环境并在运行前校验；部署镜像内 pip 同样走 TUNA。
 
 ## D2 · 网关新增第四种模式 stub（2026-07-26）
 提示词 §9 只定义 live|record|replay。用户明确指示"开发期先不真实调用模型（时间花费大）"，
@@ -65,7 +65,7 @@ qdrant_store 的客户端单例缓存共享。Qdrant 容器可用后 .env 置空
 
 ## D12 · stub 嵌入口径的评估数字只做管线验证（accepted，2026-07-26）
 stub 哈希嵌入 + 真实 BM25 稀疏只证明管线可跑，**不得**作为质量宣称。后续 live 结果
-保存在 `docs/evidence/`，但 D12 的口径隔离仍长期有效。
+写入明确环境的外部制品存储，不回写仓库；D12 的口径隔离仍长期有效。
 
 ## D15 · 编排形态: 四子图 + API 层路由, 无独立 Supervisor/analyst 图（2026-07-27）
 偏离提示词 §5.4"顶层轻 Supervisor + 五子图"。实际形态: qa/quiz/plan/tutor **四个**

@@ -163,7 +163,7 @@ localhost、RFC1918 私网地址会被脚本拒绝。
 [`scripts/purge_runtime_data.py`](../scripts/purge_runtime_data.py) 默认只读，输出数据库、
 Redis DB、Qdrant collection、对象存储和所有业务表数量。它保留 Alembic 与 LangGraph
 schema-migration 元数据，删除运行时 checkpoint 行；不会删除源代码、migration、tests 或
-corpus；历史 cassettes、运行对象和 `docs/evidence` 已在上线前单独清除。
+corpus；历史 cassettes、运行对象、截图和一次性验收产物已在上线前单独清除。
 
 执行前必须确认输出是专用 EduAgents 旧测试实例，而不是含真实用户的实例，并使用精确目标：
 
@@ -171,12 +171,12 @@ corpus；历史 cassettes、运行对象和 `docs/evidence` 已在上线前单�
 PURGE_EXPECTED_DB_HOST=127.0.0.1 \
 PURGE_EXPECTED_REDIS_HOST=127.0.0.1 \
 PURGE_EXPECTED_QDRANT_URL=http://127.0.0.1:6333 \
-python scripts/purge_runtime_data.py
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_runtime_data.py
 
 PURGE_EXPECTED_DB_HOST=127.0.0.1 \
 PURGE_EXPECTED_REDIS_HOST=127.0.0.1 \
 PURGE_EXPECTED_QDRANT_URL=http://127.0.0.1:6333 \
-python scripts/purge_runtime_data.py --execute --confirm-instance=eduagents-local-dev
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_runtime_data.py --execute --confirm-instance=eduagents-local-dev
 ~~~
 
 生产实例必须同时设置 `PURGE_INSTANCE_NAME`、期望数据库名/端口、Redis DB、Qdrant URL 和

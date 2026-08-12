@@ -1,4 +1,4 @@
-"""P2-1 反馈通道 + P2-3 判分申诉 全链路 (docs/PRODUCTION_GAP_REVIEW.md)。
+"""反馈通道与判分申诉全链路。
 
 feedback: 提交(带 request_id)/我的列表/越权不可见/admin 列表+关闭/非 admin 403;
 appeal: FakeGateway 高分复核 → 分差 ≥0.3 且跨 0.6 线 → attempt 修正 + mastery
