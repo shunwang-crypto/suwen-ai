@@ -15,7 +15,6 @@ def test_check_repository_accepts_valid_relative_links(tmp_path: Path) -> None:
     errors = check_repository(
         tmp_path,
         active_documents=("README.md", "docs/guide.md"),
-        require_core_index=False,
     )
 
     assert errors == []
@@ -27,7 +26,6 @@ def test_check_repository_reports_source_line_for_broken_link(tmp_path: Path) ->
     errors = check_repository(
         tmp_path,
         active_documents=("README.md",),
-        require_core_index=False,
     )
 
     assert errors == ["README.md:3: broken link: docs/missing.md"]
@@ -51,7 +49,6 @@ def test_check_repository_ignores_links_in_code_fences_and_external_urls(
     errors = check_repository(
         tmp_path,
         active_documents=("README.md",),
-        require_core_index=False,
     )
 
     assert errors == []
@@ -63,21 +60,19 @@ def test_check_repository_rejects_links_outside_repository(tmp_path: Path) -> No
     errors = check_repository(
         tmp_path,
         active_documents=("docs/guide.md",),
-        require_core_index=False,
     )
 
     assert errors == ["docs/guide.md:1: link escapes repository: ../../outside.md"]
 
 
 def test_check_repository_rejects_noncanonical_docs_artifacts_when_enabled(tmp_path: Path) -> None:
-    _write(tmp_path / "docs/README.md")
+    _write(tmp_path / "docs/architecture.md")
     _write(tmp_path / "docs/old-implementation-prompt.md")
     (tmp_path / "docs/stale-screenshot.png").write_bytes(b"stale")
 
     errors = check_repository(
         tmp_path,
-        active_documents=("docs/README.md",),
-        require_core_index=False,
+        active_documents=("docs/architecture.md",),
         enforce_canonical_docs=True,
     )
 

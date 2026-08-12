@@ -1,11 +1,10 @@
-"""F9 评估看板 + U-A4 教师组卷导出 + M5-D2 故障注入 的验收测试。
+"""本地检索评估看板、教师组卷导出和故障注入测试。
 
 ① import 幂等 (跑两次条数不变)  ② 列表/详情/对比结构正确  ③ 非 admin 403
 ④ 教师导出 JSON 含答案 / 打印视图题答分离 / 学生 403  ⑤ provider_down 打开后
 live 网关走完降级链兜到 stub, 不 500。
 """
 
-import json
 import uuid
 
 from sqlalchemy import select
@@ -40,9 +39,7 @@ async def _promote(email: str, role: str) -> str:
 async def test_evals_import_idempotent_list_detail_compare(client, tmp_path, monkeypatch):
     import eduagents_api.evals_ingest as evals_ingest
 
-    # Evidence is a test input, not a repository fixture. Keeping it under
-    # tmp_path makes this test deterministic and prevents stale production
-    # reports from affecting idempotency assertions.
+    # 评估报告是临时测试输入，不是仓库 fixture。
     retrieval_template = """# {title}
 
 生成时间: 2026-07-27T00:00:00Z
@@ -90,21 +87,6 @@ corpus_version: 3 文档
         retrieval_template.format(title="关重排", rerank="关", mrr="1.0000", categories=categories),
         encoding="utf-8",
     )
-    simulation = {
-        "generated_at": "2026-07-27T00:00:00Z",
-        "seeds": [1, 2],
-        "config": {"n_students": 30, "n_kcs": 8},
-        "experiment_b": {
-            "arms": {
-                "adaptive": {"mean": 10, "ci95": [9, 11], "grad_rate": 1, "final_theta_mean": 0.9, "seed_mean_questions": [10, 10]},
-                "ladder": {"mean": 20, "ci95": [19, 21], "grad_rate": 1, "final_theta_mean": 0.8, "seed_mean_questions": [20, 20]},
-                "random": {"mean": 30, "ci95": [29, 31], "grad_rate": 1, "final_theta_mean": 0.7, "seed_mean_questions": [30, 30]},
-            },
-            "comparisons": {"adaptive_vs_random": {"p_value": 0.01, "cohens_d": -2.0}},
-        },
-        "sensitivity": [{"name": f"variant-{i}"} for i in range(10)],
-    }
-    (tmp_path / "results.json").write_text(json.dumps(simulation), encoding="utf-8")
     monkeypatch.setattr(evals_ingest, "EVIDENCE_DIRS", (str(tmp_path),))
     email = f"evals-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
     student_headers = await _register_login(client, email)
@@ -147,8 +129,7 @@ corpus_version: 3 文档
     assert len(runs) == n_before, "重复导入不应新增行 (内容哈希去重)"
 
     # ② 列表结构
-    kinds = {r_["kind"] for r_ in runs}
-    assert {"retrieval", "simulation"} <= kinds, kinds
+    assert {r_["kind"] for r_ in runs} == {"retrieval"}
     for row in runs:
         assert row["id"] and row["label"] and row["source"] and row["at"]
         assert isinstance(row["summary"], list)
@@ -168,18 +149,7 @@ corpus_version: 3 文档
     assert detail["config"]["content_sha256"]
     assert detail["corpus_version"].startswith("3 文档")
 
-    # ② 详情: 仿真实验三臂 + p 值 (大数组已剥离, 不该把 300 个学生塞进 JSON)
-    sim = next(r_ for r_ in runs if r_["kind"] == "simulation")
-    sim_detail = (await client.get(f"/api/evals/{sim['id']}", headers=headers)).json()
-    arms = sim_detail["metrics"]["experiment_b"]["arms"]
-    assert set(arms) == {"adaptive", "random", "ladder"}
-    assert arms["adaptive"]["mean"] < arms["ladder"]["mean"] < arms["random"]["mean"]
-    cmp_ar = sim_detail["metrics"]["experiment_b"]["comparisons"]["adaptive_vs_random"]
-    assert cmp_ar["p_value"] < 0.05 and cmp_ar["cohens_d"] < 0
-    assert len(sim_detail["metrics"]["sensitivity"]) == 10
-    assert "all_questions" not in str(sim_detail["metrics"])
-
-    # ② 对比: 关重排 vs 完整链路 —— F9-A2 要的就是这种"参数调优→指标变化"
+    # ② 对比：关重排 vs 完整链路。
     full = next(r_ for r_ in runs if "live 嵌入" in r_["label"] and "完整链路" in r_["label"])
     no_rerank = next(r_ for r_ in runs if "关重排" in r_["label"])
     r = await client.get(
@@ -187,19 +157,11 @@ corpus_version: 3 文档
     )
     assert r.status_code == 200, r.text
     comp = r.json()
-    assert comp["same_kind"] is True
     by_metric = {d["metric"]: d for d in comp["deltas"]}
     assert "headline.mrr" in by_metric
     # 真实数据: 完整 0.9222 -> 关重排 1.0000 (关掉重排 MRR 反而更高, 如实呈现)
     assert by_metric["headline.mrr"]["delta"] > 0
     assert by_metric["headline.hit@5"]["delta"] == 0.0
-
-    # 跨类型对比不报错, 只是同名指标很少
-    cross = (
-        await client.get(f"/api/evals/compare?ids={v2['id']},{sim['id']}", headers=headers)
-    ).json()
-    assert cross["same_kind"] is False
-    assert cross["left_only"] and cross["right_only"]
 
     # 参数校验
     assert (
@@ -207,7 +169,7 @@ corpus_version: 3 文档
     ).status_code == 400
     assert (await client.get(f"/api/evals/{uuid.uuid4()}", headers=headers)).status_code == 404
 
-    # F9-A1 一键触发: 入队拿 job_id + 轮询契约 (本用例不起 worker, 只验队列与状态端点)
+    # 一键触发：入队拿 job_id + 轮询契约（本用例不起 worker，只验队列与状态端点）。
     r = await client.post(
         "/api/evals/run",
         headers=headers,
@@ -227,7 +189,7 @@ corpus_version: 3 文档
 
 
 # --------------------------------------------------------------------------
-# ④ 教师组卷导出 (U-A4)
+# ④ 教师组卷导出
 # --------------------------------------------------------------------------
 
 
@@ -284,7 +246,7 @@ async def test_teacher_export_json_print_and_student_forbidden(client):
     user_id = await _promote(email, "student")  # 先确保是学生
     quiz_id = await _seed_quiz(user_id)
 
-    # ④ 学生角色访问一律 403 (U-A4 验收点)
+    # ④ 学生角色访问一律 403。
     assert (await client.get("/api/teacher/quizzes", headers=student_headers)).status_code == 403
     r = await client.post(
         f"/api/teacher/quizzes/{quiz_id}/export?format=json", headers=student_headers
@@ -356,7 +318,7 @@ async def test_teacher_export_json_print_and_student_forbidden(client):
 
 
 # --------------------------------------------------------------------------
-# ⑤ 故障注入 + 降级链 (M5-D2)
+# ⑤ 故障注入 + 降级链
 # --------------------------------------------------------------------------
 
 

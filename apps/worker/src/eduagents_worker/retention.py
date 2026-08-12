@@ -1,6 +1,6 @@
 """数据留存清理 (P2-9): 监管可答的"留多久、怎么删"。
 
-留存口径（当前权威说明见 docs/safety.md）：
+本地数据留存任务：
 - usage_log        > 180 天删 (可还原个人每日用量画像, 不长留);
 - mastery_log      > 730 天删 (学情审计流水, 保留 2 年);
 - checkpoints 三表 > 30 天删 (LangGraph 检查点, JSONB 明文含问答原文,
@@ -134,7 +134,7 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
 async def purge_retention(ctx: dict, dry_run: bool = False) -> dict:
     """按留存口径清理各表; 返回 {表名: 删除行数 | None(该表失败/不存在)}。
 
-    dry_run=True 只 COUNT 不删 (上线前先看量)。删除量一律 log.info 留痕。
+    dry_run=True 只 COUNT 不删，便于本地先核对数量。删除量一律 log.info 留痕。
     时间用真实时钟: 留存合规按自然时间计, 不随 time-travel 虚拟时钟漂移。
     """
     settings = ctx.get("settings") or get_settings()

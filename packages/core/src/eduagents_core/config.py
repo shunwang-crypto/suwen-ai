@@ -124,7 +124,6 @@ class Settings(BaseSettings):
     # These controls are intentionally independent from FSRS scheduling.  The
     # offline evaluator does not read or mutate application state, and every
     # online/shadow flag remains disabled unless an operator opts in.
-    learning_models_shadow_enabled: bool = False
     elo_shadow_enabled: bool = False
     afm_pfa_shadow_enabled: bool = False
     kc_edge_validation_enabled: bool = False

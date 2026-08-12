@@ -9,7 +9,6 @@ import { Features } from "@/components/landing/features";
 import { Flow } from "@/components/landing/flow";
 import { Hero } from "@/components/landing/hero";
 import { SiteFooter } from "@/components/landing/site-footer";
-import { Stats } from "@/components/landing/stats";
 import { useAuth } from "@/lib/auth-context";
 
 export default function Home() {
@@ -41,7 +40,6 @@ export default function Home() {
       <Hero />
       <Features />
       <Flow />
-      <Stats />
       <SiteFooter />
     </main>
   );

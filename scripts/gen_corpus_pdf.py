@@ -1,6 +1,6 @@
 """把 corpus/calculus.md 真实排版为 >=20 页 PDF (corpus/calculus.pdf)。
 
-M2-D1 摄取计时验收需要一份真实的多页数学 PDF (走 pymupdf4llm 解析路径)。
+生成本地摄取测试使用的多页数学 PDF（走 pymupdf4llm 解析路径）。
 本脚本用 pymupdf (fitz) 新建文档, 逐块 insert_textbox 排版:
 - markdown # 级数映射标题字号 (# 章 / ## 节 / ### 小节), 标题加大字号并叠印仿粗;
 - 段落正文按内容宽度自动折行 (中文逐字、英文/LaTeX 按词, 超宽 token 硬断);

@@ -31,10 +31,10 @@ _WEAK_TOPIC = "薄弱点强化练习"
 
 
 def adaptive_difficulty_mix(weak: list[dict], num_questions: int) -> dict:
-    """按各薄弱 KC 的掌握度算整卷难度分布 (P1-1 ZPD 自适应产品化)。
+    """按各薄弱 KC 的掌握度计算整卷难度分布。
 
-    档位与阈值同源仿真自适应臂 (thresholds.difficulty_for_mastery): 题目按薄弱点
-    轮转分配 (蓝图要求覆盖均衡), 第 i 题难度 = 对应 KC 的匹配档, 故各档之和恒等于
+    档位与阈值统一来自 thresholds.difficulty_for_mastery。题目按薄弱点
+    轮转分配（蓝图要求覆盖均衡），第 i 题难度 = 对应 KC 的匹配档，故各档之和恒等于
     num_questions。由后端计算, 不信任前端传的 difficulty_mix (可篡改)。
 
     Assessment Mode 的 KC 可能没有 mastery_record (p_mastery=None): 这类 KC 的目的

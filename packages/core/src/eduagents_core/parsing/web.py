@@ -13,9 +13,9 @@
    (否则 302 到 169.254.169.254 就绕过了首次校验);
 4. 响应大小上限 5MB + 20s 超时 + 仅接受 HTML/文本 Content-Type。
 
-已知残余风险 (演示范围内接受, 已记档): DNS rebinding —— 校验用的解析结果与
+已知残余风险: DNS rebinding —— 校验用的解析结果与
 httpx 实际连接时的解析可能不同。彻底修需要自定义 transport 把已校验 IP 钉死,
-或走出网代理白名单; 生产部署建议后者。
+或走出网代理白名单。
 """
 
 from __future__ import annotations

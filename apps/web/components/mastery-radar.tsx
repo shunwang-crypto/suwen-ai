@@ -18,7 +18,7 @@ import { Card, fmtPct } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
 import { masteryColor } from "@/components/ui/progress-ring";
 
-/** 聚合输入行：契约新增字段全部可选（后端未上线时安全降级）。 */
+/** 聚合输入行：可选字段缺失时安全降级。 */
 export interface RadarSourceItem {
   kc_id: string;
   name: string;

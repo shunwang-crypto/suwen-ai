@@ -477,7 +477,7 @@ $L = \int_a^b \sqrt{1 + f'(x)^2}\,dx$。此外, 变力做功、液体压力、�
 这正是微元法的思想。
 """
 
-# 黄金集: relevant_headings 均为语料中真实出现的标题片段 (子串匹配, 见 eval/golden_set/README.md)
+# 黄金集的 relevant_headings 均为语料中真实出现的标题片段（子串匹配）。
 GOLDEN_ITEMS: list[dict] = [
     {
         "qid": "q01",

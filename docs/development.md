@@ -1,36 +1,38 @@
-# 开发与测试手册
+# 本地开发与测试
 
-> 状态：Active
-> 目标读者：本地开发者、测试人员和 AI 编程代理
-> 生产部署：请改读[部署手册](../deploy/README-deploy.md)。
+> 本文只描述本地工作流。项目 Python 固定使用 Conda 环境，不维护部署或线上操作说明。
 
-## 环境要求
+## 环境
 
-- Python 3.12
-- Node.js 20+ 与 npm（CI 当前使用 Node 22）
-- PostgreSQL 16、Redis 7
-- Qdrant；对象存储相关链路需要 MinIO 或兼容实现
-- 可选 Docker 20+ 与 Compose v2
+- Python 3.12：`/home/shunw/miniforge3/envs/eduagents`
+- Node.js 20+ 与 npm
+- PostgreSQL 16、Redis 7、Qdrant
+- 文件对象链路按 `.env` 使用 MinIO 或本地实现
 
-本机项目环境固定为：
+即使终端当前处于 `base`，也不要裸跑 `python`、`pip`、`pytest` 或 `alembic`。所有 Python
+命令从仓库根目录通过 Makefile 执行：
 
 ~~~bash
+make env-check
+~~~
+
+Makefile 会直接调用：
+
+~~~text
 /home/shunw/miniforge3/envs/eduagents/bin/python
 ~~~
 
-即使当前 shell 仍处于 base，所有本地 Python 命令也必须通过 Makefile 执行；禁止裸跑
-`python`、`pip`、`pytest` 或 `alembic`。`make env-check` 会确认 `sys.prefix` 指向该环境且版本
-为 Python 3.12，不满足时立即失败。其他机器使用
-`make PY_ENV=/path/to/conda-env <target>` 覆盖环境根目录。CI 由 workflow 固定 Python 3.12，
-不受本机路径约束。
-
-## 首次初始化
+并校验 `sys.prefix` 和 Python 3.12。其他机器可显式覆盖：
 
 ~~~bash
-git clone <repo-url> eduagents
-cd eduagents
-[ -f .env ] || cp .env.example .env
+make PY_ENV=/absolute/path/to/conda-env env-check
+~~~
 
+## 初始化与启动
+
+~~~bash
+cd /home/shunw/eduagents
+[ -f .env ] || cp .env.example .env
 make install
 (cd apps/web && npm ci)
 make dev-infra
@@ -38,19 +40,7 @@ make migrate
 make seed
 ~~~
 
-`make dev-infra` 启动本地 PostgreSQL、Redis，并确保 Qdrant 可用；如果选择容器基础设施，
-使用 `make up-infra`，不要同时运行占用相同端口的两套服务。
-
-`make seed` 仅用于本地演示，幂等创建学生与管理员账号并摄取示例语料。生产环境禁止运行。
-
-注册流程在生产必须先通过图形验证码再发送邮箱验证码；验证码发送和密码找回都复用
-`EmailSender`。本地/测试默认可通过 `EMAIL_VERIFICATION_REQUIRED=0` 复用旧认证夹具，专项
-邮箱注册测试使用 fake sender，不连接 Resend。真实 Resend 冒烟只能由运维显式执行并指定
-测试收件箱，Key 只存在服务器 Secrets 或未提交的 `.env`。
-
-## 启动开发服务
-
-分别在三个终端运行：
+`make dev-infra` 幂等启动本机 PostgreSQL、Redis 和 Qdrant。然后在三个终端运行：
 
 ~~~bash
 make api
@@ -65,128 +55,73 @@ cd apps/web
 npm run dev
 ~~~
 
-验证：
+本地地址：
+
+- Web：`http://127.0.0.1:3000`
+- API：`http://127.0.0.1:8000`
+- Swagger：`http://127.0.0.1:8000/api/docs`
+- 就绪检查：`http://127.0.0.1:8000/api/health/ready`
+
+本地 seed 账号：
+
+- `demo@eduagents.cn` / `demo-pass-123`
+- `admin@eduagents.cn` / `admin-pass-123`
+
+## 模型模式
+
+| `GATEWAY_MODE` | 本地用途 |
+|---|---|
+| `stub` | 默认；确定性开发桩，不需要模型密钥 |
+| `live` | 联调真实模型，密钥只写未提交的 `.env` |
+| `record` | 临时录制调试，输出必须放仓库外 |
+| `replay` | 回放已有磁带 |
+
+stub 输出不能用来判断模型质量。真实模型、嵌入、重排和联网搜索变量见 `.env.example`。
+
+## 验证命令
+
+后端静态检查与单测：
 
 ~~~bash
-curl -fsS http://127.0.0.1:8000/api/health/live
-curl -fsS http://127.0.0.1:8000/api/health/ready
-curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000
-~~~
-
-- `live` 只证明 API 进程活着。
-- `ready` 检查 PostgreSQL、Redis、Qdrant 和 Worker 心跳；依赖异常时返回 503。
-- Web 开发入口为 `http://127.0.0.1:3000`。
-
-## 网关模式
-
-| `GATEWAY_MODE` | 语义 | 纪律 |
-|---|---|---|
-| `stub` | 本地确定性桩 | 必须明确标注，不能生成质量结论 |
-| `live` | 真实模型调用 | 需要模型、嵌入、重排密钥和预算 |
-| `record` | live 并录制请求/响应 | 磁带可能包含敏感内容，提交前审查 |
-| `replay` | 回放磁带 | 只证明可重复流程，不等同当前模型质量 |
-
-CI 默认不需要真实模型密钥。生产环境必须显式使用 `APP_ENV=prod` 并遵守部署手册。
-
-生产可选启用 `MODEL_ROUTING_ENABLED=true` 使用独立的 text/vision/plan 候选链；候选端点必须是
-HTTPS，密钥只放服务器 Secrets 或未提交的 `.env`。`OPENCODE_ZEN_API_KEY=public` 不是 OpenCode
-官方保证的长期生产认证方式，需上线前验证 401/403 并准备真实 Key。完整候选变量见 `.env.example`。
-
-## 测试与质量检查
-
-### Python
-
-~~~bash
+make docs-check
 make lint
 make compile
 make test-unit
 ~~~
 
-### 集成测试
-
-`make test-integration` 会在本机 PostgreSQL 上创建一个带随机后缀的临时数据库，并启动一个
-随机端口的 disposable Redis 容器；迁移使用本地 migration role，应用使用 `edu_app`，两者
-都只指向这次运行创建的数据库。测试结束会先关闭应用连接、LangGraph checkpointer 和
-Qdrant 本地 client，再删除精确匹配的临时数据库、Redis 容器和对象目录。
-
-测试 fixture 会拒绝 `APP_ENV=prod`、远程 PostgreSQL，以及无法确认数据库名的连接；不会
-清空或删除 `eduagents`、共享 Redis、MinIO 或任何生产资源。集成网关、嵌入、重排和邮件
-均强制使用 stub/开发替身，SMTP 测试不会投递邮件。LangGraph 的 checkpointer 表只在临时
-测试数据库中由 migration role 初始化，API role 不会在应用启动时执行 setup。
+集成测试：
 
 ~~~bash
 make test-integration
+make migration-check
 ~~~
 
-定向迁移测试使用统一目标：
+集成测试会创建名称随机的临时 PostgreSQL 数据库、临时 Redis 和对象目录，并在结束后清理。
+fixture 会拒绝远程数据库和无法确认名称的连接，不会清空本地开发库 `eduagents`。模型、
+嵌入、重排和邮件在测试中使用开发替身。
 
-~~~bash
-make test-migration TEST=tests/integration/test_migration_0012.py
-~~~
-
-`test-integration` 已经包含隔离资源生命周期；`test-integration-isolated` 是同一入口的
-显式别名。不要在集成测试中改用开发数据库或 Redis DB 0。
-
-集成测试会使用 PostgreSQL、Redis 和测试配置；不要让测试连接生产数据库或生产对象存储。
-
-### Web
-
-~~~bash
-cd apps/web
-npm run lint
-npm run build
-~~~
-
-Next.js 版本可能包含超出模型训练数据的新约定。修改 `apps/web` 前必须完整阅读
-`apps/web/AGENTS.md`，并按其中要求阅读本地 `node_modules/next/dist/docs/` 的相关文档。
-
-### 文档
-
-~~~bash
-make docs-check
-~~~
-
-该检查验证 Active 文档索引和相对链接。功能变更若影响产品边界、API、数据或安全，必须
-在同一提交更新相应文档。
-
-## Migration 规范
-
-1. 已提交的 migration 永远不修改，包括为了“让测试更容易”。
-2. schema 变化创建新 migration，revision 链只能有一个预期 head。
-3. ORM、migration、数据模型文档和 API 类型必须同步。
-4. 升级必须保护存量数据；危险回填应可审计、可重试或分阶段执行。
-5. downgrade 不能伪造已经删除的历史事实；无法恢复时要明确边界。
-6. 新 migration 必须增加从旧 head 升级的专项测试，并运行 `alembic heads`。
-7. 应用连接和 migration 连接分离：应用角色不得拥有绕过 RLS 的权限。
-
-当前 0023–0027 的隔离门禁为：
-
-~~~bash
-make test-migration TEST=tests/integration/test_migration_0023_0027.py
-~~~
-
-该命令只适用于已确认的本机开发 PostgreSQL；测试会创建随机临时库并在结束时删除，不能把
-`MIGRATION_DATABASE_URL` 指向生产或共享远程数据库。它验证 0023–0027 的 upgrade/downgrade、
-0024 的从零 ORM 已有列与旧库缺列路径，以及 0025/0027 的 RLS/约束元数据。
-
-Wave 1B 的 `0028` 为 KnowledgeComponent 增加来源类型、稳定 key 和可空的 superseded 关系；
-定向门禁为：
-
-~~~bash
-make test-migration TEST=tests/integration/test_migration_0028.py
-~~~
-
-它覆盖从零升级、旧 KC 回填、条件唯一索引、来源约束、自引用删除语义、RLS 新字段读写以及
-`0027` 往返升级。应用与 worker 的 KC 冷启动定向测试另见 `test_kc_bootstrap.py` 和
-`test_quiz_kc_loop.py`。
-
-Wave 3 的 `0029` 为 `resource_questions` 增加非空默认 `{}` 的
-`field_confidence_json`；旧的 `extraction_confidence` 保留兼容，逐字段置信度由服务端 eligibility
-判定。定向门禁为：
+单个迁移测试：
 
 ~~~bash
 make test-migration TEST=tests/integration/test_migration_0029.py
 ~~~
+
+前端：
+
+~~~bash
+make test-web
+~~~
+
+该命令运行 Web 单测、TypeScript、ESLint 和 Next.js 构建。直接修改 `apps/web` 前先读
+`apps/web/AGENTS.md`，并按要求查阅当前安装版本的 Next.js 本地文档。
+
+## Migration 规则
+
+1. 已提交的 migration 不修改；schema 变化新增 revision。
+2. revision 链保持单一 head。
+3. ORM、migration、API 类型和[数据模型](data-model.md)同步修改。
+4. 新 migration 增加从旧 head 升级的专项测试。
+5. 应用连接与 migration 连接分离；应用角色不得绕过 RLS。
 
 常用命令：
 
@@ -195,91 +130,51 @@ make migrate
 make migration-check
 ~~~
 
-## API 与数据变更规范
+## 业务变更规则
 
-- 资源所有权查询必须带租户和用户/机构边界；不可见资源优先使用既有 404 语义。
-- 状态机只能沿文档声明方向前进，重试必须幂等。
-- pending 或未核验记录不得进入 FSRS、掌握度、画像、报告和推荐。
-- `PUT` 表示整体替换时必须在契约和测试中明确；`PATCH` 只做部分更新。
-- 评分、掌握度、错题等不可逆证据写入前先完成全部校验，并放在同一事务。
-- 新错误码需要加入 API 契约、前端友好提示和集成测试。
-- 前后端枚举必须来自同一业务语义；知识库 `owner_type=user|org` 与题目资料
-  `owner_type=personal|organization` 是不同契约。
+- 资源查询必须带用户或机构所有权边界。
+- pending 或未核验内容不得进入 FSRS、掌握度、画像、报告和推荐。
+- 掌握度更新必须复用统一证据入口，不能新增第二套 BKT 写逻辑。
+- 评分、掌握度和错题等证据写入必须幂等，并在同一事务完成校验与保存。
+- 新错误码同步 [API 契约](api-contract.md)、前端提示和测试。
+- 前端模型长文本使用统一 Markdown 渲染器，短公式字段使用 `MathText`，页面不自行解析
+  Markdown 正则。
+- 异步请求和 SSE 在跨知识库、资源、计划或路由时必须有 request/scope guard。
 
-## Git 与工作树规范
+## 常见故障
 
-修改前后都运行：
+| 现象 | 处理 |
+|---|---|
+| 命令跑到 base 或 Python 3.13 | 停止裸跑，改用 Makefile；先执行 `make env-check` |
+| API 报缺表或列 | `make migrate && make migration-check` |
+| PostgreSQL/Redis 未就绪 | `make dev-infra`，查看 `~/.local/share/eduagents/` 日志 |
+| Qdrant 未就绪 | `curl http://127.0.0.1:6333/healthz` |
+| 异步任务不执行 | 确认 `make worker` 进程和 API ready 心跳 |
+| Web 类型或构建异常 | `cd apps/web && npm ci && npm run build` |
+| 页面认证异常 | Web 与 API 都使用 `127.0.0.1`，保持 cookie 同源口径 |
+| 检索始终零命中 | 用 `scripts/check_vector_drift.py` 检查 PG 与 Qdrant 是否脱节 |
+
+本地向量对账要求显式只读 DSN，默认不修改数据：
+
+~~~bash
+export READONLY_DATABASE_URL='<local PostgreSQL DSN>'
+export READONLY_QDRANT_URL='http://127.0.0.1:6333'
+/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py
+~~~
+
+## 提交前
 
 ~~~bash
 git status --short
 git diff --check
+make docs-check
+make lint
+make compile
+make test-unit
+make test-integration
+make migration-check
+make test-web
 ~~~
 
-- 工作树中的既有修改属于用户，除非用户明确授权，不得覆盖、回滚或顺带提交。
-- 一个提交只包含一个清晰目标；业务修复、migration 和大规模文档治理尽量独立提交。
-- 不使用 `git reset --hard`、`git checkout --` 等破坏性命令处理未知改动。
-- 提交前检查 staged diff，而不只看工作树总 diff。
-
-## 常见故障
-
-| 现象 | 检查 |
-|---|---|
-| API 报缺表或列 | `make migrate`，再运行 `make migration-check` |
-| PostgreSQL/Redis 未就绪 | `make dev-infra`，检查对应端口和日志 |
-| Qdrant 不可用 | `curl http://127.0.0.1:6333/healthz`；检查本地模式是否被多进程占用 |
-| 异步任务不执行 | 只保留一个预期开发 Worker，检查 ready 心跳与 ARQ 日志 |
-| Web 类型或构建异常 | 在 `apps/web` 运行 `npm ci && npm run build` |
-| 页面 API 认证异常 | 使用 `127.0.0.1` 保持同源代理和 cookie 口径一致 |
-| stub 输出被误认为真实模型 | 检查 `.env` 的 `GATEWAY_MODE` 和页面环境提示 |
-| 对象删除失败 | 查看 pending cleanup 的 `cleanup_outbox_metrics`、`cleanup_outbox_retry/stuck` 结构化日志、对象存储连接和退避时间，不手工删数据库掩盖问题 |
-| 知识库能问但检索永远 0 命中 | 向量库与 PG 脱节，使用项目解释器运行 `scripts/check_vector_drift.py`（见下） |
-
-### 向量库对账
-
-`/api/health/ready` 的 qdrant 探针只验连通性，不看数据。若 Qdrant 丢过数据或被重建，
-PG 侧仍标着 `embedding_status='done'`，检索会静默返回 0 命中并降级到 web 兜底——
-表面正常，RAG 已失效。对账把两侧差异显式化：
-
-~~~bash
-export READONLY_DATABASE_URL='<目标 PostgreSQL 只读 DSN>'
-export READONLY_QDRANT_URL='<目标 Qdrant 只读 endpoint>'
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --all
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --kb <id>
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py --json
-~~~
-
-对账 CLI 不会回退到普通 `DATABASE_URL/QDRANT_URL`；没有目标只读连接时应停止并报告权限阻塞。
-生产证据必须记录目标环境和代码版本，不能用本地开发数据替代。
-
-退出码：`0` 一致、`1` 存在漂移、`2` 对账本身出错，可直接挂 cron 或 CI。
-管理员亦可走 `GET /api/admin/vector-reconcile`（`?kb_id=` 单库、`?include_all=true` 全量）。
-
-两个方向都查，含义不同：
-
-- **`missing_vectors`**（PG 有 / Qdrant 无）：该库检索已失效，需重新摄取文档才能恢复。
-- **`orphan_points`**（Qdrant 有 / PG 无）：删除未清理干净。点的 payload 含文档原文，
-  知识库删除或账号注销后仍留存属于数据删除不完整，不只是存储浪费。
-
-两侧均为只读，不会自动修改数据。
-
-清理孤儿向量（`missing_vectors` 不适用，那要重新摄取原文档）：
-
-~~~bash
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py --execute
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/purge_orphan_vectors.py --execute --kb <id>
-~~~
-
-默认 dry-run，删除必须显式 `--execute`。只删 PG 中已无对应 `knowledge_bases` 行的
-kb_id，现存库一律不碰（哪怕它有漂移）。删除按 `(tenant_id, kb_id)` 过滤下发，不做
-无租户删除。**不可逆**：向量重建需要原始文件重新摄取。对账报错时拒绝执行删除。
-
-## 变更完成清单
-
-- [ ] 目标功能、权限和失败路径均有测试。
-- [ ] migration（如有）从前一 head 升级通过。
-- [ ] Ruff、compileall、TypeScript、ESLint 和生产构建通过。
-- [ ] API、数据、安全或部署文档已同步。
-- [ ] `make docs-check` 与 `git diff --check` 通过。
-- [ ] 工作树只剩明确属于用户或后续任务的改动。
+不要把截图、运行证据、临时报告、一次性提示词或新增说明文档提交到仓库。长期事实只更新
+根 README 与 `docs/` 中现有四份文档。

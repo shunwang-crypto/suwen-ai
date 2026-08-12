@@ -1,9 +1,8 @@
-"""F9-A1: 页面上一键触发检索评估的后台任务。
+"""页面上一键触发检索评估的后台任务。
 
 **唯一决定 — 用子进程调 eval/run_retrieval_eval.py, 不 import 它的 run_eval。** 理由:
 
-1. 权威性单一。CLI 产出的 markdown 就是答辩引用的那份文件; 走同一条命令意味着看板
-   里的数字与明确环境生成的评估报告逐字同源, 没有"第二套算法"。
+1. 权威性单一。看板与 CLI 读取同一份结果，不产生第二套指标算法。
 2. eval/ 不是包 (`run_retrieval_eval.py` 顶层 `from metrics import ...` 依赖脚本目录
    进 sys.path)。直接 import 需要往 worker 进程里塞 sys.path hack, 且会把 BGE-M3 +
    reranker 常驻进 worker 内存, 之后每个文档摄取任务都背着它。
@@ -41,7 +40,7 @@ async def run_retrieval_eval_task(
     root = repo_root()
     stem = Path(golden).stem
     suffix = "".join(s for s, on in (("_no-sparse", no_sparse), ("_no-rerank", no_rerank)) if on)
-    output = root / "docs" / "evidence" / "m5" / f"retrieval_eval_{stem}{suffix}_latest.md"
+    output = Path("/tmp/eduagents-evidence") / f"retrieval_eval_{stem}{suffix}_latest.md"
     output.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -86,7 +85,7 @@ async def run_retrieval_eval_task(
         "ok": True,
         "eval_run_id": run_id,
         "created": created,  # False = 结果与上一次逐字节相同 (幂等命中)
-        "report": str(output.relative_to(root)),
+        "report": str(output),
         "stdout_tail": (stdout or b"").decode("utf-8", "replace")[-2000:],
         "error": None,
     }

@@ -1,6 +1,6 @@
 "use client";
 
-// 检索调试面板（F2，评委演示用）：query → POST debug/retrieve，
+// 本地检索调试面板：query → POST debug/retrieve，
 // dense/sparse 命中数、各 chunk 分数与 rerank 分、confident 标记全透明；
 // 下方四阶段命中对比（dense/sparse 召回 → RRF 融合 → rerank 终排）带排名变化箭头，
 // 直观展示 rerank 对排序的改变（Dify 式召回测试，管理端命中测试页共用）。

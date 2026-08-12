@@ -370,8 +370,7 @@ async def build_profile_context(
 # 难度档中文名 (与 apps/web 蓝图卡 DIFFICULTY_OPTIONS 同源)
 _DIFFICULTY_LABELS = {"easy": "简单", "mid": "中等", "hard": "困难"}
 
-# 定性区间 -> 派此难度档的解释话术 (P1-1 ZPD 自适应可解释化; 档位见
-# thresholds.difficulty_for_mastery, 语义锚定仿真自适应臂的脚手架原则)。
+# 定性区间 -> 派此难度档的解释话术，档位见 thresholds.difficulty_for_mastery。
 # C3 差异化: 每个区间给 (区间前段, 区间后段) 两套措辞骨架, 再叠 recent_error
 # 两款衔接语 —— 4 区间 × 2 段位 × 2 错题态 = 16 种组合, 且理由点名 KC,
 # 同卷 5 个 KC 不再出现整段一字不差的复读。措辞纪律不变 (P2-7): 只有定性词,

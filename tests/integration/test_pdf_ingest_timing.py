@@ -107,6 +107,6 @@ async def test_pdf_ingest_ready_within_60s(client):
         f"结果: status=ready; 父块 {len(parents)} 个, 子块 {len(children)} 个; "
         f"chunk 页码覆盖 {min(pages)}-{max(pages)}\n"
         "口径: EMBEDDING_MODE=stub / GATEWAY_MODE=stub; 解析=pymupdf4llm; "
-        "live 嵌入口径待 SiliconFlow key 后重测 (docs/decisions.md D12)\n",
+        "live 嵌入口径需配置 SiliconFlow key 后重测\n",
         encoding="utf-8",
     )

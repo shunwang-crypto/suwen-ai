@@ -1,4 +1,4 @@
-"""F9 评估看板的数据入口: 解析明确环境中临时生成的评测产物。
+"""评估看板的数据入口: 解析本地临时生成的评测产物。
 
 为什么是"解析已有产物"而不是"看板自己再算一遍":
 评测的权威版本是明确日期和环境下 CLI 跑出来的 markdown / results.json。
@@ -8,7 +8,7 @@
 幂等: 按文件**内容** sha256 去重 (不是路径也不是 mtime) —— 同一份报告换个路径重复
 导入不会产生第二条; 重跑评估内容变了才是新的一条。哈希存 config_json.content_sha256。
 
-解析器对缺字段一律宽容 (M2 的老报告没有 category 分桶/拒答段落), 缺什么就少什么,
+解析器对缺字段一律宽容，缺什么就少什么，
 绝不用默认值填充 —— 看板宁可少显示一块, 不可显示一个编造的数字。
 """
 
@@ -29,7 +29,7 @@ from .db import plain_session
 from .models import EvalRun
 
 # 仓库根: routers/../../../../../ -> apps/api/src/eduagents_api/ 上溯 5 层。
-# 容器/异构部署用 EDUAGENTS_REPO_ROOT 覆盖。
+# 特殊本地工作区可用 EDUAGENTS_REPO_ROOT 覆盖。
 _DEFAULT_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -220,7 +220,7 @@ def parse_retrieval_report(text: str) -> dict[str, Any]:
 
 
 def _ablation_tag(cfg: dict[str, str]) -> str:
-    """从配置摘要还原消融标签 —— F9-A2 的"参数调优→指标变化"靠它区分同一批报告。"""
+    """从配置摘要还原消融标签，区分同一批报告的配置。"""
     off = []
     if cfg.get("sparse") == "关":
         off.append("关稀疏")
@@ -305,122 +305,6 @@ def build_retrieval_record(text: str, source: str, label_hint: str = "") -> dict
 
 
 # --------------------------------------------------------------------------
-# 闭环仿真实验 (results.json)
-# --------------------------------------------------------------------------
-
-_ARMS = ("adaptive", "random", "ladder")
-
-
-def _mean_curve(curves: list[list[float]]) -> list[float]:
-    """跨 seed 逐轮取均值 (最短曲线为准)。原始 10 条曲线太胖, 看板只要平均线。"""
-    curves = [c for c in curves if c]
-    if not curves:
-        return []
-    n = min(len(c) for c in curves)
-    return [round(sum(c[i] for c in curves) / len(curves), 6) for i in range(n)]
-
-
-def parse_simulation_results(raw: dict) -> dict[str, Any]:
-    """results.json -> metrics_json。**剥掉逐学生大数组** (theta/p_final/all_questions
-    各 2400/300 项, 原文件 ~390KB): 入库的是看板要画的东西, 原始明细留在 results.json,
-    看板上给出源文件路径可回溯。"""
-    metrics: dict[str, Any] = {
-        "kind": "simulation",
-        "generated_at": raw.get("generated_at", ""),
-        "elapsed_seconds": raw.get("elapsed_seconds"),
-        "seeds": raw.get("seeds", []),
-        "config": raw.get("config", {}),
-    }
-
-    exp_a = {}
-    for arm in _ARMS:
-        node = (raw.get("experiment_a") or {}).get(arm)
-        if not isinstance(node, dict):
-            continue
-        curve = _mean_curve(node.get("mae_curves") or [])
-        exp_a[arm] = {
-            "r2": node.get("r2"),
-            "spearman": node.get("spearman"),
-            "convergence_round": node.get("convergence_round"),
-            "min_mae": node.get("min_mae"),
-            "min_mae_round": node.get("min_mae_round"),
-            "final_mae": curve[-1] if curve else None,
-            "mae_curve_mean": curve,
-        }
-    if exp_a:
-        metrics["experiment_a"] = exp_a
-
-    raw_b = raw.get("experiment_b") or {}
-    arms = {}
-    for arm in _ARMS:
-        node = (raw_b.get("arms") or {}).get(arm)
-        if not isinstance(node, dict):
-            continue
-        arms[arm] = {
-            "mean": node.get("mean"),
-            "ci95": node.get("ci95"),
-            "grad_rate": node.get("grad_rate"),
-            "final_theta_mean": node.get("final_theta_mean"),
-            "seed_mean_questions": node.get("seed_mean_questions", []),
-        }
-    if arms or raw_b.get("comparisons"):
-        metrics["experiment_b"] = {
-            "arms": arms,
-            "comparisons": raw_b.get("comparisons", {}),
-        }
-
-    if raw.get("sensitivity"):
-        metrics["sensitivity"] = raw["sensitivity"]
-    return metrics
-
-
-def _simulation_summary(metrics: dict) -> list[dict]:
-    arms = (metrics.get("experiment_b") or {}).get("arms") or {}
-    out = [
-        {
-            "key": f"{arm} 毕业题量",
-            "value": arms[arm].get("mean"),
-            "display": f"{arms[arm]['mean']:.1f} 题",
-        }
-        for arm in _ARMS
-        if isinstance(arms.get(arm), dict) and arms[arm].get("mean") is not None
-    ]
-    cmp_ar = ((metrics.get("experiment_b") or {}).get("comparisons") or {}).get(
-        "adaptive_vs_random"
-    )
-    if isinstance(cmp_ar, dict) and cmp_ar.get("p_value") is not None:
-        out.append(
-            {
-                "key": "adaptive vs random p",
-                "value": cmp_ar["p_value"],
-                "display": f"p={cmp_ar['p_value']:.4f}",
-            }
-        )
-    return out
-
-
-def build_simulation_record(raw: dict, source: str, label_hint: str = "") -> dict:
-    metrics = parse_simulation_results(raw)
-    cfg = metrics.get("config", {})
-    scale = (
-        f"N={cfg.get('n_students', '?')}×K={cfg.get('n_kcs', '?')}"
-        f"×{len(metrics.get('seeds', []))} seeds"
-    )
-    return {
-        "kind": "simulation",
-        "label": label_hint or f"合成学生闭环实验 · {scale}",
-        "source": source,
-        "metrics": metrics,
-        "corpus_version": f"synthetic ({scale})"[:64],
-        "golden_set_version": "",
-        "data_basis": "纯数值仿真 (IRT 环境 + BKT 估计器), 零 LLM 调用",
-        "generated_at": metrics.get("generated_at", ""),
-        "summary": _simulation_summary(metrics),
-        "report_config": cfg,
-    }
-
-
-# --------------------------------------------------------------------------
 # 扫描 + 落库
 # --------------------------------------------------------------------------
 
@@ -440,8 +324,6 @@ def discover(root: Path | None = None) -> list[tuple[Path, str]]:
         for path in sorted(directory.iterdir()):
             if _is_retrieval_report(path):
                 found.append((path, "retrieval"))
-            elif path.name == "results.json":
-                found.append((path, "simulation"))
     return found
 
 
@@ -455,11 +337,7 @@ def build_record(path: Path, kind: str, root: Path | None = None) -> dict:
     except ValueError:
         source = str(path)
     text = data.decode("utf-8")
-    record = (
-        build_retrieval_record(text, source)
-        if kind == "retrieval"
-        else build_simulation_record(json.loads(text), source)
-    )
+    record = build_retrieval_record(text, source)
     record["content_sha256"] = digest
     return record
 

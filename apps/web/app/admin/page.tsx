@@ -3,7 +3,7 @@
 // 运营面板（F10，仅管理员）：成本/token 大数卡片、按 feature/model/mode 条形（纯 div）、
 // 日趋势折线（纯 SVG polyline）、top 用户表、latency p50/p95 表，
 // time-travel 虚拟时钟控制卡（演示遗忘曲线的操作台），
-// 以及「检索命中测试」分区（四阶段召回/融合/重排全过程，评委演示 rerank 价值）。
+// 以及「检索命中测试」分区（四阶段召回/融合/重排全过程）。
 
 import { useEffect, useState } from "react";
 

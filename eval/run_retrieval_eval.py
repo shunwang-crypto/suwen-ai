@@ -1,14 +1,14 @@
-"""检索评估 CLI (M2 起, M5 升级): 逐问题跑 RetrievalService, 产出 markdown 评估报告。
+"""本地检索评估 CLI：逐问题运行 RetrievalService，产出 Markdown 报告。
 
 用法 (cwd = 仓库根):
     python eval/run_retrieval_eval.py --golden eval/golden_set/v2.jsonl \
         --kb-id <kb_id> --tenant-id <tenant_id> \
-        --output /tmp/eduagents-evidence/retrieval_eval_v2.md [--no-sparse] [--no-rerank]
+        --output /tmp/eduagents-retrieval-eval.md [--no-sparse] [--no-rerank]
 
-relevance 判定 (M5, 向后兼容 v1):
+relevance 判定：
 1. 若该题带 relevant_chunk_hints (chunk 级标注): chunk.text 含任一 hint 子串即相关,
    **优先于** heading 判定;
-2. 否则回落 M2 结构定位规则: chunk.heading_path 含 relevant_headings 任一子串。
+2. 否则使用结构定位规则：chunk.heading_path 含 relevant_headings 任一子串。
 
 拒答题 (expect_refusal=true, relevant_headings=[]): 语料中确实无答案, 不参与
 检索命中指标; 单独统计"拒答正确率" —— 判定规则: 检索结果为空, 或 top1 分数
@@ -48,7 +48,7 @@ class GoldenItem:
     relevant_headings: list[str]
     ground_truth: str
     version: str = ""
-    # --- v2 新增字段 (v1 无这些字段 -> 缺省值即向后兼容) ---
+    # v2 字段；v1 缺失时使用默认值。
     category: str = ""
     expect_refusal: bool = False
     relevant_chunk_hints: list[str] = field(default_factory=list)
@@ -99,7 +99,7 @@ def load_golden(path: Path) -> list[GoldenItem]:
 
 
 def is_relevant(chunk: RetrievedChunk, item: GoldenItem) -> bool:
-    """chunk 级 hint 判定优先 (M5); 无 hint 回落 M2 heading_path 子串规则。"""
+    """chunk 级 hint 判定优先；无 hint 时使用 heading_path 子串规则。"""
     if item.relevant_chunk_hints:
         return any(h in chunk.text for h in item.relevant_chunk_hints)
     return any(h in chunk.heading_path for h in item.relevant_headings)

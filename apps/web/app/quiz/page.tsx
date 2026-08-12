@@ -553,8 +553,7 @@ export default function QuizPage() {
       void consume(pending.requestPath || "/api/quiz", pending.requestBody);
   }, [consume, userId]);
 
-  /** 画像定向出题：kc_names 与难度分布都由后端按掌握度计算（M4-D2 / P1-1），
-   *  前端只声明意图 —— 客户端算的难度可篡改，且与仿真验证过的 ZPD 阈值不同源。 */
+  /** 画像定向出题：kc_names 与难度分布都由后端按掌握度计算；前端只声明意图。 */
   const startWeakQuiz = useCallback(() => {
     const points = weak?.weak_points ?? [];
     const requestBody = {

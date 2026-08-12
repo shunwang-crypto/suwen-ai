@@ -1,4 +1,4 @@
-"""评估语料库 v2 种子 (M5 黄金集 v2): 创建评估账号 + "评估语料库v2" 知识库 +
+"""本地评估语料库 v2 种子：创建评估账号和“评估语料库v2”知识库，
 摄取三篇语料 (calculus.md 主文档 + linear_algebra.md / probability.md 干扰文档)。
 
 幂等: 账号/知识库复用; 文档按 (filename, content_hash) 判断 ——

@@ -1,10 +1,8 @@
-"""掌握度阈值唯一来源 (个性化波次 G6: 此前 0.4/0.5/0.6/0.8 散落 5 处各自硬编码)。
+"""掌握度阈值的唯一来源。
 
-语义锚定 eval/simulation/policies.py 的自适应臂 (闭环实验 26.0 题 vs 随机 80.9, p=0.0020):
-难度档位与 ZPD 边界在仿真与生产必须同源, 否则实验结论无法迁移到产品行为。
-统一 = 单一出处, 不是单一数值 —— 各阈值语义不同, 禁止合并:
+统一指单一出处，不是把不同语义强行合并成同一数值：
 
-- MASTERED_THRESHOLD: 达标线。>= 视为已掌握 (画像"已掌握"段 / 难度 hard 档 / 仿真毕业判定)。
+- MASTERED_THRESHOLD: 达标线。>= 视为已掌握（画像“已掌握”段 / 难度 hard 档）。
 - WEAK_THRESHOLD: 画像"薄弱点"叙述线 (进 QA 画像摘要)。
 - QUIZ_WEAK_THRESHOLD: 薄弱点定向出题圈选线 (略宽于叙述线, 让"将巩固未牢"的点也进练习)。
 - REINFORCE_THRESHOLD: 计划补强/学情报告红线 (低于此值触发补强任务插入与报告告警)。
@@ -41,7 +39,7 @@ def evidence_strength(score: float) -> str:
 
 
 def difficulty_for_mastery(p_mastery: float) -> str:
-    """按当前掌握度估计匹配难度档 (脚手架原则, 同仿真自适应臂):
+    """按当前掌握度估计匹配难度档：
 
     P(L) < 0.5 -> easy; 0.5 <= P(L) < 0.8 -> mid; >= 0.8 -> hard。
     上界锚定达标线 (产品语义), 未达标不派最难档。
@@ -54,7 +52,7 @@ def difficulty_for_mastery(p_mastery: float) -> str:
 
 
 def zone_label(p_mastery: float) -> str:
-    """给可解释推荐用的定性区间标签 (P2-7 脱敏口径: 出境只给定性词)。"""
+    """给可解释推荐使用的定性区间标签。"""
     if p_mastery < ZPD_LOWER:
         return "较弱"
     if p_mastery < QUIZ_WEAK_THRESHOLD:

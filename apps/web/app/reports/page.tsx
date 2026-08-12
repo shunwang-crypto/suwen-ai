@@ -28,7 +28,7 @@ import type {
   ReportWeakPoint,
 } from "@/lib/types";
 
-// ---- 后端并行契约（可选字段 + 空值降级：后端未上线时按旧响应正常工作）----
+// ---- 后端可选字段与空值降级 ----
 
 /** 章节聚合轴的下钻明细项（?kb_id= 时每轴附带）。 */
 interface RadarAxisKcDetail {
@@ -870,7 +870,7 @@ export default function ReportsPage() {
   const redPct = Math.round(redThreshold * 100);
   const consolidatePct = Math.round(consolidateThreshold * 100);
 
-  // 章节聚合轴判定：axes_kind 显式声明，或任一轴带聚合字段（后端未上线时恒为 false）
+  // 章节聚合轴判定：axes_kind 显式声明，或任一轴带聚合字段。
   const isChapterAxes =
     report.axes_kind === "chapter" ||
     radarAxes.some((a) => a.kc_count != null || (a.kcs?.length ?? 0) > 0);

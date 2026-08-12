@@ -5,7 +5,7 @@ Revises:
 Create Date: 2026-07-26
 
 初始迁移采用 Base.metadata.create_all 以保证与 ORM 模型零漂移
-(决策记录: docs/decisions.md #D3)。后续迁移一律 autogenerate 增量。
+后续迁移一律使用增量 revision。
 RLS: 租户表 ENABLE+FORCE, 策略基于事务级 GUC app.tenant_id
 (应用层通过 set_config('app.tenant_id', :tid, true) 注入, 见 apps/api db.py)。
 """
@@ -69,7 +69,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS original_response")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
-    # 开发默认密码 'edu', 生产部署后必须 ALTER ROLE edu_app PASSWORD ...
+    # 本地开发默认密码为 'edu'；应用连接与 migration 连接仍使用不同角色。
     op.execute(
         """
         DO $$ BEGIN

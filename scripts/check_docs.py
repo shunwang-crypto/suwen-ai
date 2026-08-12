@@ -1,4 +1,4 @@
-"""Validate links and the core index for actively maintained documentation."""
+"""Validate links and reject extra files in the maintained documentation set."""
 
 from __future__ import annotations
 
@@ -9,23 +9,11 @@ from urllib.parse import unquote
 
 ACTIVE_DOCUMENTS = (
     "README.md",
-    "STATUS.md",
-    "docs/README.md",
     "docs/architecture.md",
     "docs/development.md",
     "docs/api-contract.md",
     "docs/data-model.md",
-    "docs/decisions.md",
-    "docs/learning-plan.md",
-    "docs/safety.md",
-    "docs/scaling.md",
-    "docs/tradeoffs.md",
-    "docs/vlse.md",
-    "deploy/README-deploy.md",
-    "apps/web/README.md",
 )
-
-CORE_INDEX_TARGETS = tuple(path for path in ACTIVE_DOCUMENTS if path != "docs/README.md")
 
 _LINK_RE = re.compile(r"!?\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)")
 _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
@@ -72,15 +60,11 @@ def check_repository(
     root: Path,
     *,
     active_documents: tuple[str, ...] = ACTIVE_DOCUMENTS,
-    require_core_index: bool = True,
     enforce_canonical_docs: bool = False,
 ) -> list[str]:
     """Return human-readable validation errors for ``root``."""
     root = root.resolve()
     errors: list[str] = []
-    indexed_targets: set[Path] = set()
-    index_path = (root / "docs/README.md").resolve()
-
     for relative_path in active_documents:
         source = root / relative_path
         if not source.is_file():
@@ -91,8 +75,6 @@ def check_repository(
             target = _resolve_local_link(source, destination)
             if target is None:
                 continue
-            if source.resolve() == index_path:
-                indexed_targets.add(target)
             try:
                 target.relative_to(root)
             except ValueError:
@@ -102,12 +84,6 @@ def check_repository(
                 continue
             if not target.exists():
                 errors.append(f"{relative_path}:{line_number}: broken link: {destination}")
-
-    if require_core_index and index_path.is_file():
-        for relative_path in CORE_INDEX_TARGETS:
-            target = (root / relative_path).resolve()
-            if target not in indexed_targets:
-                errors.append(f"docs/README.md: core document is not indexed: {relative_path}")
 
     if enforce_canonical_docs:
         canonical = {

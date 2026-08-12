@@ -1,4 +1,4 @@
-"""F9 评估看板 API (仅管理员)。
+"""本地检索评估看板 API（仅管理员）。
 
 eval_runs 表从 M0 起就存在但从未被写入 —— 评测结果由明确环境的临时产物导入。本路由
 把它接通: 导入新产物 → 列表/详情/对比 → 页面上一键重跑。
@@ -58,7 +58,7 @@ async def import_runs(ctx: AuthContext = Depends(require_admin)):
 @router.get("")
 async def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
-    kind: str | None = Query(default=None, pattern="^(retrieval|simulation)$"),
+    kind: str | None = Query(default=None, pattern="^retrieval$"),
     ctx: AuthContext = Depends(require_admin),
 ):
     async with plain_session() as session:
@@ -109,7 +109,6 @@ async def compare_runs(
     return {
         "left": brief_l,
         "right": brief_r,
-        "same_kind": brief_l["kind"] == brief_r["kind"],
         "deltas": deltas,
         "left_only": sorted(set(flat_l) - set(flat_r)),
         "right_only": sorted(set(flat_r) - set(flat_l)),
@@ -120,7 +119,7 @@ async def compare_runs(
 async def run_eval(
     body: RunEvalIn, request: Request, ctx: AuthContext = Depends(require_admin)
 ):
-    """把一次检索评估投进 ARQ 队列 (F9-A1 的"一键触发")。
+    """把一次本地检索评估投进 ARQ 队列。
 
     评估要加载 BGE-M3 + reranker 并逐问打 60 次检索, 秒级到分钟级 —— 绝不能占着
     HTTP 请求, 也不该跑在 API 进程里污染在线服务的内存。

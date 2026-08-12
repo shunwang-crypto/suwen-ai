@@ -133,14 +133,14 @@ export interface KbOut {
   subject: string;
   kb_version: number;
   created_at: string;
-  /** Wave3 机构库：owner_type='org' 时带 org 标识；writable=当前用户可写 */
+  /** 机构库：owner_type='org' 时带 org 标识；writable=当前用户可写 */
   owner_type: "user" | "org";
   org_id: string | null;
   org_name: string | null;
   writable: boolean;
 }
 
-// ---- 机构（Wave3，对齐 routers/orgs.py）----
+// ---- 机构（对齐 routers/orgs.py）----
 
 export interface OrgOut {
   id: string;
@@ -237,7 +237,7 @@ export interface ErrorEventData {
   message: string;
 }
 
-// ---- 知识库（M2/M4，对齐 routers/kb.py）----
+// ---- 知识库（对齐 routers/kb.py）----
 
 export interface DocumentOut {
   id: string;
@@ -1131,10 +1131,10 @@ export interface TimeTravelInfo {
   virtual_now?: string;
 }
 
-// ---- 评估看板（F9，对齐 routers/evals.py）----
-// 历史报告字段口径不一（M2 老报告只有 hit@5/mrr/ndcg@10），故指标一律 optional。
+// ---- 本地检索评估看板（对齐 routers/evals.py）----
+// 历史检索报告字段口径不一，故指标一律 optional。
 
-export type EvalKind = "retrieval" | "simulation";
+export type EvalKind = "retrieval";
 
 /** 列表页的关键指标缩略（0..5 条，后端已格式化好 display）。 */
 export interface EvalSummaryMetric {
@@ -1224,78 +1224,6 @@ export interface RetrievalEvalMetrics {
   report_config?: EvalReportConfig;
 }
 
-export interface SimulationEstimatorConfig {
-  p_l0?: number;
-  p_t?: number;
-  slip?: number;
-  guess?: number;
-}
-
-export interface SimulationConfig {
-  n_students?: number;
-  n_kcs?: number;
-  t_rounds?: number;
-  threshold?: number;
-  max_questions?: number;
-  learning_rate?: number;
-  theta_max?: number;
-  estimator?: SimulationEstimatorConfig;
-}
-
-/** 实验 A：掌握度估计精度（每臂一组）。 */
-export interface SimulationArmEstimation {
-  r2?: number;
-  spearman?: number;
-  convergence_round?: number | null;
-  min_mae?: number;
-  min_mae_round?: number;
-  final_mae?: number;
-  mae_curve_mean?: number[];
-}
-
-/** 实验 B：毕业所需题量（每臂一组）。 */
-export interface SimulationArmEfficiency {
-  mean: number;
-  ci95?: number[];
-  grad_rate?: number;
-  final_theta_mean?: number;
-  seed_mean_questions?: number[];
-}
-
-export interface SimulationComparison {
-  mean_diff: number;
-  diff_ci95?: number[];
-  wilcoxon_w?: number;
-  p_value: number;
-  method?: string;
-  cohens_d?: number;
-}
-
-export interface SimulationSensitivityRow {
-  variant: string;
-  mean_adaptive: number;
-  mean_random: number;
-  mean_ladder: number;
-  mean_diff_a_vs_r: number;
-  p_value: number;
-  cohens_d: number;
-  direction_holds: boolean;
-}
-
-export interface SimulationEvalMetrics {
-  kind: "simulation";
-  generated_at?: string;
-  elapsed_seconds?: number;
-  seeds?: number[];
-  config?: SimulationConfig;
-  experiment_a?: Record<string, SimulationArmEstimation>;
-  experiment_b?: {
-    arms?: Record<string, SimulationArmEfficiency>;
-    comparisons?: Record<string, SimulationComparison>;
-  };
-  sensitivity?: SimulationSensitivityRow[];
-}
-
 export interface EvalRunDetail {
   id: string;
   kind: EvalKind;
@@ -1305,7 +1233,7 @@ export interface EvalRunDetail {
   corpus_version?: string | null;
   golden_set_version?: string | null;
   config?: EvalRunConfig;
-  metrics: RetrievalEvalMetrics | SimulationEvalMetrics;
+  metrics: RetrievalEvalMetrics;
 }
 
 export interface EvalCompareSide {
@@ -1328,7 +1256,6 @@ export interface EvalCompareDelta {
 export interface EvalCompareResponse {
   left: EvalCompareSide;
   right: EvalCompareSide;
-  same_kind: boolean;
   deltas: EvalCompareDelta[];
   left_only: string[];
   right_only: string[];
@@ -1363,7 +1290,7 @@ export interface EvalJobInfo {
   error: string | null;
 }
 
-// ---- 故障注入（M5-D2，对齐 routers/admin.py）----
+// ---- 故障注入（对齐 routers/admin.py）----
 
 export type BreakerState = "closed" | "open" | "half_open";
 
@@ -1406,7 +1333,7 @@ export interface FaultPatch {
   reset_breakers?: boolean;
 }
 
-// ---- 教师组卷导出（U-A4，对齐 routers/teacher.py）----
+// ---- 教师组卷导出（对齐 routers/teacher.py）----
 
 export interface TeacherQuizItem {
   id: string;

@@ -38,9 +38,8 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 
 认证错误码还包括 `EMAIL_CODE_REQUIRED`、`EMAIL_CODE_INVALID`、`EMAIL_CODE_RATE_LIMITED`、
 `CAPTCHA_REQUIRED`、`CAPTCHA_INVALID`、`EMAIL_EXISTS`、`INVITE_CODE_INVALID` 和 `REGISTRATION_CLOSED`；错误统一使用
-`{code, message, request_id}`。生产使用 Resend SMTP：`smtp.resend.com:465`、用户 `resend`、
-服务器 Secrets 中的 API Key 作为 `SMTP_PASSWORD`，发件人必须是已验证的
-`@mail.adfgt.xyz` 地址，并建议配置 `SMTP_REPLY_TO`。
+`{code, message, request_id}`。本地未配置 SMTP 时使用开发发送器；联调真实邮件时，凭据只写
+未提交的 `.env`。
 
 ### 对话（用户，120次/分限流）
 | 方法 | 路径 | 说明 |
@@ -57,7 +56,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/health/live | 进程存活探针 `{status: "ok"}`；不探依赖，失败处理由重启/编排器负责 |
-| GET | /api/health/ready | 就绪探针 `{status,gateway_mode,checks:{postgres,redis,qdrant,worker[,graph,vector_audit]},vector_audit}`；PG/Redis/Qdrant（生产另含 graph）失败返回 503，worker/审计异常可为 degraded |
+| GET | /api/health/ready | 就绪探针 `{status,gateway_mode,checks:{postgres,redis,qdrant,worker[,graph,vector_audit]},vector_audit}`；PG/Redis/Qdrant 失败返回 503，worker/审计异常可为 degraded |
 | GET | /api/health | 旧兼容路径，OpenAPI 标为 deprecated 并返回 `Deprecation: true` 与 successor `Link`；只检查 PG/Redis。仓库调用已切换，外部 monitor 仍需观察期确认后再移除兼容 |
 | GET | /api/docs | OpenAPI 文档 |
 
@@ -66,11 +65,10 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 |---|---|---|
 | GET | /api/billing/wallet | 当前额度余额 |
 | GET | /api/billing/ledger | 额度变动流水 |
-| GET | /api/billing/pricing | `{markup, signup_grant, recharge_enabled, referral_campaign:{enabled,url,reward_credits}, note}`；生产环境 `recharge_enabled=false`；邀请活动关闭时 `url=null` |
-| POST | /api/billing/orders | 仅非生产 mock 通道可用；生产返回 `403 PAYMENT_DISABLED` |
+| GET | /api/billing/pricing | `{markup, signup_grant, recharge_enabled, referral_campaign:{enabled,url,reward_credits}, note}`；邀请活动关闭时 `url=null` |
+| POST | /api/billing/orders | 本地 mock 支付通道；禁用时返回 `403 PAYMENT_DISABLED` |
 
-生产环境未接入真实支付时，前端不得展示模拟充值入口，只展示“在线充值暂未开放”。
-模拟支付只属于非生产开发能力，不能向线上用户呈现为可用支付方式。
+模拟支付只用于本地调试，不代表真实支付能力。
 硅基流动邀请活动只提供外部跳转；点击不产生额度。管理员在供应商后台确认有效邀请后，
 通过调额接口使用唯一业务凭证人工发放，活动额度不可提现或转让。
 
@@ -118,10 +116,10 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 {"event":"session","data":{"session_id":"…","run_id":"…"}}
 {"event":"token","data":{"text":"泰勒"}}
 {"event":"node_update","data":{"node":"generate","status":"running","detail":"生成回答中"}}
-{"event":"trace_event","data":{"type":"router","route":"kb","reason":"…"}}          // M3
-{"event":"citation","data":{"idx":1,"doc_id":"…","chunk_id":"…","page":42,"highlight":"…","doc_name":"…"}}  // M2
+{"event":"trace_event","data":{"type":"router","route":"kb","reason":"…"}}
+{"event":"citation","data":{"idx":1,"doc_id":"…","chunk_id":"…","page":42,"highlight":"…","doc_name":"…"}}
 {"event":"followups","data":{"questions":["…"]}}
-{"event":"interrupt","data":{"kind":"blueprint_confirm","payload":{},"resume_url":"/api/threads/{id}/resume"}}  // M3
+{"event":"interrupt","data":{"kind":"blueprint_confirm","payload":{},"resume_url":"/api/threads/{id}/resume"}}
 {"event":"error","data":{"code":"GENERATION_FAILED","message":"…"}}
 {"event":"done","data":{"session_id":"…","usage":{"cost_cny":0.002,"mode":"live","latency_ms":1234}}}
 ```
@@ -137,7 +135,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 旧客户端的 `kb` 模式及“未发送 mode 但携带知识库 ID”仍兼容。助手消息的 `meta.chat_mode`
 记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。
 
-### 知识库（M2，用户级鉴权 + 限流）
+### 知识库（用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/kb | {name, subject} 建库 |
@@ -145,7 +143,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | DELETE | /api/kb/{id} | 删库 + 异步物理清理（向量/对象） |
 | POST | /api/kb/{id}/documents | multipart 上传；后缀白名单+魔数+配额三重校验；同哈希幂等；入 ARQ 摄取队列 |
 | GET | /api/kb/{id}/documents | 文档列表（含两阶段状态机 status/error_msg） |
-| DELETE | /api/kb/{id}/documents/{doc} | 删文档 + 异步清理向量与对象（F2-A3） |
+| DELETE | /api/kb/{id}/documents/{doc} | 删除文档并异步清理向量与对象 |
 | POST | /api/kb/{id}/documents/{doc}/reindex | 重新摄取 |
 | GET | /api/kb/{id}/documents/{doc}/chunks | 分块预览器（text/页码/heading_path/向量化状态） |
 | POST | /api/kb/{id}/debug/retrieve | 检索调试面板：dense/sparse 命中、融合重排、置信度全透明 |
@@ -160,7 +158,7 @@ PDF 摄取逐页分类为 `native_text/scanned/mixed/failed`。完整可信文�
 Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向量写入前后重新确认 Document
 仍存在。引用继续使用 Chunk 的真实 `page_start/page_end`。
 
-Wave3 机构库（D14）：
+机构库：
 - `GET /api/kb` 每项新增 `owner_type/org_id/org_name/writable`；机构库写端点
   （上传/删文档/重建索引/删库/检索调试）member 一律 `403 ORG_READONLY`。
 - `/api/chat` 请求体新增 `kb_ids: UUID[]`（联合检索，deprecated `kb_id` 暂保留等价 `kb_ids=[kb_id]`）；
@@ -174,7 +172,7 @@ Wave3 机构库（D14）：
 | GET | /api/orgs/{id}/members | 成员列表（仅成员可见，非成员 404） |
 | POST | /api/orgs/{id}/kb | 建机构库（仅 org admin；owner_type='org', tenant_id=org_id） |
 
-VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察）：
+学习状态闭环（画像注入、画像联动出题与对话洞察）：
 - `/api/chat` kb 路径把学生画像摘要（≤300 字，确定性拼装，不经 LLM）注入 generate 的
   system prompt，并下发 `trace_event {type:"profile", weak_points:[], chars}`；
   **有画像时答案语义缓存禁用**（答案已按该学生个性化，跨用户复用即错答案）。
@@ -193,10 +191,10 @@ VLSE 闭环（F8-A2 画像注入 / M4-D2 画像联动出题 / §5.5 对话洞察
   mastery_log `evidence_type="chat_reflection"`、`weight=0.3`（弱于测评 1.0 / 辅导小结 0.5），
   stub 网关下跳过。
 
-### 多智能体工作流（M3，用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
+### AI 工作流（用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/threads/{thread_id}/resume | {value} interrupt 恢复协议 (M3-D2)；thread_id=`kind:user:local`，跨用户 404 |
+| POST | /api/threads/{thread_id}/resume | `{value}` interrupt 恢复协议；thread_id=`kind:user:local`，跨用户 404 |
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_key?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
 | GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason/question_count/difficulty_mix`，不返回题干或掌握度小数 |
 | POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_key?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
@@ -259,7 +257,7 @@ schema 重试耗尽是 `validation_failed`。`confirmation_mode` 为 `required` 
 如果校验成功但事务未能落库，或落库函数返回空结果，服务端只发送 `error` 事件
 （`QUIZ_FINALIZE_FAILED` / `QUIZ_FINALIZE_INVALID`），不会发送 `succeeded`。
 
-### 错题本（M4/F6，用户级鉴权 + 限流）
+### 错题本（用户级鉴权 + 限流）
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/errors | 错题列表；筛选 `state`(new\|reviewing\|mastered\|archived\|active) / `cause`(五分类) / `kc_id`，分页 `page`/`page_size`；含题干·选项·答案·解析·我的作答·错误次数·下次复习时间 |
@@ -395,8 +393,6 @@ attempt 置为 graded。相同请求重试幂等，已 graded 的语义字段改
 MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt。资源 owner、创建者、
 测评学生/阅卷人和关联 KB 均有明确 FK 删除语义；downgrade 先移除引用再删除结构化表，
 不伪造已删除的隐藏 Quiz。
-旧环境可执行 `scripts/audit_0011_error_import_isolation.sql` 做只读审计。
-
 后续迁移 0024 增加 ErrorItem 的 Attempt/信心快照，0025 增加用户级 FSRS-6 shadow 参数产物，
 0027 增加 Explain-back 的来源、rubric 和 shadow 质量分字段；这些 schema 变化不代表已经完成真实
 环境验收或启用个体参数/数值评分。

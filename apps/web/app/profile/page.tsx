@@ -2,7 +2,7 @@
 
 // AI 眼中的我（F8）：真实规模（3 库 × 152 KC）适配版。
 // - 掌握度雷达：components/mastery-radar.tsx —— 库 tab 切换 + 章节聚合轴 + 少轴条形降级 + 轴下钻
-//  （后端契约 kb_id/kb_name/subject/chapter 未上线时降级回 top12 旧行为）。
+//  （缺少 kb_id/kb_name/subject/chapter 时降级回 top12 行为）。
 // - 掌握度明细：「科目 → 章节」两级折叠树（组头=章均掌握度+薄弱计数，默认只展开含薄弱的章），
 //   名称/别名搜索 + 「只看薄弱」「只看到期」过滤 chip，行高压缩，动作收进桌面 hover /「…」菜单，
 //   窄屏两行卡片布局，遗忘快照缩成「3 天后 N%」徽章（P2-7 全文进 tooltip）。
@@ -110,7 +110,7 @@ function ActionIcon({ kind }: { kind: "consolidate" | "review" | "verify" }) {
 
 /**
  * 掌握度行 + 后端附带/并行契约字段（共享 types.ts 不改，页面局部扩展）：
- * retention_*（P2-7 遗忘快照，已上线）；kb_id/kb_name/subject/chapter/aliases
+ * retention_*（遗忘快照）；kb_id/kb_name/subject/chapter/aliases
  *（真实规模契约，后端并行开发中，缺失时本页各区块自动降级）。
  */
 type MasteryWithMeta = MasteryItem & {

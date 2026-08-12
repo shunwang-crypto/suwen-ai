@@ -1,11 +1,10 @@
 "use client";
 
-// 评估看板（F9，仅管理员）：把明确环境生成的评测产物入库后集中展示。
+// 本地检索评估看板（仅管理员）：把临时评测产物入库后集中展示。
 // 上：导入 / 重跑（job 轮询）操作条；中：历史跑分表（可勾选 A/B 做 delta 对比）；
-// 下：单次跑分详情——检索报告给 headline 指标卡 + 按 category 分桶柱 + 拒答正确率，
-// 仿真报告给三臂毕业题量柱（含 95%CI 误差线）+ 显著性 / 敏感性 / 实验 A 表。
+// 下：单次跑分详情展示 headline 指标卡、按 category 分桶柱和拒答正确率。
 // 图表一律纯 SVG / 纯 CSS div，颜色只作辅助——每根柱都带文字数值与 title tooltip。
-// 每张卡片底部固定标注数据口径（embedding/rerank 真跑还是 stub、语料与黄金集版本、仿真规模）。
+// 每张卡片底部固定标注 embedding/rerank、语料与黄金集版本。
 
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -23,7 +22,6 @@ import type {
   EvalCompareResponse,
   EvalImportResponse,
   EvalJobInfo,
-  EvalKind,
   EvalRunDetail,
   EvalRunJobStart,
   EvalRunListItem,
@@ -31,9 +29,6 @@ import type {
   RetrievalCategoryRow,
   RetrievalEvalMetrics,
   RetrievalRefusal,
-  SimulationArmEfficiency,
-  SimulationComparison,
-  SimulationEvalMetrics,
 } from "@/lib/types";
 
 const DEFAULT_GOLDEN = "eval/golden_set/v2.jsonl";
@@ -49,18 +44,6 @@ const CAT_SERIES: { key: CatSeriesKey; label: string; color: string }[] = [
   { key: "hit@5", label: "hit@5", color: "#d97706" },
   { key: "mrr", label: "MRR", color: "#be123c" },
 ];
-
-const ARM_META: { key: string; label: string; color: string }[] = [
-  { key: "adaptive", label: "自适应选题", color: "#4f46e5" },
-  { key: "random", label: "随机选题", color: "#0d9488" },
-  { key: "ladder", label: "固定阶梯", color: "#d97706" },
-];
-
-const COMPARISON_LABEL: Record<string, string> = {
-  adaptive_vs_random: "自适应 vs 随机",
-  adaptive_vs_ladder: "自适应 vs 阶梯",
-  ladder_vs_random: "阶梯 vs 随机",
-};
 
 const HEADLINE_ORDER: { key: keyof NonNullable<RetrievalEvalMetrics["headline"]>; label: string }[] =
   [
@@ -79,26 +62,10 @@ function fmtNum(v: number | null | undefined, digits = 4): string {
   return v.toFixed(digits);
 }
 
-function fmtP(p: number | null | undefined): string {
-  if (typeof p !== "number" || !Number.isFinite(p)) return "—";
-  if (p < 0.0001) return p.toExponential(2);
-  return p.toFixed(4);
-}
-
-function fmtCi(ci: number[] | undefined): string {
-  if (!ci || ci.length < 2) return "—";
-  return `[${ci[0].toFixed(2)}, ${ci[1].toFixed(2)}]`;
-}
-
-function KindBadge({ kind }: { kind: EvalKind }) {
-  const retrieval = kind === "retrieval";
+function KindBadge() {
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${
-        retrieval ? "bg-indigo-50 text-indigo-700" : "bg-teal-50 text-teal-700"
-      }`}
-    >
-      {retrieval ? "检索评估" : "仿真实验"}
+    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-indigo-700">
+      检索评估
     </span>
   );
 }
@@ -191,7 +158,7 @@ function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
   if (rows.length === 0 || series.length === 0) {
     return (
       <p className="py-4 text-center text-xs text-slate-400">
-        该报告未提供按 category 的分桶指标（M2 版本报告只有整体 headline）
+        该报告未提供按 category 的分桶指标
       </p>
     );
   }
@@ -430,410 +397,8 @@ function RetrievalDetail({
           <RefusalBlock refusal={metrics.refusal} />
         ) : (
           <p className="py-4 text-center text-xs text-slate-400">
-            该报告未包含拒答子集（M2 版本黄金集尚无拒答题）
+            该报告未包含拒答子集
           </p>
-        )}
-        <BasisNote>{basis}</BasisNote>
-      </Card>
-    </div>
-  );
-}
-
-// ---- 仿真详情 ----
-
-/** 三臂毕业题量柱（纯 SVG）：柱顶标 mean，叠加 95%CI 误差线。 */
-function ArmsChart({ arms }: { arms: Record<string, SimulationArmEfficiency> }) {
-  const items = ARM_META.flatMap((m) => {
-    const arm = arms?.[m.key];
-    return arm && typeof arm.mean === "number" ? [{ ...m, arm }] : [];
-  });
-  if (items.length === 0) {
-    return <p className="py-4 text-center text-xs text-slate-400">暂无实验 B 数据</p>;
-  }
-
-  const w = 560;
-  const h = 260;
-  const pad = { l: 40, r: 16, t: 26, b: 62 };
-  const innerW = w - pad.l - pad.r;
-  const innerH = h - pad.t - pad.b;
-  const top = Math.max(
-    ...items.map((it) => Math.max(it.arm.mean, it.arm.ci95?.[1] ?? it.arm.mean)),
-    1e-9,
-  );
-  const max = top * 1.15;
-  const y = (v: number) => pad.t + innerH - (v / max) * innerH;
-  const slot = innerW / items.length;
-  const barW = Math.min(slot * 0.4, 68);
-
-  return (
-    <div className="overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        className="block w-full min-w-120"
-        role="img"
-        aria-label="三种选题策略的平均毕业题量对比"
-      >
-        <line
-          x1={pad.l}
-          y1={pad.t + innerH}
-          x2={w - pad.r}
-          y2={pad.t + innerH}
-          stroke="#cbd5e1"
-          strokeWidth={1}
-        />
-        <line
-          x1={pad.l}
-          y1={pad.t}
-          x2={w - pad.r}
-          y2={pad.t}
-          stroke="#f1f5f9"
-          strokeWidth={1}
-        />
-        <text x={pad.l - 6} y={pad.t + 4} fontSize={10} fill="#94a3b8" textAnchor="end">
-          {max.toFixed(0)}
-        </text>
-        <text
-          x={pad.l - 6}
-          y={pad.t + innerH + 4}
-          fontSize={10}
-          fill="#94a3b8"
-          textAnchor="end"
-        >
-          0
-        </text>
-
-        {items.map((it, i) => {
-          const cx = pad.l + slot * (i + 0.5);
-          const yTop = y(it.arm.mean);
-          const lo = it.arm.ci95?.[0];
-          const hi = it.arm.ci95?.[1];
-          return (
-            <g key={it.key}>
-              <rect
-                x={cx - barW / 2}
-                y={yTop}
-                width={barW}
-                height={pad.t + innerH - yTop}
-                rx={4}
-                fill={it.color}
-              >
-                <title>
-                  {it.label}：平均 {it.arm.mean.toFixed(2)} 题毕业 · 95%CI{" "}
-                  {fmtCi(it.arm.ci95)} · 毕业率{" "}
-                  {it.arm.grad_rate != null ? `${(it.arm.grad_rate * 100).toFixed(0)}%` : "—"}
-                </title>
-              </rect>
-
-              {/* 95%CI 误差线（含上下横帽） */}
-              {typeof lo === "number" && typeof hi === "number" && (
-                <g stroke="#1e293b" strokeWidth={1.5} strokeLinecap="round">
-                  <line x1={cx} y1={y(hi)} x2={cx} y2={y(lo)} />
-                  <line x1={cx - 9} y1={y(hi)} x2={cx + 9} y2={y(hi)} />
-                  <line x1={cx - 9} y1={y(lo)} x2={cx + 9} y2={y(lo)} />
-                </g>
-              )}
-
-              <text
-                x={cx}
-                y={Math.min(y(hi ?? it.arm.mean) - 7, yTop - 7)}
-                fontSize={13}
-                fontWeight={600}
-                fill="#0f172a"
-                textAnchor="middle"
-              >
-                {it.arm.mean.toFixed(2)}
-              </text>
-              <text
-                x={cx}
-                y={pad.t + innerH + 17}
-                fontSize={11}
-                fill="#334155"
-                textAnchor="middle"
-              >
-                {it.label}
-              </text>
-              <text
-                x={cx}
-                y={pad.t + innerH + 31}
-                fontSize={10}
-                fill="#94a3b8"
-                textAnchor="middle"
-              >
-                95%CI {fmtCi(it.arm.ci95)}
-              </text>
-              <text
-                x={cx}
-                y={pad.t + innerH + 44}
-                fontSize={10}
-                fill="#94a3b8"
-                textAnchor="middle"
-              >
-                毕业率{" "}
-                {it.arm.grad_rate != null
-                  ? `${(it.arm.grad_rate * 100).toFixed(0)}%`
-                  : "—"}
-                {it.arm.final_theta_mean != null
-                  ? ` · θ̄ ${it.arm.final_theta_mean.toFixed(3)}`
-                  : ""}
-              </text>
-            </g>
-          );
-        })}
-        <text x={pad.l} y={14} fontSize={10} fill="#94a3b8">
-          纵轴：达到掌握阈值所需平均题量（越低越好）
-        </text>
-      </svg>
-    </div>
-  );
-}
-
-function ComparisonsTable({
-  comparisons,
-}: {
-  comparisons: Record<string, SimulationComparison>;
-}) {
-  const rows = Object.entries(comparisons ?? {});
-  if (rows.length === 0) {
-    return <p className="py-3 text-center text-xs text-slate-400">暂无成对比较</p>;
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-160 text-left text-sm">
-        <thead>
-          <tr className="border-b border-slate-100 text-xs text-slate-400">
-            <th className="py-1.5 font-medium">对比</th>
-            <th className="py-1.5 text-right font-medium">均值差</th>
-            <th className="py-1.5 font-medium">差值 95%CI</th>
-            <th className="py-1.5 text-right font-medium">Wilcoxon W</th>
-            <th className="py-1.5 text-right font-medium">p 值</th>
-            <th className="py-1.5 text-right font-medium">Cohen&apos;s d</th>
-            <th className="py-1.5 font-medium">结论</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(([key, c]) => {
-            const sig = typeof c.p_value === "number" && c.p_value < 0.05;
-            return (
-              <tr key={key} className="border-b border-slate-50">
-                <td className="py-1.5 pr-2 text-xs font-medium text-slate-700">
-                  {COMPARISON_LABEL[key] ?? key}
-                </td>
-                <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                  {c.mean_diff > 0 ? "+" : ""}
-                  {fmtNum(c.mean_diff, 2)}
-                </td>
-                <td className="py-1.5 pr-2 font-mono text-xs text-slate-500">
-                  {fmtCi(c.diff_ci95)}
-                </td>
-                <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-500">
-                  {c.wilcoxon_w ?? "—"}
-                </td>
-                <td
-                  className={`py-1.5 pr-2 text-right font-mono text-xs ${
-                    sig ? "font-semibold text-emerald-700" : "text-slate-600"
-                  }`}
-                >
-                  {fmtP(c.p_value)}
-                </td>
-                <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                  {fmtNum(c.cohens_d, 2)}
-                </td>
-                <td className="py-1.5 whitespace-nowrap">
-                  {sig ? (
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                      显著（p&lt;0.05）
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-                      不显著
-                    </span>
-                  )}
-                  {c.method && (
-                    <span className="ml-1.5 font-mono text-body-sm text-slate-400">
-                      {c.method}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function SimulationDetail({
-  detail,
-  metrics,
-}: {
-  detail: EvalRunDetail;
-  metrics: SimulationEvalMetrics;
-}) {
-  const cfg = metrics.config ?? {};
-  const arms = metrics.experiment_b?.arms ?? {};
-  const comparisons = metrics.experiment_b?.comparisons ?? {};
-  const sensitivity = metrics.sensitivity ?? [];
-  const expA = metrics.experiment_a ?? {};
-  const seedCount = metrics.seeds?.length ?? 0;
-
-  const basis = (
-    <>
-      纯数值仿真，<span className="font-semibold text-slate-500">零 LLM 调用</span> ·{" "}
-      {seedCount} 个随机种子 · 规模 {cfg.n_students ?? "?"} 学生 × {cfg.n_kcs ?? "?"}{" "}
-      知识点 × {cfg.t_rounds ?? "?"} 轮 · 掌握阈值 {cfg.threshold ?? "?"} · BKT 参数 P(L0)=
-      {cfg.estimator?.p_l0 ?? "?"} / P(T)={cfg.estimator?.p_t ?? "?"} / slip=
-      {cfg.estimator?.slip ?? "?"} / guess={cfg.estimator?.guess ?? "?"}
-      {metrics.generated_at ? ` · 报告生成于 ${fmtDateTime(metrics.generated_at)}` : ""}
-      {metrics.elapsed_seconds != null
-        ? ` · 全量重跑耗时 ${metrics.elapsed_seconds.toFixed(2)}s`
-        : ""}
-      {detail.corpus_version ? ` · 语料 ${detail.corpus_version}` : ""}
-    </>
-  );
-
-  return (
-    <div className="space-y-4">
-      <Card
-        title="实验 B · 毕业所需题量（三臂对比）"
-        extra={
-          <span className="text-xs text-slate-400">
-            上限 {cfg.max_questions ?? "?"} 题 · 越低越好
-          </span>
-        }
-      >
-        <ArmsChart arms={arms} />
-        <BasisNote>{basis}</BasisNote>
-      </Card>
-
-      <Card title="成对显著性检验（Wilcoxon 符号秩 + Cohen's d）">
-        <ComparisonsTable comparisons={comparisons} />
-        <BasisNote>{basis}</BasisNote>
-      </Card>
-
-      <Card title="敏感性分析（扰动 BKT 参数后结论是否仍成立）">
-        {sensitivity.length === 0 ? (
-          <p className="py-3 text-center text-xs text-slate-400">该报告未包含敏感性分析</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-160 text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
-                  <th className="py-1.5 font-medium">扰动变体</th>
-                  <th className="py-1.5 text-right font-medium">自适应</th>
-                  <th className="py-1.5 text-right font-medium">随机</th>
-                  <th className="py-1.5 text-right font-medium">阶梯</th>
-                  <th className="py-1.5 text-right font-medium">自适应−随机</th>
-                  <th className="py-1.5 text-right font-medium">p 值</th>
-                  <th className="py-1.5 text-right font-medium">Cohen&apos;s d</th>
-                  <th className="py-1.5 font-medium">结论方向</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sensitivity.map((s) => (
-                  <tr key={s.variant} className="border-b border-slate-50">
-                    <td className="py-1.5 pr-2 font-mono text-xs text-slate-700">
-                      {s.variant}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                      {fmtNum(s.mean_adaptive, 2)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
-                      {fmtNum(s.mean_random, 2)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
-                      {fmtNum(s.mean_ladder, 2)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                      {s.mean_diff_a_vs_r > 0 ? "+" : ""}
-                      {fmtNum(s.mean_diff_a_vs_r, 2)}
-                    </td>
-                    <td
-                      className={`py-1.5 pr-2 text-right font-mono text-xs ${
-                        s.p_value < 0.05
-                          ? "font-semibold text-emerald-700"
-                          : "text-slate-600"
-                      }`}
-                    >
-                      {fmtP(s.p_value)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                      {fmtNum(s.cohens_d, 2)}
-                    </td>
-                    <td className="py-1.5 whitespace-nowrap">
-                      {s.direction_holds ? (
-                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                          ✓ 仍成立
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">
-                          ✗ 翻转
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <BasisNote>{basis}</BasisNote>
-      </Card>
-
-      <Card title="实验 A · 掌握度估计精度">
-        {Object.keys(expA).length === 0 ? (
-          <p className="py-3 text-center text-xs text-slate-400">该报告未包含实验 A</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-120 text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
-                  <th className="py-1.5 font-medium">策略</th>
-                  <th className="py-1.5 text-right font-medium">R²</th>
-                  <th className="py-1.5 text-right font-medium">Spearman ρ</th>
-                  <th className="py-1.5 text-right font-medium">收敛轮次</th>
-                  <th className="py-1.5 text-right font-medium">最小 MAE</th>
-                  <th className="py-1.5 text-right font-medium">末轮 MAE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ARM_META.flatMap((m) => {
-                  const a = expA[m.key];
-                  return a ? [{ meta: m, a }] : [];
-                }).map(({ meta, a }) => (
-                  <tr key={meta.key} className="border-b border-slate-50">
-                    <td className="py-1.5 pr-2 text-xs font-medium text-slate-700">
-                      <span className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm align-middle"
-                        style={{ background: meta.color }}
-                        aria-hidden
-                      />
-                      {meta.label}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                      {fmtNum(a.r2, 4)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-700">
-                      {fmtNum(a.spearman, 4)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
-                      {a.convergence_round ?? "未收敛"}
-                    </td>
-                    <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
-                      {fmtNum(a.min_mae, 4)}
-                      {a.min_mae_round != null && (
-                        <span className="ml-1 text-body-sm text-slate-400">
-                          @{a.min_mae_round}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-1.5 text-right font-mono text-xs text-slate-600">
-                      {fmtNum(a.final_mae, 4)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         )}
         <BasisNote>{basis}</BasisNote>
       </Card>
@@ -877,22 +442,12 @@ function RunDetailPanel({ id }: { id: string }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <KindBadge kind={detail.kind} />
+        <KindBadge />
         <h3 className="text-sm font-semibold text-slate-900">{detail.label}</h3>
         <span className="font-mono text-xs text-slate-400">{detail.source}</span>
         <span className="ml-auto text-xs text-slate-400">{fmtDateTime(detail.at)}</span>
       </div>
-      {detail.kind === "retrieval" ? (
-        <RetrievalDetail
-          detail={detail}
-          metrics={detail.metrics as RetrievalEvalMetrics}
-        />
-      ) : (
-        <SimulationDetail
-          detail={detail}
-          metrics={detail.metrics as SimulationEvalMetrics}
-        />
-      )}
+      <RetrievalDetail detail={detail} metrics={detail.metrics} />
     </div>
   );
 }
@@ -946,7 +501,7 @@ function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }
               <div key={tag} className="rounded-xl border border-slate-200 px-3 py-2">
                 <p className="text-xs text-slate-400">{tag}</p>
                 <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-800">
-                  <KindBadge kind={side.kind} />
+                  <KindBadge />
                   {side.label}
                 </p>
                 <p className="mt-0.5 font-mono text-body-sm text-slate-400">
@@ -955,13 +510,6 @@ function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }
               </div>
             ))}
           </div>
-
-          {!data.same_kind && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              两次跑分类型不同（{data.left.kind} vs {data.right.kind}），指标不可直接比较，
-              下表仅列出同名键。
-            </div>
-          )}
 
           {data.deltas.length === 0 ? (
             <p className="py-3 text-center text-xs text-slate-400">没有可比较的同名指标</p>
@@ -1034,7 +582,7 @@ function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }
           )}
           <p className="text-body-sm text-slate-400">
             Δ 与相对变化按 B−A 计算；绿色 ↑ 表示 B 更高，红色 ↓ 表示 B 更低。
-            指标方向请结合语义判断（hit/MRR 越高越好，毕业题量越低越好）。
+            hit、MRR 和 nDCG 均为越高越好。
           </p>
         </div>
       )}
@@ -1440,7 +988,7 @@ export default function EvalsPage() {
                         {fmtDateTime(r.at)}
                       </td>
                       <td className="py-2.5 pr-2">
-                        <KindBadge kind={r.kind} />
+                        <KindBadge />
                       </td>
                       <td className="py-2.5 pr-2">
                         <span className="text-sm font-medium text-slate-800">

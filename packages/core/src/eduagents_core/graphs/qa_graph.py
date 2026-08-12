@@ -854,7 +854,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         return state.get("route", "direct")
 
     def after_retrieve(state: _QaGraphState) -> str:
-        # 置信度门控 (§5.3 答辩创新点): 高置信走快路径跳过 grade 压延迟
+        # 置信度门控：高置信走快路径跳过 grade，降低延迟。
         if state.get("confident") and state.get("evidences"):
             return "generate"
         return "grade"
