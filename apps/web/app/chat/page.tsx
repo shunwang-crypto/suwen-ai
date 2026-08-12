@@ -28,6 +28,11 @@ import {
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
+import {
+  booleanStorageCodec,
+  useHydratedLocalStorage,
+  type StorageCodec,
+} from "@/lib/use-hydrated-local-storage";
 import type {
   ChatRunStatusOut,
   ChatAttachmentCapabilities,
@@ -92,28 +97,22 @@ const LAST_CHAT_SESSION_KEY = "eduagents:last-chat-session";
 const CHAT_SESSION_STATUS_KEY = "eduagents:chat-session-status";
 const CHAT_HISTORY_COLLAPSED_KEY = "suwen:chat-history-collapsed";
 
-function readChatHistoryCollapsed(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(CHAT_HISTORY_COLLAPSED_KEY) === "1";
-}
-
 type SessionIndicator = "running" | "completed";
 
-function readSessionIndicators(): Record<string, SessionIndicator> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = JSON.parse(
-      window.localStorage.getItem(CHAT_SESSION_STATUS_KEY) ?? "{}",
-    ) as Record<string, unknown>;
+const sessionIndicatorsCodec: StorageCodec<Record<string, SessionIndicator>> = {
+  parse: (raw) => {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(
-      Object.entries(raw).filter(
+      Object.entries(parsed).filter(
         ([, value]) => value === "running" || value === "completed",
       ),
     ) as Record<string, SessionIndicator>;
-  } catch {
-    return {};
-  }
-}
+  },
+  serialize: (value) => JSON.stringify(value),
+};
+
+const EMPTY_SESSION_INDICATORS: Record<string, SessionIndicator> = {};
 
 function genId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -296,9 +295,11 @@ function ChatView() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [sessionIndicators, setSessionIndicators] = useState<
-    Record<string, SessionIndicator>
-  >(readSessionIndicators);
+  const [sessionIndicators, setSessionIndicators] = useHydratedLocalStorage(
+    CHAT_SESSION_STATUS_KEY,
+    EMPTY_SESSION_INDICATORS,
+    sessionIndicatorsCodec,
+  );
   const abortRef = useRef<AbortController | null>(null);
   const detachedControllersRef = useRef(new WeakSet<AbortController>());
   const stoppedControllersRef = useRef(new WeakSet<AbortController>());
@@ -317,8 +318,10 @@ function ChatView() {
 
   // 移动端抽屉
   const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [historyCollapsed, setHistoryCollapsed] = useState(
-    readChatHistoryCollapsed,
+  const [historyCollapsed, setHistoryCollapsed] = useHydratedLocalStorage(
+    CHAT_HISTORY_COLLAPSED_KEY,
+    false,
+    booleanStorageCodec,
   );
   const [citationsOpen, setCitationsOpen] = useState(false);
 
@@ -328,13 +331,6 @@ function ChatView() {
   /** ?new=1 全局新建入口只消费一次。 */
   const newChatRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      CHAT_HISTORY_COLLAPSED_KEY,
-      historyCollapsed ? "1" : "0",
-    );
-  }, [historyCollapsed]);
 
   const patchMsg = useCallback(
     (id: string, patch: (m: ChatMsg) => ChatMsg) => {
@@ -372,13 +368,6 @@ function ChatView() {
     },
     [detachCurrentStream],
   );
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      CHAT_SESSION_STATUS_KEY,
-      JSON.stringify(sessionIndicators),
-    );
-  }, [sessionIndicators]);
 
   useEffect(() => {
     if (activeSessionId) {
@@ -535,7 +524,7 @@ function ChatView() {
       setStreaming(false);
       setBanner(message);
     }
-  }, [detachCurrentStream, discardPendingAttachments, loadSessions, patchMsg]);
+  }, [detachCurrentStream, discardPendingAttachments, loadSessions, patchMsg, setSessionIndicators]);
 
   // 从其他功能页返回 /chat 时恢复上次查看的会话；带 ?q= 的推荐问题仍开启新对话。
   useEffect(() => {
@@ -595,7 +584,7 @@ function ChatView() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [activeSessionId, sessionIndicators, sessions]);
+  }, [activeSessionId, sessionIndicators, sessions, setSessionIndicators]);
 
   const newSession = useCallback(() => {
     discardPendingAttachments();
@@ -662,7 +651,7 @@ function ChatView() {
         return false;
       }
     },
-    [activeRunId, activeSessionId, loadSessions],
+    [activeRunId, activeSessionId, loadSessions, setSessionIndicators],
   );
 
   const removeAttachment = useCallback(async (attachment: ChatAttachmentOut) => {
@@ -1014,6 +1003,7 @@ function ChatView() {
       kbs,
       patchMsg,
       loadSessions,
+      setSessionIndicators,
     ],
   );
 
@@ -1045,7 +1035,7 @@ function ChatView() {
         return next;
       });
     }
-  }, [activeRunId, activeSessionId]);
+  }, [activeRunId, activeSessionId, setSessionIndicators]);
 
   /** truncated 消息的「重新提问」：回溯到该助手消息之前最近的用户消息重发 */
   const retryFrom = useCallback(

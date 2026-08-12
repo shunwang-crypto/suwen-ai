@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { ApiError, apiJson } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -76,7 +76,15 @@ export function AssessmentPanel({
   const [scores, setScores] = useState<Record<string, string>>({});
   const [maxScores, setMaxScores] = useState<Record<string, string>>({});
   const [title, setTitle] = useState(`${resource.title} · 练习记录`);
-  const [takenAt, setTakenAt] = useState(new Date().toISOString().slice(0, 10));
+  // The current day can differ between the Next.js server timezone and the
+  // browser. Populate it after hydration so the first render stays stable.
+  const browserToday = useSyncExternalStore(
+    () => () => {},
+    () => new Date().toISOString().slice(0, 10),
+    () => "",
+  );
+  const [takenAtDraft, setTakenAt] = useState<string | null>(null);
+  const takenAt = takenAtDraft ?? browserToday;
   const [duration, setDuration] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

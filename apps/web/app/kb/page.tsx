@@ -26,6 +26,7 @@ import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { createRequestEpoch } from "@/lib/request-epoch";
 import type { DocumentOut, KbOut } from "@/lib/types";
 
 /** 上传/配额类错误码 → 中文提示（后端信封对未知码回显原码）。 */
@@ -77,6 +78,11 @@ export default function KbPage() {
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<DocumentOut | null>(null);
+  // All document reads share a latest-wins boundary. This covers the initial
+  // load, polling and mutation-triggered refreshes, so an old KB response can
+  // never overwrite the currently selected KB.
+  const docsRequestsRef = useRef(createRequestEpoch());
+  const selectedIdRef = useRef<string | null>(null);
 
   const selected = kbs?.find((k) => k.id === selectedId) ?? null;
 
@@ -90,12 +96,12 @@ export default function KbPage() {
         setKbError(null);
         const requested = new URLSearchParams(window.location.search).get("kb");
         const remembered = window.localStorage.getItem(lastSelectionKey);
-        setSelectedId((prev) => {
-          const preferred = [prev, requested, remembered].find(
-            (id): id is string => Boolean(id && list.some((k) => k.id === id)),
-          );
-          return preferred ?? list[0]?.id ?? null;
-        });
+        const preferred = [selectedIdRef.current, requested, remembered].find(
+          (id): id is string => Boolean(id && list.some((k) => k.id === id)),
+        );
+        const nextSelectedId = preferred ?? list[0]?.id ?? null;
+        selectedIdRef.current = nextSelectedId;
+        setSelectedId(nextSelectedId);
       } catch (err) {
         if (!alive) return;
         setKbs((prev) => prev ?? []);
@@ -119,12 +125,22 @@ export default function KbPage() {
   const reloadKbs = useCallback(() => setKbsReload((k) => k + 1), []);
 
   const loadDocs = useCallback(async (kbId: string, silent = false) => {
+    if (selectedIdRef.current !== kbId) return;
+    const request = docsRequestsRef.current.begin();
     try {
       const list = await apiJson<DocumentOut[]>(`/api/kb/${kbId}/documents`);
+      if (
+        !docsRequestsRef.current.isCurrent(request) ||
+        selectedIdRef.current !== kbId
+      ) return;
       setDocs(list);
       setDocsKbId(kbId);
       setDocsError(null);
     } catch (err) {
+      if (
+        !docsRequestsRef.current.isCurrent(request) ||
+        selectedIdRef.current !== kbId
+      ) return;
       if (!silent) {
         setDocsError(err instanceof ApiError ? err.message : "文档列表加载失败");
         setDocs([]);
@@ -136,25 +152,32 @@ export default function KbPage() {
   // 切库后的首次加载（内联 IIFE；后续静默刷新走 loadDocs）
   useEffect(() => {
     if (!selectedId) return;
-    let alive = true;
+    const requests = docsRequestsRef.current;
+    const request = requests.begin();
     (async () => {
       try {
         const list = await apiJson<DocumentOut[]>(`/api/kb/${selectedId}/documents`);
-        if (!alive) return;
+        if (
+          !requests.isCurrent(request) ||
+          selectedIdRef.current !== selectedId
+        ) return;
         setDocs(list);
         setDocsKbId(selectedId);
         setDocsError(null);
       } catch (err) {
-        if (!alive) return;
+        if (
+          !requests.isCurrent(request) ||
+          selectedIdRef.current !== selectedId
+        ) return;
         setDocsError(err instanceof ApiError ? err.message : "文档列表加载失败");
         setDocs([]);
         setDocsKbId(selectedId);
       }
     })();
     return () => {
-      alive = false;
+      requests.invalidate();
     };
-  }, [selectedId]);
+  }, [selectedId, lastSelectionKey]);
 
   // 两阶段状态机轮询：存在处理中的文档时每 2s 静默刷新，直到全部 ready/enriched/failed
   const pollingRef = useRef(false);
@@ -184,6 +207,7 @@ export default function KbPage() {
       setNewName("");
       setNewSubject("");
       setShowCreate(false);
+      selectedIdRef.current = kb.id;
       setSelectedId(kb.id);
       reloadKbs();
     } catch (err) {
@@ -200,7 +224,11 @@ export default function KbPage() {
     setBanner(null);
     try {
       await apiJson<void>(`/api/kb/${kb.id}`, { method: "DELETE" });
-      if (kb.id === selectedId) setSelectedId(null);
+      if (kb.id === selectedId) {
+        selectedIdRef.current = null;
+        docsRequestsRef.current.invalidate();
+        setSelectedId(null);
+      }
       reloadKbs();
     } catch (err) {
       setBanner(friendlyError(err, "删除知识库失败"));
@@ -301,7 +329,7 @@ export default function KbPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
+          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => { const nextId = e.target.value; docsRequestsRef.current.invalidate(); selectedIdRef.current = nextId; setSelectedId(nextId); }} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
           <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white hover:bg-brand-800">新建知识库</button>
           {selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-danger-600 hover:bg-danger-50">删除</button>}
         </div>

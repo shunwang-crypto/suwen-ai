@@ -12,6 +12,7 @@ import { ResourceExtractionSteps } from "@/components/resources/resource-extract
 import { SourcePreview } from "@/components/resources/source-preview";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ApiError, apiJson } from "@/lib/api";
+import { createRequestEpoch } from "@/lib/request-epoch";
 import type {
   LearningResourceOut,
   ResourceQuestionOut,
@@ -234,16 +235,22 @@ function ResourcesPageContent() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LearningResourceOut | null>(null);
   const deepLinkHandled = useRef<string | null>(null);
+  const listRequestsRef = useRef(createRequestEpoch());
+  const detailRequestsRef = useRef(createRequestEpoch());
+  const selectedResourceIdRef = useRef<string | null>(null);
   const deepResourceId = searchParams.get("resource_id");
   const deepQuestionId = searchParams.get("question_id");
   const deepLinkKey = deepResourceId ? `${deepResourceId}:${deepQuestionId ?? ""}` : null;
 
   const loadResources = useCallback(async () => {
+    const request = listRequestsRef.current.begin();
     try {
       const list = await apiJson<LearningResourceOut[]>("/api/resources");
+      if (!listRequestsRef.current.isCurrent(request)) return;
       setResources(list);
       setListError(null);
     } catch (reason) {
+      if (!listRequestsRef.current.isCurrent(request)) return;
       setListError(friendlyError(reason, "题目资料加载失败"));
       setResources((previous) => previous ?? []);
     }
@@ -255,6 +262,8 @@ function ResourcesPageContent() {
   }, [loadResources]);
 
   const loadResource = useCallback(async (resourceId: string) => {
+    if (selectedResourceIdRef.current !== resourceId) return;
+    const request = detailRequestsRef.current.begin();
     setSelectedLoading(true);
     setBanner(null);
     try {
@@ -262,18 +271,30 @@ function ResourcesPageContent() {
       const resourceQuestions = isQuestionResource(resource) && !isTutorManagedResource(resource)
         ? await apiJson<ResourceQuestionOut[]>(`/api/resources/${resourceId}/questions`)
         : [];
+      if (
+        !detailRequestsRef.current.isCurrent(request) ||
+        selectedResourceIdRef.current !== resourceId
+      ) return;
       setSelectedResource(resource);
       setQuestions(resourceQuestions);
       setSelectedDetailsLoaded(true);
       setResources((previous) => previous?.map((item) => item.id === resource.id ? resource : item) ?? previous);
     } catch (reason) {
+      if (
+        !detailRequestsRef.current.isCurrent(request) ||
+        selectedResourceIdRef.current !== resourceId
+      ) return;
       setBanner(friendlyError(reason, "题目资料详情加载失败"));
     } finally {
-      setSelectedLoading(false);
+      if (
+        detailRequestsRef.current.isCurrent(request) &&
+        selectedResourceIdRef.current === resourceId
+      ) setSelectedLoading(false);
     }
   }, []);
 
   const openResource = useCallback((resource: LearningResourceOut) => {
+    selectedResourceIdRef.current = resource.id;
     setSelectedDetailsLoaded(false);
     setSelectedResource(resource);
     setQuestions([]);
@@ -291,6 +312,7 @@ function ResourcesPageContent() {
       } else {
         // The detail endpoint applies the same ownership check. A stale or
         // forbidden deep link therefore stays indistinguishable from a missing one.
+        selectedResourceIdRef.current = deepResourceId;
         void loadResource(deepResourceId);
       }
     }, 0);
@@ -359,6 +381,8 @@ function ResourcesPageContent() {
       await apiJson<void>(`/api/resources/${resource.id}`, { method: "DELETE" });
       setResources((previous) => previous?.filter((item) => item.id !== resource.id) ?? previous);
       if (selectedResource?.id === resource.id) {
+        detailRequestsRef.current.invalidate();
+        selectedResourceIdRef.current = null;
         setSelectedResource(null);
         setQuestions([]);
       }
@@ -375,6 +399,7 @@ function ResourcesPageContent() {
   const handleCreated = async (resource: LearningResourceOut) => {
     setUploadOpen(false);
     setBanner(resource.source_url ? "原文件已保存，正在启动异步识别…" : "资料已创建，可以手动添加题目。");
+    selectedResourceIdRef.current = resource.id;
     setSelectedResource(resource);
     setSelectedDetailsLoaded(false);
     setQuestions([]);
@@ -399,6 +424,8 @@ function ResourcesPageContent() {
   }), [filter, resources]);
 
   const backToResourceList = () => {
+    detailRequestsRef.current.invalidate();
+    selectedResourceIdRef.current = null;
     setSelectedResource(null);
     setQuestions([]);
     setSelectedDetailsLoaded(false);

@@ -13,22 +13,23 @@ import { createPortal } from "react-dom";
 
 import { MathText } from "@/lib/katex";
 import type { SessionOut } from "@/lib/types";
+import {
+  useHydratedLocalStorage,
+  type StorageCodec,
+} from "@/lib/use-hydrated-local-storage";
 
 const PINNED_SESSIONS_KEY = "eduagents:pinned-chat-sessions";
+const EMPTY_PINNED_SESSIONS: string[] = [];
 
-function readPinnedSessions(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const value = JSON.parse(
-      window.localStorage.getItem(PINNED_SESSIONS_KEY) ?? "[]",
-    );
+const pinnedSessionsCodec: StorageCodec<string[]> = {
+  parse: (raw) => {
+    const value: unknown = JSON.parse(raw);
     return Array.isArray(value)
       ? value.filter((id): id is string => typeof id === "string")
       : [];
-  } catch {
-    return [];
-  }
-}
+  },
+  serialize: (value) => JSON.stringify(value),
+};
 
 export function SessionList({
   sessions,
@@ -55,7 +56,11 @@ export function SessionList({
   const [draft, setDraft] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [pinnedIds, setPinnedIds] = useState<string[]>(readPinnedSessions);
+  const [pinnedIds, setPinnedIds] = useHydratedLocalStorage(
+    PINNED_SESSIONS_KEY,
+    EMPTY_PINNED_SESSIONS,
+    pinnedSessionsCodec,
+  );
   const [deleteTarget, setDeleteTarget] = useState<SessionOut | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [menu, setMenu] = useState<{
@@ -63,10 +68,6 @@ export function SessionList({
     top: number;
     left: number;
   } | null>(null);
-
-  useEffect(() => {
-    window.localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(pinnedIds));
-  }, [pinnedIds]);
 
   useEffect(() => {
     if (!menu) return;

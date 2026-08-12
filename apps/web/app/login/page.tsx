@@ -13,22 +13,28 @@ import {
 import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import {
+  stringStorageCodec,
+  useHydratedLocalStorage,
+} from "@/lib/use-hydrated-local-storage";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REMEMBERED_EMAIL_KEY = "suwen:remembered-login-email";
 
-function readRememberedEmail(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(REMEMBERED_EMAIL_KEY) ?? "";
-}
-
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
-  const [email, setEmail] = useState(readRememberedEmail);
-  const [rememberEmail, setRememberEmail] = useState(
-    () => readRememberedEmail().length > 0,
+  // Keep the server/browser first render identical; restore browser-only
+  // preferences after hydration.
+  const [rememberedEmail] = useHydratedLocalStorage(
+    REMEMBERED_EMAIL_KEY,
+    "",
+    stringStorageCodec,
   );
+  const [emailDraft, setEmail] = useState<string | null>(null);
+  const [rememberEmailDraft, setRememberEmail] = useState<boolean | null>(null);
+  const email = emailDraft ?? rememberedEmail;
+  const rememberEmail = rememberEmailDraft ?? Boolean(rememberedEmail);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);

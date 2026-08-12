@@ -8,15 +8,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
 import { useAuth } from "@/lib/auth-context";
+import {
+  booleanStorageCodec,
+  useHydratedLocalStorage,
+} from "@/lib/use-hydrated-local-storage";
 
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot", "/reset"];
 const BARE_AUTHED_PATHS = ["/onboarding"];
 const NAV_COLLAPSED_KEY = "suwen:navigation-collapsed";
-
-function readNavigationCollapsed(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(NAV_COLLAPSED_KEY) === "1";
-}
 
 interface NavItem {
   href: string;
@@ -324,7 +323,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, status, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [navCollapsed, setNavCollapsed] = useState(readNavigationCollapsed);
+  const [navCollapsed, setNavCollapsed] = useHydratedLocalStorage(
+    NAV_COLLAPSED_KEY,
+    false,
+    booleanStorageCodec,
+  );
   const isPublic = PUBLIC_PATHS.includes(pathname);
 
   useEffect(() => {
@@ -334,10 +337,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
     if (status === "guest") router.replace("/login");
   }, [isPublic, status, router]);
-
-  useEffect(() => {
-    window.localStorage.setItem(NAV_COLLAPSED_KEY, navCollapsed ? "1" : "0");
-  }, [navCollapsed]);
 
   if (isPublic) return <>{children}</>;
 
