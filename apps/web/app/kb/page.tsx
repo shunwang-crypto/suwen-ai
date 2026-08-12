@@ -321,9 +321,13 @@ export default function KbPage() {
         <EmptyState title="选择一个知识库" description="从上方选择已有知识库，或创建新的资料空间。" illustration="docs" />
       ) : (
         <>
-          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] bg-brand-700 px-5 py-4 text-white">
-            <div><h2 className="text-[13px] font-semibold">用这个知识库开始学习</h2><p className="mt-1 text-caption text-indigo-100">AI 只会引用这里的真实资料和来源；辅导与练习也可沿用当前范围。</p></div>
-            <div className="flex flex-wrap gap-2"><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white px-3.5 py-2 text-body-sm font-medium text-brand-700">对话</Link><Link href={`/tutor?kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-body-sm font-medium text-white ring-1 ring-inset ring-white/15">分级辅导</Link><Link href={`/quiz?kb=${encodeURIComponent(selected.id)}&topic=${encodeURIComponent(selected.name)}`} className="rounded-[8px] bg-white/10 px-3.5 py-2 text-body-sm font-medium text-white ring-1 ring-inset ring-white/15">智能练习</Link></div>
+          {/* 入口区：陈述 + 三个并列入口，本身不是主操作 —— 用浅色面。
+              原来这里是 bg-brand-700 深色块（同 profile 页已修复的那处），
+              三个按钮只能靠白底/半透明白区分彼此，主次读不出来。改为浅色面后
+              「对话」作为默认入口用近黑实心，另外两个走白底描边。 */}
+          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-line bg-surface-muted px-5 py-4">
+            <div><h2 className="text-[13px] font-semibold text-ink">用这个知识库开始学习</h2><p className="mt-1 text-caption text-ink-secondary">AI 只会引用这里的真实资料和来源；辅导与练习也可沿用当前范围。</p></div>
+            <div className="flex flex-wrap gap-2"><Link href={`/chat?new=1&kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] bg-brand-600 px-3.5 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800">对话</Link><Link href={`/tutor?kb=${encodeURIComponent(selected.id)}`} className="rounded-[8px] border border-line-strong bg-white px-3.5 py-2 text-body-sm font-medium text-ink-secondary transition-colors hover:bg-surface-muted">分级辅导</Link><Link href={`/quiz?kb=${encodeURIComponent(selected.id)}&topic=${encodeURIComponent(selected.name)}`} className="rounded-[8px] border border-line-strong bg-white px-3.5 py-2 text-body-sm font-medium text-ink-secondary transition-colors hover:bg-surface-muted">智能练习</Link></div>
           </section>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_230px] lg:items-start">
