@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -20,9 +22,15 @@ _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 def get_engine() -> AsyncEngine:
     global _engine, _sessionmaker
     if _engine is None:
-        _engine = create_async_engine(
-            get_settings().database_url, pool_pre_ping=True, pool_size=10, max_overflow=20
-        )
+        engine_options = {"pool_pre_ping": True}
+        if os.environ.get("INTEGRATION") == "1":
+            # pytest-asyncio may use a fresh event loop for each test. asyncpg
+            # connections are loop-bound, so integration tests must not reuse
+            # a pooled connection created by a previous test's loop.
+            engine_options["poolclass"] = NullPool
+        else:
+            engine_options.update(pool_size=10, max_overflow=20)
+        _engine = create_async_engine(get_settings().database_url, **engine_options)
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 

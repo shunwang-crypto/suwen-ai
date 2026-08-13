@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ipaddress
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -432,8 +433,9 @@ def _coerce_task(raw: object) -> dict | None:
     """任务字段容错落地; 非 dict 直接丢弃.
 
     This is also the schema boundary for model output and user-edited drafts.
-    Unknown ids/task keys are intentionally discarded; stable resource ids are
-    assigned only by the API transaction after confirmation.
+    Client-supplied identities are intentionally discarded. A fresh task UUID
+    is assigned at this schema boundary; stable resource ids are attached only
+    by the API transaction after confirmation.
     """
     if not isinstance(raw, dict):
         return None
@@ -504,6 +506,7 @@ def _coerce_task(raw: object) -> dict | None:
         else None
     )
     result = {
+        "task_id": str(uuid.uuid4()),
         "title": title,
         "objective": objective,
         "instructions": instructions,
@@ -512,6 +515,7 @@ def _coerce_task(raw: object) -> dict | None:
         "kc_names": kc_names,
         "resource_ref": resource_ref,
         "action_type": action_type,
+        "status": "pending",
     }
     if practice_count is not None:
         result["practice_count"] = practice_count
@@ -584,6 +588,7 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
                 "day": day,
                 "tasks": [
                     {
+                        "task_id": str(uuid.uuid4()),
                         "title": f"学习: {topic}",
                         "objective": f"掌握{topic}的核心概念，并能独立应用",
                         "instructions": [
@@ -597,6 +602,7 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
                         "action_type": "practice" if not state.get("kb_id") else "mixed",
                         "practice_count": 3,
                         "difficulty": "mid",
+                        "status": "pending",
                     }
                 ],
             }
@@ -627,6 +633,7 @@ def _fix_total_days(plan: dict, total_days: int, budget_minutes: float, fixes: l
                 "day": 0,
                 "tasks": [
                     {
+                        "task_id": str(uuid.uuid4()),
                         "title": "综合复习与查漏补缺",
                         "objective": "整合当天知识并发现仍不熟练的部分",
                         "instructions": [
@@ -640,6 +647,7 @@ def _fix_total_days(plan: dict, total_days: int, budget_minutes: float, fixes: l
                         "action_type": "mixed",
                         "practice_count": 3,
                         "difficulty": "mid",
+                        "status": "pending",
                     }
                 ],
             }
@@ -734,6 +742,7 @@ def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> No
         if not tasks:
             tasks.append(
                 {
+                    "task_id": str(uuid.uuid4()),
                     "title": "自主复习",
                     "objective": "回顾本阶段知识并找出仍需巩固的内容",
                     "instructions": [
@@ -747,6 +756,7 @@ def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> No
                     "action_type": "mixed",
                     "practice_count": 1,
                     "difficulty": "mid",
+                    "status": "pending",
                 }
             )
             fixes.append({"fix": "empty_day_filled", "day": day["day"]})

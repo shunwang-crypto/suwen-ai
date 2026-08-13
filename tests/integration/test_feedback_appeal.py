@@ -87,7 +87,7 @@ async def test_feedback_submit_list_admin_close(client):
         json={
             "category": "bug",
             "content": f"上传按钮点了没反应 {tag}",
-            "page_url": "/kb",
+            "page_url": "/materials",
             "request_id": f"req-{tag}",
         },
     )

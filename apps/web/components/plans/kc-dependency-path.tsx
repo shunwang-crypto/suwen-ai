@@ -7,7 +7,7 @@ import type {
 
 interface KcDependencyPathProps {
   dependency?: PlanKcDependency;
-  onTaskOpen?: (taskKey: string) => void;
+  onTaskOpen?: (taskId: string) => void;
 }
 
 function statusLabel(status: PlanKcDependencyNode["task_statuses"][number]["status"]): string {
@@ -16,33 +16,33 @@ function statusLabel(status: PlanKcDependencyNode["task_statuses"][number]["stat
   return "待学习";
 }
 
-function KcNode({ node, onTaskOpen }: { node: PlanKcDependencyNode; onTaskOpen?: (taskKey: string) => void }) {
+function KcNode({ node, onTaskOpen }: { node: PlanKcDependencyNode; onTaskOpen?: (taskId: string) => void }) {
   const statusText = node.task_statuses.length > 0
     ? node.task_statuses.map((item) => `${statusLabel(item.status)}`).join("、")
     : "尚未安排任务";
-  const taskKey = node.task_keys[0];
+  const taskId = node.task_ids[0];
   const content = (
     <>
       <span className="block truncate text-body-sm font-semibold text-ink">{node.kc_name}</span>
       <span className="mt-1 block text-caption text-ink-muted">
         {node.is_current_task ? `计划任务 · ${statusText}` : "递归先修知识点"}
       </span>
-      {node.task_keys.length > 1 && (
-        <span className="mt-1 block text-caption text-ink-muted">关联 {node.task_keys.length} 个任务</span>
+      {node.task_ids.length > 1 && (
+        <span className="mt-1 block text-caption text-ink-muted">关联 {node.task_ids.length} 个任务</span>
       )}
       {node.is_blocking && (
         <span className="mt-1 block text-caption font-medium text-warning-700">
-          阻塞 {node.blocking_task_keys.length} 个后续任务
+          阻塞 {node.blocking_task_ids.length} 个后续任务
         </span>
       )}
     </>
   );
 
-  if (taskKey && onTaskOpen) {
+  if (taskId && onTaskOpen) {
     return (
       <button
         type="button"
-        onClick={() => onTaskOpen(taskKey)}
+        onClick={() => onTaskOpen(taskId)}
         aria-label={`查看知识点任务：${node.kc_name}`}
         className="w-full rounded-xl border border-line bg-white px-3 py-3 text-left shadow-sm transition hover:border-brand-300 hover:bg-brand-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
       >

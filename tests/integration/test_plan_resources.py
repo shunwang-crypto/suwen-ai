@@ -202,7 +202,8 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
     assert body["structure"]["goal_analysis"] == state["goal_analysis"]
     assert body["structure"]["skill_gaps"] == state["skill_gaps"]
     assert body["schedule"]["current_day"] >= 1
-    assert "stage0.day0.task0" in body["schedule"]["today_tasks"]
+    first_task_id = body["structure"]["stages"][0]["days"][0]["tasks"][0]["task_id"]
+    assert first_task_id in body["schedule"]["today_tasks"]
 
     # A repeated save fails at the database primary key while its new resource
     # is in the same transaction; rollback must leave the original one only.

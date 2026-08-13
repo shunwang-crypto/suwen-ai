@@ -5,7 +5,7 @@
 ② 画像联动出题: from_weak_points=true 时后端填 kc_names, blueprint 的 kc_name 全部
    落在该用户薄弱点集合内, 且出题 prompt 里确实带着这些薄弱 KC 名;
 ③ Reflection: 直调 reflect_session, 对话洞察以 weight=0.3 / evidence_type=
-   "chat_reflection" 落 mastery_log (confused 降、understood 升);
+   chat reflection 只落 learner_insights，不把模型抽取当作掌握证据;
 ④ 有画像时答案缓存禁用 (cacheable=False 路径), 无画像用户仍走缓存;
 ⑤ 非 KB 会话 (P1-5): 直连路径同样注入画像段 + profile trace, 且答案缓存零触碰。
 
@@ -16,7 +16,6 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-import pytest
 from sqlalchemy import select
 
 from .conftest import requires_services
@@ -208,7 +207,7 @@ async def _seed_kb(uid: str) -> dict:
 async def _seed_profile(uid: str, ids: dict, *, error_state: str = "new") -> None:
     """薄弱点画像: 导数定义 0.24 / 极值判定 0.31 / 泰勒公式 0.92 + 一道概念混淆错题。"""
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import ErrorItem, MasteryRecord, Question, Quiz
+    from eduagents_api.models import ErrorItem, MasteryLog, MasteryRecord, Question, Quiz
 
     tid = uuid.UUID(uid)
     async with tenant_session(uid) as s:
@@ -219,6 +218,19 @@ async def _seed_profile(uid: str, ids: dict, *, error_state: str = "new") -> Non
                     p_mastery=p, confidence=0.6, last_seen=datetime.now(UTC),
                 )
             )
+            for _ in range(3):
+                s.add(
+                    MasteryLog(
+                        tenant_id=tid,
+                        user_id=tid,
+                        kc_id=uuid.UUID(ids[key]),
+                        old_p=p,
+                        new_p=p,
+                        evidence_type="quiz_attempt",
+                        evidence_id=uuid.uuid4(),
+                        weight=1.0,
+                    )
+                )
         quiz = Quiz(tenant_id=tid, user_id=tid, title="旧练习", status="ready")
         s.add(quiz)
         await s.flush()
@@ -511,12 +523,18 @@ async def test_quiz_from_weak_points_empty_kb_does_not_fallback_cross_subject(cl
 # ---------- ③ Reflection 对话洞察 (§5.5) ----------
 
 
-async def test_reflect_session_writes_chat_reflection(client):
+async def test_reflect_session_writes_insights_without_mastery(client):
     uid, headers = await _register(client, "vlse-reflect")
     ids = await _seed_kb(uid)
 
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import ChatMessage, ChatSession, MasteryLog, MasteryRecord
+    from eduagents_api.models import (
+        ChatMessage,
+        ChatSession,
+        LearnerInsight,
+        MasteryLog,
+        MasteryRecord,
+    )
     from eduagents_worker.reflection import reflect_session
 
     tid = uuid.UUID(uid)
@@ -568,34 +586,18 @@ async def test_reflect_session_writes_chat_reflection(client):
         }
     )
     result = await reflect_session({}, uid, uid, session_id, gateway=gateway)
-    assert result == "applied:2", result
+    assert result == "recorded:2", result
 
     # 洞察抽取 prompt 带上了受控词表与对话原文
     prompt = gateway.prompts("chat_reflect")[0]
     assert "导数定义" in prompt and "学生:" in prompt
 
     async with tenant_session(uid) as s:
-        logs = (
-            await s.scalars(
-                select(MasteryLog).where(MasteryLog.evidence_type == "chat_reflection")
-            )
-        ).all()
-        records = {
-            str(r.kc_id): r for r in (await s.scalars(select(MasteryRecord))).all()
-        }
-    assert len(logs) == 2
-    by_kc = {str(x.kc_id): x for x in logs}
-    assert set(by_kc) == {ids["deriv"], ids["taylor"]}  # 词表外洞察未落库
-    for row in logs:
-        assert row.weight == pytest.approx(0.3)  # 对话证据弱于测评
-        assert str(row.evidence_id) == session_id
-    assert by_kc[ids["deriv"]].new_p < by_kc[ids["deriv"]].old_p  # confused -> 降
-    assert by_kc[ids["taylor"]].new_p > by_kc[ids["taylor"]].old_p  # understood -> 升
-    assert records[ids["deriv"]].p_mastery == pytest.approx(by_kc[ids["deriv"]].new_p)
-
-    # 画像 API 可见该证据类型 (前端显示为"对话洞察")
-    r = await client.get("/api/profile", headers=headers)
-    assert "chat_reflection" in {c["evidence_type"] for c in r.json()["recent_changes"]}
+        insights = (await s.scalars(select(LearnerInsight))).all()
+        logs = (await s.scalars(select(MasteryLog))).all()
+        records = (await s.scalars(select(MasteryRecord))).all()
+    assert {str(row.kc_id) for row in insights} == {ids["deriv"], ids["taylor"]}
+    assert logs == [] and records == []
 
 
 async def test_reflect_session_stub_gateway_skipped(client):

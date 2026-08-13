@@ -36,16 +36,18 @@ function friendlyError(reason: unknown): string {
 export function ResourceUploadDialog({
   onClose,
   onCreated,
+  initialLinkedKbId = "",
 }: {
   onClose: () => void;
   onCreated: (resource: LearningResourceOut) => void;
+  initialLinkedKbId?: string;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
   const [resourceType, setResourceType] = useState<LearningResourceType>("exam_paper");
   const [knowledgeBases, setKnowledgeBases] = useState<KbOut[]>([]);
-  const [linkedKbId, setLinkedKbId] = useState("");
+  const [linkedKbId, setLinkedKbId] = useState(initialLinkedKbId);
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

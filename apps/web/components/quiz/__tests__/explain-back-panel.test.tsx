@@ -15,11 +15,11 @@ const mockedApiJson = vi.mocked(apiJson);
 describe("ExplainBackPanel", () => {
   beforeEach(() => mockedApiJson.mockReset());
 
-  it("submits the explanation and renders formula feedback through MathText", async () => {
+  it("submits the explanation and renders formula feedback through ModelMarkdown", async () => {
     mockedApiJson.mockResolvedValue({
       id: "eb-1",
       understanding_score: 0.8,
-      feedback: "你说明了 $x^2$ 的关键关系。",
+      feedback: "你说明了 $x^2$ 的关键关系。\n\n- 条件完整",
       gap: "还需说明 $x \\ne 0$。",
       retry_guidance: "再用一个反例验证。",
       degraded: false,
@@ -37,6 +37,7 @@ describe("ExplainBackPanel", () => {
       { body: { student_text: "我先移项，再约分。", prompt_span_ref: "quiz:q:question:1", kc_id: "kc-1" } },
     ));
     expect(await screen.findByText("完整度 80%")).toBeInTheDocument();
+    expect(screen.getByRole("list")).toHaveTextContent("条件完整");
     expect(container.querySelectorAll(".katex")).toHaveLength(2);
     expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
   });

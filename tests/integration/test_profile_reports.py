@@ -137,13 +137,15 @@ async def _seed_learning_data(uid: str) -> dict:
             s.add(
                 MasteryLog(
                     tenant_id=tid, user_id=tid, kc_id=kc_b.id,
-                    old_p=0.3, new_p=0.35, evidence_type="quiz_attempt", weight=1.0,
+                    old_p=0.3, new_p=0.35, evidence_type="quiz_attempt",
+                    evidence_id=uuid.uuid4(), weight=1.0,
                 )
             )
         s.add(
             MasteryLog(
                 tenant_id=tid, user_id=tid, kc_id=kc_a.id,
-                old_p=0.3, new_p=0.2, evidence_type="quiz_attempt", weight=1.0,
+                old_p=0.3, new_p=0.2, evidence_type="quiz_attempt",
+                evidence_id=uuid.uuid4(), weight=1.0,
             )
         )
         quiz = Quiz(tenant_id=tid, user_id=tid, title="导数摸底")
@@ -195,8 +197,8 @@ async def _seed_learning_data(uid: str) -> dict:
     }
 
 
-async def test_profile_structure_and_override(api):
-    """F8: 画像全量结构 + 用户纠正直写 mastery_record 且 mastery_log 增 user_override。"""
+async def test_profile_structure_and_evidence_state(api):
+    """F8: 画像显式区分未观测、估计中与已观测。"""
     _, uid, headers = await _register(api, "prof")
     ids = await _seed_learning_data(uid)
 
@@ -209,6 +211,11 @@ async def test_profile_structure_and_override(api):
     assert by_kc[ids["kc_b"]]["p_mastery"] == pytest.approx(0.35)
     assert by_kc[ids["kc_b"]]["evidence_strength"] == "moderate"
     assert by_kc[ids["kc_c"]]["evidence_strength"] == "strong"
+    assert by_kc[ids["kc_a"]]["evidence_state"] == "estimated"
+    assert by_kc[ids["kc_b"]]["evidence_state"] == "observed"
+    assert by_kc[ids["kc_c"]]["evidence_state"] == "unobserved"
+    assert by_kc[ids["kc_c"]]["p_mastery"] is None
+    assert body["weak_threshold"] == pytest.approx(0.6)
     assert by_kc[ids["kc_b"]]["last_seen"] is not None
     assert body["error_distribution"]["by_cause"] == {"concept_confusion": 1, "knowledge_gap": 1}
     assert body["error_distribution"]["by_state"] == {"new": 2}
@@ -218,37 +225,7 @@ async def test_profile_structure_and_override(api):
         for x in body["recent_changes"]
     )
 
-    # 用户纠正: "导数定义我已经会了"
-    r = await api.post(
-        f"/api/profile/kc/{ids['kc_b']}/override", headers=headers, json={"p_mastery": 0.95}
-    )
-    assert r.status_code == 200, r.text
-    out = r.json()
-    assert out["old_p"] == pytest.approx(0.35) and out["new_p"] == pytest.approx(0.95)
-
-    r = await api.get("/api/profile", headers=headers)
-    body = r.json()
-    by_kc = {m["kc_id"]: m for m in body["mastery"]}
-    assert by_kc[ids["kc_b"]]["p_mastery"] == pytest.approx(0.95)
-    assert by_kc[ids["kc_b"]]["evidence_strength"] == "strong"
-    latest = body["recent_changes"][0]
-    assert latest["evidence_type"] == "user_override" and latest["weight"] == 1.0
-
-    # DB 核对: 恰好新增一条 user_override 流水 (F8-A3 日志与操作可核对)
-    from eduagents_api.db import tenant_session
-    from eduagents_api.models import MasteryLog
-
-    async with tenant_session(uid) as s:
-        n = len(
-            (
-                await s.scalars(
-                    select(MasteryLog).where(MasteryLog.evidence_type == "user_override")
-                )
-            ).all()
-        )
-    assert n == 1
-
-    # 不存在的 KC -> 404
+    # 手工覆盖掌握度的绕过入口已删除。
     r = await api.post(
         f"/api/profile/kc/{uuid.uuid4()}/override", headers=headers, json={"p_mastery": 0.5}
     )
@@ -256,7 +233,7 @@ async def test_profile_structure_and_override(api):
 
 
 async def test_reports_learning(api):
-    """F7: radar/trend/weak_points 归因下钻/actions 无空话/narrative stub 下如实为 null。"""
+    """F7: radar/trend/observed weak points 与归因下钻。"""
     _, uid, headers = await _register(api, "rep")
     ids = await _seed_learning_data(uid)
 
@@ -277,8 +254,8 @@ async def test_reports_learning(api):
         ids["kc_b"],
         ids["kc_c"],
     ]
-    assert [x["p_mastery"] for x in body["radar"]] == pytest.approx([0.2, 0.35, 0.9])
-    assert [x["weak_count"] for x in body["radar"]] == [1, 1, 0]
+    assert [x["p_mastery"] for x in body["radar"]] == [None, pytest.approx(0.35), None]
+    assert [x["weak_count"] for x in body["radar"]] == [0, 1, 0]
     assert all(x["kb_id"] == ids["kb_id"] for x in body["radar"])
 
     # 兼容字段仍保留活动量 top KC，旧消费方不会被静默破坏。
@@ -316,24 +293,15 @@ async def test_reports_learning(api):
     assert by_date[d2]["attempts"] == 1 and by_date[d2]["accuracy"] == pytest.approx(1.0)
     assert by_date[(today - timedelta(days=1)).isoformat()]["attempts"] == 0
 
-    # weak_points: A(0.2)/B(0.35) 弱; B 的归因下钻含前置 A (F7 归因下钻)
+    # weak_points: 只有三条独立证据的 B 能被稳定定性为薄弱。
     weak = {w["kc_id"]: w for w in body["weak_points"]}
-    assert set(weak) == {ids["kc_a"], ids["kc_b"]}
+    assert set(weak) == {ids["kc_b"]}
     b = weak[ids["kc_b"]]
     assert b["error_count"] == 2
     roots = {rc["kc_id"] for rc in b["possible_root_cause"]}
-    assert roots == {ids["kc_a"]}
-    assert b["possible_root_cause"][0]["name"] == "极限"
-    assert weak[ids["kc_a"]]["possible_root_cause"] == []
+    assert roots == set()
 
-    # actions: ≥2 且引用具体数量/KC 名, 每条带跳转 (F7-A2/A3)
-    actions = body["actions"]
-    assert len(actions) >= 2
-    assert all(a.get("href") for a in actions)
-    labels = " | ".join(a["label"] for a in actions)
-    assert "复习错题本 2 题" in labels
-    assert "导数定义" in labels or "极限" in labels
-    assert any(a["href"].startswith("/quiz?kc=") for a in actions)
+    assert "actions" not in body
 
     # 首屏只返回持久化快照，不等待 LLM；同 scope 再读命中数据库快照。
     assert body["cached"] is False

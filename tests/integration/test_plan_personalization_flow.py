@@ -85,7 +85,13 @@ async def _seed_mastery_with_dag(uid: str) -> dict:
     from datetime import UTC, datetime
 
     from eduagents_api.db import tenant_session
-    from eduagents_api.models import KcEdge, KnowledgeBase, KnowledgeComponent, MasteryRecord
+    from eduagents_api.models import (
+        KcEdge,
+        KnowledgeBase,
+        KnowledgeComponent,
+        MasteryLog,
+        MasteryRecord,
+    )
 
     tid = uuid.UUID(uid)
     async with tenant_session(uid) as s:
@@ -109,6 +115,19 @@ async def _seed_mastery_with_dag(uid: str) -> dict:
                     last_seen=datetime.now(UTC),
                 )
             )
+            for _ in range(3):
+                s.add(
+                    MasteryLog(
+                        tenant_id=tid,
+                        user_id=tid,
+                        kc_id=kcs[key].id,
+                        old_p=p,
+                        new_p=p,
+                        evidence_type="quiz_attempt",
+                        evidence_id=uuid.uuid4(),
+                        weight=1.0,
+                    )
+                )
         s.add_all(
             [
                 KcEdge(

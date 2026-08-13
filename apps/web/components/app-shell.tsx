@@ -23,11 +23,6 @@ interface NavItem {
   icon: ReactNode;
 }
 
-interface NavGroup {
-  label?: string;
-  items: NavItem[];
-}
-
 function Icon({ children }: { children: ReactNode }) {
   return (
     <svg
@@ -66,82 +61,14 @@ function FigmaNavIcon({ name }: { name: string }) {
   );
 }
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    items: [
-      {
-        href: "/today",
-        label: "今日",
-        icon: <FigmaNavIcon name="today" />,
-      },
-    ],
-  },
-  {
-    label: "学习与资料",
-    items: [
-      {
-        href: "/chat",
-        label: "AI 对话",
-        icon: <FigmaNavIcon name="chat" />,
-      },
-      {
-        href: "/tutor",
-        label: "分级辅导",
-        icon: <FigmaNavIcon name="tutor" />,
-      },
-      {
-        href: "/kb",
-        label: "知识库",
-        icon: <FigmaNavIcon name="knowledge" />,
-      },
-    ],
-  },
-  {
-    label: "练习巩固",
-    items: [
-      {
-        href: "/quiz",
-        label: "智能练习",
-        icon: <FigmaNavIcon name="practice" />,
-      },
-      {
-        href: "/reviews",
-        label: "今日复习",
-        icon: <FigmaNavIcon name="review" />,
-      },
-      {
-        href: "/errors",
-        label: "错题本",
-        icon: <FigmaNavIcon name="errors" />,
-      },
-      {
-        href: "/resources",
-        label: "题目资料",
-        icon: <FigmaNavIcon name="knowledge" />,
-      },
-    ],
-  },
-  {
-    label: "规划与成长",
-    items: [
-      {
-        href: "/plans",
-        label: "学习计划",
-        icon: <FigmaNavIcon name="plans" />,
-      },
-      {
-        href: "/profile",
-        label: "学习画像",
-        icon: <FigmaNavIcon name="profile" />,
-      },
-      {
-        href: "/reports",
-        label: "学情报告",
-        icon: <FigmaNavIcon name="reports" />,
-      },
-    ],
-  },
+export const PRIMARY_NAV_ITEMS: NavItem[] = [
+  { href: "/today", label: "今日", icon: <FigmaNavIcon name="today" /> },
+  { href: "/materials", label: "资料", icon: <FigmaNavIcon name="knowledge" /> },
+  { href: "/reviews", label: "复习", icon: <FigmaNavIcon name="review" /> },
+  { href: "/growth", label: "成长", icon: <FigmaNavIcon name="profile" /> },
 ];
+
+const TODAY_TOOL_PATHS = ["/chat", "/tutor", "/quiz", "/plans"];
 
 const UTILITY_ITEMS: NavItem[] = [
   {
@@ -160,14 +87,11 @@ const TITLE_MAP: Record<string, string> = {
   "/today": "今日",
   "/chat": "AI 对话",
   "/tutor": "分级辅导",
-  "/kb": "知识库",
-  "/resources": "题目资料",
+  "/materials": "资料",
   "/quiz": "智能练习",
-  "/reviews": "今日复习",
-  "/errors": "错题本",
+  "/reviews": "复习",
   "/plans": "学习计划",
-  "/profile": "学习画像",
-  "/reports": "学情报告",
+  "/growth": "成长",
   "/settings": "账户设置",
   "/orgs": "机构",
   "/billing": "苏问 AI 额度",
@@ -177,6 +101,9 @@ const TITLE_MAP: Record<string, string> = {
 };
 
 function isActive(pathname: string, href: string) {
+  if (href === "/today" && TODAY_TOOL_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
+    return true;
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -206,14 +133,9 @@ function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: str
   return (
     <>
       <nav className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-1.5" : "px-3"}`}>
-        {NAV_GROUPS.map((group, index) => (
-          <section key={group.label ?? "today"} className={index === 0 ? "pt-2" : collapsed ? "pt-2" : "pt-[18px]"}>
-            {group.label && !collapsed && <h2 className="mb-1.5 px-2.5 text-caption font-medium tracking-[0.06em] text-[#a1a19d]">{group.label}</h2>}
-            <div className="space-y-0.5">
-              {group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
-            </div>
-          </section>
-        ))}
+        <div className="space-y-1 pt-2">
+          {PRIMARY_NAV_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
+        </div>
       </nav>
       <div className={`shrink-0 border-t border-line py-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-0.5">

@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
   Card,
   EmptyState,
@@ -176,7 +177,7 @@ export default function QuizPage() {
     ? (urlParams.get("difficulty") as "easy" | "mid" | "hard")
     : undefined;
   const planId = urlParams.get("plan_id") ?? "";
-  const taskKey = urlParams.get("task_key") ?? "";
+  const taskId = urlParams.get("task_id") ?? "";
   // /quiz?weak=1（画像页/学情报告页的「针对此点练习」）：高亮薄弱点定向出题卡片
   const fromWeakLink = urlParams.get("weak") === "1";
   // /quiz?kc=<KC名>&n=3（画像页「验证一下」，P2-6 可争辩画像）：
@@ -470,7 +471,7 @@ export default function QuizPage() {
       topicRef.current = value.topic;
       const requestBody = {
         ...value,
-        ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
+        ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
       };
       writePendingQuiz(userId, {
         status: "generating",
@@ -490,7 +491,7 @@ export default function QuizPage() {
       setPhase("streaming");
       void consume("/api/quiz", requestBody);
     },
-    [consume, planId, taskKey, userId],
+    [consume, planId, taskId, userId],
   );
 
   const startRecommended = useCallback(
@@ -777,8 +778,8 @@ export default function QuizPage() {
                 <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{attempt.correct}/{attempt.total}</strong><span className="text-caption text-ink-muted">答对</span></div>
                 <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-caption font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span></div><p className="mt-1 text-body-sm leading-5 text-ink-muted">结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。</p></div>
               </div>
-              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><MathText text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
-              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-body-sm font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-body-sm text-warning-600"><MathText text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-body-sm font-medium text-warning-700">前往学习计划 →</Link></div>}
+              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><ModelMarkdown text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
+              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-body-sm font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-body-sm text-warning-600"><ModelMarkdown text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-body-sm font-medium text-warning-700">前往学习计划 →</Link></div>}
               {calibration && calibration.sample_n > 0 && (
                 <div className="mt-4 rounded-[9px] border border-brand-100 bg-brand-50/45 px-4 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -804,7 +805,7 @@ export default function QuizPage() {
               <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-4">
                 <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setPredictions({}); setAttempt(null); setCalibration(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-body-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
                 <Link href="/tutor" className="rounded-[8px] border border-brand-200 bg-brand-50 px-3 py-2 text-center text-body-sm font-medium text-brand-700">进入分级辅导</Link>
-                <Link href="/profile" className="rounded-[8px] border border-line-strong px-3 py-2 text-center text-body-sm font-medium text-ink-secondary">查看学习画像</Link>
+                <Link href="/growth" className="rounded-[8px] border border-line-strong px-3 py-2 text-center text-body-sm font-medium text-ink-secondary">查看成长</Link>
                 <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); setPredictions({}); setCalibration(null); }} className="rounded-[8px] border border-line-strong px-3 py-2 text-body-sm font-medium text-ink-secondary">返回智能练习</button>
               </div>
               <div className="mt-3 border-t border-line pt-3">
@@ -925,20 +926,20 @@ export default function QuizPage() {
                           )}
                         </p>
                         {result.scored_reason && (
-                          <p className="mt-1 text-caption text-slate-600">
+                          <div className="mt-1 text-caption text-slate-600">
                             <span className="font-medium text-slate-500">评分理由：</span>
-                            <MathText text={result.scored_reason} />
-                          </p>
+                            <ModelMarkdown text={result.scored_reason} />
+                          </div>
                         )}
                         <p className="mt-1.5 text-caption text-slate-600">
                           <span className="font-medium text-slate-500">参考答案：</span>
                           <MathText text={result.answer} />
                         </p>
                         {result.explanation && (
-                          <p className="mt-1 text-caption leading-relaxed text-slate-600">
-                            <span className="font-medium text-slate-500">解析：</span>
-                            <MathText text={result.explanation} />
-                          </p>
+                          <div className="mt-1 text-caption leading-relaxed text-slate-600">
+                            <p className="font-medium text-slate-500">解析：</p>
+                            <ModelMarkdown text={result.explanation} />
+                          </div>
                         )}
                         {result.mastery_changes.length > 0 && (
                           <p className="mt-2 flex flex-wrap gap-1.5">
@@ -1039,7 +1040,7 @@ export default function QuizPage() {
                     <Link href="/reviews" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">去复习</Link>
                   )}
                   {recommendation.action === "upload" && (
-                    <Link href="/kb" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
+                    <Link href="/materials" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
                   )}
                 </div>
                 {recommendation.status === "needs_scope" && (

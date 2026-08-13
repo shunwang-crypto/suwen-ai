@@ -14,6 +14,7 @@ import {
   type FormEvent,
 } from "react";
 
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
   Card,
   EmptyState,
@@ -161,7 +162,7 @@ function flattenDays(structure: PlanStructure | null): FlatDay[] {
 type PlanTaskStatus = NonNullable<PlanTask["status"]>;
 
 function normalizedTaskStatus(task: PlanTask): PlanTaskStatus {
-  return task.status ?? (task.done ? "done" : "pending");
+  return task.status;
 }
 
 function taskIsPending(task: PlanTask): boolean {
@@ -171,7 +172,7 @@ function taskIsPending(task: PlanTask): boolean {
 /** 乐观更新：生成带新三态的 detail 副本，并完整重算两种进度口径。 */
 function withTaskStatus(
   detail: PlanDetail,
-  taskKey: string,
+  taskId: string,
   status: PlanTaskStatus,
 ): PlanDetail {
   const stages = detail.structure.stages.map((stage) => ({
@@ -179,8 +180,8 @@ function withTaskStatus(
     days: (stage.days ?? []).map((day) => ({
       ...day,
       tasks: (day.tasks ?? []).map((task) => {
-        if (task.task_key !== taskKey) return task;
-        return { ...task, status, done: status === "done" };
+        if (task.task_id !== taskId) return task;
+        return { ...task, status };
       }),
     })),
   }));
@@ -224,21 +225,21 @@ function TaskLockBadge({ task }: { task: PlanTask }) {
 
 function TaskStatusControls({
   task,
-  taskKey,
+  taskId,
   busy,
   disabled,
   compact = false,
   onStatus,
 }: {
   task: PlanTask;
-  taskKey?: string;
+  taskId?: string;
   busy: boolean;
   disabled: boolean;
   compact?: boolean;
-  onStatus?: (taskKey: string, status: PlanTaskStatus) => void;
+  onStatus?: (taskId: string, status: PlanTaskStatus) => void;
 }) {
   const status = normalizedTaskStatus(task);
-  const unavailable = disabled || !taskKey || busy;
+  const unavailable = disabled || !taskId || busy;
   return (
     <div className="flex shrink-0 items-center gap-1">
       <input
@@ -246,7 +247,7 @@ function TaskStatusControls({
         checked={status === "done"}
         disabled={unavailable}
         onChange={() =>
-          taskKey && onStatus?.(taskKey, status === "done" ? "pending" : "done")
+          taskId && onStatus?.(taskId, status === "done" ? "pending" : "done")
         }
         aria-label={`${status === "done" ? "取消完成" : "标记完成"}：${task.title}`}
         className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} accent-brand-600`}
@@ -257,7 +258,7 @@ function TaskStatusControls({
         aria-pressed={status === "skipped"}
         aria-label={`${status === "skipped" ? "取消跳过" : "跳过任务"}：${task.title}`}
         onClick={() =>
-          taskKey && onStatus?.(taskKey, status === "skipped" ? "pending" : "skipped")
+          taskId && onStatus?.(taskId, status === "skipped" ? "pending" : "skipped")
         }
         className={`rounded px-1.5 py-0.5 text-caption font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
           status === "skipped"
@@ -280,7 +281,7 @@ function PlanCalendar({
   highlightKeys,
 }: {
   structure: PlanStructure;
-  onStatus?: (taskKey: string, status: PlanTaskStatus) => void;
+  onStatus?: (taskId: string, status: PlanTaskStatus) => void;
   onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
   pendingKeys?: Set<string>;
   highlightKeys?: Set<string>;
@@ -301,11 +302,11 @@ function PlanCalendar({
         <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
         <ul className="divide-y divide-line">
           {currentDay.tasks.map((task, index) => {
-            const key = task.task_key;
+            const key = task.task_id;
             const status = normalizedTaskStatus(task);
             const busy = Boolean(key && pendingKeys?.has(key));
             const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
+            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskId={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
           })}
         </ul>
         <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
@@ -345,13 +346,13 @@ function PlanCalendar({
                           <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-body-sm text-ink">第 {day.day} 天</strong><span className="text-caption text-ink-muted">{totalMinutes} 分钟</span></header>
                           <ul className="divide-y divide-line/70">
                             {day.tasks.map((task, taskIndex) => {
-                              const key = task.task_key;
+                              const key = task.task_id;
                               const status = normalizedTaskStatus(task);
                               const busy = Boolean(key && pendingKeys?.has(key));
                               const isNew = Boolean(key && highlightKeys?.has(key));
                               return (
                                 <li key={key ?? taskIndex} className={`flex items-start gap-2 px-3 py-2.5 ${isNew ? "bg-warning-50" : ""}`}>
-                                  <TaskStatusControls task={task} taskKey={key} busy={busy} disabled={!onStatus} compact onStatus={onStatus} />
+                                  <TaskStatusControls task={task} taskId={key} busy={busy} disabled={!onStatus} compact onStatus={onStatus} />
                                   <div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: stage.name, day: day.day })} className={`block text-left text-body-sm leading-relaxed hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "text-ink"}`}><MathText text={task.title} /></button><p className="mt-1 flex flex-wrap gap-1 text-body-sm text-ink-muted"><span>{task.minutes} 分钟</span>{task.kc_names.map((name) => <span key={name} className={`rounded px-1 py-0.5 ${color.chip}`}>{name}</span>)}{status === "skipped" && <span>已跳过</span>}{isNew && <span className="font-medium text-warning-600">补强任务</span>}<TaskLockBadge task={task} /></p></div>
                                 </li>
                               );
@@ -849,20 +850,20 @@ export default function PlansPage() {
   };
 
   /** 任务三态更新：乐观更新；失败只恢复当前任务，保留其他并发更新。 */
-  const updateTaskStatus = async (taskKey: string, status: PlanTaskStatus) => {
-    if (!detail || pendingKeys.has(taskKey)) return;
+  const updateTaskStatus = async (taskId: string, status: PlanTaskStatus) => {
+    if (!detail || detail.status !== "active" || pendingKeys.has(taskId)) return;
     const snapshot = detail;
     const previousTask = flattenDays(detail.structure)
       .flatMap((day) => day.tasks)
-      .find((task) => task.task_key === taskKey);
+      .find((task) => task.task_id === taskId);
     if (!previousTask) return;
     const previousStatus = normalizedTaskStatus(previousTask);
-    setDetail(withTaskStatus(detail, taskKey, status));
-    setPendingKeys((prev) => new Set(prev).add(taskKey));
+    setDetail(withTaskStatus(detail, taskId, status));
+    setPendingKeys((prev) => new Set(prev).add(taskId));
     setTaskBanner(null);
     try {
       const res = await apiJson<PlanToggleResult>(
-        `/api/plans/${snapshot.id}/tasks/${taskKey}/toggle`,
+        `/api/plans/${snapshot.id}/tasks/${taskId}/toggle`,
         { body: { status } },
       );
       // 以服务端进度为准（并发勾选时避免本地计数漂移）
@@ -872,7 +873,7 @@ export default function PlansPage() {
     } catch (err) {
       setDetail((prev) =>
         prev && prev.id === snapshot.id
-          ? withTaskStatus(prev, taskKey, previousStatus)
+          ? withTaskStatus(prev, taskId, previousStatus)
           : prev,
       );
       setTaskBanner(
@@ -881,7 +882,7 @@ export default function PlansPage() {
     } finally {
       setPendingKeys((prev) => {
         const next = new Set(prev);
-        next.delete(taskKey);
+        next.delete(taskId);
         return next;
       });
     }
@@ -889,7 +890,7 @@ export default function PlansPage() {
 
   /** 根据学情调整计划：插入补强任务 → 重拉详情并高亮新任务。 */
   const runAdjust = async () => {
-    if (!detail || adjusting) return;
+    if (!detail || detail.status !== "active" || adjusting) return;
     setAdjusting(true);
     setTaskBanner(null);
     try {
@@ -898,7 +899,7 @@ export default function PlansPage() {
         body: {},
       });
       setAdjustResult(res);
-      setHighlightKeys(new Set(res.inserted.map((t) => t.task_key)));
+      setHighlightKeys(new Set(res.inserted.map((t) => t.task_id)));
       setDetailKey((k) => k + 1);
     } catch (err) {
       setTaskBanner(err instanceof ApiError ? err.message : "计划调整失败，请重试");
@@ -1115,11 +1116,11 @@ export default function PlansPage() {
     Boolean(confirmedDeadline || confirmedTotalDays);
   const scopeReady = kbs.length <= 1 || Boolean(kbId);
 
-  const openDependencyTask = (taskKey: string) => {
+  const openDependencyTask = (taskId: string) => {
     if (!detail) return;
     for (const stage of detail.structure.stages) {
       for (const day of stage.days ?? []) {
-        const task = (day.tasks ?? []).find((item) => item.task_key === taskKey);
+        const task = (day.tasks ?? []).find((item) => item.task_id === taskId);
         if (task) {
           setOpenTask({
             task,
@@ -1127,6 +1128,7 @@ export default function PlansPage() {
             day: day.day,
             planId: detail.id,
             planKbId: detail.kb_id,
+            readOnly: detail.status !== "active",
           });
           return;
         }
@@ -1388,7 +1390,7 @@ export default function PlansPage() {
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
                       <span className="block text-caption font-normal text-slate-400">
-                        {p.is_current ? "当前联动计划 · " : ""}每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
+                        {p.status === "active" ? "进行中 · " : p.status === "completed" ? "已完成 · " : "已归档 · "}每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
                       </span>
                     </button>
                   </li>
@@ -1432,7 +1434,7 @@ export default function PlansPage() {
                 }
                 extra={
                   <span className="text-caption text-slate-400">
-                    {selected.is_current ? "当前联动计划 · " : ""}每日 {selected.budget_hours} 小时
+                    {selected.status === "active" ? "进行中 · " : selected.status === "completed" ? "已完成 · " : "已归档 · "}每日 {selected.budget_hours} 小时
                   </span>
                 }
               >
@@ -1499,7 +1501,7 @@ export default function PlansPage() {
                   </div>
                   <button
                     type="button"
-                    disabled={!detail || adjusting}
+                    disabled={!detail || detail.status !== "active" || adjusting}
                     onClick={() => void runAdjust()}
                     title="按当前掌握度（p<0.4 的知识点）在最近未完成日插入补强任务"
                     className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1517,8 +1519,8 @@ export default function PlansPage() {
                         : "border-slate-200 bg-slate-50"
                     }`}
                   >
-                    <p className="flex items-start justify-between gap-2 text-slate-700">
-                      <span className="min-w-0"><MathText text={adjustResult.reason} /></span>
+                    <div className="flex items-start justify-between gap-2 text-slate-700">
+                      <div className="min-w-0"><ModelMarkdown text={adjustResult.reason} /></div>
                       <button
                         type="button"
                         onClick={() => {
@@ -1530,12 +1532,12 @@ export default function PlansPage() {
                       >
                         ✕
                       </button>
-                    </p>
+                    </div>
                     {adjustResult.inserted.length > 0 && (
                       <ul className="mt-2 space-y-1">
                         {adjustResult.inserted.map((t) => (
                           <li
-                            key={t.task_key}
+                            key={t.task_id}
                             className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-caption"
                           >
                             <span className="rounded bg-amber-500 px-1.5 py-0.5 font-medium text-white">
@@ -1603,8 +1605,8 @@ export default function PlansPage() {
                   <PlanCalendar
                     key={detail.id}
                     structure={detail.structure}
-                    onStatus={(key, status) => void updateTaskStatus(key, status)}
-                    onTaskOpen={(location) => setOpenTask({ ...location, planId: detail.id, planKbId: detail.kb_id })}
+                    onStatus={detail.status === "active" ? (taskId, status) => void updateTaskStatus(taskId, status) : undefined}
+                    onTaskOpen={(location) => setOpenTask({ ...location, planId: detail.id, planKbId: detail.kb_id, readOnly: detail.status !== "active" })}
                     pendingKeys={pendingKeys}
                     highlightKeys={highlightKeys}
                   />
@@ -1677,7 +1679,7 @@ export default function PlansPage() {
                               </span>
                             </p>
                             <div className="mt-1 text-sm leading-relaxed text-slate-700">
-                              <MathText text={a.reason} />
+                              <ModelMarkdown text={a.reason} />
                             </div>
                           </div>
                         </li>

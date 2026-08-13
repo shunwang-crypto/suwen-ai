@@ -26,10 +26,11 @@ def _kb(name: str = "高等数学") -> dict:
 
 
 def test_priority_review_beats_plan_weak_and_cold_start():
+    task_id = str(uuid.uuid4())
     recommendation = build_recommendation(
         PracticeContext(
             due_count=2,
-            plan_task={"plan_id": str(uuid.uuid4()), "task_key": "stage0.day0.task0"},
+            plan_task={"plan_id": str(uuid.uuid4()), "task_id": task_id},
             weak_points=[{"name": "极限", "p_mastery": 0.2}],
             ready_kbs=[_kb()],
         )
@@ -41,11 +42,12 @@ def test_priority_review_beats_plan_weak_and_cold_start():
 
 
 def test_plan_task_beats_weak_point_practice():
+    task_id = str(uuid.uuid4())
     recommendation = build_recommendation(
         PracticeContext(
             plan_task={
                 "plan_id": str(uuid.uuid4()),
-                "task_key": "stage0.day0.task0",
+                "task_id": task_id,
                 "kb_id": str(uuid.uuid4()),
                 "goal": "期末及格",
                 "count": 4,
@@ -60,7 +62,7 @@ def test_plan_task_beats_weak_point_practice():
     assert recommendation.source == "plan_task"
     assert recommendation.question_count == 4
     assert recommendation.plan_id
-    assert recommendation.task_key == "stage0.day0.task0"
+    assert recommendation.task_id == task_id
 
 
 def test_cold_start_is_three_questions_with_fixed_mix_and_real_kcs():

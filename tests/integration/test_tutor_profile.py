@@ -1,8 +1,7 @@
-"""Wave1-包C: 辅导小结 → 画像联动 (F4→F8)。
+"""辅导小结只形成可删除的 learner insight。
 
 FakeGateway 脚本驱动 tutor 图到 summarize, 断言:
-- misconceptions 命中已有 KC 词表 (canonical/alias 归一化子串) 的 KC 被以
-  correct=False、weight=0.5、evidence_type="tutor_summary" 写入 mastery_log;
+- misconceptions 命中已有 KC 词表时保留 KC 归因，但不写 mastery;
 - 词表外的误解如实丢弃, 不新建 KC;
 - 同 thread 后续轮次不重复计分 (summarize 只在本轮 trace 末项时落库)。
 """
@@ -10,7 +9,6 @@ FakeGateway 脚本驱动 tutor 图到 summarize, 断言:
 import json
 import uuid
 
-import pytest
 from sqlalchemy import select
 
 from .conftest import requires_services
@@ -90,7 +88,7 @@ async def _seed_kcs(uid: str) -> dict:
         return {"deriv": str(kc_deriv.id), "extremum": str(kc_extremum.id)}
 
 
-async def test_tutor_summary_writes_mastery_with_tutor_evidence(client):
+async def test_tutor_summary_records_insight_without_mastery(client):
     _, uid, headers = await _register(client, "tut")
     ids = await _seed_kcs(uid)
 
@@ -133,13 +131,8 @@ async def test_tutor_summary_writes_mastery_with_tutor_evidence(client):
         parsed = json.loads(body["session_summary"])
         assert parsed["misconceptions"] == summary["misconceptions"]
 
-        changes = body["mastery_changes"]
-        assert {c["kc_id"] for c in changes} == {ids["deriv"], ids["extremum"]}
-        by_kc = {c["kc_id"]: c for c in changes}
-        assert by_kc[ids["deriv"]]["name"] == "导数定义"
-        assert by_kc[ids["extremum"]]["name"] == "极值判定"  # alias「极值」子串命中
-        for c in changes:
-            assert c["new_p"] < c["old_p"]  # 负向证据 -> 掌握度下调
+        insights = body["learner_insights"]
+        assert {c["kc_id"] for c in insights} == {ids["deriv"], ids["extremum"]}
 
         # 第 2 轮 (同 thread, 未 solved): 不得重复计分
         r = await client.post(
@@ -152,7 +145,7 @@ async def test_tutor_summary_writes_mastery_with_tutor_evidence(client):
             },
         )
         assert r.status_code == 200, r.text
-        assert r.json()["mastery_changes"] == []
+        assert r.json()["learner_insights"] == []
 
         restored = await client.get(f"/api/tutor/{thread_local_id}", headers=headers)
         assert restored.status_code == 200, restored.text
@@ -169,30 +162,15 @@ async def test_tutor_summary_writes_mastery_with_tutor_evidence(client):
     finally:
         runtime._deps.gateway = original
 
-    # DB 核对: 每个命中 KC 恰好 1 条 tutor_summary 流水, 权重 0.5, 无 evidence_id
+    # DB 核对: 只有 insight，无 mastery 事实。
     from eduagents_api.db import tenant_session
     from eduagents_api.models import MasteryLog, MasteryRecord
 
     async with tenant_session(uid) as s:
-        logs = (
-            await s.scalars(
-                select(MasteryLog).where(MasteryLog.evidence_type == "tutor_summary")
-            )
-        ).all()
-        assert {str(x.kc_id) for x in logs} == {ids["deriv"], ids["extremum"]}
-        assert len(logs) == 2
-        for x in logs:
-            assert x.weight == pytest.approx(0.5)
-            assert x.evidence_id is None
+        logs = (await s.scalars(select(MasteryLog))).all()
+        assert logs == []
         records = (await s.scalars(select(MasteryRecord))).all()
-        # 词表外误解未新建 KC/记录: 恰好两条掌握度记录
-        assert {str(x.kc_id) for x in records} == {ids["deriv"], ids["extremum"]}
-
-    # 画像 API 可见辅导小结证据 (F8-A3 流水口径)
-    r = await client.get("/api/profile", headers=headers)
-    assert r.status_code == 200
-    evidence_types = {c["evidence_type"] for c in r.json()["recent_changes"]}
-    assert "tutor_summary" in evidence_types
+        assert records == []
 
 
 async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
@@ -222,7 +200,7 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
     finally:
         runtime._deps.gateway = original
     assert r.status_code == 200, r.text
-    assert r.json()["mastery_changes"] == []
+    assert r.json()["learner_insights"] == []
 
     from eduagents_api.db import tenant_session
     from eduagents_api.models import MasteryLog

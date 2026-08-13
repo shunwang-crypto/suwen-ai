@@ -1,13 +1,11 @@
-"""Reflection 节点 (§5.5 画像写入双通道的第二条): 对话洞察异步入画像。
+"""Reflection 节点：普通对话只保存 learner insight。
 
-测评/辅导是确定性直写 (services.apply_mastery_evidence), 对话只能靠抽取, 因此:
+测评/复习/受控 explain-back 才是掌握度证据；普通对话只能抽取记忆，因此:
 - 触发: 由 chat 路由每会话每 5 轮入队一次 (routers/chat.py, Redis 计数), 不是每轮都跑;
 - 抽取: cheap 档 json_mode 从最近 ≤10 轮对话抽 {"insights":[{kc_name, signal, evidence}]};
 - 落库: 仅接受能在该用户可见 KC 受控词表里匹配到的 kc_name (词表外如实丢弃, 不新建 KC);
-  confused -> BKT correct=False, understood -> correct=True, **权重一律 0.3**
-  (对话证据弱于测评的 1.0 与主观题/辅导小结的 0.5), evidence_type="chat_reflection";
 - 长期记忆 (P2-1, G10): 入账洞察连同学生原话 (evidence) 写 learner_insights,
-  幂等复用 mastery_log 去重 (重复入队不重复落原话), 每用户 100 条上限在
+  内容去重 (重复入队不重复落原话), 每用户 100 条上限在
   services.persist_learner_insights 统一裁剪;
 - stub 网关下跳过 (D2 约定, 同 enrichment: stub 不产生可入库内容)。
 """
@@ -30,11 +28,12 @@ log = get_logger("reflection")
 _PROMPTS_DIR = Path(__file__).resolve().parents[4] / "prompts"
 
 MAX_TURNS = 10  # 抽取窗口: 最近 10 条消息
-CHAT_EVIDENCE_WEIGHT = 0.3  # 对话证据权重 (必须低于测评 1.0 / 辅导小结 0.5)
-EVIDENCE_TYPE = "chat_reflection"
 _MAX_INSIGHTS = 5
 _MAX_MSG_CHARS = 600  # 单条消息进 prompt 的截断长度 (控 cheap 档上下文)
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
+# Dialogue insights are memory signals only. Keep the policy weight explicit so
+# evaluation code cannot accidentally treat them as quiz/review evidence.
+CHAT_EVIDENCE_WEIGHT = 0.3
 
 
 def _load_prompt(name: str) -> str:
@@ -130,10 +129,9 @@ async def reflect_session(
     """会话对话洞察 -> 画像 (ARQ 任务)。返回状态串: skipped/no_messages/no_vocab/
     parse_failed/no_match/applied:{n}。任何失败只降级, 不重试轰炸 LLM。"""
     from eduagents_api.db import tenant_session
-    from eduagents_api.deps import AuthContext
     from eduagents_api.models import ChatMessage as ChatMessageRow
     from eduagents_api.models import ChatSession, KnowledgeComponent
-    from eduagents_api.services import apply_mastery_evidence, persist_learner_insights
+    from eduagents_api.services import persist_learner_insights
 
     from .enrichment import get_worker_gateway
 
@@ -201,52 +199,20 @@ async def reflect_session(
         return "parse_failed"
 
     insight_rows = match_insight_rows(insights, vocab)
-    confused = [r["kc_id"] for r in insight_rows if r["kind"] == "confused"]
-    understood = [r["kc_id"] for r in insight_rows if r["kind"] == "understood"]
-    names = {r["kc_id"]: r["kc_name"] for r in insight_rows}
-    if not confused and not understood:
+    if not insight_rows:
         return "no_match"
 
-    auth = AuthContext(
-        user_id=uuid.UUID(str(user_id)),
-        tenant_id=uuid.UUID(str(tenant_id)),
-        role="student",
-        jti="",
-    )
-    changes: list[dict] = []
+    from eduagents_api.deps import AuthContext
+
+    auth = AuthContext(user_id=uuid.UUID(str(user_id)), tenant_id=uuid.UUID(str(tenant_id)), role="student", jti="")
     async with tenant_session(tenant_id) as session:
-        for kc_ids, correct in ((confused, False), (understood, True)):
-            if not kc_ids:
-                continue
-            changes.extend(
-                await apply_mastery_evidence(
-                    session,
-                    auth,
-                    kc_ids,
-                    correct=correct,
-                    weight=CHAT_EVIDENCE_WEIGHT,
-                    evidence_id=uuid.UUID(session_id),
-                    evidence_type=EVIDENCE_TYPE,
-                )
-            )
-        # P2-1: 真正入账的洞察连同学生原话写入长期记忆 (G10)。以 changes 过滤 =
-        # 复用 apply_mastery_evidence 的 (evidence_type, evidence_id) 幂等口径 —
-        # worker 重试/重复入队时 changes 为空, 原话不会重复落库。
-        applied_kcs = {str(c["kc_id"]) for c in changes}
-        memory_rows = [r for r in insight_rows if r["kc_id"] in applied_kcs]
-        if memory_rows:
-            await persist_learner_insights(
-                session,
-                auth,
-                memory_rows,
-                source="chat_reflection",
-                session_id=session_id,
-            )
+        await persist_learner_insights(
+            session, auth, insight_rows, source="chat_reflection", session_id=session_id
+        )
     log.info(
         "reflect_done",
         session_id=session_id,
-        confused=len(confused),
-        understood=len(understood),
-        kcs=[names.get(k, "") for k in (*confused, *understood)],
+        insights=len(insight_rows),
+        kcs=[row["kc_name"] for row in insight_rows],
     )
-    return f"applied:{len(changes)}"
+    return f"recorded:{len(insight_rows)}"

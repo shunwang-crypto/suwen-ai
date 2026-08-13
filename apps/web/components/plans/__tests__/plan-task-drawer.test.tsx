@@ -10,6 +10,8 @@ const KB_ID = "11111111-1111-4111-8111-111111111111";
 
 function task(action_type: PlanTask["action_type"] = "mixed"): PlanTask {
   return {
+    task_id: "55555555-5555-4555-8555-555555555555",
+    status: "pending",
     title: "二次函数图像",
     objective: "能够根据顶点式判断二次函数的开口与顶点。",
     instructions: ["复习顶点式", "完成三道变式题", "用自己的话解释判断过程"],
@@ -82,13 +84,13 @@ describe("PlanTaskDrawer", () => {
         location={{
           ...location(),
           planId: "22222222-2222-4222-8222-222222222222",
-          task: { ...task(), task_key: "stage-0-day-0-task-0" },
+          task: { ...task(), task_id: "00000000-0000-4000-8000-000000000001" },
         }}
         onClose={() => {}}
       />,
     );
     const href = screen.getByRole("link", { name: "进入分级辅导" }).getAttribute("href") ?? "";
-    expect(href).toBe("/tutor?plan_id=22222222-2222-4222-8222-222222222222&task_key=stage-0-day-0-task-0&kb=11111111-1111-4111-8111-111111111111");
+    expect(href).toBe("/tutor?plan_id=22222222-2222-4222-8222-222222222222&task_id=00000000-0000-4000-8000-000000000001&kb=11111111-1111-4111-8111-111111111111");
     expect(href).not.toContain("problem=");
     expect(href).not.toContain(encodeURIComponent("能够根据顶点式判断二次函数的开口与顶点。"));
   });

@@ -13,7 +13,7 @@ from eduagents_core.gateway import Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text, update
 
 from .db import tenant_session
 from .deps import AuthContext
@@ -41,7 +41,6 @@ log = get_logger("services")
 
 _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重进 BKT (写死)
 _SHORT_PASS_SCORE = 0.6
-_TUTOR_EVIDENCE_WEIGHT = 0.5  # 辅导小结证据权重 (与主观题同档: 间接证据减半)
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
 
 
@@ -614,10 +613,10 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
             resolved_questions.append((question, kc_ids))
 
         blueprint = dict(state.get("blueprint") or {})
-        if state.get("plan_id") and state.get("task_key"):
+        if state.get("plan_id") and state.get("task_id"):
             blueprint["_plan_task_attribution"] = {
                 "plan_id": str(state["plan_id"]),
-                "task_key": str(state["task_key"]),
+                "task_id": str(state["task_id"]),
             }
         quiz = Quiz(
             id=uuid.UUID(local_id),
@@ -684,6 +683,25 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
         raise HTTPException(status_code=400, detail="INVALID_KB_ID") from None
 
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        # Two confirmation requests may arrive from separate tabs. Serialize
+        # this learner's lifecycle before replacing the active plan so both
+        # transactions cannot race the partial unique index.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"plan-lifecycle:{ctx.tenant_id}:{ctx.user_id}"},
+        )
+        # Lifecycle is owned by plans: replace the current plan atomically in
+        # this transaction so the partial unique index never sees two active
+        # rows for the same learner.
+        await session.execute(
+            update(Plan)
+            .where(
+                Plan.tenant_id == ctx.tenant_id,
+                Plan.user_id == ctx.user_id,
+                Plan.status == "active",
+            )
+            .values(status="archived")
+        )
         kb = None
         if kb_id is not None:
             kb = await session.get(KnowledgeBase, kb_id)
@@ -760,7 +778,11 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
                 for task in day.get("tasks", []) if isinstance(day, dict) else []:
                     if not isinstance(task, dict):
                         continue
-                    task.pop("task_key", None)
+                    raw_task_id = task.get("task_id")
+                    try:
+                        task["task_id"] = str(uuid.UUID(str(raw_task_id)))
+                    except (TypeError, ValueError):
+                        task["task_id"] = str(uuid.uuid4())
                     ref = task.get("resource_ref")
                     task["resource_id"] = (
                         str(resource_ids[ref])
@@ -777,6 +799,7 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
             goal=str(state.get("goal") or "")[:2000],
             budget_hours=float(state.get("budget_hours_per_day") or 0),
             kb_id=kb_id,
+            status="active",
             structure_json=structure,
         )
         session.add(plan)
@@ -816,24 +839,31 @@ async def apply_mastery_evidence(
 ) -> list[dict]:
     """掌握度的**唯一**写入口 (EvidenceUpdater): BKT 直写 + mastery_log 审计 (F8-A3)。
 
-    §16 要求所有学习证据走同一条更新链路。此前 quiz / review / 手动覆盖三处各自
+    §16 要求所有学习证据走同一条更新链路。此前 quiz / review 等多处各自
     复制了同一段 BKT 逻辑, 其中 review 一路漏掉了幂等去重 —— 复习接口重试会重复
     推同一条证据。新增证据来源请调用本函数, 不要再复制这段逻辑。
 
-    evidence_type 区分证据来源 (quiz_attempt | tutor_summary | ...), 默认值保持向后兼容。
+    evidence_type must name one of the verified evidence sources.
 
     幂等 (P1-7): 同一 (user_id, kc_id, evidence_type, evidence_id) 已有 mastery_log
-    即跳过 — worker 重试/重复入队 (如 reflect_session) 不会重复推 BKT 污染画像。
-    evidence_id=None (tutor_summary) 无去重键, 保持原样。
+    即跳过，网络重试或并发重放不会重复推进 BKT。
+    evidence_id is required so every evidence event is idempotent.
     """
+    from eduagents_core.mastery.thresholds import VALID_MASTERY_EVIDENCE_TYPES
+
+    if evidence_type not in VALID_MASTERY_EVIDENCE_TYPES:
+        raise ValueError("invalid mastery evidence type")
+    if evidence_id is None:
+        raise ValueError("evidence_id is required for mastery evidence")
     changes = []
     business_now = now_dt or datetime.now(UTC)
     params = BktParams()
     applied: set[str] = set()
-    if evidence_id is not None and kc_ids:
+    if kc_ids:
         existing_logs = (
             await session.scalars(
                 select(MasteryLog.kc_id).where(
+                    MasteryLog.tenant_id == ctx.tenant_id,
                     MasteryLog.user_id == ctx.user_id,
                     MasteryLog.evidence_type == evidence_type,
                     MasteryLog.evidence_id == evidence_id,
@@ -841,14 +871,36 @@ async def apply_mastery_evidence(
             )
         ).all()
         applied = {str(k) for k in existing_logs}
-    for kc_id in kc_ids:
+    for kc_uuid in sorted({uuid.UUID(str(value)) for value in kc_ids}, key=str):
+        kc_id = str(kc_uuid)
+        # Serialize one learner/KC stream before the idempotency recheck.  The
+        # transaction lock also covers the no-record-yet case, where a row
+        # lock cannot protect concurrent first evidence.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"mastery:{ctx.user_id}:{kc_uuid}"},
+        )
+        already_applied = await session.scalar(
+            select(MasteryLog.id)
+            .where(
+                MasteryLog.tenant_id == ctx.tenant_id,
+                MasteryLog.user_id == ctx.user_id,
+                MasteryLog.kc_id == kc_uuid,
+                MasteryLog.evidence_type == evidence_type,
+                MasteryLog.evidence_id == evidence_id,
+            )
+            .limit(1)
+        )
+        if already_applied is not None:
+            continue
         if str(kc_id) in applied:
             continue
         record = await session.scalar(
             select(MasteryRecord).where(
                 MasteryRecord.user_id == ctx.user_id,
-                MasteryRecord.kc_id == uuid.UUID(kc_id),
+                MasteryRecord.kc_id == kc_uuid,
             )
+            .with_for_update()
         )
         old_p = record.p_mastery if record else params.p_l0
         new_p = bkt_update(old_p, correct, params, weight=weight)
@@ -856,7 +908,7 @@ async def apply_mastery_evidence(
             record = MasteryRecord(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
-                kc_id=uuid.UUID(kc_id),
+                kc_id=kc_uuid,
                 p_mastery=new_p,
                 confidence=weight,
                 last_seen=business_now,
@@ -870,7 +922,7 @@ async def apply_mastery_evidence(
             MasteryLog(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
-                kc_id=uuid.UUID(kc_id),
+                kc_id=kc_uuid,
                 old_p=old_p,
                 new_p=new_p,
                 evidence_type=evidence_type,
@@ -879,6 +931,89 @@ async def apply_mastery_evidence(
             )
         )
         changes.append({"kc_id": kc_id, "old_p": round(old_p, 4), "new_p": round(new_p, 4)})
+    return changes
+
+
+async def correct_mastery_evidence(
+    session,
+    ctx: AuthContext,
+    *,
+    original_evidence_type: str,
+    original_evidence_id: uuid.UUID,
+    corrected_evidence_type: str,
+    correct: bool,
+    weight: float,
+    now_dt: datetime | None = None,
+) -> list[dict]:
+    """Replace a graded event through the same serialized mastery boundary.
+
+    Appeals are corrections, not a second observation.  For each affected KC
+    this removes the original event, restores its pre-event state, then writes
+    one auditable corrected event while holding the same advisory lock used by
+    :func:`apply_mastery_evidence`.
+    """
+    originals = (
+        await session.scalars(
+            select(MasteryLog)
+            .where(
+                MasteryLog.user_id == ctx.user_id,
+                MasteryLog.evidence_type == original_evidence_type,
+                MasteryLog.evidence_id == original_evidence_id,
+            )
+            .order_by(MasteryLog.kc_id.asc(), MasteryLog.at.asc())
+        )
+    ).all()
+    changes: list[dict] = []
+    for original in originals:
+        kc_id = original.kc_id
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"mastery:{ctx.user_id}:{kc_id}"},
+        )
+        duplicate = await session.scalar(
+            select(MasteryLog.id)
+            .where(
+                MasteryLog.tenant_id == ctx.tenant_id,
+                MasteryLog.user_id == ctx.user_id,
+                MasteryLog.kc_id == kc_id,
+                MasteryLog.evidence_type == corrected_evidence_type,
+                MasteryLog.evidence_id == original_evidence_id,
+            )
+            .limit(1)
+        )
+        if duplicate is not None:
+            continue
+        record = await session.scalar(
+            select(MasteryRecord)
+            .where(
+                MasteryRecord.user_id == ctx.user_id,
+                MasteryRecord.kc_id == kc_id,
+            )
+            .with_for_update()
+        )
+        if record is None:
+            continue
+        previous_visible = record.p_mastery
+        previous_confidence = record.confidence
+        record.p_mastery = original.old_p
+        # Keep the original audit row. Evidence-state readers count distinct
+        # evidence_id values, so the correction remains one observation.
+        corrected = await apply_mastery_evidence(
+            session,
+            ctx,
+            [str(kc_id)],
+            correct,
+            weight,
+            original_evidence_id,
+            evidence_type=corrected_evidence_type,
+            now_dt=now_dt,
+        )
+        if corrected:
+            # A regrade replaces one observation; it must not increase the
+            # amount of evidence merely because a grader corrected itself.
+            record.confidence = previous_confidence
+            corrected[0]["replaced_p"] = round(previous_visible, 4)
+            changes.extend(corrected)
     return changes
 
 
@@ -918,16 +1053,13 @@ def match_misconception_insights(
 
 
 async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
-    """辅导小结落画像 (F4→F8 联动): misconceptions 命中已有 KC 词表 → BKT 负向证据。
+    """Persist tutor misconceptions as learner insight only.
 
     匹配规则: KC canonical/alias 归一化后作为子串出现在误解文本中即命中;
     词表外的误解不进 BKT、不新建 KC (画像外键只认归一化 kc_id, F5-A2)。
-    命中 KC 以 correct=False、0.5 权重、evidence_type="tutor_summary" 进 BKT,
-    返回变化列表 (附 KC 名, 供前端复盘卡展示)。
-
     P2-1 追加: 误解文本本身写入 learner_insights (source=tutor_summary,
-    kind=misconception; 能归一匹配 KC 就带 kc_id, 匹配不上也如实保留原文) —
-    掌握度数字之外留住"他到底错在哪"的语境 (G10)。
+    kind=misconception; 能归一匹配 KC 就带 kc_id, 匹配不上也如实保留原文)。
+    普通辅导小结不是受控验证事件，不得更新 BKT。
     """
     raw_texts = [
         m.strip() for m in (summary.get("misconceptions") or []) if isinstance(m, str) and m.strip()
@@ -951,18 +1083,10 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
             ],
             source="tutor_summary",
         )
-        if not matched:
-            return []
-        changes = await apply_mastery_evidence(
-            session,
-            ctx,
-            matched,
-            correct=False,
-            weight=_TUTOR_EVIDENCE_WEIGHT,
-            evidence_id=None,
-            evidence_type="tutor_summary",
-        )
-    return [{**c, "name": name_by_id.get(c["kc_id"], "")} for c in changes]
+    return [
+        {"kc_id": kc_id, "name": name_by_id.get(kc_id, ""), "recorded": True}
+        for kc_id in matched
+    ]
 
 
 async def _validated_quiz_kc_snapshots(
@@ -1208,7 +1332,7 @@ async def record_attempts(
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
                     plan_id=uuid.UUID(str(attribution.get("plan_id") or "")),
-                    task_key=str(attribution.get("task_key") or ""),
+                    task_id=str(attribution.get("task_id") or ""),
                     source_type="quiz_attempt",
                     source_id=str(quiz_id),
                     completed_at=business_now,

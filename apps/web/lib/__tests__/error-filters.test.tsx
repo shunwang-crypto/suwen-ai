@@ -28,41 +28,41 @@ function FilterHarness() {
 
 describe("useKnowledgeBaseFilter", () => {
   it("initializes from a visible URL KB and clears it without a URL fallback", async () => {
-    window.history.replaceState({}, "", `/errors?kb_id=${KB_A}&state=active&cause=misread`);
+    window.history.replaceState({}, "", `/reviews?view=errors&kb_id=${KB_A}&state=active&cause=misread`);
     render(<FilterHarness />);
     expect(screen.getByTestId("selected")).toHaveTextContent(KB_A);
 
     await userEvent.click(screen.getByRole("button", { name: "全部科目" }));
     expect(screen.getByTestId("selected")).toHaveTextContent("全部");
-    expect(window.location.search).toBe("?state=active&cause=misread");
+    expect(window.location.search).toBe("?view=errors&state=active&cause=misread");
   });
 
   it("updates the URL, keeps other filters, and restores state with back/forward", async () => {
     const user = userEvent.setup();
-    window.history.replaceState({}, "", "/errors?state=new&q=函数");
+    window.history.replaceState({}, "", "/reviews?view=errors&state=new&q=函数");
     render(<FilterHarness />);
 
     await user.click(screen.getByRole("button", { name: "物理" }));
-    expect(window.location.search).toBe(`?state=new&q=%E5%87%BD%E6%95%B0&kb_id=${KB_B}`);
+    expect(window.location.search).toBe(`?view=errors&state=new&q=%E5%87%BD%E6%95%B0&kb_id=${KB_B}`);
     expect(screen.getByTestId("selected")).toHaveTextContent(KB_B);
 
     window.history.back();
     await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent("全部"));
-    expect(window.location.search).toBe("?state=new&q=%E5%87%BD%E6%95%B0");
+    expect(window.location.search).toBe("?view=errors&state=new&q=%E5%87%BD%E6%95%B0");
     window.history.forward();
     await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent(KB_B));
   });
 
   it("rejects malformed and invisible URL KB values", async () => {
-    window.history.replaceState({}, "", `/errors?kb_id=${KB_C}`);
+    window.history.replaceState({}, "", `/reviews?view=errors&kb_id=${KB_C}`);
     render(<FilterHarness />);
     await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent("全部"));
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?view=errors");
 
-    window.history.replaceState({}, "", "/errors?kb_id=not-a-uuid");
+    window.history.replaceState({}, "", "/reviews?view=errors&kb_id=not-a-uuid");
     window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent("全部"));
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?view=errors");
   });
 });
 

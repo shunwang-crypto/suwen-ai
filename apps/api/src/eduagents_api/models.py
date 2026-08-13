@@ -382,6 +382,18 @@ class MasteryRecord(Base):
 
 class MasteryLog(Base):
     __tablename__ = "mastery_log"
+    __table_args__ = (
+        Index(
+            "uq_mastery_log_evidence",
+            "tenant_id",
+            "user_id",
+            "kc_id",
+            "evidence_type",
+            "evidence_id",
+            unique=True,
+            postgresql_where=text("evidence_id IS NOT NULL"),
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
@@ -901,6 +913,19 @@ class LearningEvent(Base):
 
 class Plan(Base):
     __tablename__ = "plans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'completed', 'archived')",
+            name="ck_plans_status",
+        ),
+        Index(
+            "uq_plans_one_active_per_user",
+            "tenant_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
@@ -911,6 +936,9 @@ class Plan(Base):
         ForeignKey("knowledge_bases.id", name="fk_plans_kb_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
     )
     structure_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

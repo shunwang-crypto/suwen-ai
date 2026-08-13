@@ -5,7 +5,7 @@ import { TutorEntrypoints } from "@/components/tutor/tutor-entrypoints";
 import type { TutorEntrypointsOut } from "@/lib/types";
 
 const ready: TutorEntrypointsOut = {
-  today_task: { status: "ready", plan_id: "plan-1", task_key: "stage0.day0.task0" },
+  today_task: { status: "ready", plan_id: "plan-1", task_id: "00000000-0000-4000-8000-000000000001" },
   errors: { status: "ready", error_ids: ["error-1", "error-2"] },
 };
 
@@ -15,7 +15,7 @@ describe("Tutor entrypoints", () => {
 
     expect(screen.getByRole("link", { name: "继续今天的任务" })).toHaveAttribute(
       "href",
-      "/tutor?plan_id=plan-1&task_key=stage0.day0.task0",
+      "/tutor?plan_id=plan-1&task_id=00000000-0000-4000-8000-000000000001",
     );
     expect(screen.getByRole("link", { name: "错题 1" })).toHaveAttribute(
       "href",

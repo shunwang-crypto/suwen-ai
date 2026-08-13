@@ -11,12 +11,12 @@ const dependency = {
         {
           kc_id: "a",
           kc_name: "极限",
-          task_keys: [],
+          task_ids: [],
           task_statuses: [],
           is_current_task: false,
           is_prerequisite: true,
           is_blocking: true,
-          blocking_task_keys: ["stage0.day0.task0"],
+          blocking_task_ids: ["00000000-0000-4000-8000-000000000001"],
         },
       ],
     },
@@ -26,12 +26,12 @@ const dependency = {
         {
           kc_id: "c",
           kc_name: "导数",
-          task_keys: ["stage0.day0.task0"],
-          task_statuses: [{ task_key: "stage0.day0.task0", status: "pending" as const }],
+          task_ids: ["00000000-0000-4000-8000-000000000001"],
+          task_statuses: [{ task_id: "00000000-0000-4000-8000-000000000001", status: "pending" as const }],
           is_current_task: true,
           is_prerequisite: false,
           is_blocking: false,
-          blocking_task_keys: [],
+          blocking_task_ids: [],
         },
       ],
     },
@@ -41,8 +41,8 @@ const dependency = {
 
 describe("KcDependencyPath", () => {
   it("renders levels once, keeps the dependency area scrollable, and opens task nodes", () => {
-    const onTaskOpen = (taskKey: string) => {
-      expect(taskKey).toBe("stage0.day0.task0");
+    const onTaskOpen = (taskId: string) => {
+      expect(taskId).toBe("00000000-0000-4000-8000-000000000001");
     };
     render(<KcDependencyPath dependency={dependency} onTaskOpen={onTaskOpen} />);
 

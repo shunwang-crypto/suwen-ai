@@ -7,9 +7,7 @@
   (fake session 记录 add/execute, 不触达 PG);
 - match_misconception_insights: BKT 命中口径与旧内联实现一致 + 每条误解文本的
   首个命中 kc_id (未命中 None, 原文仍要落库);
-- reflect_session 离线全链路: fake gateway (沿用现有 reflection 测试的
-  _FakeGateway 写法) + monkeypatch DB 层, 学生原话写入长期记忆, 重复入队
-  (幂等口径复用 mastery_log 去重) 不重复落原话。
+- reflect_session 离线全链路只写学生原话，不调用掌握度更新。
 """
 
 from __future__ import annotations
@@ -243,15 +241,6 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
     async def fake_tenant_session(tid, **kw):
         yield fake
 
-    mastery_calls = []
-
-    async def fake_update_mastery(session, ctx, kc_ids, **kw):
-        mastery_calls.append(kc_ids)
-        # 首次全部入账, 复跑模拟 mastery_log 去重后零变化 (幂等口径)
-        if len(mastery_calls) == 1:
-            return [{"kc_id": k, "old_p": 0.3, "new_p": 0.25} for k in kc_ids]
-        return []
-
     persisted = []
 
     async def fake_persist(session, ctx, rows, *, source, session_id=None):
@@ -259,7 +248,6 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
         return 0
 
     monkeypatch.setattr(db_mod, "tenant_session", fake_tenant_session)
-    monkeypatch.setattr(services_mod, "apply_mastery_evidence", fake_update_mastery)
     monkeypatch.setattr(services_mod, "persist_learner_insights", fake_persist)
 
     gateway = _FakeGateway()
@@ -268,9 +256,9 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
     _fresh_scalars()
     out2 = await reflect_session({}, str(tenant_id), str(user_id), str(session_id), gateway=gateway)
 
-    assert out1 == "applied:1" and out2 == "applied:0"
-    # 长期记忆只落一次 (复跑 changes 为空 -> 不重复写原话), 且带学生原话与 KC 归因
-    assert len(persisted) == 1
+    assert out1 == "recorded:1" and out2 == "recorded:1"
+    # 幂等由 persist_learner_insights 内容去重承担；reflection 本身永远不碰 BKT。
+    assert len(persisted) == 2
     call = persisted[0]
     assert call["source"] == "chat_reflection"
     assert call["session_id"] == str(session_id)

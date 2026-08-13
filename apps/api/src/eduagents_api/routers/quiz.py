@@ -58,19 +58,19 @@ class QuizCreate(BaseModel):
     # 画像联动出题 (M4-D2): 由后端按掌握度自动填 kc_names, 不信任前端传的薄弱点
     from_weak_points: bool = False
     plan_id: uuid.UUID | None = None
-    task_key: str | None = Field(default=None, max_length=96)
+    task_id: str | None = Field(default=None, max_length=96)
     confirmation_mode: Literal["auto", "required"] = "required"
 
     @model_validator(mode="after")
     def _topic_required(self) -> QuizCreate:
         if not self.from_weak_points and not self.topic.strip():
             raise ValueError("topic 不能为空")
-        if (self.plan_id is None) != (self.task_key is None):
-            raise ValueError("plan_id 与 task_key 必须同时提供")
-        if self.task_key is not None:
-            self.task_key = self.task_key.strip()
-            if not self.task_key:
-                raise ValueError("task_key 不能为空")
+        if (self.plan_id is None) != (self.task_id is None):
+            raise ValueError("plan_id 与 task_id 必须同时提供")
+        if self.task_id is not None:
+            self.task_id = self.task_id.strip()
+            if not self.task_id:
+                raise ValueError("task_id 不能为空")
         return self
 
 
@@ -131,7 +131,7 @@ async def create_recommended_quiz(
         difficulty_mix=recommendation.difficulty_mix,
         kc_names=list(recommendation.target_kc_names),
         plan_id=uuid.UUID(recommendation.plan_id) if recommendation.plan_id else None,
-        task_key=recommendation.task_key,
+        task_id=recommendation.task_id,
         confirmation_mode="auto",
     )
     return await create_quiz(quiz_body, request, ctx)
@@ -152,7 +152,7 @@ async def create_quiz(
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     effective_kb_id = body.kb_id
     effective_plan_id = body.plan_id
-    effective_task_key = body.task_key
+    effective_task_id = body.task_id
     # Wave 1B barrier: a KB-backed cold-start Quiz must not enter the graph
     # while its usable KC set is still being built.  Personalized and ordinary
     # Quiz paths share this barrier; weak-point requests must not spend
@@ -211,8 +211,8 @@ async def create_quiz(
             )
         if recommendation.source == "plan_task":
             recommendation_plan_id = recommendation.plan_id
-            recommendation_task_key = recommendation.task_key
-            if not recommendation_plan_id or not recommendation_task_key:
+            recommendation_task_id = recommendation.task_id
+            if not recommendation_plan_id or not recommendation_task_id:
                 return JSONResponse(
                     status_code=409,
                     content={
@@ -228,7 +228,7 @@ async def create_quiz(
                 effective_plan_id is not None
                 and (
                     str(effective_plan_id) != recommendation_plan_id
-                    or effective_task_key != recommendation_task_key
+                    or effective_task_id != recommendation_task_id
                 )
             ):
                 return JSONResponse(
@@ -250,7 +250,7 @@ async def create_quiz(
                         "recommendation": recommendation.to_dict(),
                     },
                 )
-            effective_task_key = recommendation_task_key
+            effective_task_id = recommendation_task_id
         elif effective_plan_id is not None:
             # Ordinary weak/cold-start/maintenance recommendations own no
             # plan attribution.  Browser-supplied context is stale or forged.
@@ -309,9 +309,9 @@ async def create_quiz(
                 ),
             }
         )
-    if (effective_plan_id is None) != (effective_task_key is None):
+    if (effective_plan_id is None) != (effective_task_id is None):
         raise HTTPException(status_code=409, detail="PRACTICE_DECISION_CHANGED")
-    if effective_plan_id is not None and effective_task_key is not None:
+    if effective_plan_id is not None and effective_task_id is not None:
         async with tenant_session(ctx.tenant_id) as session:
             try:
                 await validate_plan_task_attribution(
@@ -319,7 +319,7 @@ async def create_quiz(
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
                     plan_id=effective_plan_id,
-                    task_key=effective_task_key,
+                    task_id=effective_task_id,
                     source_type="quiz_attempt",
                 )
             except PlanTaskAttributionError as exc:
@@ -355,9 +355,9 @@ async def create_quiz(
         "profile_summary": profile_summary,
         "difficulty_reasons": difficulty_reasons,
     }
-    if effective_plan_id is not None and effective_task_key is not None:
+    if effective_plan_id is not None and effective_task_id is not None:
         payload["plan_id"] = str(effective_plan_id)
-        payload["task_key"] = effective_task_key
+        payload["task_id"] = effective_task_id
     return await stream_graph_run(
         runtime, "quiz", thread_id, ctx, payload, trace_prelude=trace_prelude
     )

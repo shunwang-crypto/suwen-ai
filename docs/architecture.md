@@ -94,6 +94,16 @@ flowchart LR
     MASTERY --> PROFILE[画像 / 报告 / 推荐 / 计划]
 ~~~
 
+掌握度只能由 `apply_mastery_evidence` 边界写入。当前有效证据仅包括真实 Quiz
+作答、到期 FSRS 复习、最终核验的 AssessmentAnswer 及其申诉纠正。阅读资料、
+普通对话、AI 解释、辅导小结、计划任务完成和未核验题目都不更新 BKT。
+对话反思和辅导小结只写 `LearnerInsight`，供用户查看和删除。
+
+`evidence_state` 由有效 `MasteryLog` 的独立 `evidence_id` 数量派生，不从
+`p_mastery` 先验或历史 `confidence` 反推：0 次为 `unobserved`，1–2 次为
+`estimated`，3 次及以上为 `observed`。只有 `observed` 才能进入稳定“薄弱”或
+“已掌握”叙述、补强推荐和报告归因；其余状态优先收集证据。
+
 ## 运行组件
 
 | 组件 | 职责 | 当前边界 |

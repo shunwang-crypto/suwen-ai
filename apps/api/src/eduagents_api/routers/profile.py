@@ -1,4 +1,4 @@
-"""F8 "AI 眼中的我": 画像全量读取 + 用户纠正 (最终解释权)。
+"""F8 "AI 眼中的我": 可审计的画像与长期记忆读侧。
 
 - GET /api/profile: 掌握度全量 (join KC 名, 附 FSRS 保持率快照 + kb/章节元信息,
   ?kb_id= 单库过滤 — 真实规模 152 KC 需折叠成 库→章→KC 树, B1) + 错题分布
@@ -6,8 +6,6 @@
   ?include_noop=1 保留全量供审计口径, C1)。
 - GET /api/profile/weak-points: 定向出题将要覆盖的薄弱点预览 (与 POST /api/quiz
   的 from_weak_points 走同一函数, 预览即所得)。
-- POST /api/profile/kc/{kc_id}/override: 用户直改 p_mastery, 确定性直写
-  mastery_record + mastery_log(evidence_type="user_override", weight=1.0)。
 - GET/DELETE /api/profile/insights (P2-1): 长期记忆条目 (学生原话/误解语境)
   用户可见可删 — F8 规格"记忆条目"的最终解释权同样归用户。
 """
@@ -18,10 +16,14 @@ import uuid
 from datetime import datetime, timedelta
 
 from eduagents_core.mastery import scheduler
-from eduagents_core.mastery.bkt import BktParams
-from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, evidence_strength
+from eduagents_core.mastery.thresholds import (
+    QUIZ_WEAK_THRESHOLD,
+    VALID_MASTERY_EVIDENCE_TYPES,
+    evidence_state,
+    evidence_state_label,
+    evidence_strength,
+)
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from .. import timectl
@@ -88,10 +90,6 @@ def _kc_retention_snapshots(
     return result
 
 
-class OverrideIn(BaseModel):
-    p_mastery: float = Field(ge=0.0, le=1.0)
-
-
 @router.get("")
 async def get_profile(
     request: Request,
@@ -119,22 +117,36 @@ async def get_profile(
         # 掌握度全量 (join KC 名)
         mastery_rows = (
             await session.execute(
-                select(MasteryRecord, KnowledgeComponent.canonical_name)
+                select(
+                    MasteryRecord,
+                    KnowledgeComponent.canonical_name,
+                    func.count(func.distinct(MasteryLog.evidence_id)),
+                )
                 .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+                .outerjoin(
+                    MasteryLog,
+                    (MasteryLog.user_id == MasteryRecord.user_id)
+                    & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                    & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                )
                 .where(MasteryRecord.user_id == ctx.user_id)
+                .group_by(MasteryRecord, KnowledgeComponent.canonical_name)
                 .order_by(MasteryRecord.p_mastery.asc())
             )
         ).all()
         mastery = []
-        for r, name in mastery_rows:
+        for r, name, evidence_count in mastery_rows:
             retention = retention_by_kc.get(str(r.kc_id))
+            state = evidence_state(int(evidence_count))
             mastery.append(
                 {
                     "kc_id": str(r.kc_id),
                     "name": name,
-                    "p_mastery": round(r.p_mastery, 4),
+                    "p_mastery": None if state == "unobserved" else round(r.p_mastery, 4),
                     "confidence": round(r.confidence, 4),
                     "evidence_strength": evidence_strength(r.confidence),
+                    "evidence_state": state,
+                    "evidence_state_label": evidence_state_label(state),
                     "last_seen": r.last_seen,
                     # 无 FSRS 卡 (没错过题 / 卡未复习过) 的条目为 null, 前端不渲染
                     "retention_now": round(retention[0], 4) if retention else None,
@@ -181,7 +193,9 @@ async def get_profile(
             )
         ).all()
         logs = filter_noop_changes(raw_logs, include_noop=include_noop)
-        kc_names: dict[str, str] = {str(r.kc_id): name for r, name in mastery_rows}
+        kc_names: dict[str, str] = {
+            str(r.kc_id): name for r, name, _count in mastery_rows
+        }
         missing = {str(x.kc_id) for x in logs} - set(kc_names)
         if missing:
             for kc in (
@@ -222,6 +236,7 @@ async def get_profile(
 
     return {
         "mastery": mastery,
+        "weak_threshold": QUIZ_WEAK_THRESHOLD,
         # kb_id 过滤只作用于 mastery (错题分布/流水是全局学习行为, 不随库切换清零)
         "kb_id": str(kb_id) if kb_id is not None else None,
         "error_distribution": {"by_cause": by_cause, "by_state": by_state},
@@ -297,59 +312,3 @@ async def delete_insight(
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
         await session.delete(row)
-
-
-@router.post("/kc/{kc_id}/override")
-async def override_mastery(
-    kc_id: uuid.UUID,
-    body: OverrideIn,
-    request: Request,
-    ctx: AuthContext = Depends(api_rate_limited),
-):
-    """用户纠正画像 ("这个我已经会了"): 直写, 不经 LLM, 全程留审计日志。"""
-    # last_seen 走虚拟时钟 (§9): 与练习/复习写入口径一致, time-travel 演示不穿帮
-    now_dt = await timectl.now(request.app.state.redis)
-    async with tenant_session(ctx.tenant_id) as session:
-        kc = await session.get(KnowledgeComponent, kc_id)  # RLS 保证只见本租户 KC
-        if kc is None:
-            raise HTTPException(status_code=404, detail="KC_NOT_FOUND")
-        record = await session.scalar(
-            select(MasteryRecord).where(
-                MasteryRecord.user_id == ctx.user_id, MasteryRecord.kc_id == kc_id
-            )
-        )
-        old_p = record.p_mastery if record else BktParams().p_l0
-        if record is None:
-            record = MasteryRecord(
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                kc_id=kc_id,
-                p_mastery=body.p_mastery,
-                confidence=1.0,
-                last_seen=now_dt,
-            )
-            session.add(record)
-        else:
-            record.p_mastery = body.p_mastery
-            # 用户亲自断言 = 最强证据, 置信度拉满 (用户对自己画像的最终解释权)
-            record.confidence = 1.0
-            record.last_seen = now_dt
-        log_row = MasteryLog(
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            kc_id=kc_id,
-            old_p=old_p,
-            new_p=body.p_mastery,
-            evidence_type="user_override",
-            evidence_id=None,
-            weight=1.0,
-        )
-        session.add(log_row)
-        await session.flush()
-        return {
-            "kc_id": str(kc_id),
-            "kc_name": kc.canonical_name,
-            "old_p": round(old_p, 4),
-            "new_p": round(body.p_mastery, 4),
-            "log_id": str(log_row.id),
-        }

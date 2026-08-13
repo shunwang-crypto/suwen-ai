@@ -181,37 +181,41 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   `kc_names`，`topic` 可省略并缺省为“薄弱点强化练习”，入图前先行下发
   `trace_event {node:"weak_points", event:"weak_points_selected", mode, count, kc_names, difficulty_mix, rationale}`；
   trace 不含 `p_mastery`、`confidence` 或 `mastery_band`。若推荐命中 `plan_task`，计划归因由
-  recommendation 的 `plan_id/task_key` 服务端回填并在入图前校验；浏览器带来的过期任务不会静默切换，
+  recommendation 的 `plan_id/task_id` 服务端回填并在入图前校验；浏览器带来的过期任务不会静默切换，
   其他 weak/cold-start/maintenance 分支不携带计划归因。KC enrichment 进行中返回 `409 QUIZ_KC_PREPARING`，
   已终止或无合法 KC 返回 `409 QUIZ_KC_NOT_READY`）。
+- `GET /api/profile` 的每个掌握项返回 `evidence_state: unobserved|estimated|observed`
+  与展示标签；`unobserved` 的 `p_mastery` 为 null，不对外假装成 30% 薄弱。
+  响应同时返回 `weak_threshold`。
 - `GET /api/profile/weak-points[?kb_id=]` → `{threshold, limit, weak_points:[{kc_id, name,
-  p_mastery, recent_error}]}`；与出题共享同一个服务端薄弱 KC 候选 loader（近 7 天 verified 错题优先，
+  p_mastery, evidence_state, recent_error}]}`；候选必须是 `observed`，并与出题共享同一个服务端 loader（近 7 天 verified 错题优先，
   再按 p_mastery 升序和稳定 KC 顺序），预览即所练；精确 p_mastery 只保留在该鉴权画像接口。
-- 对话洞察由 worker `reflect_session(tenant_id, user_id, session_id)` 异步写画像：
-  mastery_log `evidence_type="chat_reflection"`、`weight=0.3`（弱于测评 1.0 / 辅导小结 0.5），
+- 对话洞察由 worker `reflect_session(tenant_id, user_id, session_id)` 异步写入
+  `learner_insights`；普通对话中的 `confused/understood` 均不写 `mastery_log`、不推进 BKT。
   stub 网关下跳过。
 
 ### AI 工作流（用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/threads/{thread_id}/resume | `{value}` interrupt 恢复协议；thread_id=`kind:user:local`，跨用户 404 |
-| POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_key?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
+| POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_id?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
 | GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason/question_count/difficulty_mix`，不返回题干或掌握度小数 |
-| POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_key?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
+| POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_id?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
 | POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |
 | GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
 | POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
 | POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认，服务端不再静默补默认值；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。服务端重新校验 KB 访问、任务结构与资源引用 |
-| GET | /api/plans | 计划列表，含 `kb_id/kb_name` 与 `is_current`（最近创建计划是当前联动计划） |
-| GET | /api/plans/{id} | 计划详情：含 `kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带 `task_key`（stageI.dayJ.taskK，三层 0 基下标）、`objective/instructions/completion_criteria/action_type/resource/resource_id/done`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges}`。`kc_dependency` 只包含当前计划任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_keys/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_keys`，不含 `p_mastery`/`confidence`；空图返回空 `levels/edges`，不写回计划结构。 |
-| GET | /api/plans/{id}/tasks/{task_key}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_key`；任务文字不进入 URL，非法或他人任务统一 404 |
-| POST | /api/plans/{id}/tasks/{task_key}/toggle | {done?} 勾选/取消任务（缺省取反）；done 内嵌 structure_json，不另建列 |
-| POST | /api/plans/{id}/tasks/{task_key}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
+| GET | /api/plans | 计划列表，含 `kb_id/kb_name/status`；`status` 为 `active/completed/archived`，每个用户最多一个 active 计划 |
+| GET | /api/plans/{id} | 本人计划详情（历史计划可读）：含 `status/kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带服务端生成且不随结构调整变化的 UUID `task_id`、`objective/instructions/completion_criteria/action_type/resource/resource_id/status`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 UUID 集合 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges}`。`kc_dependency` 只包含当前计划任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_ids/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_ids`，不含 `p_mastery`/`confidence`；空图返回空 `levels/edges`，不写回计划结构。 |
+| GET | /api/plans/{id}/tasks/{task_id}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_id`；任务文字不进入 URL，非法或他人任务统一 404 |
+| POST | /api/plans/{id}/tasks/{task_id}/toggle | `{status: pending|done|skipped}` 显式更新任务状态；状态内嵌 `structure_json`，不另建列 |
+| POST | /api/plans/{id}/tasks/{task_id}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
+| POST | /api/plans/{id}/archive | 放弃唯一 active 计划并置为 archived；completed/archived 计划只读，不可隐式恢复 |
 | POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插带目标、步骤、完成标准、`action_type=practice` 的「补强: {KC}」任务 → `{inserted, reason}` |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
-| POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_key?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
-| GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_key`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |
+| POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
+| GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_id`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |
 
 作答前信心的五级概率映射固定为 `0.1/0.3/0.5/0.7/0.9`。高信心答错率只统计概率
 `>=0.7` 的样本；Brier 分数和该比率均只描述预测校准，不评价学习能力。跳过预测时不写
@@ -265,8 +269,8 @@ schema 重试耗尽是 `validation_failed`。`confirmation_mode` 为 `required` 
 | GET | /api/errors/stats | 仅统计 `verification_status=verified` 的错题：{total, by_cause(五分类补零), by_state, by_kc(top10)}；待核验数量单列 `pending_verification` |
 | POST | /api/errors/{id}/archive | 手动归档：state→archived，退出今日复习队列 |
 | POST | /api/errors/{id}/cause | {cause} 错因修正（五分类之一，越界 422） |
-| GET | /api/reviews/today | 到期复习队列；计划入口使用 URL 中的 `plan_id/task_key` |
-| POST | /api/reviews/{id}/answer | `{response, plan_id?, task_key?, review_duration_ms?}`；客户端必须为一次提交生成并在网络重试间复用 `Idempotency-Key`（≤128 字符）；仅真实到期复习作答可幂等完成 `review_errors/mixed` 计划任务 |
+| GET | /api/reviews/today | 到期复习队列；计划入口使用 URL 中的 `plan_id/task_id` |
+| POST | /api/reviews/{id}/answer | `{response, plan_id?, task_id?, review_duration_ms?}`；客户端必须为一次提交生成并在网络重试间复用 `Idempotency-Key`（≤128 字符）；仅真实到期复习作答可幂等完成 `review_errors/mixed` 计划任务 |
 
 > 错因自动分类：`POST /api/reviews/{id}/answer` 判错时以 cheap 档 json_mode 重标错因并回传 `cause`；
 > 网关 stub 模式不发请求、异常一律回落 `knowledge_gap`（入本初值），绝不冒充分类结果。
@@ -286,7 +290,7 @@ schema 重试耗尽是 `validation_failed`。`confirmation_mode` 为 `required` 
 
 `GET /api/errors` 的导入题字段包括 `verification_status`、`source_import_id`、`content_editable`；题目资料错题还返回 `resource_id/resource_question_id`，前端可回到题目资料查看原题。`my_answer` 对导入题来自 `ErrorItem.original_response`，自动练习错题仍来自真实 `Attempt`。`Question.source_type` 为 `generated|manual|image|document`；新导入题的 `quiz_id` 为空并通过 `ResourceQuestion` 归属资料，不会出现在普通测验或教师组卷列表。
 
-`ErrorItem.verification_status` 的状态只能从 `pending` 前进到 `verified`，不能回退；待核验错题不会进入复习、FSRS、掌握度、画像、报告或推荐。题目资料错题的“查看原题资料”链接使用 `/resources?resource_id=<resource_id>&question_id=<resource_question_id>`，页面会通过受保护接口打开资料并定位题目；无效题目参数不会跨资料读取，返回列表时会清理这两个查询参数。
+`ErrorItem.verification_status` 的状态只能从 `pending` 前进到 `verified`，不能回退；待核验错题不会进入复习、FSRS、掌握度、画像、报告或推荐。题目资料错题的“查看原题资料”链接使用 `/materials?resource_id=<resource_id>&question_id=<resource_question_id>`，页面会通过受保护接口打开资料并定位题目；无效题目参数不会跨资料读取，返回列表时会清理这两个查询参数。
 Explain-back 的来源校验错误包括 `SOURCE_ATTEMPT_NOT_FOUND`、`QUESTION_NOT_FOUND` 和
 `SOURCE_QUESTION_MISMATCH`。
 
@@ -419,7 +423,8 @@ MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt�
 但原件、选页和手工草稿均保留。`POST /api/tutor` 带 `tutor_draft_id` 时忽略客户端
 `problem`，只使用服务端确认快照，并校验快照绑定的 thread。未确认草稿和单纯确认操作不会
 写 `Attempt/ErrorItem/MasteryLog/LearnerInsight/Report`；只有原有 tutor graph 完成
-`tutor_summary` 后才沿用 mastery/画像链路。
+`tutor_summary` 后只将误解原文写入可删除的 `learner_insights`，不写
+`MasteryRecord/MasteryLog`。辅导任务完成也不是掌握度证据。
 
 辅导 PDF 只处理用户选择页，并综合文字质量、正文覆盖、图片面积/数量和图形对象判断页面；
 完整文本页直接提取，扫描或 mixed 选择页渲染 PNG 并逐页调用视觉模型，真实页码由服务端保留。

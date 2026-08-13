@@ -7,7 +7,7 @@ import {
   resourceDetailKey,
   shouldShowResourceDetailSkeleton,
   tutorDraftHref,
-} from "@/app/resources/page";
+} from "@/components/resources/resource-library";
 
 const resource = (metadata: Record<string, unknown>) => ({ metadata } as never);
 

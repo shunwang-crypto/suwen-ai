@@ -40,18 +40,21 @@ from eduagents_core.logging import get_logger
 # 阈值唯一来源 (个性化波次 G6): 此处仅 import 再导出 (routers/profile.py 等既有
 # 消费方沿用本模块入口), 禁止再落地本地硬编码副本。
 from eduagents_core.mastery.thresholds import (
+    EVIDENCE_OBSERVED_MIN_EVENTS,
     MASTERED_THRESHOLD,
     QUIZ_WEAK_THRESHOLD,
+    VALID_MASTERY_EVIDENCE_TYPES,
     WEAK_THRESHOLD,
     ZPD_LOWER,
     difficulty_for_mastery,
+    evidence_state,
     mastery_band,
     zone_label,
 )
 from sqlalchemy import and_, func, select
 
 from .db import tenant_session
-from .models import ErrorItem, KnowledgeComponent, MasteryRecord, UserPreference
+from .models import ErrorItem, KnowledgeComponent, MasteryLog, MasteryRecord, UserPreference
 
 log = get_logger("profile_summary")
 
@@ -67,11 +70,6 @@ _ERROR_SCAN = 10  # 错因分布的近期错题扫描窗口
 # 定向出题口径 (M4-D2: "上午答错的概念下午自动出现在练习卷")
 QUIZ_WEAK_TOP = 5
 _RECENT_ERROR_DAYS = 7
-# confidence 低于此值视为"证据不足", 触发 Assessment Mode 而非判定无事可做 (§5.3)。
-# apply_mastery_evidence 每条证据 +0.1, 因此 0.3 约等于"至少测过三次"。
-# 这是服务端策略阈值，不进入推荐公开结果、SSE 或模型 prompt。
-ASSESSMENT_CONFIDENCE_CEILING = 0.3
-_ASSESSMENT_CONFIDENCE_CEILING = ASSESSMENT_CONFIDENCE_CEILING
 # 题面 ↔ KC 名子串匹配的最短归一化长度 (同 services._MIN_KC_MATCH_LEN 口径):
 # 单字 KC 名 (如"角""集") 会命中几乎任意题面, 放行会把起始层级判飞。
 _MIN_BAND_MATCH_LEN = 2
@@ -157,8 +155,8 @@ async def invalidate_profile_summary_cache(redis, user_id: uuid.UUID | str) -> i
 
 async def _load_snapshot(
     tenant_id: uuid.UUID | str, user_id: uuid.UUID | str, kb_ids: list[str]
-) -> tuple[list[tuple[str, str, float]], list[str], Counter, dict | None]:
-    """一次事务读齐: (掌握度行, 最近错题 KC 名, 近期错因计数, 偏好 dict|None)。
+) -> tuple[list[tuple[str, str, float, str]], list[str], Counter, dict | None]:
+    """一次事务读齐: (掌握度行含 evidence_state, 最近错题 KC 名, 近期错因计数, 偏好)。
 
     掌握度行形如 (kc_id, kc_name, p_mastery), 已按 p 升序。kb_ids 非空时按所属知识库
     过滤; 过滤后为空则回退全量 (跨库学习者不该因绑库而丢画像)。偏好 (P2-3) 与
@@ -173,9 +171,22 @@ async def _load_snapshot(
                     MasteryRecord.p_mastery,
                     KnowledgeComponent.canonical_name,
                     KnowledgeComponent.kb_id,
+                    func.count(func.distinct(MasteryLog.evidence_id)),
                 )
                 .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+                .outerjoin(
+                    MasteryLog,
+                    (MasteryLog.user_id == MasteryRecord.user_id)
+                    & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                    & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                )
                 .where(MasteryRecord.user_id == uid)
+                .group_by(
+                    MasteryRecord.kc_id,
+                    MasteryRecord.p_mastery,
+                    KnowledgeComponent.canonical_name,
+                    KnowledgeComponent.kb_id,
+                )
                 .order_by(MasteryRecord.p_mastery.asc())
             )
         ).all()
@@ -195,7 +206,7 @@ async def _load_snapshot(
             for kc_id in item.kc_ids or []:
                 if str(kc_id) not in error_kc_ids:
                     error_kc_ids.append(str(kc_id))
-        name_by_id = {str(kc_id): name for kc_id, _p, name, _kb in rows}
+        name_by_id = {str(kc_id): name for kc_id, _p, name, _kb, _count in rows}
         missing = [k for k in error_kc_ids if k not in name_by_id]
         if missing:
             for kc in (
@@ -221,12 +232,15 @@ async def _load_snapshot(
 
     kb_set = set(kb_ids)
     scoped = [
-        (str(kc_id), name, float(p))
-        for kc_id, p, name, kb_id in rows
+        (str(kc_id), name, float(p), evidence_state(int(count)))
+        for kc_id, p, name, kb_id, count in rows
         if not kb_set or str(kb_id) in kb_set
     ]
     if not scoped:
-        scoped = [(str(kc_id), name, float(p)) for kc_id, p, name, _kb in rows]
+        scoped = [
+            (str(kc_id), name, float(p), evidence_state(int(count)))
+            for kc_id, p, name, _kb, count in rows
+        ]
     error_names = [name_by_id[k] for k in error_kc_ids if k in name_by_id]
     causes = Counter(item.cause for item in errors if item.cause)
     return scoped, error_names, causes, prefs
@@ -264,7 +278,7 @@ def _pref_parts(prefs: dict | None, include_interests: bool = True) -> list[str]
 
 
 def _compose_summary(
-    mastery: list[tuple[str, str, float]],
+    mastery: list[tuple],
     error_names: list[str],
     causes: Counter,
     prefs: dict | None = None,
@@ -277,9 +291,20 @@ def _compose_summary(
     定性词; 错因只给类别; 全程无掌握度小数、无题干/作答原文 (见模块 docstring)。
     偏好段排最后且优先级最低: 超 300 字先砍兴趣, 再不够整段让位给薄弱点段。
     """
+    # Pure callers/tests may still pass a compact three-tuple.  Treating that
+    # as observed is a function-input convenience only; database consumers
+    # always supply the explicitly derived fourth field above.
+    normalized = [
+        (*row, "observed") if len(row) == 3 else row
+        for row in mastery
+    ]
     sections = ROLE_SECTIONS.get(role, ROLE_SECTIONS["qa"])
-    weak_all = [(name, p) for _kc, name, p in mastery if p < WEAK_THRESHOLD][:_WEAK_TOP]
-    mastered_all = [name for _kc, name, p in reversed(mastery) if p > MASTERED_THRESHOLD][
+    weak_all = [
+        (name, p)
+        for _kc, name, p, state in normalized
+        if state == "observed" and p < WEAK_THRESHOLD
+    ][:_WEAK_TOP]
+    mastered_all = [name for _kc, name, p, state in reversed(normalized) if state == "observed" and p > MASTERED_THRESHOLD][
         :_MASTERED_TOP
     ]
     pref_parts = _pref_parts(prefs)
@@ -450,9 +475,24 @@ async def problem_mastery_band(
     ids = _norm_ids(kb_ids)
     async with tenant_session(tenant_id) as session:
         stmt = (
-            select(KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
+            select(
+                KnowledgeComponent.canonical_name,
+                MasteryRecord.p_mastery,
+                func.count(func.distinct(MasteryLog.evidence_id)),
+            )
             .join(MasteryRecord, MasteryRecord.kc_id == KnowledgeComponent.id)
+            .join(
+                MasteryLog,
+                (MasteryLog.user_id == MasteryRecord.user_id)
+                & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+            )
             .where(MasteryRecord.user_id == uid)
+            .group_by(KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
+            .having(
+                func.count(func.distinct(MasteryLog.evidence_id))
+                >= EVIDENCE_OBSERVED_MIN_EVENTS
+            )
         )
         if ids:
             stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(i) for i in ids]))
@@ -460,7 +500,7 @@ async def problem_mastery_band(
 
     hits = [
         float(p)
-        for name, p in rows
+        for name, p, _count in rows
         if name and len(normalize_kc_name(name)) >= _MIN_BAND_MATCH_LEN
         and normalize_kc_name(name) in key
     ]
@@ -516,12 +556,30 @@ async def _load_weak_point_candidates(
             MasteryRecord.p_mastery,
             KnowledgeComponent.canonical_name,
             KnowledgeComponent.created_at,
+            func.count(func.distinct(MasteryLog.evidence_id)),
         )
         .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+        .join(
+            MasteryLog,
+            (MasteryLog.user_id == MasteryRecord.user_id)
+            & (MasteryLog.kc_id == MasteryRecord.kc_id)
+            & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+        )
         .where(
             MasteryRecord.tenant_id == tid,
             MasteryRecord.user_id == uid,
             MasteryRecord.p_mastery < threshold,
+        )
+        .group_by(
+            MasteryRecord.kc_id,
+            MasteryRecord.p_mastery,
+            KnowledgeComponent.canonical_name,
+            KnowledgeComponent.created_at,
+            KnowledgeComponent.id,
+        )
+        .having(
+            func.count(func.distinct(MasteryLog.evidence_id))
+            >= EVIDENCE_OBSERVED_MIN_EVENTS
         )
         .order_by(
             MasteryRecord.p_mastery.asc(),
@@ -551,7 +609,7 @@ async def _load_weak_point_candidates(
         for kc_id in (kc_ids_for_error or [])
     }
     items = []
-    for kc_id, p, name, created_at in rows:
+    for kc_id, p, name, created_at, count in rows:
         recent_error = str(kc_id) in recent_kc_ids
         rationale = difficulty_rationale(name, float(p), recent_error)
         items.append(
@@ -560,6 +618,7 @@ async def _load_weak_point_candidates(
                 "name": name,
                 # 精确数值仅供站内鉴权接口展示 (P2-7); 出境理由只用下面的定性字段
                 "p_mastery": round(float(p), 4),
+                "evidence_state": evidence_state(int(count)),
                 "recent_error": recent_error,
                 "zone": rationale["zone"],
                 "difficulty": rationale["difficulty"],
@@ -589,13 +648,11 @@ async def assessment_mode_kcs(
 ) -> list[dict]:
     """证据不足时的诊断出题目标 (§5.3 / §15 Assessment Mode)。
 
-    冷启动**不是异常分支**: p_mastery 高而 confidence 低意味着"还没测过", 该安排
-    一次快速验证, 而不是判定无事可做。weak_point_kcs 只看 p_mastery, 因此新用户
-    (p 全为先验 p_l0, confidence≈0) 在它眼里可能一个薄弱点都没有 —— 调用方过去
-    据此禁用了出题入口, 造成冷启动死锁。
+    冷启动**不是异常分支**：`unobserved/estimated` 应安排快速验证，
+    而不是把 BKT 先验判定为薄弱或已掌握。
 
-    这里按 confidence 升序取 KC: 证据最少的先测。KC 存在但完全没有 mastery_record
-    的情形一并覆盖 (LEFT JOIN, confidence 视作 0), 否则从未答题的用户仍然拿不到题。
+    这里按有效 mastery_log 事件数升序取 KC。完全没有 mastery_record
+    的情形一并覆盖；不再从 confidence 反推观测次数。
     """
     uid = uuid.UUID(str(user_id))
     ids = _norm_ids(kb_ids)
@@ -605,8 +662,8 @@ async def assessment_mode_kcs(
                 KnowledgeComponent.id,
                 KnowledgeComponent.canonical_name,
                 KnowledgeComponent.kb_id,
-                MasteryRecord.confidence,
                 MasteryRecord.p_mastery,
+                func.count(func.distinct(MasteryLog.evidence_id)),
             )
             .join(
                 MasteryRecord,
@@ -616,8 +673,23 @@ async def assessment_mode_kcs(
                 ),
                 isouter=True,
             )
+            .join(
+                MasteryLog,
+                and_(
+                    MasteryLog.kc_id == KnowledgeComponent.id,
+                    MasteryLog.user_id == uid,
+                    MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                ),
+                isouter=True,
+            )
+            .group_by(
+                KnowledgeComponent.id,
+                KnowledgeComponent.canonical_name,
+                KnowledgeComponent.kb_id,
+                MasteryRecord.p_mastery,
+            )
             .order_by(
-                func.coalesce(MasteryRecord.confidence, 0.0).asc(),
+                func.count(func.distinct(MasteryLog.evidence_id)).asc(),
                 KnowledgeComponent.canonical_name.asc(),
             )
         )
@@ -626,9 +698,9 @@ async def assessment_mode_kcs(
         rows = (await session.execute(stmt)).all()
 
     items: list[dict] = []
-    for kc_id, name, _kb, confidence, p in rows:
-        conf = float(confidence or 0.0)
-        if conf >= ASSESSMENT_CONFIDENCE_CEILING:
+    for kc_id, name, _kb, p, count in rows:
+        state = evidence_state(int(count))
+        if state == "observed":
             continue
         # 诊断题的难度固定走中档: 目的是量出水平, 不是照着未验证的 p_mastery 调难度。
         items.append(
@@ -636,7 +708,7 @@ async def assessment_mode_kcs(
                 "kc_id": str(kc_id),
                 "name": name,
                 "p_mastery": round(float(p), 4) if p is not None else None,
-                "confidence": round(conf, 4),
+                "evidence_state": state,
                 "recent_error": False,
                 "zone": "unverified",
                 "difficulty": "mid",

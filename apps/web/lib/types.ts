@@ -435,7 +435,7 @@ export interface PracticeRecommendation {
   scope_options: Array<{ id: string; name: string }>;
   adjustments: Array<"easier" | "harder" | "switch_kc" | "switch_kb">;
   plan_id?: string | null;
-  task_key?: string | null;
+  task_id?: string | null;
 }
 
 export interface MasteryChange {
@@ -466,9 +466,8 @@ export interface AttemptResult {
 }
 
 export interface PlanTaskCompletion {
-  task_key?: string;
-  status?: "pending" | "done" | "skipped";
-  done?: boolean;
+  task_id: string;
+  status: "pending" | "done" | "skipped";
   completed: boolean;
   changed?: boolean;
   error_code?: string;
@@ -567,10 +566,9 @@ export interface PlanTask {
   /** 题量契约：服务端只接受 1–20。 */
   practice_count?: number | null;
   difficulty?: "easy" | "mid" | "hard" | string | null;
-  /** 计划详情接口下发：stages/days/tasks 三层 0 基下标组成的任务键（前端只回传不自造） */
-  task_key?: string;
-  status?: "pending" | "done" | "skipped";
-  done?: boolean;
+  /** 服务端生成的稳定 UUID；结构调整不会改变身份，前端只回传不自造。 */
+  task_id: string;
+  status: "pending" | "done" | "skipped";
   /** 先修未掌握 → 派生锁定态（服务端按实时掌握度计算，不落库，故不进 status） */
   locked?: boolean;
   /** 阻塞该任务的先修知识点及其定性区间（掌握度小数不出境） */
@@ -622,7 +620,7 @@ export interface PlanListItem {
   kb_name?: string | null;
   structure: PlanStructure | null;
   created_at: string;
-  is_current?: boolean;
+  status: "active" | "completed" | "archived";
 }
 
 /** 任务粒度完成进度（GET /api/plans/{id}）。 */
@@ -644,19 +642,19 @@ export interface PlanSchedule {
 }
 
 export interface PlanKcDependencyTaskStatus {
-  task_key: string;
+  task_id: string;
   status: "pending" | "done" | "skipped";
 }
 
 export interface PlanKcDependencyNode {
   kc_id: string;
   kc_name: string;
-  task_keys: string[];
+  task_ids: string[];
   task_statuses: PlanKcDependencyTaskStatus[];
   is_current_task: boolean;
   is_prerequisite: boolean;
   is_blocking: boolean;
-  blocking_task_keys: string[];
+  blocking_task_ids: string[];
 }
 
 export interface PlanKcDependencyLevel {
@@ -683,12 +681,12 @@ export interface PlanDetail {
   /** 只读的当前计划 KC 及递归先修闭包；不含掌握度数值。 */
   kc_dependency?: PlanKcDependency;
   created_at: string;
+  status: "active" | "completed" | "archived";
 }
 
 export interface PlanToggleResult {
-  task_key: string;
+  task_id: string;
   status: "pending" | "done" | "skipped";
-  done: boolean;
   progress: PlanProgress;
   completed?: boolean;
   changed?: boolean;
@@ -697,7 +695,7 @@ export interface PlanToggleResult {
 
 /** 学情调整插入的补强任务。 */
 export interface PlanInsertedTask {
-  task_key: string;
+  task_id: string;
   day: number;
   stage_name: string;
   title: string;
@@ -804,12 +802,27 @@ export interface TutorSessionSummary {
   review_suggestions: string[];
 }
 
+// ---- 今日行动（唯一决策源 GET /api/next-actions）----
+
+export interface NextActionItem {
+  type: "review" | "resume_insight" | "weak_practice" | "plan_task" | "cold_start" | string;
+  title: string;
+  reason: string;
+  href: string;
+}
+
+export interface NextActionsResponse {
+  items: NextActionItem[];
+}
+
 // ---- 学情报告（F7，对齐 routers/reports.py）----
 
 export interface ReportRadarItem {
   kc_id: string;
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
+  evidence_state?: "unobserved" | "estimated" | "observed";
+  evidence_state_label?: string;
   activity: number;
 }
 
@@ -823,21 +836,17 @@ export interface ReportTrendPoint {
 export interface ReportRootCause {
   kc_id: string;
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
+  evidence_state?: "unobserved" | "estimated" | "observed";
 }
 
 export interface ReportWeakPoint {
   kc_id: string;
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
+  evidence_state?: "unobserved" | "estimated" | "observed";
   error_count: number;
   possible_root_cause: ReportRootCause[];
-}
-
-export interface ReportAction {
-  type: string;
-  label: string;
-  href: string;
 }
 
 export interface LearningReportResponse {
@@ -846,7 +855,6 @@ export interface LearningReportResponse {
   weak_points: ReportWeakPoint[];
   /** 薄弱判定红线 (0-1), 由后端 thresholds 唯一来源下发, 前端文案据此渲染 */
   weak_threshold?: number;
-  actions: ReportAction[];
   narrative: string | null;
   narrative_note: string | null;
   metrics?: {
@@ -937,13 +945,13 @@ export interface TutorContextOut {
   error_item_id?: string;
   kb_id?: string | null;
   plan_id?: string;
-  task_key?: string;
+  task_id?: string;
   kc_ids?: string[];
 }
 
 export interface TutorEntrypointsOut {
   today_task:
-    | { status: "ready"; plan_id: string; task_key: string }
+    | { status: "ready"; plan_id: string; task_id: string }
     | { status: "empty"; reason: "NO_PENDING_TODAY_TASK" };
   errors:
     | { status: "ready"; error_ids: string[] }
@@ -1008,7 +1016,10 @@ export interface ErrorStatsResponse {
 export interface MasteryItem {
   kc_id: string;
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
+  /** 无证据不是薄弱；只有 observed 才能定性强弱。 */
+  evidence_state: "unobserved" | "estimated" | "observed";
+  evidence_state_label?: string;
   /** 兼容字段：内部证据累计分，不是统计置信概率。 */
   confidence: number;
   /** 面向用户的定性证据强度，避免把内部 1.0 误读成“100% 正确”。 */
@@ -1029,6 +1040,7 @@ export interface MasteryLogItem {
 }
 
 export interface ProfileResponse {
+  weak_threshold: number;
   mastery: MasteryItem[];
   error_distribution: {
     by_cause: Record<string, number>;

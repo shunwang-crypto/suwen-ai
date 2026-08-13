@@ -14,7 +14,7 @@ def test_task_coercion_adds_executable_fields_and_clamps_public_values():
             "instructions": ["第一步", "第二步", "第三步", "第四步", "第五步", "多余步骤"],
             "practice_count": 999,
             "difficulty": "hard",
-            "task_key": "stage9.day9.task9",
+            "task_id": "stage9.day9.task9",
             "resource_id": "not-trusted-yet",
         }
     )
@@ -24,7 +24,7 @@ def test_task_coercion_adds_executable_fields_and_clamps_public_values():
     assert task["completion_criteria"]
     assert task["action_type"] == "read"
     assert task["practice_count"] == 20
-    assert "task_key" not in task and "resource_id" not in task
+    assert task["task_id"] != "stage9.day9.task9" and "resource_id" not in task
 
 
 def test_task_coercion_fallback_is_executable_without_a_resource():

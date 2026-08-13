@@ -55,6 +55,7 @@ async def _seed_learning_state(uid: uuid.UUID) -> str:
         ErrorItem,
         KnowledgeBase,
         KnowledgeComponent,
+        MasteryLog,
         MasteryRecord,
         Plan,
         Question,
@@ -78,6 +79,19 @@ async def _seed_learning_state(uid: uuid.UUID) -> str:
                 tenant_id=uid, user_id=uid, kc_id=kc.id, p_mastery=0.35, confidence=0.5
             )
         )
+        for _ in range(3):
+            s.add(
+                MasteryLog(
+                    tenant_id=uid,
+                    user_id=uid,
+                    kc_id=kc.id,
+                    old_p=0.35,
+                    new_p=0.35,
+                    evidence_type="quiz_attempt",
+                    evidence_id=uuid.uuid4(),
+                    weight=1.0,
+                )
+            )
         question = Question(
             tenant_id=uid,
             quiz_id=quiz.id,
@@ -115,7 +129,12 @@ async def _seed_learning_state(uid: uuid.UUID) -> str:
                                 {
                                     "day": 1,
                                     "tasks": [
-                                        {"title": "复习导数定义", "minutes": 30, "done": False}
+                                        {
+                                            "task_id": str(uuid.uuid4()),
+                                            "title": "复习导数定义",
+                                            "minutes": 30,
+                                            "status": "pending",
+                                        }
                                     ],
                                 }
                             ],
@@ -167,8 +186,10 @@ async def test_next_actions_reference_history_stuck_point(client):
 
     # plan_task 收尾
     plan = by_type["plan_task"]
-    assert "1 个任务待完成" in plan["title"]
+    assert "复习导数定义" in plan["title"]
     assert "期末高数 90 分" in plan["reason"] and "第 1 天" in plan["reason"]
+    assert "1 个任务没完成" in plan["reason"]
+    assert "plan_id=" in plan["href"] and "task_id=" in plan["href"]
 
     # 优先级全序 + P2-7 脱敏: 任何 title/reason 无小数
     types = [it["type"] for it in items]
@@ -181,14 +202,13 @@ async def test_next_actions_reference_history_stuck_point(client):
 # ---- 冷启动兜底 ----
 
 
-async def test_cold_start_gives_fallback_actions(client):
+async def test_cold_start_gives_one_primary_action(client):
     _user_id, headers = await _register_login(client, "na-cold")
     r = await client.get("/api/next-actions", headers=headers)
     assert r.status_code == 200
     items = r.json()["items"]
-    assert [it["type"] for it in items] == ["quiz", "plan"]
-    assert "5-8 题摸底" in items[0]["title"] and items[0]["href"] == "/quiz"
-    assert "学习计划" in items[1]["title"] and items[1]["href"] == "/plans"
+    assert [it["type"] for it in items] == ["cold_start"]
+    assert "摸底练习" in items[0]["title"] and items[0]["href"] == "/quiz"
 
 
 # ---- 本人隔离: 他人卡点不进我的开场卡 ----
@@ -203,5 +223,5 @@ async def test_other_users_insights_not_leaked(client):
     assert r.status_code == 200
     items = r.json()["items"]
     # 他人只该看到冷启动兜底, 绝不该看到 owner 的卡点/错题/计划
-    assert [it["type"] for it in items] == ["quiz", "plan"]
+    assert [it["type"] for it in items] == ["cold_start"]
     assert _EVIDENCE not in str(items)

@@ -45,12 +45,9 @@ async def refresh_learning_report(
         ):
             return "stale"
         payload = dict(snapshot.payload_json or {})
-        actions = list(payload.get("actions") or [])
 
     try:
-        narrative, note = await _narrative(
-            gateway, settings, auth, request_id, payload, actions
-        )
+        narrative, note = await _narrative(gateway, settings, auth, request_id, payload)
         status = "completed" if narrative else "failed"
     except Exception:  # noqa: BLE001 — worker 必须把 generating 收口
         log.exception("learning_report_refresh_failed", snapshot_id=snapshot_id)

@@ -3,10 +3,10 @@
 // 学情报告（F7）：掌握度雷达（章节聚合轴 + 知识库切换 tab；轴数<5 或移动端降级条形图，
 // 防轴标签重叠）+ 30 天趋势（答题数/正确率双系列，纯 SVG、两联面板共享横轴——不做双 Y 轴）
 // + 薄弱点卡片（按科目分节，「红线/待巩固」两口径分开计数，节内 p 升序 top5 + 展开全部）
-// + 可执行建议（带跳转）+ narrative 三段式诊断（复用 chat 同款 MathText 渲染 + **加粗**）。
+// + 可执行建议（带跳转）+ narrative 三段式诊断（统一由 ModelMarkdown 渲染）。
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Card,
@@ -18,8 +18,8 @@ import {
   fmtPct,
 } from "@/components/common";
 import { MasteryRadar, RADAR_MAX_DIMS } from "@/components/radar";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
-import { MathText } from "@/lib/katex";
 import type {
   KbOut,
   LearningReportResponse,
@@ -375,16 +375,17 @@ function StatTiles({
 }
 
 /** 条形图轴视图：轴数<5 的降级形态，也是移动端的雷达替代（标签 truncate 不重叠）。 */
-function AxisBars({ axes }: { axes: RadarAxis[] }) {
+function AxisBars({ axes, weakThreshold }: { axes: RadarAxis[]; weakThreshold: number }) {
   return (
     <ul className="space-y-2">
       {axes.map((a) => {
+        const value = a.p_mastery ?? 0;
         const barColor =
-          a.p_mastery < 0.4
+          a.p_mastery == null
+            ? "bg-slate-300"
+            : value < weakThreshold
             ? "bg-rose-400"
-            : a.p_mastery < 0.6
-              ? "bg-amber-400"
-              : "bg-indigo-500";
+            : "bg-indigo-500";
         return (
           <li key={a.kc_id || a.name} className="flex items-center gap-2 text-caption">
             <span
@@ -396,11 +397,11 @@ function AxisBars({ axes }: { axes: RadarAxis[] }) {
             <span className="h-2.5 min-w-0 flex-1 rounded-full bg-slate-100">
               <span
                 className={`block h-full rounded-full ${barColor}`}
-                style={{ width: `${Math.max(a.p_mastery * 100, 2)}%` }}
+                style={{ width: `${Math.max(value * 100, 2)}%` }}
               />
             </span>
             <span className="w-10 shrink-0 text-right font-mono text-slate-600">
-              {fmtPct(a.p_mastery)}
+              {a.p_mastery == null ? "未知" : fmtPct(a.p_mastery)}
             </span>
           </li>
         );
@@ -430,7 +431,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
               {a.name}
             </span>
             <span className="shrink-0 font-mono text-slate-500">
-              {fmtPct(a.p_mastery)}
+              {a.p_mastery == null ? "未知" : fmtPct(a.p_mastery)}
             </span>
             {a.kc_count != null && (
               <span className="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-caption text-slate-600">
@@ -469,7 +470,7 @@ function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
 }
 
 /** 雷达区：轴数<5 降级条形图；≥5 桌面画雷达、移动端用条形图（防轴标签重叠）。 */
-function RadarPanel({ axes, isChapter }: { axes: RadarAxis[]; isChapter: boolean }) {
+function RadarPanel({ axes, isChapter, weakThreshold }: { axes: RadarAxis[]; isChapter: boolean; weakThreshold: number }) {
   if (axes.length === 0) {
     return (
       <p className="py-6 text-center text-caption text-slate-400">
@@ -480,14 +481,14 @@ function RadarPanel({ axes, isChapter }: { axes: RadarAxis[]; isChapter: boolean
   return (
     <>
       {axes.length < 5 ? (
-        <AxisBars axes={axes} />
+        <AxisBars axes={axes} weakThreshold={weakThreshold} />
       ) : (
         <>
           <div className="hidden sm:block">
             <MasteryRadar items={axes} />
           </div>
           <div className="sm:hidden">
-            <AxisBars axes={axes} />
+            <AxisBars axes={axes} weakThreshold={weakThreshold} />
           </div>
         </>
       )}
@@ -508,6 +509,7 @@ function WeakPointCard({
   redPct: number;
   consolidatePct: number;
 }) {
+  const mastery = wp.p_mastery ?? 0;
   return (
     <li className="rounded-2xl border border-slate-200 bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -527,7 +529,7 @@ function WeakPointCard({
           {isRedline ? "红线" : "待巩固"}
         </span>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-caption text-slate-600">
-          掌握度 {fmtPct(wp.p_mastery)}
+          掌握度 {fmtPct(mastery)}
         </span>
         {wp.error_count > 0 && (
           <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">
@@ -538,7 +540,7 @@ function WeakPointCard({
       <div className="mt-2 h-2 rounded-full bg-slate-100">
         <div
           className={`h-full rounded-full ${isRedline ? "bg-rose-500" : "bg-amber-500"}`}
-          style={{ width: `${Math.max(wp.p_mastery * 100, 2)}%` }}
+          style={{ width: `${Math.max(mastery * 100, 2)}%` }}
         />
       </div>
       <div className="mt-2 flex justify-end">
@@ -564,7 +566,7 @@ function WeakPointCard({
                     {rc.name}
                   </span>
                   <span className="font-mono text-caption text-violet-500">
-                    前置 · {fmtPct(rc.p_mastery)}
+                    前置 · {rc.p_mastery == null ? "未知" : fmtPct(rc.p_mastery)}
                   </span>
                 </span>
                 <svg
@@ -587,12 +589,12 @@ function WeakPointCard({
                     {wp.name}
                   </span>
                   <span className="font-mono text-caption text-amber-500">
-                    当前 · {fmtPct(wp.p_mastery)}
+                    当前 · {fmtPct(mastery)}
                   </span>
                 </span>
               </div>
               <p className="mt-1 text-caption text-slate-500">
-                可能源于《{rc.name}》未掌握（{fmtPct(rc.p_mastery)}），建议先补前置
+                可能源于《{rc.name}》未掌握（{rc.p_mastery == null ? "未知" : fmtPct(rc.p_mastery)}），建议先补前置
               </p>
             </div>
           ))}
@@ -620,119 +622,15 @@ function groupWeakPoints(points: SubjectWeakPoint[], redThreshold: number): Weak
       map.set(key, g);
     }
     g.items.push(wp);
-    if (wp.p_mastery < redThreshold) g.red += 1;
+    if ((wp.p_mastery ?? 1) < redThreshold) g.red += 1;
     else g.consolidate += 1;
   }
   const groups = [...map.values()];
-  for (const g of groups) g.items.sort((a, b) => a.p_mastery - b.p_mastery);
+  for (const g of groups) g.items.sort((a, b) => (a.p_mastery ?? 1) - (b.p_mastery ?? 1));
   return groups;
 }
 
-// ---- AI 三段式诊断：复用 chat 同款 MathText 渲染，行内 **加粗** 局部解析 ----
-
-/** 每次调用新建正则实例：全局正则的 lastIndex 是可变状态，模块级共享会串状态。 */
-const boldRe = () => /\*\*(.+?)\*\*/g;
-
-/** 行内轻量 markdown：**加粗** → <strong>，其余与 chat 答案同款 MathText（公式/换行）。 */
-function MdInline({ text }: { text: string }) {
-  const nodes: ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  const re = boldRe();
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) {
-      nodes.push(<MathText key={`t${last}`} text={text.slice(last, m.index)} />);
-    }
-    nodes.push(
-      <strong key={`b${m.index}`} className="font-semibold text-slate-900">
-        <MathText text={m[1]} />
-      </strong>,
-    );
-    last = m.index + m[0].length;
-  }
-  if (nodes.length === 0) return <MathText text={text} />;
-  if (last < text.length) {
-    nodes.push(<MathText key={`t${last}`} text={text.slice(last)} />);
-  }
-  return <>{nodes}</>;
-}
-
-/** 三段式标题行（**现状** / ## 归因 / 【建议】 等写法都认）。 */
-const NARRATIVE_HEADING_RE =
-  /^\s*(?:\*\*|#{1,4}\s*|【)?\s*(现状|归因|建议)\s*(?:\*\*|】)?\s*[:：]?\s*$/;
-
-function parseNarrative(text: string): {
-  intro: string;
-  sections: { title: string; body: string }[];
-} {
-  const sections: { title: string; body: string }[] = [];
-  const introLines: string[] = [];
-  let cur: { title: string; body: string } | null = null;
-  for (const line of text.split("\n")) {
-    const m = NARRATIVE_HEADING_RE.exec(line);
-    if (m) {
-      cur = { title: m[1], body: "" };
-      sections.push(cur);
-      continue;
-    }
-    if (cur) cur.body += (cur.body ? "\n" : "") + line;
-    else introLines.push(line);
-  }
-  return {
-    intro: introLines.join("\n").trim(),
-    sections: sections
-      .map((s) => ({ title: s.title, body: s.body.trim() }))
-      .filter((s) => s.body.length > 0),
-  };
-}
-
-const SECTION_BADGE_STYLE: Record<string, string> = {
-  现状: "bg-sky-50 text-sky-700",
-  归因: "bg-amber-50 text-amber-700",
-  建议: "bg-emerald-50 text-emerald-700",
-};
-
-/** 诊断正文：三段式解析成分节卡；结构异常（无标题行）整段降级渲染，不崩不裸露星号。 */
-function DiagnosisBody({ narrative }: { narrative: string }) {
-  const { intro, sections } = parseNarrative(narrative);
-  if (sections.length === 0) {
-    return (
-      <p className="text-sm leading-relaxed text-slate-700">
-        <MdInline text={narrative.trim()} />
-      </p>
-    );
-  }
-  return (
-    <div className="grid gap-4 md:grid-cols-3">
-      {intro && (
-        <p className="text-sm leading-relaxed text-slate-600 md:col-span-3">
-          <MdInline text={intro} />
-        </p>
-      )}
-      {sections.map((s, i) => (
-        <section
-          key={`${s.title}-${i}`}
-          className="border-l-2 border-line-strong pl-3.5"
-        >
-          <h3 className="text-sm font-semibold text-slate-800">
-            <span
-              className={`rounded-full px-2 py-0.5 text-caption font-semibold ${
-                SECTION_BADGE_STYLE[s.title] ?? "bg-slate-100 text-slate-600"
-              }`}
-            >
-              <MathText text={s.title} />
-            </span>
-          </h3>
-          <p className="mt-1.5 text-sm leading-relaxed text-slate-700">
-            <MdInline text={s.body} />
-          </p>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-export default function ReportsPage() {
+export function HistoryTrends() {
   const [report, setReport] = useState<ScaledReportResponse | null>(null);
   const [kbs, setKbs] = useState<KbOut[]>([]);
   const [kbId, setKbId] = useState("");
@@ -856,7 +754,7 @@ export default function ReportsPage() {
     );
   }
 
-  const { trend, actions, narrative, narrative_note } = report;
+  const { trend, narrative, narrative_note } = report;
   const radarAxes = report.radar as RadarAxis[];
   // 后端两档分开下发（weak_points=红线 / consolidate_points=待巩固），此处合并后
   // 由 groupWeakPoints 按科目分节并各自计数；旧后端无 consolidate_points 时自动降级
@@ -866,7 +764,7 @@ export default function ReportsPage() {
   ];
   // 两口径阈值：红线（后端 weak_threshold 唯一来源）与待巩固（契约新增，缺省 0.6）
   const redThreshold = report.weak_threshold ?? 0.4;
-  const consolidateThreshold = report.consolidate_threshold ?? 0.6;
+  const consolidateThreshold = report.consolidate_threshold ?? report.weak_threshold ?? 0.5;
   const redPct = Math.round(redThreshold * 100);
   const consolidatePct = Math.round(consolidateThreshold * 100);
 
@@ -982,7 +880,7 @@ export default function ReportsPage() {
                 </span>
               }
             >
-              <RadarPanel axes={radarAxes} isChapter={isChapterAxes} />
+              <RadarPanel axes={radarAxes} isChapter={isChapterAxes} weakThreshold={redThreshold} />
             </Card>
 
             <Card title="近 30 天趋势">
@@ -1035,7 +933,7 @@ export default function ReportsPage() {
                           <WeakPointCard
                             key={wp.kc_id}
                             wp={wp}
-                            isRedline={wp.p_mastery < redThreshold}
+                            isRedline={(wp.p_mastery ?? 1) < redThreshold}
                             redPct={redPct}
                             consolidatePct={consolidatePct}
                           />
@@ -1067,40 +965,6 @@ export default function ReportsPage() {
           </Card>
         )}
 
-        {hasAnyData && <Card title="下一步建议" className="order-5">
-          {actions.length === 0 ? (
-            <p className="py-3 text-center text-caption text-slate-400">暂无建议</p>
-          ) : (
-            <ul className="grid gap-3 md:grid-cols-2">
-              {actions.map((a, i) => (
-                <li key={i}>
-                  <Link
-                    href={a.href}
-                    className="group flex items-start justify-between gap-3 rounded-[11px] border border-line px-4 py-3 text-body-sm text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/30"
-                  >
-                    <span className="flex min-w-0 flex-1 gap-2"><b className="text-caption font-medium text-ink-muted">{String(i + 1).padStart(2, "0")}</b><span>{a.label}</span></span>
-                    <span className="flex shrink-0 items-center gap-1 text-caption font-medium text-indigo-600">
-                      去处理
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
-                        aria-hidden
-                      >
-                        <path d="M5 12h14m-6-6 6 6-6 6" />
-                      </svg>
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>}
-
         {hasAnyData && <Card
           title="AI 诊断（三段式）"
           className="order-2"
@@ -1122,7 +986,7 @@ export default function ReportsPage() {
           )}
           {narrative && narrative.trim() ? (
             <div className={diagnosisLoading ? "opacity-75" : ""}>
-              <DiagnosisBody narrative={narrative} />
+              <ModelMarkdown text={narrative} />
               {diagnosisLoading && (
                 <p className="mt-3 text-caption text-ink-muted">
                   当前先显示最近一次诊断，更新完成后会自动替换。

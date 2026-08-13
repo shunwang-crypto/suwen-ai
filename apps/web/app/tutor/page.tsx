@@ -13,7 +13,7 @@ import {
   MasteryDelta,
   Spinner,
 } from "@/components/common";
-import { MarkdownAnswer } from "@/components/chat/markdown-answer";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { TutorEntrypoints } from "@/components/tutor/tutor-entrypoints";
 import { TutorProblemInput } from "@/components/tutor/tutor-problem-input";
 import { ApiError, apiJson } from "@/lib/api";
@@ -317,7 +317,7 @@ export default function TutorPage() {
   const sourceKbId = urlParams.get("kb") ?? "";
   const requestedDraftId = urlParams.get("draft") ?? "";
   const planId = urlParams.get("plan_id") ?? "";
-  const taskKey = urlParams.get("task_key") ?? "";
+  const taskId = urlParams.get("task_id") ?? "";
   const [problem, setProblem] = useState("");
   const [problemTouched, setProblemTouched] = useState(false);
   const [sourceKb, setSourceKb] = useState<KbOut | null>(null);
@@ -344,7 +344,7 @@ export default function TutorPage() {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (prefilledProblem || errorId || planId || taskKey || requestedDraftId) return;
+    if (prefilledProblem || errorId || planId || taskId || requestedDraftId) return;
     let alive = true;
     void apiJson<TutorEntrypointsOut>("/api/tutor/entrypoints")
       .then((value) => {
@@ -359,7 +359,7 @@ export default function TutorPage() {
     return () => {
       alive = false;
     };
-  }, [errorId, planId, prefilledProblem, requestedDraftId, taskKey]);
+  }, [errorId, planId, prefilledProblem, requestedDraftId, taskId]);
 
   useEffect(() => {
     if (!sourceKbId) return;
@@ -395,10 +395,10 @@ export default function TutorPage() {
   }, [errorId]);
 
   useEffect(() => {
-    if (!planId || !taskKey || hasProblemContext) return;
+    if (!planId || !taskId || hasProblemContext) return;
     let alive = true;
     void apiJson<TutorContextOut>(
-      `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskKey)}/tutor-context`,
+      `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskId)}/tutor-context`,
     )
       .then((context) => {
         if (!alive) return;
@@ -411,7 +411,7 @@ export default function TutorPage() {
     return () => {
       alive = false;
     };
-  }, [hasProblemContext, planId, taskKey]);
+  }, [hasProblemContext, planId, taskId]);
 
   useEffect(() => {
     if (!requestedDraftId) return;
@@ -536,7 +536,7 @@ export default function TutorPage() {
           message,
           thread_local_id: activeThreadId,
           tutor_draft_id: activeDraftId,
-          ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
+          ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
         },
       });
       setThreadId(res.thread_local_id);
@@ -648,7 +648,7 @@ export default function TutorPage() {
           ) : (
             <div key={index} className="flex items-start gap-3 py-2">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-body-sm font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-caption font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><MarkdownAnswer text={message.content} /></div></div>
+              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-caption font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><ModelMarkdown text={message.content} /></div></div>
             </div>
           ))}
 

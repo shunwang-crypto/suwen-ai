@@ -24,6 +24,7 @@ import { DocumentTable, isDocActive } from "@/components/kb/document-table";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
+import { ResourceLibrary } from "@/components/resources/resource-library";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { createRequestEpoch } from "@/lib/request-epoch";
@@ -56,7 +57,7 @@ function friendlyError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-export default function KbPage() {
+export default function MaterialsPage() {
   const { user } = useAuth();
   const lastSelectionKey = `${LAST_KB_SELECTION_KEY}:${user?.id ?? "anonymous"}`;
   // 库列表（kbsReload 自增触发重新加载：effect 内联 IIFE 模式）
@@ -64,6 +65,7 @@ export default function KbPage() {
   const [kbsReload, setKbsReload] = useState(0);
   const [kbError, setKbError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showUnclassified, setShowUnclassified] = useState(false);
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -94,12 +96,25 @@ export default function KbPage() {
         if (!alive) return;
         setKbs(list);
         setKbError(null);
-        const requested = new URLSearchParams(window.location.search).get("kb");
+        const search = new URLSearchParams(window.location.search);
+        const requested = search.get("kb");
+        setShowUnclassified(search.get("view") === "unclassified");
         const remembered = window.localStorage.getItem(lastSelectionKey);
         const preferred = [selectedIdRef.current, requested, remembered].find(
           (id): id is string => Boolean(id && list.some((k) => k.id === id)),
         );
-        const nextSelectedId = preferred ?? list[0]?.id ?? null;
+        let resourceKbId: string | null = null;
+        const resourceId = search.get("resource_id");
+        if (!preferred && resourceId) {
+          try {
+            const resource = await apiJson<{ linked_kb_id: string | null }>(`/api/resources/${resourceId}`);
+            resourceKbId = resource.linked_kb_id;
+            setShowUnclassified(resourceKbId === null);
+          } catch {
+            resourceKbId = null;
+          }
+        }
+        const nextSelectedId = preferred ?? resourceKbId ?? list[0]?.id ?? null;
         selectedIdRef.current = nextSelectedId;
         setSelectedId(nextSelectedId);
       } catch (err) {
@@ -114,13 +129,13 @@ export default function KbPage() {
   }, [kbsReload, lastSelectionKey]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || showUnclassified) return;
     window.localStorage.setItem(lastSelectionKey, selectedId);
     const url = new URL(window.location.href);
     if (url.searchParams.get("kb") === selectedId) return;
     url.searchParams.set("kb", selectedId);
     window.history.replaceState(window.history.state, "", url);
-  }, [selectedId, lastSelectionKey]);
+  }, [selectedId, lastSelectionKey, showUnclassified]);
 
   const reloadKbs = useCallback(() => setKbsReload((k) => k + 1), []);
 
@@ -322,16 +337,16 @@ export default function KbPage() {
 
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-caption text-ink-muted">知识库 {selected ? <><span className="mx-1">/</span><span className="text-ink-secondary">{selected.name}</span></> : null}</p>
+          <p className="text-caption text-ink-muted">资料空间 {showUnclassified ? <><span className="mx-1">/</span><span className="text-ink-secondary">未归类</span></> : selected ? <><span className="mx-1">/</span><span className="text-ink-secondary">{selected.name}</span></> : null}</p>
           <div className="mt-2 flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-50 text-[15px] font-semibold text-success-600">{selected?.name?.[0] ?? "知"}</span>
-            <div className="min-w-0"><h1 className="truncate text-[21px] font-semibold tracking-[-0.03em] text-ink">{selected?.name ?? "知识库"}</h1><p className="mt-0.5 text-body-sm text-ink-muted">{selected ? `${docs?.length ?? 0} 份资料 · ${docs?.filter((doc) => doc.status === "ready").length ?? 0} 就绪 · ${selected.subject}` : "把课程资料整理成可检索、可引用的学习空间"}</p></div>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-50 text-[15px] font-semibold text-success-600">{showUnclassified ? "未" : selected?.name?.[0] ?? "资"}</span>
+            <div className="min-w-0"><h1 className="truncate text-[21px] font-semibold tracking-[-0.03em] text-ink">{showUnclassified ? "未归类题目资料" : selected?.name ?? "资料"}</h1><p className="mt-0.5 text-body-sm text-ink-muted">{showUnclassified ? "为尚未归属学习空间的试卷、作业和题单选择知识库" : selected ? `${docs?.length ?? 0} 份学习资料 · ${docs?.filter((doc) => doc.status === "ready").length ?? 0} 就绪 · ${selected.subject}` : "按知识库组织教材、讲义、试卷与作业"}</p></div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {kbs && kbs.length > 0 && <select value={selectedId ?? ""} onChange={(e) => { const nextId = e.target.value; docsRequestsRef.current.invalidate(); selectedIdRef.current = nextId; setSelectedId(nextId); }} aria-label="切换知识库" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}</select>}
-          <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white hover:bg-brand-800">新建知识库</button>
-          {selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-danger-600 hover:bg-danger-50">删除</button>}
+          {kbs && kbs.length > 0 && <select value={showUnclassified ? "unclassified" : selectedId ?? ""} onChange={(e) => { const nextId = e.target.value; const unclassified = nextId === "unclassified"; setShowUnclassified(unclassified); const url = new URL(window.location.href); if (unclassified) { url.searchParams.set("view", "unclassified"); url.searchParams.delete("kb"); } else { url.searchParams.delete("view"); url.searchParams.set("kb", nextId); docsRequestsRef.current.invalidate(); selectedIdRef.current = nextId; setSelectedId(nextId); } window.history.replaceState(window.history.state, "", url); }} aria-label="切换资料空间" className="h-9 max-w-52 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-ink-secondary outline-none focus:border-brand-400">{kbs.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}{kb.owner_type === "org" ? ` · ${kb.org_name ?? "机构"}` : ""}</option>)}<option value="unclassified">未归类题目资料</option></select>}
+          <button type="button" onClick={() => setShowCreate((value) => !value)} className="h-9 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white hover:bg-brand-800">新建资料空间</button>
+          {!showUnclassified && selected?.writable && <button type="button" onClick={() => void deleteKb(selected)} className="h-9 rounded-[8px] border border-line-strong bg-white px-3 text-body-sm text-danger-600 hover:bg-danger-50">删除</button>}
         </div>
       </header>
 
@@ -343,7 +358,9 @@ export default function KbPage() {
         </form>
       )}
 
-      {kbs === null ? <div className="rounded-[14px] border border-line bg-white p-5"><SkeletonList rows={4} /></div> : kbs.length === 0 ? (
+      {kbs === null ? <div className="rounded-[14px] border border-line bg-white p-5"><SkeletonList rows={4} /></div> : showUnclassified ? (
+        <ResourceLibrary scopeKbId="unclassified" />
+      ) : kbs.length === 0 ? (
         <EmptyState title="建立第一个知识库" description="新账号不会显示示例教材。创建知识库后即可上传真实资料并生成学习指南。" illustration="docs"><button type="button" onClick={() => setShowCreate(true)} className="mt-2 rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">新建知识库</button></EmptyState>
       ) : !selected ? (
         <EmptyState title="选择一个知识库" description="从上方选择已有知识库，或创建新的资料空间。" illustration="docs" />
@@ -373,6 +390,8 @@ export default function KbPage() {
               {docs === null || docsKbId !== selected.id ? <SkeletonList rows={3} /> : docs.length === 0 ? <p className="py-6 text-center text-body-sm text-ink-muted">{selected.writable ? "暂无资料。上传文件或导入网页后会自动解析、切块并建立索引。" : "该机构库暂无资料。"}</p> : <DocumentTable documents={docs} busyDocId={busyDocId} onPreview={setPreviewDoc} onReindex={(doc) => void reindexDoc(doc)} onDelete={(doc) => void deleteDoc(doc)} readOnly={!selected.writable} />}
             </div>
           </Card>
+
+          <ResourceLibrary key={selected.id} scopeKbId={selected.id} />
         </>
       )}
 

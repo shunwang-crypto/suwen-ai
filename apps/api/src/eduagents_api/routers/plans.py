@@ -8,9 +8,10 @@ from typing import Literal
 from eduagents_core.kc.dag import add_edge_safe, topological_order, validate_acyclic
 from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
+from eduagents_core.mastery.thresholds import evidence_state
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import func, select
 
 from .. import timectl
 from ..budget import CN_TZ
@@ -21,6 +22,7 @@ from ..models import (
     KcEdge,
     KnowledgeBase,
     KnowledgeComponent,
+    MasteryLog,
     MasteryRecord,
     Plan,
     PlanAdjustment,
@@ -29,16 +31,16 @@ from ..models import (
 )
 from ..plan_adjust import (
     PlanTaskAttributionError,
+    active_plan,
     adjust_plan,
     complete_plan_task,
     compute_task_locks,
     enrich_structure,
     iter_tasks,
-    latest_plan,
-    make_task_key,
     plan_progress,
     plan_schedule_snapshot,
     set_task_status,
+    task_identity,
     task_status,
     validate_plan_task_attribution,
 )
@@ -85,10 +87,10 @@ class PlanCreate(BaseModel):
 
 
 class TaskToggle(BaseModel):
-    """Three-state update with the old boolean field kept for compatibility."""
+    """Explicit three-state task update."""
 
-    status: Literal["pending", "done", "skipped"] | None = None
-    done: bool | None = None
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["pending", "done", "skipped"]
 
 
 class TutorTurn(BaseModel):
@@ -97,17 +99,17 @@ class TutorTurn(BaseModel):
     thread_local_id: uuid.UUID | None = None
     tutor_draft_id: uuid.UUID | None = None
     plan_id: uuid.UUID | None = None
-    task_key: str | None = Field(default=None, max_length=96)
+    task_id: str | None = Field(default=None, max_length=96)
 
-    @field_validator("task_key")
+    @field_validator("task_id")
     @classmethod
-    def _normalize_task_key(cls, value: str | None) -> str | None:
+    def _normalize_task_id(cls, value: str | None) -> str | None:
         return value.strip() if value else None
 
     @model_validator(mode="after")
     def _plan_attribution_pair(self) -> TutorTurn:
-        if (self.plan_id is None) != (self.task_key is None):
-            raise ValueError("plan_id 与 task_key 必须同时提供")
+        if (self.plan_id is None) != (self.task_id is None):
+            raise ValueError("plan_id 与 task_id 必须同时提供")
         return self
 
 
@@ -199,10 +201,12 @@ def _build_kc_dependency(
     if not names_by_id:
         return {"levels": [], "edges": []}
 
-    task_keys_by_kc: dict[str, list[str]] = defaultdict(list)
+    task_ids_by_kc: dict[str, list[str]] = defaultdict(list)
     task_statuses_by_kc: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for stage_index, day_index, task_index, _stage, _day, task in iter_tasks(structure):
-        task_key = make_task_key(stage_index, day_index, task_index)
+    for _stage_index, _day_index, _task_index, _stage, _day, task in iter_tasks(structure):
+        current_task_id = task_identity(task)
+        if current_task_id is None:
+            continue
         status = task_status(task)
         seen_in_task: set[str] = set()
         for raw_name in task.get("kc_names") or []:
@@ -212,10 +216,10 @@ def _build_kc_dependency(
             if not kc_id or kc_id in seen_in_task:
                 continue
             seen_in_task.add(kc_id)
-            task_keys_by_kc[kc_id].append(task_key)
-            task_statuses_by_kc[kc_id].append({"task_key": task_key, "status": status})
+            task_ids_by_kc[kc_id].append(current_task_id)
+            task_statuses_by_kc[kc_id].append({"task_id": current_task_id, "status": status})
 
-    direct_ids = set(task_keys_by_kc)
+    direct_ids = set(task_ids_by_kc)
     if not direct_ids:
         return {"levels": [], "edges": []}
 
@@ -270,7 +274,7 @@ def _build_kc_dependency(
             depth[target] = max(depth[target], depth[kc_id] + 1)
 
     blocking_by_kc: dict[str, list[str]] = defaultdict(list)
-    for task_key, lock in (locks or {}).items():
+    for task_id, lock in (locks or {}).items():
         for blocker in lock.get("blockers") or []:
             if not isinstance(blocker, dict):
                 continue
@@ -278,22 +282,22 @@ def _build_kc_dependency(
             if not isinstance(raw_name, str):
                 continue
             kc_id = id_by_name.get(normalize_kc_name(raw_name))
-            if kc_id and task_key not in blocking_by_kc[kc_id]:
-                blocking_by_kc[kc_id].append(task_key)
+            if kc_id and task_id not in blocking_by_kc[kc_id]:
+                blocking_by_kc[kc_id].append(task_id)
 
     nodes_by_id: dict[str, dict] = {}
     for kc_id in ordered_ids:
-        task_keys = task_keys_by_kc.get(kc_id, [])
-        blocking_task_keys = blocking_by_kc.get(kc_id, [])
+        task_ids = task_ids_by_kc.get(kc_id, [])
+        blocking_task_ids = blocking_by_kc.get(kc_id, [])
         nodes_by_id[kc_id] = {
             "kc_id": kc_id,
             "kc_name": names_by_id[kc_id],
-            "task_keys": list(task_keys),
+            "task_ids": list(task_ids),
             "task_statuses": list(task_statuses_by_kc.get(kc_id, [])),
-            "is_current_task": bool(task_keys),
-            "is_prerequisite": not bool(task_keys),
-            "is_blocking": bool(blocking_task_keys),
-            "blocking_task_keys": list(blocking_task_keys),
+            "is_current_task": bool(task_ids),
+            "is_prerequisite": not bool(task_ids),
+            "is_blocking": bool(blocking_task_ids),
+            "blocking_task_ids": list(blocking_task_ids),
         }
 
     levels_by_index: dict[int, list[str]] = defaultdict(list)
@@ -468,15 +472,28 @@ async def list_plans(ctx: AuthContext = Depends(api_rate_limited)):
                 "kb_name": kb_names.get(r.kb_id),
                 "structure": r.structure_json,
                 "created_at": r.created_at,
-                "is_current": index == 0,
+                "status": r.status,
             }
-            for index, r in enumerate(rows)
+            for r in rows
         ]
 
 
-async def _load_plan(session, plan_id: uuid.UUID, ctx: AuthContext) -> Plan:
-    plan = await session.get(Plan, plan_id)
-    if plan is None or plan.user_id != ctx.user_id:
+async def _load_plan(
+    session,
+    plan_id: uuid.UUID,
+    ctx: AuthContext,
+    *,
+    for_update: bool = False,
+) -> Plan:
+    query = select(Plan).where(
+        Plan.id == plan_id,
+        Plan.tenant_id == ctx.tenant_id,
+        Plan.user_id == ctx.user_id,
+    )
+    if for_update:
+        query = query.with_for_update()
+    plan = await session.scalar(query)
+    if plan is None:
         raise HTTPException(status_code=404, detail="NOT_FOUND")
     return plan
 
@@ -489,22 +506,42 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
     """
     mastery_rows = (
         await session.execute(
-            select(KnowledgeComponent.id, KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
+            select(
+                KnowledgeComponent.id,
+                KnowledgeComponent.canonical_name,
+                MasteryRecord.p_mastery,
+                func.count(MasteryLog.id),
+            )
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+            .outerjoin(
+                MasteryLog,
+                (MasteryLog.user_id == MasteryRecord.user_id)
+                & (MasteryLog.kc_id == MasteryRecord.kc_id),
+            )
             .where(MasteryRecord.user_id == plan.user_id)
+            .group_by(
+                KnowledgeComponent.id,
+                KnowledgeComponent.canonical_name,
+                MasteryRecord.p_mastery,
+            )
         )
     ).all()
     if not mastery_rows:
         return {}
     mastery_by_kc = {
-        normalize_kc_name(name): float(score) for _kc_id, name, score in mastery_rows
+        normalize_kc_name(name): float(score)
+        for _kc_id, name, score, _count in mastery_rows
     }
-    names_by_id = {str(kc_id): name for kc_id, name, _score in mastery_rows}
+    evidence_by_kc = {
+        normalize_kc_name(name): evidence_state(int(count))
+        for _kc_id, name, _score, count in mastery_rows
+    }
+    names_by_id = {str(kc_id): name for kc_id, name, _score, _count in mastery_rows}
     edge_rows = (
         await session.execute(
             select(KcEdge.from_kc, KcEdge.to_kc).where(
                 KcEdge.type == "prerequisite",
-                KcEdge.to_kc.in_([kc_id for kc_id, _n, _s in mastery_rows]),
+                KcEdge.to_kc.in_([kc_id for kc_id, _n, _s, _c in mastery_rows]),
             )
         )
     ).all()
@@ -517,7 +554,12 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
         prereq_by_kc.setdefault(normalize_kc_name(target), []).append(
             normalize_kc_name(source)
         )
-    return compute_task_locks(plan.structure_json, mastery_by_kc, prereq_by_kc)
+    return compute_task_locks(
+        plan.structure_json,
+        mastery_by_kc,
+        prereq_by_kc,
+        evidence_state_by_kc=evidence_by_kc,
+    )
 
 
 async def _load_kc_dependency(
@@ -584,6 +626,7 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
         "progress": plan_progress(plan.structure_json),
         "kc_dependency": kc_dependency,
         "created_at": plan.created_at,
+        "status": plan.status,
     }
 
 
@@ -593,26 +636,28 @@ async def get_plan(
     request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """计划详情 (F3): 每个任务带 task_key 与 done, 附任务粒度进度。"""
+    """计划详情 (F3): 每个任务带 task_id/status, 附任务粒度进度。"""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx)
         now_dt = await timectl.now(request.app.state.redis)
         return await _plan_detail(session, plan, now_dt.astimezone(CN_TZ).date())
 
 
-@router.get("/{plan_id}/tasks/{task_key}/tutor-context")
+@router.get("/{plan_id}/tasks/{task_id}/tutor-context")
 async def get_plan_task_tutor_context(
     plan_id: uuid.UUID,
-    task_key: str,
+    task_id: str,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """Resolve a plan task for Tutor without putting task text in a URL."""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
-        plan = await _load_plan(session, plan_id, ctx)
-        for stage_index, day_index, task_index, _stage, _day, task in iter_tasks(
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status != "active":
+            raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
+        for _stage_index, _day_index, _task_index, _stage, _day, task in iter_tasks(
             plan.structure_json or {}
         ):
-            if make_task_key(stage_index, day_index, task_index) != task_key:
+            if task_identity(task) != task_id:
                 continue
             problem = str(task.get("objective") or task.get("title") or "").strip()
             if not problem:
@@ -621,41 +666,56 @@ async def get_plan_task_tutor_context(
                 "problem": problem[:4000],
                 "kb_id": str(plan.kb_id) if plan.kb_id else None,
                 "plan_id": str(plan.id),
-                "task_key": task_key,
+                "task_id": task_id,
             }
     raise HTTPException(status_code=404, detail="TASK_NOT_FOUND")
 
 
-@router.post("/{plan_id}/tasks/{task_key}/toggle")
+@router.post("/{plan_id}/tasks/{task_id}/toggle")
 async def toggle_task(
     plan_id: uuid.UUID,
-    task_key: str,
-    body: TaskToggle | None = None,
+    task_id: str,
+    body: TaskToggle,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """勾选/取消勾选一个任务 (F3 计划是活的)。task_key 见 plan_adjust 模块文档。"""
+    """勾选/取消勾选一个任务 (F3 计划是活的)。task_id 见 plan_adjust 模块文档。"""
     async with tenant_session(ctx.tenant_id) as session:
-        plan = await _load_plan(session, plan_id, ctx)
-        requested = body.status if body else None
-        if requested is None and body is not None and body.done is not None:
-            requested = "done" if body.done else "pending"
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status != "active":
+            raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         try:
-            new_structure, final_status = set_task_status(plan.structure_json, task_key, requested)
+            new_structure, final_status = set_task_status(plan.structure_json, task_id, body.status)
         except KeyError:
             raise HTTPException(status_code=404, detail="TASK_NOT_FOUND") from None
         plan.structure_json = new_structure  # JSONB 未挂 MutableDict, 必须整体重新赋值
+        progress = plan_progress(new_structure)
+        if progress["pending"] == 0 and progress["total"] > 0:
+            plan.status = "completed"
         return {
-            "task_key": task_key,
+            "task_id": task_id,
             "status": final_status,
-            "done": final_status == "done",
             "progress": plan_progress(new_structure),
         }
 
 
-@router.post("/{plan_id}/tasks/{task_key}/complete")
+@router.post("/{plan_id}/archive")
+async def archive_plan(
+    plan_id: uuid.UUID,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """Abandon the active plan; archived and completed plans stay immutable."""
+    async with tenant_session(ctx.tenant_id) as session:
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status != "active":
+            raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
+        plan.status = "archived"
+        return {"id": str(plan.id), "status": plan.status}
+
+
+@router.post("/{plan_id}/tasks/{task_id}/complete")
 async def complete_reading_task(
     plan_id: uuid.UUID,
-    task_key: str,
+    task_id: str,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """Explicitly complete a reading task; merely opening a link never completes it."""
@@ -666,9 +726,9 @@ async def complete_reading_task(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 plan_id=plan_id,
-                task_key=task_key,
+                task_id=task_id,
                 source_type="manual_read",
-                source_id=f"{plan_id}:{task_key}",
+                source_id=f"{plan_id}:{task_id}",
             )
         except PlanTaskAttributionError as exc:
             status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
@@ -679,7 +739,9 @@ async def complete_reading_task(
 async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """依据当前学情调整计划 (F3-A3): 薄弱 KC 无对应任务 → 插补强任务 + 写调整审计。"""
     async with tenant_session(ctx.tenant_id) as session:
-        plan = await _load_plan(session, plan_id, ctx)
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status != "active":
+            raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         result = await adjust_plan(session, ctx.user_id, ctx.tenant_id, plan, trigger="manual")
         result["progress"] = plan_progress(plan.structure_json)
         return result
@@ -718,7 +780,7 @@ async def tutor_entrypoints(request: Request, ctx: AuthContext = Depends(api_rat
     """Return safe IDs for context-aware Tutor entry cards."""
     now_dt = await timectl.now(request.app.state.redis)
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
-        plan = await latest_plan(session, ctx.user_id)
+        plan = await active_plan(session, ctx.user_id)
         today_task = None
         if plan is not None:
             snapshot = plan_schedule_snapshot(
@@ -727,15 +789,15 @@ async def tutor_entrypoints(request: Request, ctx: AuthContext = Depends(api_rat
                 now_dt.astimezone(CN_TZ).date(),
             )
             due_keys = set(snapshot["today_tasks"]) | set(snapshot["overdue_tasks"])
-            for stage_idx, day_idx, task_idx, _stage, _day, task in iter_tasks(
+            for _stage_idx, _day_idx, _task_idx, _stage, _day, task in iter_tasks(
                 plan.structure_json
             ):
-                task_key = make_task_key(stage_idx, day_idx, task_idx)
-                if task_key in due_keys and task_status(task) == "pending":
+                current_task_id = task_identity(task)
+                if current_task_id in due_keys and task_status(task) == "pending":
                     today_task = {
                         "status": "ready",
                         "plan_id": str(plan.id),
-                        "task_key": task_key,
+                        "task_id": current_task_id,
                     }
                     break
         if today_task is None:
@@ -850,17 +912,17 @@ async def tutor_turn(
     checkpoint = await graph.aget_state(config)
     existing = dict(checkpoint.values)
     stored_plan_id = str(existing.get("plan_id") or "")
-    stored_task_key = str(existing.get("task_key") or "")
+    stored_task_id = str(existing.get("task_id") or "")
     requested_plan_id = str(body.plan_id or "")
-    requested_task_key = body.task_key or ""
+    requested_task_id = body.task_id or ""
     if existing and not stored_plan_id and requested_plan_id:
         raise HTTPException(status_code=409, detail="TUTOR_PLAN_TASK_LATE_BIND")
     if stored_plan_id and requested_plan_id and (
-        stored_plan_id != requested_plan_id or stored_task_key != requested_task_key
+        stored_plan_id != requested_plan_id or stored_task_id != requested_task_id
     ):
         raise HTTPException(status_code=409, detail="TUTOR_PLAN_TASK_MISMATCH")
     plan_id = stored_plan_id or requested_plan_id
-    task_key = stored_task_key or requested_task_key
+    task_id = stored_task_id or requested_task_id
     if plan_id:
         async with tenant_session(ctx.tenant_id) as session:
             try:
@@ -869,7 +931,7 @@ async def tutor_turn(
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
                     plan_id=uuid.UUID(plan_id),
-                    task_key=task_key,
+                    task_id=task_id,
                     source_type="tutor_summary",
                 )
             except (ValueError, PlanTaskAttributionError) as exc:
@@ -910,11 +972,11 @@ async def tutor_turn(
     }
     if plan_id:
         payload["plan_id"] = plan_id
-        payload["task_key"] = task_key
+        payload["task_id"] = task_id
     state = await graph.ainvoke(payload, config)
     # F4→F8 联动: 仅当本轮走了 summarize (trace 末项) 才把小结写入画像 —
     # trace/session_summary 会随 checkpointer 跨轮保留, 不能只看非空, 否则同 thread 续聊会重复计分。
-    mastery_changes: list[dict] = []
+    learner_insights: list[dict] = []
     plan_task_completion = None
     summary_raw = state.get("session_summary", "")
     trace = state.get("trace") or []
@@ -924,8 +986,8 @@ async def tutor_turn(
         except ValueError:
             summary = None
         if isinstance(summary, dict):
-            mastery_changes = await apply_tutor_summary(ctx, summary)
-        if plan_id and task_key:
+            learner_insights = await apply_tutor_summary(ctx, summary)
+        if plan_id and task_id:
             try:
                 async with tenant_session(ctx.tenant_id) as session:
                     plan_task_completion = await complete_plan_task(
@@ -933,7 +995,7 @@ async def tutor_turn(
                         tenant_id=ctx.tenant_id,
                         user_id=ctx.user_id,
                         plan_id=uuid.UUID(plan_id),
-                        task_key=task_key,
+                        task_id=task_id,
                         source_type="tutor_summary",
                         source_id=local_id,
                     )
@@ -942,7 +1004,7 @@ async def tutor_turn(
                 log.warning(
                     "tutor_plan_task_completion_failed",
                     plan_id=plan_id,
-                    task_key=task_key,
+                    task_id=task_id,
                     code=code,
                 )
                 plan_task_completion = {"completed": False, "error_code": code}
@@ -952,6 +1014,6 @@ async def tutor_turn(
         "hint_level": state.get("hint_level", 0),
         "stuck_type": state.get("stuck_type", ""),
         "session_summary": summary_raw,
-        "mastery_changes": mastery_changes,
+        "learner_insights": learner_insights,
         "plan_task_completion": plan_task_completion,
     }

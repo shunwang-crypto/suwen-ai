@@ -13,12 +13,17 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
-from eduagents_core.mastery.thresholds import difficulty_for_mastery
-from sqlalchemy import select
+from eduagents_core.mastery.thresholds import (
+    EVIDENCE_OBSERVED_MIN_EVENTS,
+    VALID_MASTERY_EVIDENCE_TYPES,
+    difficulty_for_mastery,
+)
+from sqlalchemy import func, select
 
 from .models import (
     KnowledgeBase,
     KnowledgeComponent,
+    MasteryLog,
     MasteryRecord,
     Plan,
     Question,
@@ -26,12 +31,11 @@ from .models import (
 )
 from .plan_adjust import (
     iter_tasks,
-    make_task_key,
     plan_schedule_snapshot,
+    task_identity,
     task_status,
 )
 from .profile_summary import (
-    ASSESSMENT_CONFIDENCE_CEILING,
     _load_weak_point_candidates,
 )
 from .services import quiz_kc_readiness
@@ -157,7 +161,7 @@ class PracticeRecommendation:
     # deliberately absent from ``to_dict`` and contains no mastery/confidence.
     difficulty_reasons: tuple[dict[str, str], ...] = ()
     plan_id: str | None = None
-    task_key: str | None = None
+    task_id: str | None = None
     # Internal readiness fact used by compatibility Quiz adapters.  It is not
     # part of the public recommendation JSON.
     readiness_code: str | None = None
@@ -176,7 +180,7 @@ class PracticeRecommendation:
             "scope_options": list(self.scope_options),
             "adjustments": list(self.adjustments),
             "plan_id": self.plan_id,
-            "task_key": self.task_key,
+            "task_id": self.task_id,
         }
 
 
@@ -239,7 +243,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             target_kc_ids=tuple(str(x) for x in task.get("kc_ids") or []),
             target_kc_names=tuple(str(x) for x in task.get("kc_names") or []),
             plan_id=str(task["plan_id"]) if task.get("plan_id") else None,
-            task_key=str(task["task_key"]) if task.get("task_key") else None,
+            task_id=str(task["task_id"]) if task.get("task_id") else None,
         )
 
     if context.weak_points:
@@ -381,13 +385,17 @@ async def _load_plan_task(
     user_id: uuid.UUID,
     now_dt: datetime,
     plan_id=None,
-    task_key=None,
+    task_id=None,
 ):
-    query = select(Plan).where(Plan.tenant_id == tenant_id, Plan.user_id == user_id)
+    query = select(Plan).where(
+        Plan.tenant_id == tenant_id,
+        Plan.user_id == user_id,
+        Plan.status == "active",
+    )
     if plan_id is not None:
         query = query.where(Plan.id == plan_id)
     else:
-        query = query.order_by(Plan.created_at.desc()).limit(1)
+        query = query.limit(1)
     plan = await session.scalar(query)
     if plan is None:
         return None
@@ -395,13 +403,15 @@ async def _load_plan_task(
     snapshot = plan_schedule_snapshot(plan.created_at.date(), structure, now_dt.date())
     due_keys = set(snapshot["today_tasks"]) | set(snapshot["overdue_tasks"])
     candidates = []
-    for si, di, ti, _stage, _day, task in iter_tasks(structure):
-        key = make_task_key(si, di, ti)
-        if task_key and key != task_key:
+    for _si, _di, _ti, _stage, _day, task in iter_tasks(structure):
+        key = task_identity(task)
+        if key is None:
+            continue
+        if task_id and key != task_id:
             continue
         if task_status(task) != "pending":
             continue
-        if not task_key and key not in due_keys:
+        if not task_id and key not in due_keys:
             continue
         if str(task.get("action_type") or "practice") not in {"practice", "mixed"}:
             continue
@@ -441,23 +451,38 @@ async def _ready_kb_snapshots(session, *, gateway_mode: str, org_ids=()):
             if session.info.get("user_id"):
                 mastery_rows = (
                     await session.execute(
-                        select(MasteryRecord.kc_id, MasteryRecord.confidence).where(
+                        select(
+                            MasteryRecord.kc_id,
+                            func.count(func.distinct(MasteryLog.evidence_id)),
+                        )
+                        .join(
+                            MasteryLog,
+                            (MasteryLog.user_id == MasteryRecord.user_id)
+                            & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                            & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                            isouter=True,
+                        )
+                        .where(
                             MasteryRecord.user_id == session.info["user_id"],
                             MasteryRecord.kc_id.in_([row.id for row in kc_rows]),
                         )
+                        .group_by(MasteryRecord.kc_id)
                     )
                 ).all()
-            confidence_by_kc = {
-                str(kc_id): float(confidence or 0.0)
-                for kc_id, confidence in mastery_rows
+            evidence_count_by_kc = {
+                str(kc_id): int(count or 0) for kc_id, count in mastery_rows
             }
-            public["has_mastery"] = bool(mastery_rows)
+            public["has_mastery"] = any(
+                count >= EVIDENCE_OBSERVED_MIN_EVENTS
+                for count in evidence_count_by_kc.values()
+            )
             # Internal selector facts only.  PracticeRecommendation.to_dict()
             # never serializes this list or the confidence values behind it.
             public["assessment_kcs"] = [
                 {"id": str(row.id), "name": row.canonical_name}
                 for row in kc_rows
-                if confidence_by_kc.get(str(row.id), 0.0) < ASSESSMENT_CONFIDENCE_CEILING
+                if evidence_count_by_kc.get(str(row.id), 0)
+                < EVIDENCE_OBSERVED_MIN_EVENTS
             ]
             ready.append(public)
         elif readiness.status == "preparing":
@@ -480,14 +505,14 @@ async def recommend_practice(
     now_dt: datetime,
     scope_kb_id: uuid.UUID | None = None,
     plan_id: uuid.UUID | None = None,
-    task_key: str | None = None,
+    task_id: str | None = None,
     previous_quiz_id: uuid.UUID | None = None,
     adjustment: str | None = None,
 ) -> PracticeRecommendation:
     """Load tenant-scoped facts and apply :func:`build_recommendation`."""
     validate_adjustment(adjustment)
-    if (plan_id is None) != (task_key is None):
-        raise ValueError("plan_id and task_key must be provided together")
+    if (plan_id is None) != (task_id is None):
+        raise ValueError("plan_id and task_id must be provided together")
     if adjustment and previous_quiz_id is None:
         raise ValueError("previous_quiz_id is required for adjustment")
     previous_quiz = None
@@ -532,7 +557,7 @@ async def recommend_practice(
         user_id=user_id,
         now_dt=now_dt,
         plan_id=plan_id,
-        task_key=task_key,
+        task_id=task_id,
     )
     task_context = None
     if plan_task:
@@ -540,7 +565,7 @@ async def recommend_practice(
         kb = next((item for item in ready if item["id"] == str(plan.kb_id)), None)
         task_context = {
             "plan_id": str(plan.id),
-            "task_key": key,
+            "task_id": key,
             "kb": kb,
             "goal": plan.goal,
             "title": task.get("title") or task.get("objective") or "计划练习",

@@ -22,15 +22,13 @@ import { masteryColor } from "@/components/ui/progress-ring";
 export interface RadarSourceItem {
   kc_id: string;
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
+  evidence_state?: "unobserved" | "estimated" | "observed";
   kb_id?: string | null;
   kb_name?: string | null;
   subject?: string | null;
   chapter?: string | null;
 }
-
-/** 薄弱红线，与画像页/后端 profile_summary.QUIZ_WEAK_THRESHOLD 同口径。 */
-const WEAK_THRESHOLD = 0.6;
 
 /** 轴数低于此值的雷达没有可读形状（3 轴即被审计点名的三角形），换条形图。 */
 const MIN_RADAR_AXES = 5;
@@ -49,6 +47,7 @@ interface AggAxis {
 /** 按 keyOf 分组聚合为轴，保持首次出现顺序（章节序稳定 → 轴序稳定可对比）。 */
 function groupAxes(
   items: RadarSourceItem[],
+  weakThreshold: number,
   keyOf: (m: RadarSourceItem) => string,
   labelOf: (m: RadarSourceItem) => string,
 ): AggAxis[] {
@@ -63,10 +62,11 @@ function groupAxes(
       axes.push(axis);
     }
     axis.kcs.push(m);
-    if (m.p_mastery < WEAK_THRESHOLD) axis.weakCount += 1;
+    if (m.evidence_state === "observed" && m.p_mastery != null && m.p_mastery < weakThreshold) axis.weakCount += 1;
   }
   for (const axis of axes) {
-    axis.mean = axis.kcs.reduce((s, k) => s + k.p_mastery, 0) / axis.kcs.length;
+    const observed = axis.kcs.filter((item) => item.evidence_state === "observed" && item.p_mastery != null);
+    axis.mean = observed.length ? observed.reduce((sum, item) => sum + (item.p_mastery ?? 0), 0) / observed.length : 0;
   }
   return axes;
 }
@@ -285,8 +285,8 @@ function AxisBars({
 }
 
 /** 下钻面板：选中轴（章/库）内的 KC 列表，薄弱在前，可跳 3 题验证。 */
-function DrillDownPanel({ axis, onClose }: { axis: AggAxis; onClose: () => void }) {
-  const sorted = [...axis.kcs].sort((x, y) => x.p_mastery - y.p_mastery);
+function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakThreshold: number; onClose: () => void }) {
+  const sorted = [...axis.kcs].sort((x, y) => (x.p_mastery == null ? 1 : x.p_mastery) - (y.p_mastery == null ? 1 : y.p_mastery));
   return (
     <div className="edu-fade-up mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
       <div className="flex items-center justify-between gap-2">
@@ -316,16 +316,16 @@ function DrillDownPanel({ axis, onClose }: { axis: AggAxis; onClose: () => void 
               <span
                 className="block h-full rounded-full"
                 style={{
-                  width: `${Math.max(k.p_mastery * 100, 3)}%`,
-                  background: masteryColor(k.p_mastery),
+                  width: `${k.p_mastery == null ? 3 : Math.max(k.p_mastery * 100, 3)}%`,
+                  background: k.p_mastery == null ? "#cbd5e1" : masteryColor(k.p_mastery),
                 }}
               />
             </span>
             <span className="w-9 shrink-0 text-right font-mono text-slate-600">
-              {fmtPct(k.p_mastery)}
+              {k.p_mastery == null ? "—" : fmtPct(k.p_mastery)}
             </span>
             <span className="w-7 shrink-0 text-right text-body-sm font-medium text-amber-600">
-              {k.p_mastery < WEAK_THRESHOLD ? "薄弱" : ""}
+              {k.evidence_state === "observed" && k.p_mastery != null && k.p_mastery < weakThreshold ? "薄弱" : k.evidence_state === "estimated" ? "估计" : k.evidence_state === "unobserved" ? "未知" : ""}
             </span>
           </li>
         ))}
@@ -338,7 +338,7 @@ function DrillDownPanel({ axis, onClose }: { axis: AggAxis; onClose: () => void 
  * 掌握度雷达卡片（画像页）：库 tab 切换 + 章节/库聚合雷达 + 少轴条形降级 + 轴下钻。
  * 数据缺 chapter 字段时降级回 top12 KC 雷达（旧行为，不崩）。
  */
-export function MasteryRadarPanel({ items }: { items: RadarSourceItem[] }) {
+export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSourceItem[]; weakThreshold: number }) {
   const [tab, setTab] = useState<string | null>(null);
   const [drill, setDrill] = useState<string | null>(null);
 
@@ -360,7 +360,7 @@ export function MasteryRadarPanel({ items }: { items: RadarSourceItem[] }) {
     );
   }
 
-  const kbTabs = groupAxes(items, kbKey, kbLabel);
+  const kbTabs = groupAxes(items, weakThreshold, kbKey, kbLabel);
   const showAllTab = kbTabs.length > 1;
   const activeTab =
     tab != null && (tab === ALL_TAB ? showAllTab : kbTabs.some((t) => t.key === tab))
@@ -369,9 +369,10 @@ export function MasteryRadarPanel({ items }: { items: RadarSourceItem[] }) {
 
   const axes =
     activeTab === ALL_TAB
-      ? kbTabs
-      : groupAxes(
+        ? kbTabs
+        : groupAxes(
           kbTabs.find((t) => t.key === activeTab)?.kcs ?? [],
+          weakThreshold,
           chapterKey,
           chapterLabel,
         );
@@ -447,7 +448,7 @@ export function MasteryRadarPanel({ items }: { items: RadarSourceItem[] }) {
           </>
         )}
 
-        {drillAxis && <DrillDownPanel axis={drillAxis} onClose={() => setDrill(null)} />}
+        {drillAxis && <DrillDownPanel axis={drillAxis} weakThreshold={weakThreshold} onClose={() => setDrill(null)} />}
       </div>
     </Card>
   );

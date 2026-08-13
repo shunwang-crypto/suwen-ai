@@ -13,11 +13,12 @@ export interface PlanTaskLocation {
   day: number;
   planId?: string;
   planKbId?: string | null;
+  readOnly?: boolean;
 }
 
 function resourceHref(resource: PlanResource): string | null {
   if (resource.url) return resource.url;
-  if (resource.kb_id) return `/kb?kb=${encodeURIComponent(resource.kb_id)}`;
+  if (resource.kb_id) return `/materials?kb=${encodeURIComponent(resource.kb_id)}`;
   return null;
 }
 
@@ -42,21 +43,21 @@ export function PlanTaskDrawer({
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
-  const { task, stageName, day, planId, planKbId } = location;
+  const { task, stageName, day, planId, planKbId, readOnly = false } = location;
   const [completing, setCompleting] = useState(false);
   const [completionError, setCompletionError] = useState<string | null>(null);
-  const [locallyDone, setLocallyDone] = useState(Boolean(task.done));
+  const [locallyDone, setLocallyDone] = useState(task.status === "done");
   const resource = task.resource ?? null;
   const kbId = resource?.kb_id ?? planKbId ?? null;
   const topic = task.kc_names?.[0] ?? task.title;
   const count = task.practice_count && task.practice_count >= 1 && task.practice_count <= 20 ? task.practice_count : 3;
   const difficulty = task.difficulty && ["easy", "mid", "hard"].includes(task.difficulty) ? task.difficulty : "mid";
-  const attribution = planId && task.task_key
-    ? `&plan_id=${encodeURIComponent(planId)}&task_key=${encodeURIComponent(task.task_key)}`
+  const attribution = !readOnly && planId && task.task_id
+    ? `&plan_id=${encodeURIComponent(planId)}&task_id=${encodeURIComponent(task.task_id)}`
     : "";
   const quizHref = `/quiz?topic=${encodeURIComponent(topic)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}&count=${count}&difficulty=${encodeURIComponent(difficulty)}${attribution}`;
-  const tutorHref = planId && task.task_key
-    ? `/tutor?plan_id=${encodeURIComponent(planId)}&task_key=${encodeURIComponent(task.task_key)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}`
+  const tutorHref = !readOnly && planId && task.task_id
+    ? `/tutor?plan_id=${encodeURIComponent(planId)}&task_id=${encodeURIComponent(task.task_id)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}`
     : `/tutor${kbId ? `?kb=${encodeURIComponent(kbId)}` : ""}`;
   const reviewHref = attribution ? `/reviews?${attribution.slice(1)}` : "/reviews";
   const resourceUrl = resource ? resourceHref(resource) : null;
@@ -99,12 +100,12 @@ export function PlanTaskDrawer({
   const showRead = Boolean(resourceUrl) && (action === "read" || action === "mixed");
 
   const completeReading = async () => {
-    if (!planId || !task.task_key || completing) return;
+    if (!planId || !task.task_id || completing) return;
     setCompleting(true);
     setCompletionError(null);
     try {
       const result = await apiJson<PlanToggleResult>(
-        `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(task.task_key)}/complete`,
+        `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(task.task_id)}/complete`,
         { method: "POST", body: {} },
       );
       setLocallyDone(true);
@@ -144,10 +145,11 @@ export function PlanTaskDrawer({
             </p>
           )}
           {showRead && resourceUrl && <ActionLink href={resourceUrl} external={Boolean(resource?.url)}>阅读资料</ActionLink>}
-          {showPractice && <ActionLink href={quizHref}>开始针对性练习</ActionLink>}
-          {showTutor && <ActionLink href={tutorHref}>进入分级辅导</ActionLink>}
-          {showReview && <ActionLink href={reviewHref}>复习相关错题</ActionLink>}
-          {showRead && planId && task.task_key && !locallyDone && <button type="button" disabled={completing} onClick={() => void completeReading()} className="inline-flex min-h-9 items-center justify-center rounded-[8px] bg-brand-600 px-3 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60">{completing ? "保存中…" : "我已阅读，标记完成"}</button>}
+          {!readOnly && showPractice && <ActionLink href={quizHref}>开始针对性练习</ActionLink>}
+          {!readOnly && showTutor && <ActionLink href={tutorHref}>进入分级辅导</ActionLink>}
+          {!readOnly && showReview && <ActionLink href={reviewHref}>复习相关错题</ActionLink>}
+          {!readOnly && showRead && planId && task.task_id && !locallyDone && <button type="button" disabled={completing} onClick={() => void completeReading()} className="inline-flex min-h-9 items-center justify-center rounded-[8px] bg-brand-600 px-3 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60">{completing ? "保存中…" : "我已阅读，标记完成"}</button>}
+          {readOnly && <p className="w-full text-body-sm text-ink-muted">这是历史计划，只保留查看，不再产生任务归因或完成记录。</p>}
         </div>
         {completionError && <p role="alert" className="mt-3 text-body-sm text-danger-700">{completionError}</p>}
       </div>

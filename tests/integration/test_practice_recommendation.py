@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from eduagents_api.db import tenant_session
-from eduagents_api.models import ErrorItem, MasteryRecord, Plan, Question, Quiz
+from eduagents_api.models import ErrorItem, MasteryLog, MasteryRecord, Plan, Question, Quiz
 from eduagents_api.practice_recommendation import recommend_practice
 from sqlalchemy import select
 
@@ -101,6 +101,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
     seeded = await _seed_kb(uid)
     user_id = uuid.UUID(uid)
     async with tenant_session(user_id) as session:
+        task_id = str(uuid.uuid4())
         plan = Plan(
             tenant_id=user_id,
             user_id=user_id,
@@ -112,7 +113,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
                     "days": [{
                         "day": 1,
                         "tasks": [{
-                            "title": "章节一练习",
+                            "task_id": task_id, "title": "章节一练习",
                             "action_type": "practice",
                             "kc_names": ["章节一"],
                             "practice_count": 3,
@@ -207,7 +208,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
         assert quiz is not None
         assert quiz.blueprint_json["_plan_task_attribution"] == {
             "plan_id": plan_id,
-            "task_key": "stage0.day0.task0",
+            "task_id": task_id,
         }
         questions = (await session.scalars(
             select(Question).where(Question.quiz_id == quiz.id)
@@ -228,7 +229,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
     assert submitted.status_code == 200, submitted.text
     completion = submitted.json()["plan_task_completion"]
     assert completion["completed"] is True
-    assert completion["task_key"] == "stage0.day0.task0"
+    assert completion["task_id"] == task_id
 
 
 async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_changes(
@@ -239,15 +240,17 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
     user_id = uuid.UUID(uid)
     now = datetime.now(UTC)
     async with tenant_session(user_id) as session:
+        task_id = str(uuid.uuid4())
         old_plan = Plan(
             tenant_id=user_id,
             user_id=user_id,
             kb_id=uuid.UUID(seeded["kb_id"]),
             goal="旧计划",
+            status="archived",
             created_at=now,
             structure_json={
                 "stages": [{"name": "旧", "days": [{"day": 1, "tasks": [{
-                    "title": "旧任务", "action_type": "practice", "kc_names": ["章节一"]
+                    "task_id": task_id, "title": "旧任务", "action_type": "practice", "kc_names": ["章节一"]
                 }]}]}],
             },
         )
@@ -256,10 +259,12 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
             user_id=user_id,
             kb_id=uuid.UUID(seeded["kb_id"]),
             goal="新计划",
+            status="active",
             created_at=now + timedelta(seconds=1),
             structure_json={
                 "stages": [{"name": "新", "days": [{"day": 1, "tasks": [{
-                    "title": "新任务", "action_type": "practice", "kc_names": ["章节二"]
+                    "task_id": str(uuid.uuid4()), "title": "新任务",
+                    "action_type": "practice", "kc_names": ["章节二"]
                 }]}]}],
             },
         )
@@ -280,7 +285,7 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
         json={
             "from_weak_points": True,
             "plan_id": old_plan_id,
-            "task_key": "stage0.day0.task0",
+            "task_id": task_id,
         },
     )
     assert response.status_code == 409, response.text
@@ -306,7 +311,7 @@ async def test_legacy_non_plan_recommendation_does_not_add_plan_payload(client, 
     )
     assert response.status_code == 200, response.text
     assert "plan_id" not in captured
-    assert "task_key" not in captured
+    assert "task_id" not in captured
 
 
 async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_error_order(client):
@@ -330,6 +335,20 @@ async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_err
                 confidence=0.8,
             ),
         ])
+        for kc_key, p in (("kc_1", 0.18), ("kc_2", 0.32)):
+            for _ in range(3):
+                session.add(
+                    MasteryLog(
+                        tenant_id=user_id,
+                        user_id=user_id,
+                        kc_id=uuid.UUID(seeded[kc_key]),
+                        old_p=p,
+                        new_p=p,
+                        evidence_type="quiz_attempt",
+                        evidence_id=uuid.uuid4(),
+                        weight=1.0,
+                    )
+                )
         quiz = Quiz(tenant_id=user_id, user_id=user_id, title="近期错题", status="ready")
         session.add(quiz)
         await session.flush()
@@ -404,6 +423,7 @@ async def test_plan_task_switch_kc_overrides_plan_default_and_changes_target(cli
     seeded = await _seed_kb(uid)
     user_id = uuid.UUID(uid)
     async with tenant_session(user_id) as session:
+        task_id = str(uuid.uuid4())
         plan = Plan(
             tenant_id=user_id,
             user_id=user_id,
@@ -411,7 +431,7 @@ async def test_plan_task_switch_kc_overrides_plan_default_and_changes_target(cli
             goal="计划练习",
             structure_json={
                 "stages": [{"name": "基础", "days": [{"day": 1, "tasks": [{
-                    "title": "计划 KC 一",
+                    "task_id": task_id, "title": "计划 KC 一",
                     "action_type": "practice",
                     "kc_names": ["章节一"],
                     "practice_count": 3,
@@ -441,7 +461,7 @@ async def test_plan_task_switch_kc_overrides_plan_default_and_changes_target(cli
             gateway_mode="stub",
             now_dt=datetime.now(UTC),
             plan_id=plan_id,
-            task_key="stage0.day0.task0",
+            task_id=task_id,
             previous_quiz_id=quiz_id,
             adjustment="switch_kc",
         )
@@ -458,6 +478,7 @@ async def test_plan_task_switch_kb_changes_ready_kb(client):
     second = await _seed_kb(uid)
     user_id = uuid.UUID(uid)
     async with tenant_session(user_id) as session:
+        task_id = str(uuid.uuid4())
         plan = Plan(
             tenant_id=user_id,
             user_id=user_id,
@@ -465,7 +486,7 @@ async def test_plan_task_switch_kb_changes_ready_kb(client):
             goal="计划练习",
             structure_json={
                 "stages": [{"name": "基础", "days": [{"day": 1, "tasks": [{
-                    "title": "计划科目一",
+                    "task_id": task_id, "title": "计划科目一",
                     "action_type": "practice",
                     "kc_names": ["章节一"],
                     "practice_count": 3,
@@ -482,7 +503,7 @@ async def test_plan_task_switch_kb_changes_ready_kb(client):
             gateway_mode="stub",
             now_dt=datetime.now(UTC),
             plan_id=plan.id,
-            task_key="stage0.day0.task0",
+            task_id=task_id,
             previous_quiz_id=quiz.id,
             adjustment="switch_kb",
         )

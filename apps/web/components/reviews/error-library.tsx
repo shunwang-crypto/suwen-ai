@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
   Card,
   EmptyState,
@@ -101,7 +102,7 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
-export default function ErrorsPage() {
+export function ErrorLibrary() {
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -314,8 +315,8 @@ export default function ErrorsPage() {
   return (
     <div className="mx-auto w-full max-w-[1100px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
       <PageHeader
-        title="错题本"
-        subtitle="沉淀每一道错误，看清原因，再决定下一步该练什么。"
+        title="错题管理"
+        subtitle="查看、筛选与归档真实作答中沉淀的错题。"
         action={
           <>
             <button
@@ -329,7 +330,7 @@ export default function ErrorsPage() {
               录入错题
             </button>
             <Link
-              href="/resources"
+              href="/materials"
               className="rounded-[8px] border border-brand-200 bg-brand-50 px-3.5 py-1.5 text-body-sm font-medium text-brand-700 hover:bg-brand-100"
             >
               导入整份题目资料
@@ -662,11 +663,11 @@ export default function ErrorsPage() {
             <header className="flex items-start justify-between border-b border-line px-5 py-4"><div><div className="flex items-center gap-2"><StateBadge state={selectedItem.state} /><span className="text-body-sm text-ink-muted">{selectedItem.kc_names.join(" · ") || "未关联知识点"}</span></div><h2 className="mt-2 text-[18px] font-semibold text-ink">错题详情</h2></div><button type="button" onClick={() => setSelectedItemId(null)} className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted" aria-label="关闭">✕</button></header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
               {selectedItem.verification_status === "pending" && <section className="rounded-[10px] border border-warning-200 bg-warning-50 p-4"><p className="text-body-sm font-medium text-warning-700">这道题的正确答案尚未核验</p><p className="mt-1 text-caption leading-4 text-warning-700">核验前不会进入今日复习、生成变式题或影响学习画像。</p></section>}
-              {selectedItem.question ? <><section><p className="text-caption font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-caption font-semibold text-danger-600">我的答案</p><div className="mt-2 text-body-sm text-ink-secondary"><MathText text={selectedItem.my_answer || "（未作答）"} /></div></div><div className={`rounded-[10px] border p-4 ${selectedItem.verification_status === "verified" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}><p className={`text-caption font-semibold ${selectedItem.verification_status === "verified" ? "text-success-600" : "text-warning-700"}`}>{selectedItem.verification_status === "verified" ? "正确答案" : "待核验答案"}</p><div className="mt-2 text-body-sm text-ink-secondary">{selectedItem.question.answer ? <MathText text={selectedItem.question.answer} /> : "尚未填写"}</div></div></div>{selectedItem.question.explanation && <section><p className="text-caption font-semibold text-ink-muted">解析</p><div className="mt-2 text-body-sm leading-6 text-ink-secondary"><MathText text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-body-sm text-ink-muted">原题已删除，历史记录仍保留。</p>}
+              {selectedItem.question ? <><section><p className="text-caption font-semibold text-ink-muted">题目</p><div className="mt-2 text-[14px] leading-6 text-ink"><MathText text={selectedItem.question.stem} /></div></section><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-danger-200 bg-danger-50 p-4"><p className="text-caption font-semibold text-danger-600">我的答案</p><div className="mt-2 text-body-sm text-ink-secondary"><MathText text={selectedItem.my_answer || "（未作答）"} /></div></div><div className={`rounded-[10px] border p-4 ${selectedItem.verification_status === "verified" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}><p className={`text-caption font-semibold ${selectedItem.verification_status === "verified" ? "text-success-600" : "text-warning-700"}`}>{selectedItem.verification_status === "verified" ? "正确答案" : "待核验答案"}</p><div className="mt-2 text-body-sm text-ink-secondary">{selectedItem.question.answer ? <MathText text={selectedItem.question.answer} /> : "尚未填写"}</div></div></div>{selectedItem.question.explanation && <section><p className="text-caption font-semibold text-ink-muted">解析</p><div className="mt-2 text-body-sm leading-6 text-ink-secondary"><ModelMarkdown text={selectedItem.question.explanation} /></div></section>}</> : <p className="text-body-sm text-ink-muted">原题已删除，历史记录仍保留。</p>}
               <section className="rounded-[10px] border border-line p-4"><div className="flex items-center justify-between"><span className="text-body-sm text-ink-muted">错因判定</span><label className="rounded-full bg-brand-50 px-2 py-1 text-body-sm text-brand-700"><select value={selectedItem.cause} onChange={(e) => void changeCause(selectedItem, e.target.value)} className="bg-transparent outline-none">{CAUSE_ORDER.map((cause) => <option key={cause} value={cause}>{CAUSE_LABELS[cause]}</option>)}</select></label></div></section>
               <div className="grid grid-cols-3 gap-3 text-center"><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">累计错误</p><strong className="mt-1 block text-[15px] text-ink">{selectedItem.error_count} 次</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">加入日期</p><strong className="mt-1 block text-body-sm text-ink">{fmtDateTime(selectedItem.created_at).slice(0, 10)}</strong></div><div className="rounded-[10px] border border-line p-3"><p className="text-caption text-ink-muted">下次复习</p><strong className="mt-1 block text-body-sm text-warning-600">{selectedItem.next_due ? fmtRelative(selectedItem.next_due) : "未安排"}</strong></div></div>
             </div>
-            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]">{selectedItem.resource_id && <Link href={`/resources?resource_id=${encodeURIComponent(selectedItem.resource_id)}${selectedItem.resource_question_id ? `&question_id=${encodeURIComponent(selectedItem.resource_question_id)}` : ""}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-center text-body-sm font-medium text-brand-700">查看原题资料</Link>}{selectedItem.question?.source_type && selectedItem.question.source_type !== "generated" ? <button type="button" onClick={() => { setEditingItem(selectedItem); setImportOpen(true); }} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white">{selectedItem.verification_status === "verified" ? "编辑题目" : "编辑并核验"}</button> : <button type="button" disabled={busyId === selectedItem.id || selectedItem.verification_status !== "verified"} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white disabled:opacity-40">生成变式题去练习</button>}<Link href={`/tutor?error_id=${encodeURIComponent(selectedItem.id)}`} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-body-sm font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-body-sm font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-body-sm text-ink-secondary">归档</button>}</footer>
+            <footer className="grid gap-2 border-t border-line p-5 sm:grid-cols-[1fr_1fr_auto]">{selectedItem.resource_id && <Link href={`/materials?resource_id=${encodeURIComponent(selectedItem.resource_id)}${selectedItem.resource_question_id ? `&question_id=${encodeURIComponent(selectedItem.resource_question_id)}` : ""}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-center text-body-sm font-medium text-brand-700">查看原题资料</Link>}{selectedItem.question?.source_type && selectedItem.question.source_type !== "generated" ? <button type="button" onClick={() => { setEditingItem(selectedItem); setImportOpen(true); }} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white">{selectedItem.verification_status === "verified" ? "编辑题目" : "编辑并核验"}</button> : <button type="button" disabled={busyId === selectedItem.id || selectedItem.verification_status !== "verified"} onClick={() => void makeVariant(selectedItem)} className="rounded-[8px] bg-brand-600 px-4 py-2.5 text-body-sm font-medium text-white disabled:opacity-40">生成变式题去练习</button>}<Link href={`/tutor?error_id=${encodeURIComponent(selectedItem.id)}`} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-center text-body-sm font-medium text-ink-secondary">带着这道题去辅导</Link>{selectedItem.state === "archived" ? <button type="button" disabled={busyId === selectedItem.id} onClick={() => void restore(selectedItem)} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2.5 text-body-sm font-medium text-brand-700">恢复到复习</button> : <button type="button" disabled={busyId === selectedItem.id} onClick={() => void archive(selectedItem)} className="rounded-[8px] border border-line-strong px-4 py-2.5 text-body-sm text-ink-secondary">归档</button>}</footer>
           </aside>
         </div>
       )}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from eduagents_api.routers.plans import _build_kc_dependency
 
+TASK_ID = "00000000-0000-4000-8000-000000000001"
+
 
 def _structure(*names: tuple[str, str]) -> dict:
     return {
@@ -18,6 +20,7 @@ def _structure(*names: tuple[str, str]) -> dict:
                                 "title": name,
                                 "kc_names": [name],
                                 "status": status,
+                                "task_id": TASK_ID,
                             }
                             for name, status in names
                         ],
@@ -94,14 +97,14 @@ def test_dependency_view_exposes_task_status_and_blocking_without_mastery_values
         _structure(("C", "pending")),
         _rows(("a", "A"), ("c", "C")),
         _edges(("a", "c")),
-        locks={"stage0.day0.task0": {"blockers": [{"kc_name": "A", "zone": "较弱"}]}},
+        locks={TASK_ID: {"blockers": [{"kc_name": "A", "zone": "较弱"}]}},
     )
 
     a = _node(view, "a")
     c = _node(view, "c")
-    assert a["blocking_task_keys"] == ["stage0.day0.task0"]
+    assert a["blocking_task_ids"] == [TASK_ID]
     assert a["is_blocking"] is True
-    assert c["task_statuses"] == [{"task_key": "stage0.day0.task0", "status": "pending"}]
+    assert c["task_statuses"] == [{"task_id": TASK_ID, "status": "pending"}]
     serialized = str(view)
     assert "p_mastery" not in serialized
     assert "confidence" not in serialized

@@ -7,7 +7,6 @@
 - weak_points: 低于补强红线 (REINFORCE_THRESHOLD) 的 KC + 相关错题数 + 归因下钻
   (沿 kc_edges 找未掌握前置); consolidate_points 为"待巩固"档 (红线以上、未达定向
   出题线 QUIZ_WEAK_THRESHOLD), 两档同结构分开下发, 消除"薄弱"同词双口径 (C4)。
-- actions: 规则生成的可执行建议, 必须引用具体 KC 名/数量 (F7-A2/A3, 禁止空话)。
 - narrative: standard 档 LLM 三段式诊断; stub 网关下如实返回 null (§14 禁止桩文本冒充)。
 """
 
@@ -24,7 +23,13 @@ from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import GatewayError, Tier
 from eduagents_core.logging import get_logger
-from eduagents_core.mastery.thresholds import QUIZ_WEAK_THRESHOLD, REINFORCE_THRESHOLD
+from eduagents_core.mastery.thresholds import (
+    QUIZ_WEAK_THRESHOLD,
+    REINFORCE_THRESHOLD,
+    VALID_MASTERY_EVIDENCE_TYPES,
+    evidence_state,
+    evidence_state_label,
+)
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -70,21 +75,42 @@ async def _build_aggregates(
     # 掌握度全量 + KC 名 (同 profile 口径, F7-A1 可核对)
     mastery_rows = (
         await session.execute(
-            select(MasteryRecord, KnowledgeComponent.canonical_name)
+            select(
+                MasteryRecord,
+                KnowledgeComponent.canonical_name,
+                func.count(func.distinct(MasteryLog.evidence_id)),
+            )
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+            .outerjoin(
+                MasteryLog,
+                (MasteryLog.user_id == MasteryRecord.user_id)
+                & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+            )
             .where(MasteryRecord.user_id == ctx.user_id)
+            .group_by(MasteryRecord, KnowledgeComponent.canonical_name)
         )
     ).all()
-    p_by_kc = {str(r.kc_id): r.p_mastery for r, _ in mastery_rows}
-    name_by_kc = {str(r.kc_id): name for r, name in mastery_rows}
+    p_by_kc = {str(r.kc_id): r.p_mastery for r, _name, _count in mastery_rows}
+    name_by_kc = {str(r.kc_id): name for r, name, _count in mastery_rows}
+    evidence_by_kc = {
+        str(r.kc_id): evidence_state(int(count))
+        for r, _name, count in mastery_rows
+    }
 
     # 兼容轴: 按活动量 (mastery_log 条数 = 证据事件数) top 12
     activity = {
         str(kc_id): int(n)
         for kc_id, n in (
             await session.execute(
-                select(MasteryLog.kc_id, func.count())
-                .where(MasteryLog.user_id == ctx.user_id)
+                select(
+                    MasteryLog.kc_id,
+                    func.count(func.distinct(MasteryLog.evidence_id)),
+                )
+                .where(
+                    MasteryLog.user_id == ctx.user_id,
+                    MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                )
                 .group_by(MasteryLog.kc_id)
             )
         ).all()
@@ -96,10 +122,12 @@ async def _build_aggregates(
         {
             "kc_id": str(r.kc_id),
             "name": name,
-            "p_mastery": round(r.p_mastery, 4),
+            "p_mastery": None if evidence_by_kc[str(r.kc_id)] == "unobserved" else round(r.p_mastery, 4),
+            "evidence_state": evidence_by_kc[str(r.kc_id)],
+            "evidence_state_label": evidence_state_label(evidence_by_kc[str(r.kc_id)]),
             "activity": activity.get(str(r.kc_id), 0),
         }
-        for r, name in ranked
+        for r, name, _count in ranked
     ]
 
     # A2 雷达语义修复: 单 KC 当轴在真实规模 (3 库 × 152 KC) 下语义错误 —— 异构 KC
@@ -108,11 +136,11 @@ async def _build_aggregates(
     #   不传     -> 轴 = 各知识库 (库级聚合)。
     # 章序按章号排 (中文数字), 保证轴序稳定; 旧 top12 结构保留在 radar_kcs 兼容。
     meta = await resolve_kc_meta(
-        ctx.tenant_id, [str(r.kc_id) for r, _ in mastery_rows], redis=redis
+        ctx.tenant_id, [str(r.kc_id) for r, _name, _count in mastery_rows], redis=redis
     )
     scoped = [
         (r, name)
-        for r, name in mastery_rows
+        for r, name, _count in mastery_rows
         if not kb_id or (meta.get(str(r.kc_id)) or {}).get("kb_id") == kb_id
     ]
     # 单库用户的全局视图: 库轴只有一根 = 一根光杆图, 没有可比性也没有信息量。
@@ -139,10 +167,18 @@ async def _build_aggregates(
         )
         # 加权平均: 证据越多的 KC 对章掌握度贡献越大 (无证据仍按 1 计, 不被抹掉)
         weight = float(activity.get(str(r.kc_id), 0)) + 1.0
-        bucket["num"] += r.p_mastery * weight
-        bucket["den"] += weight
+        state = evidence_by_kc[str(r.kc_id)]
+        if state == "observed":
+            bucket["num"] += r.p_mastery * weight
+            bucket["den"] += weight
         bucket["kcs"].append(
-            {"kc_id": str(r.kc_id), "name": name, "p_mastery": round(r.p_mastery, 4)}
+            {
+                "kc_id": str(r.kc_id),
+                "name": name,
+                "p_mastery": None if state == "unobserved" else round(r.p_mastery, 4),
+                "evidence_state": state,
+                "evidence_state_label": evidence_state_label(state),
+            }
         )
     axes_kind = "chapter" if effective_kb_id else "kb"
     radar = [
@@ -150,10 +186,18 @@ async def _build_aggregates(
             "key": key,
             "name": b["name"],
             "kb_id": b["kb_id"],
-            "p_mastery": round(b["num"] / b["den"], 4) if b["den"] else 0.0,
+            "p_mastery": round(b["num"] / b["den"], 4) if b["den"] else None,
             "kc_count": len(b["kcs"]),
-            "weak_count": sum(1 for k in b["kcs"] if k["p_mastery"] < _CONSOLIDATE_THRESHOLD),
-            "kcs": sorted(b["kcs"], key=lambda k: k["p_mastery"]),
+            "weak_count": sum(
+                1
+                for k in b["kcs"]
+                if k["evidence_state"] == "observed"
+                and k["p_mastery"] < _CONSOLIDATE_THRESHOLD
+            ),
+            "kcs": sorted(
+                b["kcs"],
+                key=lambda k: (k["p_mastery"] is None, k["p_mastery"] or 0.0),
+            ),
         }
         for key, b in buckets.items()
     ]
@@ -276,10 +320,11 @@ async def _build_aggregates(
     previous_correct += int(previous_assessment[1] or 0)
     previous_active_days = max(previous_active_days, int(previous_assessment[2] or 0))
 
-    scoped_kc_ids = [r.kc_id for r, _ in scoped]
+    scoped_kc_ids = [r.kc_id for r, _name in scoped]
     mastery_log_query = select(MasteryLog).where(
         MasteryLog.user_id == ctx.user_id,
         MasteryLog.at >= since,
+        MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
     )
     if kb_id:
         mastery_log_query = mastery_log_query.where(MasteryLog.kc_id.in_(scoped_kc_ids))
@@ -287,12 +332,14 @@ async def _build_aggregates(
     newly_mastered = {
         str(item.kc_id)
         for item in recent_mastery_logs
-        if item.old_p < _CONSOLIDATE_THRESHOLD <= item.new_p
+        if evidence_by_kc.get(str(item.kc_id)) == "observed"
+        and item.old_p < _CONSOLIDATE_THRESHOLD <= item.new_p
     }
     slipped = {
         str(item.kc_id)
         for item in recent_mastery_logs
-        if item.old_p >= _CONSOLIDATE_THRESHOLD > item.new_p
+        if evidence_by_kc.get(str(item.kc_id)) == "observed"
+        and item.old_p >= _CONSOLIDATE_THRESHOLD > item.new_p
     }
     current_accuracy = current_correct / current_attempts if current_attempts else None
     previous_accuracy = previous_correct / previous_attempts if previous_attempts else None
@@ -315,7 +362,9 @@ async def _build_aggregates(
     weak_ids = [
         kc
         for kc, p in p_by_kc.items()
-        if p < _WEAK_THRESHOLD and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
+        if evidence_by_kc.get(kc) == "observed"
+        and p < _WEAK_THRESHOLD
+        and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
     ]
     prereqs: dict[str, list[str]] = {}
     if weak_ids:
@@ -331,11 +380,12 @@ async def _build_aggregates(
             prereqs.setdefault(str(e.to_kc), []).append(str(e.from_kc))
     # C4: "薄弱"曾同词双阈值 (报告 0.4 / 出题 0.6) 导致同一用户看到两个数字。
     # 分层命名: 红线 = 低于补强阈值; 待巩固 = 红线以上但未达定向出题线。两档同结构
-    # 下发, weak_points 保持"红线"旧语义 (actions/narrative 消费方口径不变)。
+    # 下发, weak_points 保持"红线"语义。
     consolidate_ids = [
         kc
         for kc, p in p_by_kc.items()
-        if _WEAK_THRESHOLD <= p < _CONSOLIDATE_THRESHOLD
+        if evidence_by_kc.get(kc) == "observed"
+        and _WEAK_THRESHOLD <= p < _CONSOLIDATE_THRESHOLD
         and (not kb_id or (meta.get(kc) or {}).get("kb_id") == kb_id)
     ]
     # 真实规模下逐 KC COUNT 会退化成 N+1（152 KC 就可能多出上百次往返）。错题本
@@ -360,9 +410,16 @@ async def _build_aggregates(
         error_count = int(error_counts[kc])
         # 前置里同样未掌握 (p<0.4) 的列为可能根因; 无掌握记录的前置不妄断
         root_cause = [
-            {"kc_id": pre, "name": name_by_kc.get(pre, ""), "p_mastery": round(p_by_kc[pre], 4)}
+            {
+                "kc_id": pre,
+                "name": name_by_kc.get(pre, ""),
+                "p_mastery": round(p_by_kc[pre], 4),
+                "evidence_state": evidence_by_kc[pre],
+                "evidence_state_label": evidence_state_label(evidence_by_kc[pre]),
+            }
             for pre in prereqs.get(kc, [])
             if pre in p_by_kc and p_by_kc[pre] < _WEAK_THRESHOLD
+            and evidence_by_kc.get(pre) == "observed"
         ]
         entries.append(
             {
@@ -370,6 +427,8 @@ async def _build_aggregates(
                 "kc_id": kc,
                 "name": name_by_kc.get(kc, ""),
                 "p_mastery": round(p_by_kc[kc], 4),
+                "evidence_state": evidence_by_kc[kc],
+                "evidence_state_label": evidence_state_label(evidence_by_kc[kc]),
                 "error_count": error_count,
                 "possible_root_cause": root_cause,
                 # B5: 按科目分节展示 (真实规模下 17+ 张卡平铺不可读)
@@ -383,7 +442,7 @@ async def _build_aggregates(
     weak_points = [e for e in entries if e["tier"] == "red"]
     consolidate_points = [e for e in entries if e["tier"] == "consolidate"]
 
-    # 未归档错题总数 (actions 用)
+    # 未归档错题总数（成长页只用于解释当前状态）
     open_errors = int(
         await session.scalar(
             select(func.count()).where(
@@ -406,58 +465,10 @@ async def _build_aggregates(
     }
 
 
-def _build_actions(agg: dict) -> list[dict]:
-    """规则生成 ≥2 条可执行建议, 每条带跳转; 禁止空话: 必须引用具体 KC 名或数量。"""
-    actions: list[dict] = []
-    if agg["open_errors"] > 0:
-        actions.append(
-            {
-                "type": "review",
-                "label": f"复习错题本 {agg['open_errors']} 题",
-                "href": "/reviews",
-            }
-        )
-    weak = agg["weak_points"]
-    if weak:
-        w = weak[0]  # 最薄弱
-        actions.append(
-            {
-                "type": "quiz",
-                "label": f"针对「{w['name']}」出一组练习 (当前掌握度 {w['p_mastery']:.0%})",
-                "href": f"/quiz?kc={w['kc_id']}",
-            }
-        )
-        for wp in weak:
-            if wp["possible_root_cause"]:
-                rc = wp["possible_root_cause"][0]
-                actions.append(
-                    {
-                        "type": "quiz",
-                        "label": (
-                            f"「{wp['name']}」薄弱可能源于前置「{rc['name']}」"
-                            f"未掌握 ({rc['p_mastery']:.0%}), 先补前置"
-                        ),
-                        "href": f"/quiz?kc={rc['kc_id']}",
-                    }
-                )
-                break
-    # 冷启动兜底: 无错题也无薄弱点时仍保证 ≥2 条, 且带具体数量
-    if len(actions) < 2:
-        fallbacks = [
-            {"type": "quiz", "label": "完成 5-8 题摸底测评, 建立掌握度画像", "href": "/quiz"},
-            {"type": "plan", "label": "制定 1 份学习计划 (含摸底诊断)", "href": "/plans"},
-        ]
-        for fb in fallbacks:
-            if len(actions) >= 2:
-                break
-            actions.append(fb)
-    return actions
-
-
 _REPORT_PROMPT_VERSION = "v2"
 
 
-def _report_payload(agg: dict, actions: list[dict]) -> dict:
+def _report_payload(agg: dict) -> dict:
     """可持久化的确定性报告。原始证据仍在业务表，快照只负责即时展示。"""
     return {
         "radar": agg["radar"],
@@ -470,7 +481,6 @@ def _report_payload(agg: dict, actions: list[dict]) -> dict:
         "consolidate_threshold": _CONSOLIDATE_THRESHOLD,
         "consolidate_points": agg["consolidate_points"],
         "open_errors": agg["open_errors"],
-        "actions": actions,
     }
 
 
@@ -496,7 +506,7 @@ def _scope(kb_id: uuid.UUID | None) -> tuple[str, str | None]:
 
 
 async def _narrative(
-    gateway, settings: Settings, ctx: AuthContext, request_id: str, agg: dict, actions: list[dict]
+    gateway, settings: Settings, ctx: AuthContext, request_id: str, agg: dict
 ) -> tuple[str | None, str | None]:
     """standard 档三段式诊断。stub/replay 命中桩时如实返回 null, 不冒充 (§14)。"""
     if settings.gateway_mode == "stub":
@@ -506,16 +516,15 @@ async def _narrative(
         "trend_recent_7d": agg["trend"][-7:],
         "weak_points": agg["weak_points"],
         "open_errors": agg["open_errors"],
-        "actions": [a["label"] for a in actions],
     }
     prompt = (
         "你是学情分析师。仅基于下面的 JSON 聚合数据, 输出三段式诊断, 三段分别以"
-        "『现状』『归因』『建议』开头。每段必须引用具体知识点名称与数字 (掌握度百分比/"
+        "『现状』『归因』『变化』开头。每段必须引用具体知识点名称与数字 (掌握度百分比/"
         "错题数/正确率), 禁止出现没有具体知识点的空话 (如泛泛的『多加练习』)。"
         "归因段优先引用 possible_root_cause 的前置知识点链条。\n"
         "写作要求: 直接以学情结论开口, 严禁出现『基于您提供的数据』『根据 JSON』等"
-        "提示词口吻; 百分比一律取整 (写 82% 不写 81.64%); 末尾以 2-3 条可执行行动"
-        "清单收尾, 每条给出具体知识点与动作。数学表达式必须使用 LaTeX: 行内公式严格"
+        "提示词口吻; 百分比一律取整 (写 82% 不写 81.64%)。只解释状态和变化，"
+        "不生成行动建议或跳转清单。数学表达式必须使用 LaTeX: 行内公式严格"
         "写成 $...$; 块公式的开始和结束 $$ 各自独占一行。不得省略闭合定界符, 不得把"
         "中文正文放进公式定界符, 不得裸输出完整公式。\n数据:\n"
         + json.dumps(payload, ensure_ascii=False, default=str)
@@ -565,8 +574,7 @@ async def learning_report(
             kb_id=scoped_kb_id,
             redis=getattr(request.app.state, "redis", None),
         )
-        actions = _build_actions(agg)
-        payload = _report_payload(agg, actions)
+        payload = _report_payload(agg)
         unavailable = settings.gateway_mode == "stub"
         # React 开发模式会主动双跑 effect；数据库唯一约束 + ON CONFLICT 让首次
         # 快照创建也保持幂等，两个并发 GET 不会有一个变成 500。
@@ -621,8 +629,7 @@ async def refresh_learning_report(
             kb_id=scoped_kb_id,
             redis=getattr(request.app.state, "redis", None),
         )
-        actions = _build_actions(agg)
-        payload = _report_payload(agg, actions)
+        payload = _report_payload(agg)
         signature = _payload_signature(payload)
         snapshot = await session.scalar(
             select(LearningReportSnapshot).where(

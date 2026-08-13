@@ -7,7 +7,7 @@ import { fmtPct } from "@/components/common";
 
 export interface RadarItem {
   name: string;
-  p_mastery: number;
+  p_mastery: number | null;
 }
 
 export const RADAR_MAX_DIMS = 12;
@@ -38,7 +38,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
       .map((_, i) => point(i, radius * ratio).map((v) => v.toFixed(1)).join(","))
       .join(" ");
 
-  const dataPoints = dims.map((d, i) => point(i, radius * Math.max(0.02, d.p_mastery)));
+  const dataPoints = dims.map((d, i) => point(i, radius * Math.max(0.02, d.p_mastery ?? 0.5)));
 
   return (
     <div className="relative overflow-x-auto">
@@ -92,9 +92,9 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
         />
         {/* 数据点（白描边与填充分离重叠标记） */}
         {dataPoints.map(([x, y], i) => (
-          <circle key={i} cx={x} cy={y} r={3.2} fill="#4f46e5" stroke="#fff" strokeWidth={1.5}>
+          <circle key={i} cx={x} cy={y} r={3.2} fill={dims[i].p_mastery == null ? "#cbd5e1" : "#4f46e5"} stroke="#fff" strokeWidth={1.5}>
             <title>
-              {dims[i].name}：{fmtPct(dims[i].p_mastery)}
+              {dims[i].name}：{dims[i].p_mastery == null ? "尚无已观测证据" : fmtPct(dims[i].p_mastery)}
             </title>
           </circle>
         ))}

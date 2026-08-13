@@ -18,8 +18,7 @@ import {
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
-import { MarkdownAnswer } from "@/components/chat/markdown-answer";
-import { OpeningCard } from "@/components/chat/opening-card";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { SessionList } from "@/components/chat/session-list";
 import {
   ProcessTimeline,
@@ -1285,8 +1284,6 @@ function ChatView() {
                     可以直接提问，也可以从系统根据学习状态整理的下一步开始。
                   </p>
                 </div>
-                {/* F8-A2 主动开场卡：仅新会话（消息为空）首屏；有消息即随本分支隐藏 */}
-                <OpeningCard />
                 <div className="mt-1 flex flex-wrap justify-center gap-2">
                   {SAMPLE_QUESTIONS.map((q, i) => (
                     <button
@@ -1400,7 +1397,7 @@ function ChatView() {
                         >
                           {m.content ? (
                             <>
-                              <MarkdownAnswer
+                              <ModelMarkdown
                                 text={m.content}
                                 citationIndexes={m.citations.map((citation) => citation.idx)}
                                 onCitationClick={(idx) =>

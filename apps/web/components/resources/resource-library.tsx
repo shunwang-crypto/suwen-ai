@@ -170,10 +170,10 @@ function ResourceCard({
   );
 }
 
-export default function ResourcesPage() {
+export function ResourceLibrary({ scopeKbId = null }: { scopeKbId?: string | null }) {
   return (
     <Suspense fallback={<div className="mx-auto w-full max-w-[1180px] px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={5} /></div></div>}>
-      <ResourcesPageContent />
+      <ResourcesPageContent scopeKbId={scopeKbId} />
     </Suspense>
   );
 }
@@ -219,7 +219,7 @@ function TutorManagedResourceView({
   );
 }
 
-function ResourcesPageContent() {
+function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [resources, setResources] = useState<LearningResourceOut[] | null>(null);
@@ -416,12 +416,14 @@ function ResourcesPageContent() {
 
   const filteredResources = useMemo(() => (resources ?? []).filter((resource) => {
     if (isTutorManagedResource(resource)) return false;
+    if (scopeKbId === "unclassified" && resource.linked_kb_id !== null) return false;
+    if (scopeKbId && scopeKbId !== "unclassified" && resource.linked_kb_id !== scopeKbId) return false;
     if (filter === "archived") return resource.status === "archived";
     if (resource.status === "archived") return false;
     if (filter === "questions") return isQuestionResource(resource);
     if (filter === "reference") return !isQuestionResource(resource);
     return true;
-  }), [filter, resources]);
+  }), [filter, resources, scopeKbId]);
 
   const backToResourceList = () => {
     detailRequestsRef.current.invalidate();
@@ -430,7 +432,7 @@ function ResourcesPageContent() {
     setQuestions([]);
     setSelectedDetailsLoaded(false);
     setAssessmentOpen(false);
-    router.replace("/resources", { scroll: false });
+    router.replace("/materials", { scroll: false });
     void loadResources();
   };
 
@@ -451,11 +453,11 @@ function ResourcesPageContent() {
     <div className="mx-auto w-full max-w-[1180px] space-y-5 px-5 py-6 sm:px-8 lg:px-12 lg:py-8">
       {listError && <ErrorBanner message={listError} onRetry={() => void loadResources()} />}
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
-      <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-body-sm font-medium uppercase tracking-[0.1em] text-ink-muted">练习巩固</p><h1 className="mt-1.5 text-[25px] font-semibold tracking-[-0.04em] text-ink">题目资料</h1><p className="mt-1.5 max-w-[620px] text-body-sm leading-5 text-ink-secondary">上传真实试卷、模拟卷、练习册、作业或题单，校对识别结果后选择错题或保存作答记录。</p></div><button type="button" onClick={() => setUploadOpen(true)} className="rounded-[8px] bg-ink px-4 py-2.5 text-body-sm font-medium text-white hover:bg-black">导入题目资料</button></header>
+      <header className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-[18px] font-semibold tracking-[-0.03em] text-ink">题目资料</h2><p className="mt-1.5 max-w-[620px] text-body-sm leading-5 text-ink-secondary">上传真实试卷、练习册、作业或题单，校对后用于真实作答与错题复习。</p></div><button type="button" onClick={() => setUploadOpen(true)} className="rounded-[8px] bg-ink px-4 py-2.5 text-body-sm font-medium text-white hover:bg-black">导入题目资料</button></header>
       <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex w-fit flex-wrap gap-1 rounded-[9px] border border-line bg-white p-1">{([ ["all", "全部资料"], ["questions", "题目资料"], ["reference", "参考资料"], ["archived", "已归档"] ] as Array<[ResourceFilter, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-[7px] px-3 py-1.5 text-body-sm font-medium ${filter === value ? "bg-ink text-white" : "text-ink-secondary hover:bg-surface-muted"}`}>{label}</button>)}</div><p className="text-body-sm text-ink-muted">{filteredResources.length} 份资料</p></div>
       {resources === null ? <div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={5} /></div> : filteredResources.length === 0 ? <EmptyState title={filter === "archived" ? "暂无归档资料" : "还没有题目资料"} description="可以上传一份试卷、练习册、作业或题单，也可以先创建一个空资料手动录入题目。" illustration="docs"><button type="button" onClick={() => setUploadOpen(true)} className="mt-2 rounded-[8px] bg-ink px-4 py-2 text-body-sm font-medium text-white">导入第一份题目资料</button></EmptyState> : <div className="grid gap-4 md:grid-cols-2">{filteredResources.map((resource) => <ResourceCard key={resource.id} resource={resource} questionResource={isQuestionResource(resource)} onOpen={() => openResource(resource)} onArchive={() => void archive(resource)} onRestore={() => void restore(resource)} onDelete={() => requestDelete(resource)} onExtract={() => void runExtract(resource)} busy={busyId === resource.id} />)}</div>}
       <section className="rounded-[12px] border border-line bg-white px-4 py-3.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">边界说明：</span>知识库管理教材、讲义和笔记，用于 AI 检索与引用；题目资料用于拆题、错题和真实作答。题目资料不会自动进入普通聊天检索；待校对题、未核验答案也不会进入复习、FSRS、掌握度、报告或推荐。</section>
-      {uploadOpen && <ResourceUploadDialog onClose={() => setUploadOpen(false)} onCreated={(resource) => void handleCreated(resource)} />}
+      {uploadOpen && <ResourceUploadDialog initialLinkedKbId={scopeKbId === "unclassified" ? "" : scopeKbId ?? ""} onClose={() => setUploadOpen(false)} onCreated={(resource) => void handleCreated(resource)} />}
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除题目资料？"

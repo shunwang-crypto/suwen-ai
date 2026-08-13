@@ -1,4 +1,4 @@
-"""F8-A2 主动开场 + G13 可解释推荐 (Wave-P2 P2-2/P2-5)。
+"""The single server-owned decision source for the Today page.
 
 GET /api/next-actions: 确定性聚合 (零 LLM), 每一条推荐都能回答"为什么推它":
 - review: FSRS 今日到期错题数 —— 口径 = reviews.today_queue (活跃态 + is_due,
@@ -8,10 +8,10 @@ GET /api/next-actions: 确定性聚合 (零 LLM), 每一条推荐都能回答"�
   misconception 是辅导小结记录的易错点, 链到 /tutor 换题重练;
 - weak_practice: 复用 profile_summary.weak_point_kcs 的 top 薄弱 KC, 理由沿用
   difficulty_rationale 的 zone/reason 定性词 (P2-7), 链到 /quiz?weak=1 定向出题卡;
-- plan_task: 活跃计划 (latest_plan) 截至今天的未完成任务数, 链到 /plans;
-- 冷启动兜底: 四类全空时给「摸底测评」「制定计划」两条 (话术对齐 reports._build_actions)。
+- plan_task: active plan's current task with exact plan/task attribution;
+- cold start: one diagnostic action while evidence is still absent.
 
-优先级 review > resume_insight > weak_practice > plan_task, 共 ≤5 条。
+优先级 到期复习 > 上次卡点 > 有充分证据的薄弱点 > active 计划当前任务 > 冷启动，最多 5 条。
 脱敏口径 (P2-7): 理由只用定性词 (zone_label 两档等), 不带掌握度小数;
 resume_insight 的学生原话只经本鉴权接口回给本人, 续问 q 也只进其本人的 prompt。
 """
@@ -20,16 +20,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import Attempt, KnowledgeComponent, LearnerInsight, MasteryLog
-from ..plan_adjust import iter_tasks, latest_plan, plan_schedule_snapshot, task_status
+from ..models import KnowledgeComponent, LearnerInsight
+from ..plan_adjust import (
+    active_plan,
+    iter_tasks,
+    plan_schedule_snapshot,
+    task_identity,
+    task_status,
+)
 from ..profile_summary import weak_point_kcs
 
 # B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
@@ -38,14 +44,13 @@ from .reviews import due_error_items
 
 router = APIRouter(prefix="/api/next-actions", tags=["next-actions"])
 
-MAX_ITEMS = 5  # 开场卡最多 5 条 (再多就不是"下一步"而是清单)
+MAX_ITEMS = 5
 _WEAK_TOP = 2  # weak_practice 最多取 2 个薄弱 KC (review/resume/plan 各 1 时恰好凑满 5)
 _RESUME_KINDS = ("confused", "misconception")  # understood 不是卡点, 不进开场卡
 _RESUME_QUOTE_MAX = 60  # 理由里引用的学生原话截断长度
 _RESUME_Q_MAX = 200  # /chat?q= 续问里带的原话截断长度 (进本人 prompt, 不出境他人)
 _TITLE_LABEL_MAX = 12  # 无 KC 名时标题里原话片段的截断长度
 _GOAL_MAX = 20  # plan_task 理由里计划目标的截断长度
-_ACTIVITY_IDLE_DAYS = 3
 
 
 def _ellipsis(text: str, limit: int) -> str:
@@ -54,7 +59,12 @@ def _ellipsis(text: str, limit: int) -> str:
 
 
 def plan_today_snapshot(
-    goal: str, created: date, structure: dict | None, today: date
+    goal: str,
+    plan_id: str,
+    kb_id: str | None,
+    created: date,
+    structure: dict | None,
+    today: date,
 ) -> dict | None:
     """活跃计划"截至今天"的未完成任务快照; 无未完成任务返回 None (不推)。
 
@@ -63,14 +73,31 @@ def plan_today_snapshot(
     """
     snapshot = plan_schedule_snapshot(created, structure, today)
     due_keys = set(snapshot["today_tasks"]) | set(snapshot["overdue_tasks"])
-    undone = sum(
-        1
-        for si, di, ti, _stage, _day, task in iter_tasks(structure)
-        if f"stage{si}.day{di}.task{ti}" in due_keys and task_status(task) == "pending"
-    )
+    due_tasks = [
+        task
+        for _si, _di, _ti, _stage, _day, task in iter_tasks(structure)
+        if task_identity(task) in due_keys and task_status(task) == "pending"
+    ]
+    undone = len(due_tasks)
     if undone == 0:
         return None
-    return {"goal": goal, "day_no": snapshot["current_day"], "undone": undone}
+    first = due_tasks[0]
+    first_id = task_identity(first)
+    if first_id is None:
+        return None
+    return {
+        "goal": goal,
+        "plan_id": plan_id,
+        "kb_id": kb_id,
+        "task_id": first_id,
+        "title": str(first.get("title") or first.get("objective") or "继续当前任务")[:120],
+        "action_type": str(first.get("action_type") or "tutor"),
+        "topic": str((first.get("kc_names") or [first.get("title") or goal])[0])[:120],
+        "count": first.get("practice_count") or 3,
+        "difficulty": first.get("difficulty") or "mid",
+        "day_no": snapshot["current_day"],
+        "undone": undone,
+    }
 
 
 def _resume_item(insight: dict) -> dict:
@@ -106,15 +133,12 @@ def compose_next_actions(
     insight: dict | None,
     weak_points: list[dict],
     plan: dict | None,
-    days_since_activity: int | None = None,
 ) -> list[dict]:
     """确定性拼装推荐条目 (纯函数, 单测入口): 优先级排布 + ≤5 条 + 冷启动兜底。
 
     入参均为已加载的快照: due_count 到期错题数; insight 最近卡点条目
     {kc_name, kind, text}; weak_points 为 weak_point_kcs 输出 (理由用其 reason/zone
     定性字段, 不触碰 p_mastery 小数); plan 为 plan_today_snapshot 输出。
-    days_since_activity 仅在存在过真实学习活动时传入；None 表示冷启动，而不是
-    “已经很久没学”。
     """
     items: list[dict] = []
     if due_count > 0:
@@ -143,51 +167,50 @@ def compose_next_actions(
         items.append(
             {
                 "type": "plan_task",
-                "title": f"继续学习计划：{plan['undone']} 个任务待完成",
+                "title": f"继续：{_ellipsis(plan['title'], 60)}",
                 "reason": (
                     f"计划《{_ellipsis(plan['goal'], _GOAL_MAX)}》进行到第 {plan['day_no']} 天，"
                     f"按日程还有 {plan['undone']} 个任务没完成"
                 ),
-                "href": "/plans",
-            }
-        )
-    if (
-        days_since_activity is not None
-        and days_since_activity >= _ACTIVITY_IDLE_DAYS
-        and len(items) < MAX_ITEMS
-    ):
-        shown_days = min(days_since_activity, 99)
-        items.append(
-            {
-                "type": "behavior_reminder",
-                "title": f"已经 {shown_days} 天未继续学习",
-                "reason": "先用 10 分钟恢复节奏；到期复习和薄弱点会继续按当前学情安排",
-                "href": "/today",
+                "href": _plan_task_href(plan),
             }
         )
     if not items:
-        # 冷启动: 无任何学习记录时的两条兜底 (话术对齐 reports._build_actions)
         items = [
             {
-                "type": "quiz",
-                "title": "完成 5-8 题摸底测评",
-                "reason": "还没有学习记录：先摸底建立掌握度画像，之后的推荐才有依据",
+                "type": "cold_start",
+                "title": "先做一次摸底练习",
+                "reason": "还没有足够的真实作答证据，先用几道题建立起点，再决定接下来怎么学",
                 "href": "/quiz",
-            },
-            {
-                "type": "plan",
-                "title": "制定 1 份学习计划",
-                "reason": "含摸底诊断：把目标拆成每天可执行的任务，学起来不迷路",
-                "href": "/plans",
-            },
+            }
         ]
     return items[:MAX_ITEMS]
 
 
+def _plan_task_href(plan: dict) -> str:
+    """Build an execution URL that cannot lose plan/task attribution."""
+    action_type = plan.get("action_type")
+    path = "/quiz" if action_type in {"practice", "mixed"} else "/tutor"
+    if action_type == "review_errors":
+        path = "/reviews"
+    params = {"plan_id": plan["plan_id"], "task_id": plan["task_id"]}
+    if path == "/quiz":
+        params.update(
+            {
+                "topic": plan["topic"],
+                "count": str(plan["count"]),
+                "difficulty": plan["difficulty"],
+            }
+        )
+    if plan.get("kb_id"):
+        params["kb"] = plan["kb_id"]
+    return f"{path}?{urlencode(params)}"
+
+
 async def _load_snapshots(
     ctx: AuthContext, now_dt: datetime
-) -> tuple[int, dict | None, dict | None, int | None]:
-    """一次事务读齐推荐快照和最近一次已发生的真实学习活动。"""
+) -> tuple[int, dict | None, dict | None]:
+    """Load the deterministic recommendation snapshots in one transaction."""
     async with tenant_session(ctx.tenant_id) as session:
         # 到期数 = len(全量到期集合), 与 reviews.today 的 total_due 同一函数 (B3)
         due_count = len(await due_error_items(session, ctx.user_id, now_dt))
@@ -209,10 +232,12 @@ async def _load_snapshots(
             row, kc_name = insight_row
             insight = {"kc_name": kc_name or "", "kind": row.kind, "text": row.text}
 
-        plan_row = await latest_plan(session, uuid.UUID(str(ctx.user_id)))
+        plan_row = await active_plan(session, uuid.UUID(str(ctx.user_id)))
         plan = (
             plan_today_snapshot(
                 plan_row.goal,
+                str(plan_row.id),
+                str(plan_row.kb_id) if plan_row.kb_id else None,
                 plan_row.created_at.date(),
                 plan_row.structure_json,
                 now_dt.date(),
@@ -220,33 +245,14 @@ async def _load_snapshots(
             if plan_row is not None
             else None
         )
-        last_attempt = await session.scalar(
-            select(func.max(Attempt.at)).where(Attempt.user_id == ctx.user_id)
-        )
-        last_mastery_log = await session.scalar(
-            select(func.max(MasteryLog.at)).where(MasteryLog.user_id == ctx.user_id)
-        )
-    candidates = [value for value in (last_attempt, last_mastery_log) if value is not None]
-    days_since_activity = (
-        min(_whole_days_since(value, now_dt) for value in candidates) if candidates else None
-    )
-    return due_count, insight, plan, days_since_activity
-
-
-def _whole_days_since(value: datetime, now: datetime) -> int:
-    """Return non-negative completed days while tolerating legacy naive rows."""
-    if value.tzinfo is None and now.tzinfo is not None:
-        value = value.replace(tzinfo=now.tzinfo)
-    elif value.tzinfo is not None and now.tzinfo is None:
-        value = value.replace(tzinfo=None)
-    return max(0, (now - value).days)
+    return due_count, insight, plan
 
 
 @router.get("")
 async def next_actions(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
     """可解释的"下一步"推荐 (G13): 全部确定性聚合, 逐条自带"为什么"。"""
     now_dt = await timectl.now(request.app.state.redis)
-    due_count, insight, plan, days_since_activity = await _load_snapshots(ctx, now_dt)
+    due_count, insight, plan = await _load_snapshots(ctx, now_dt)
     # 薄弱点走既有共用函数 (自开事务); kb 不限定 —— 开场卡是全局视角
     weak = await weak_point_kcs(ctx.tenant_id, ctx.user_id, [])
     items = compose_next_actions(
@@ -254,6 +260,5 @@ async def next_actions(request: Request, ctx: AuthContext = Depends(api_rate_lim
         insight=insight,
         weak_points=weak,
         plan=plan,
-        days_since_activity=days_since_activity,
     )
     return {"items": items}

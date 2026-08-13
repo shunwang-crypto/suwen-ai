@@ -11,13 +11,13 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime, timedelta
+import uuid
+from datetime import date
 from urllib.parse import unquote
 
 from eduagents_api.plan_adjust import plan_schedule_snapshot
 from eduagents_api.routers.next_actions import (
     MAX_ITEMS,
-    _whole_days_since,
     compose_next_actions,
     plan_today_snapshot,
 )
@@ -47,7 +47,12 @@ def _all_inputs() -> dict:
         "due_count": 3,
         "insight": dict(_INSIGHT),
         "weak_points": [_weak("极值判定", 0.35, recent=True), _weak("泰勒公式", 0.52)],
-        "plan": {"goal": "期末高数 90 分", "day_no": 4, "undone": 2},
+        "plan": {
+            "goal": "期末高数 90 分", "day_no": 4, "undone": 2,
+            "plan_id": str(uuid.uuid4()), "task_id": str(uuid.uuid4()),
+            "title": "计划任务", "action_type": "practice", "topic": "高数",
+            "count": 3, "difficulty": "mid",
+        },
     }
 
 
@@ -85,7 +90,12 @@ def test_weak_points_capped_at_two_within_five_total():
         due_count=1,
         insight=dict(_INSIGHT),
         weak_points=[_weak(f"知识点{i}", 0.3 + i * 0.05) for i in range(5)],
-        plan={"goal": "目标", "day_no": 1, "undone": 1},
+        plan={
+            "goal": "目标", "day_no": 1, "undone": 1,
+            "plan_id": str(uuid.uuid4()), "task_id": str(uuid.uuid4()),
+            "title": "计划任务", "action_type": "practice", "topic": "目标",
+            "count": 3, "difficulty": "mid",
+        },
     )
     assert len(items) == MAX_ITEMS == 5
     assert sum(1 for it in items if it["type"] == "weak_practice") == 2
@@ -97,57 +107,15 @@ def test_weak_points_capped_at_two_within_five_total():
 
 def test_cold_start_fallback_matches_reports_wording():
     items = compose_next_actions(due_count=0, insight=None, weak_points=[], plan=None)
-    assert [it["type"] for it in items] == ["quiz", "plan"]
-    assert [it["href"] for it in items] == ["/quiz", "/plans"]
-    # 话术对齐 reports._build_actions 的 fallback: 摸底建画像 / 含摸底诊断的计划
-    assert "5-8 题摸底" in items[0]["title"]
-    assert "掌握度画像" in items[0]["reason"]
-    assert "学习计划" in items[1]["title"]
-    assert "摸底诊断" in items[1]["reason"]
+    assert [it["type"] for it in items] == ["cold_start"]
+    assert [it["href"] for it in items] == ["/quiz"]
+    assert "摸底" in items[0]["title"]
+    assert "真实作答证据" in items[0]["reason"]
 
 
 def test_no_fallback_when_any_category_present():
     items = compose_next_actions(due_count=0, insight=None, weak_points=[_weak("极值", 0.4)], plan=None)
     assert [it["type"] for it in items] == ["weak_practice"]
-
-
-def test_idle_user_gets_deterministic_return_reminder():
-    items = compose_next_actions(
-        due_count=0,
-        insight=None,
-        weak_points=[],
-        plan=None,
-        days_since_activity=4,
-    )
-    assert [item["type"] for item in items] == ["behavior_reminder"]
-    assert items[0]["href"] == "/today"
-    assert "4 天" in items[0]["title"]
-    assert "10 分钟" in items[0]["reason"]
-
-
-def test_recent_activity_and_cold_start_do_not_get_idle_reminder():
-    for days_since_activity in (None, 0, 2):
-        items = compose_next_actions(
-            due_count=0,
-            insight=None,
-            weak_points=[],
-            plan=None,
-            days_since_activity=days_since_activity,
-        )
-        assert [item["type"] for item in items] == ["quiz", "plan"]
-
-
-def test_idle_reminder_respects_cap_and_does_not_displace_learning_actions():
-    items = compose_next_actions(**_all_inputs(), days_since_activity=8)
-    assert len(items) == MAX_ITEMS
-    assert all(item["type"] != "behavior_reminder" for item in items)
-
-
-def test_whole_days_since_handles_naive_future_and_aware_values():
-    now = datetime(2026, 8, 6, 12, tzinfo=UTC)
-    assert _whole_days_since(now - timedelta(days=3, hours=1), now) == 3
-    assert _whole_days_since((now - timedelta(days=2)).replace(tzinfo=None), now) == 2
-    assert _whole_days_since(now + timedelta(hours=1), now) == 0
 
 
 # ---- 理由脱敏 (P2-7): 定性词, 无掌握度小数 ----
@@ -202,7 +170,7 @@ def test_resume_blank_text_skipped():
         weak_points=[],
         plan=None,
     )
-    assert [it["type"] for it in items] == ["quiz", "plan"]  # 空原话不成卡, 落冷启动
+    assert [it["type"] for it in items] == ["cold_start"]  # 空原话不成卡, 落冷启动
 
 
 # ---- plan_today_snapshot: "截至今天"的未完成任务口径 ----
@@ -212,9 +180,9 @@ _STRUCTURE = {
         {
             "name": "阶段一",
             "days": [
-                {"day": 1, "tasks": [{"title": "t1", "done": True}, {"title": "t2", "done": False}]},
-                {"day": 2, "tasks": [{"title": "t3", "done": False}]},
-                {"day": 9, "tasks": [{"title": "未来任务", "done": False}]},
+                {"day": 1, "tasks": [{"task_id": str(uuid.uuid4()), "title": "t1", "status": "done"}, {"task_id": str(uuid.uuid4()), "title": "t2", "status": "pending"}]},
+                {"day": 2, "tasks": [{"task_id": str(uuid.uuid4()), "title": "t3", "status": "pending"}]},
+                {"day": 9, "tasks": [{"task_id": str(uuid.uuid4()), "title": "未来任务", "status": "pending"}]},
             ],
         }
     ]
@@ -222,9 +190,9 @@ _STRUCTURE = {
 
 
 def test_plan_snapshot_counts_undone_up_to_today():
-    snap = plan_today_snapshot("期末冲刺", date(2026, 7, 25), _STRUCTURE, date(2026, 7, 26))
+    snap = plan_today_snapshot("期末冲刺", str(uuid.uuid4()), None, date(2026, 7, 25), _STRUCTURE, date(2026, 7, 26))
     # 创建当天为第 1 天 -> 今天是第 2 天; day9 的未来任务不计
-    assert snap == {"goal": "期末冲刺", "day_no": 2, "undone": 2}
+    assert snap["goal"] == "期末冲刺" and snap["day_no"] == 2 and snap["undone"] == 2
 
 
 def test_plan_snapshot_none_when_all_done_so_far():
@@ -232,18 +200,20 @@ def test_plan_snapshot_none_when_all_done_so_far():
         "stages": [
             {
                 "days": [
-                    {"day": 1, "tasks": [{"title": "t", "done": True}]},
-                    {"day": 5, "tasks": [{"title": "later", "done": False}]},
+                    {"day": 1, "tasks": [{"task_id": str(uuid.uuid4()), "title": "t", "status": "done"}]},
+                    {"day": 5, "tasks": [{"task_id": str(uuid.uuid4()), "title": "later", "status": "pending"}]},
                 ]
             }
         ]
     }
-    assert plan_today_snapshot("g", date(2026, 7, 27), structure, date(2026, 7, 27)) is None
+    assert plan_today_snapshot("g", str(uuid.uuid4()), None, date(2026, 7, 27), structure, date(2026, 7, 27)) is None
 
 
 def test_plan_snapshot_missing_day_number_counts_as_due():
-    structure = {"stages": [{"days": [{"tasks": [{"title": "无日程号", "done": False}]}]}]}
-    snap = plan_today_snapshot("g", date(2026, 7, 27), structure, date(2026, 7, 27))
+    structure = {"stages": [{"days": [{"tasks": [{"title": "无日程号", "status": "pending"}]}]}]}
+    task_id = str(uuid.uuid4())
+    structure["stages"][0]["days"][0]["tasks"][0]["task_id"] = task_id
+    snap = plan_today_snapshot("g", str(uuid.uuid4()), None, date(2026, 7, 27), structure, date(2026, 7, 27))
     assert snap is not None and snap["undone"] == 1
 
 
@@ -252,31 +222,37 @@ def test_plan_item_wording():
         due_count=0,
         insight=None,
         weak_points=[],
-        plan={"goal": "期末高数 90 分", "day_no": 4, "undone": 2},
+        plan={
+            "goal": "期末高数 90 分", "day_no": 4, "undone": 2,
+            "plan_id": str(uuid.uuid4()), "task_id": str(uuid.uuid4()),
+            "title": "计划任务", "action_type": "practice", "topic": "高数",
+            "count": 3, "difficulty": "mid",
+        },
     )
     (item,) = items
     assert item["type"] == "plan_task"
-    assert "2 个任务" in item["title"]
+    assert "计划任务" in item["title"]
     assert "第 4 天" in item["reason"] and "期末高数 90 分" in item["reason"]
-    assert item["href"] == "/plans"
+    assert item["href"].startswith("/quiz?plan_id=")
 
 
 def test_plan_schedule_selects_only_the_server_calculated_current_day():
     structure = {
         "stages": [{
             "days": [
-                {"day": 1, "tasks": [{"title": "逾期"}]},
-                {"day": 2, "tasks": [{"title": "今天"}]},
-                {"day": 3, "tasks": [{"title": "未来"}]},
+                {"day": 1, "tasks": [{"task_id": str(uuid.uuid4()), "title": "逾期"}]},
+                {"day": 2, "tasks": [{"task_id": str(uuid.uuid4()), "title": "今天"}]},
+                {"day": 3, "tasks": [{"task_id": str(uuid.uuid4()), "title": "未来"}]},
             ],
         }],
     }
     snapshot = plan_schedule_snapshot(date(2026, 7, 25), structure, date(2026, 7, 26))
+    task_ids = [task["task_id"] for day in structure["stages"][0]["days"] for task in day["tasks"]]
     assert snapshot == {
         "current_day": 2,
-        "today_tasks": ["stage0.day1.task0"],
-        "overdue_tasks": ["stage0.day0.task0"],
-        "upcoming_tasks": ["stage0.day2.task0"],
+        "today_tasks": [task_ids[1]],
+        "overdue_tasks": [task_ids[0]],
+        "upcoming_tasks": [task_ids[2]],
     }
 
 
@@ -284,13 +260,16 @@ def test_plan_schedule_marks_remaining_tasks_overdue_after_plan_end():
     structure = {
         "stages": [{
             "days": [
-                {"day": 1, "tasks": [{"title": "已过期"}]},
-                {"day": 3, "tasks": [{"title": "也已过期"}]},
+                {"day": 1, "tasks": [{"task_id": str(uuid.uuid4()), "title": "已过期"}]},
+                {"day": 3, "tasks": [{"task_id": str(uuid.uuid4()), "title": "也已过期"}]},
             ],
         }],
     }
     snapshot = plan_schedule_snapshot(date(2026, 7, 25), structure, date(2026, 7, 30))
     assert snapshot["current_day"] == 6
     assert snapshot["today_tasks"] == []
-    assert snapshot["overdue_tasks"] == ["stage0.day0.task0", "stage0.day1.task0"]
+    assert snapshot["overdue_tasks"] == [
+        structure["stages"][0]["days"][0]["tasks"][0]["task_id"],
+        structure["stages"][0]["days"][1]["tasks"][0]["task_id"],
+    ]
     assert snapshot["upcoming_tasks"] == []

@@ -27,7 +27,7 @@ class PracticeRequest(BaseModel):
 
     scope_kb_id: uuid.UUID | None = None
     plan_id: uuid.UUID | None = None
-    task_key: str | None = None
+    task_id: str | None = None
     previous_quiz_id: uuid.UUID | None = None
     adjustment: Literal["easier", "harder", "switch_kc", "switch_kb"] | None = None
 
@@ -58,7 +58,7 @@ async def load_recommendation(
                 now_dt=now_dt,
                 scope_kb_id=body.scope_kb_id,
                 plan_id=body.plan_id,
-                task_key=body.task_key,
+                task_id=body.task_id,
                 previous_quiz_id=body.previous_quiz_id,
                 adjustment=body.adjustment,
             )

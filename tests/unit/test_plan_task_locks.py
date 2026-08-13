@@ -19,6 +19,8 @@ from eduagents_api.plan_adjust import (
 )
 from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD
 
+TASK_IDS = [f"00000000-0000-4000-8000-00000000000{i}" for i in range(3)]
+
 # 极限 -> 导数 -> 泰勒公式 (与 kc_edges 里的真实边形状一致)
 PREREQ = {"导数": ["极限"], "泰勒公式": ["导数"]}
 
@@ -32,7 +34,7 @@ def _structure(*statuses: str) -> dict:
                 "days": [
                     {
                         "tasks": [
-                            {"kc_names": [names[i]], "status": statuses[i]}
+                            {"task_id": TASK_IDS[i], "kc_names": [names[i]], "status": statuses[i]}
                             for i in range(len(statuses))
                         ]
                     }
@@ -48,10 +50,11 @@ def test_unmet_prerequisite_locks_task():
         _structure("pending", "pending", "pending"),
         {"极限": 0.2, "导数": 0.5},
         PREREQ,
+        {"极限": "observed", "导数": "observed"},
     )
 
-    assert "stage0.day0.task1" in locks
-    blockers = locks["stage0.day0.task1"]["blockers"]
+    assert TASK_IDS[1] in locks
+    blockers = locks[TASK_IDS[1]]["blockers"]
     assert [b["kc_name"] for b in blockers] == ["极限"]
     assert blockers[0]["zone"]  # 定性区间, 供前端 tooltip 直接展示
 
@@ -61,15 +64,17 @@ def test_met_prerequisite_does_not_lock():
         _structure("pending", "pending", "pending"),
         {"极限": REINFORCE_THRESHOLD, "导数": 0.5},
         PREREQ,
+        {"极限": "observed", "导数": "observed"},
     )
 
-    assert "stage0.day0.task1" not in locks
+    assert TASK_IDS[1] not in locks
 
 
 def test_prerequisite_without_mastery_record_is_not_a_blocker():
     """没学过 != 没掌握: 冷启动时把整棵树锁死会让新用户寸步难行。"""
     locks = compute_task_locks(
-        _structure("pending", "pending", "pending"), {"导数": 0.5}, PREREQ
+        _structure("pending", "pending", "pending"), {"导数": 0.5}, PREREQ,
+        {"导数": "observed"},
     )
 
     assert locks == {}
@@ -78,7 +83,8 @@ def test_prerequisite_without_mastery_record_is_not_a_blocker():
 def test_done_and_skipped_tasks_are_never_locked():
     """已完成/已跳过的任务不该被事后判定为不可做。"""
     locks = compute_task_locks(
-        _structure("pending", "done", "skipped"), {"极限": 0.1, "导数": 0.1}, PREREQ
+        _structure("pending", "done", "skipped"), {"极限": 0.1, "导数": 0.1}, PREREQ,
+        {"极限": "observed", "导数": "observed"},
     )
 
     assert locks == {}
@@ -94,11 +100,14 @@ def test_missing_inputs_lock_nothing():
 def test_blockers_are_deduplicated():
     """同一先修被任务的多个 KC 共同依赖时只报一次。"""
     structure = {
-        "stages": [{"days": [{"tasks": [{"kc_names": ["导数", "泰勒公式"], "status": "pending"}]}]}]
+        "stages": [{"days": [{"tasks": [{"task_id": TASK_IDS[0], "kc_names": ["导数", "泰勒公式"], "status": "pending"}]}]}]
     }
-    locks = compute_task_locks(structure, {"极限": 0.1, "导数": 0.1}, PREREQ)
+    locks = compute_task_locks(
+        structure, {"极限": 0.1, "导数": 0.1}, PREREQ,
+        {"极限": "observed", "导数": "observed"},
+    )
 
-    blockers = locks["stage0.day0.task0"]["blockers"]
+    blockers = locks[TASK_IDS[0]]["blockers"]
     assert sorted(b["kc_name"] for b in blockers) == ["导数", "极限"]
 
 
@@ -106,7 +115,10 @@ def test_progress_ignores_locks():
     """locked 仍是 pending: 锁定不改变分母, 否则进度条会凭空虚高。"""
     structure = _structure("pending", "pending", "done")
     before = plan_progress(structure)
-    locks = compute_task_locks(structure, {"极限": 0.1, "导数": 0.1}, PREREQ)
+    locks = compute_task_locks(
+        structure, {"极限": 0.1, "导数": 0.1}, PREREQ,
+        {"极限": "observed", "导数": "observed"},
+    )
 
     assert locks  # 确有任务被锁
     assert plan_progress(structure) == before
@@ -115,7 +127,10 @@ def test_progress_ignores_locks():
 
 def test_enrich_structure_exposes_lock_fields():
     structure = _structure("pending", "pending", "pending")
-    locks = compute_task_locks(structure, {"极限": 0.1, "导数": 0.5}, PREREQ)
+    locks = compute_task_locks(
+        structure, {"极限": 0.1, "导数": 0.5}, PREREQ,
+        {"极限": "observed", "导数": "observed"},
+    )
     out = enrich_structure(structure, None, locks)
 
     tasks = out["stages"][0]["days"][0]["tasks"]

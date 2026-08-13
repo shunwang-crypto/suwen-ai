@@ -42,12 +42,15 @@ from ..models import (
     FsrsReviewEvent,
     KnowledgeComponent,
     MasteryLog,
-    MasteryRecord,
     Question,
     ResourceQuestion,
 )
 from ..plan_adjust import PlanTaskAttributionError, complete_plan_task
-from ..services import apply_mastery_evidence, write_learning_event
+from ..services import (
+    apply_mastery_evidence,
+    correct_mastery_evidence,
+    write_learning_event,
+)
 
 log = get_logger("reviews")
 
@@ -82,16 +85,16 @@ class AnswerIn(BaseModel):
     idempotency_key: str | None = Field(default=None, max_length=128)
     review_duration_ms: int | None = Field(default=None, ge=0, le=86_400_000)
     plan_id: uuid.UUID | None = None
-    task_key: str | None = Field(default=None, max_length=96)
+    task_id: str | None = Field(default=None, max_length=96)
 
     @model_validator(mode="after")
     def _plan_attribution_pair(self) -> AnswerIn:
-        if (self.plan_id is None) != (self.task_key is None):
-            raise ValueError("plan_id 与 task_key 必须同时提供")
-        if self.task_key is not None:
-            self.task_key = self.task_key.strip()
-            if not self.task_key:
-                raise ValueError("task_key 不能为空")
+        if (self.plan_id is None) != (self.task_id is None):
+            raise ValueError("plan_id 与 task_id 必须同时提供")
+        if self.task_id is not None:
+            self.task_id = self.task_id.strip()
+            if not self.task_id:
+                raise ValueError("task_id 不能为空")
         if self.idempotency_key is not None:
             self.idempotency_key = self.idempotency_key.strip() or None
         return self
@@ -345,6 +348,7 @@ async def answer_review(
         question = await session.get(Question, item.question_id)
         if question is None:
             raise HTTPException(status_code=404, detail="QUESTION_NOT_FOUND")
+        kc_ids = [str(k) for k in (question.kc_ids or [])]
         schedule = await resolve_schedule_params(
             session,
             tenant_id=ctx.tenant_id,
@@ -355,7 +359,7 @@ async def answer_review(
         request_fingerprint = hashlib.sha256(
             (
                 f"{question.id}\0{body.response}\0{body.review_duration_ms}\0"
-                f"{body.plan_id}\0{body.task_key}"
+                f"{body.plan_id}\0{body.task_id}"
             ).encode()
         ).hexdigest()
         idempotency_key = provided_idempotency_key or _new_review_idempotency_key()
@@ -432,7 +436,6 @@ async def answer_review(
                 request_id=request_id,
             )
         cause = item.cause
-        kc_ids = [str(k) for k in (question.kc_ids or [])]
         # 一次复习事件才是一条掌握度证据；ErrorItem.id 是长期复用的卡片身份，
         # 不能用作 evidence_id，否则同一卡片的后续合法复习会被误判为幂等重放。
         review_event_id = uuid.uuid4()
@@ -474,14 +477,14 @@ async def answer_review(
             occurred_at=review_log.review_datetime,
             idempotency_key=idempotency_key,
         )
-        if body.plan_id is not None and body.task_key is not None and was_due:
+        if body.plan_id is not None and body.task_id is not None and was_due:
             try:
                 plan_task_completion = await complete_plan_task(
                     session,
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
                     plan_id=body.plan_id,
-                    task_key=body.task_key,
+                    task_id=body.task_id,
                     source_type="review_answer",
                     source_id=str(item.id),
                     completed_at=now_dt,
@@ -1057,7 +1060,6 @@ async def appeal_score(
         old_score = float(attempt.llm_score)
         old_correct = attempt.is_correct is True
         stem, answer, response = question.stem, question.answer, attempt.response
-        kc_ids = [str(k) for k in (question.kc_ids or [])]
 
     # LLM 复核在事务外进行 (不给慢调用挂长事务); 温度 0 + 明示"仔细复核"
     result = await request.app.state.gateway.chat(
@@ -1158,39 +1160,16 @@ async def appeal_score(
         ).strip()
         if crossed:
             attempt.is_correct = new_correct
-            # 回滚: 该 attempt 写入的 mastery_log 里最早一条的 old_p = 判分前状态
-            entries = (
-                await session.scalars(
-                    select(MasteryLog)
-                    .where(
-                        MasteryLog.evidence_id == attempt_id,
-                        MasteryLog.evidence_type == "quiz_attempt",
-                        MasteryLog.user_id == ctx.user_id,
-                    )
-                    .order_by(MasteryLog.at.asc())
-                )
-            ).all()
-            pre_p: dict[str, float] = {}
-            for entry in entries:
-                pre_p.setdefault(str(entry.kc_id), entry.old_p)
-            for kc_id, old_p in pre_p.items():
-                record = await session.scalar(
-                    select(MasteryRecord).where(
-                        MasteryRecord.user_id == ctx.user_id,
-                        MasteryRecord.kc_id == uuid.UUID(kc_id),
-                    )
-                )
-                if record is not None:
-                    record.p_mastery = old_p  # confidence 无法精确还原, 如实保留
-            # 重写: 以复核后的判定作为新证据 (审计链保留原始行 + 新增 appeal_regrade 行)
-            changes = await apply_mastery_evidence(
+            # 申诉纠正必须仍经过统一 EvidenceUpdater；路由不得直写
+            # MasteryRecord，也不能把同一次作答算成第二个独立观测。
+            changes = await correct_mastery_evidence(
                 session,
                 ctx,
-                kc_ids,
-                new_correct,
-                _SHORT_ANSWER_WEIGHT,
-                attempt_id,
-                evidence_type="appeal_regrade",
+                original_evidence_type="quiz_attempt",
+                original_evidence_id=attempt_id,
+                corrected_evidence_type="appeal_regrade",
+                correct=new_correct,
+                weight=_SHORT_ANSWER_WEIGHT,
             )
     log.info(
         "appeal_adjusted",

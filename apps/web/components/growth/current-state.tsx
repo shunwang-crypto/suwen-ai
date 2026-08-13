@@ -17,7 +17,6 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
-  PageHeader,
   SkeletonList,
   SkeletonPage,
   Spinner,
@@ -28,7 +27,7 @@ import { MasteryRadarPanel } from "@/components/mastery-radar";
 import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
-import type { MasteryItem, OverrideResult, ProfileResponse } from "@/lib/types";
+import type { MasteryItem, ProfileResponse } from "@/lib/types";
 
 const CAUSE_LABELS: Record<string, string> = {
   concept_confusion: "概念混淆",
@@ -47,10 +46,7 @@ const STATE_LABELS: Record<string, string> = {
 const EVIDENCE_LABELS: Record<string, string> = {
   quiz_attempt: "练习作答",
   review: "复习作答",
-  user_override: "用户纠正",
-  tutor_summary: "辅导小结",
-  // §5.5 画像写入双通道之二：后台 Reflection 从对话里抽取的洞察（权重 0.3）
-  chat_reflection: "对话洞察",
+  explain_back: "受控理解验证",
 };
 
 const EVIDENCE_STRENGTH_LABELS = {
@@ -66,9 +62,6 @@ function evidenceStrengthLabel(item: MasteryWithMeta): string | null {
   const level = item.evidence_strength;
   return level ? EVIDENCE_STRENGTH_LABELS[level] : null;
 }
-
-/** 掌握度低于此值视为薄弱点（与后端 profile_summary.QUIZ_WEAK_THRESHOLD 同口径）。 */
-const WEAK_THRESHOLD = 0.6;
 
 /** 遗忘快照只在 3 天后保持率低于此值时渲染（P2-7：高于 90% 属噪声不打扰）。 */
 const RETENTION_SHOW_BELOW = 0.9;
@@ -240,7 +233,8 @@ interface SubjectGroup {
   chapters: ChapterGroup[];
 }
 
-const isWeak = (m: MasteryWithMeta) => m.p_mastery < WEAK_THRESHOLD;
+const masteryValue = (m: MasteryWithMeta) => m.p_mastery ?? 0;
+const isWeak = (m: MasteryWithMeta, weakThreshold: number) => m.evidence_state === "observed" && m.p_mastery != null && m.p_mastery < weakThreshold;
 /** 「到期」口径：FSRS 3 天后保持率有值且低于 90%（与遗忘快照展示阈值一致）。 */
 const isDue = (m: MasteryWithMeta) =>
   m.retention_in_3d != null && m.retention_in_3d < RETENTION_SHOW_BELOW;
@@ -252,7 +246,7 @@ function matchesQuery(m: MasteryWithMeta, q: string): boolean {
 }
 
 /** 按 subject → chapter 聚合，保持首次出现顺序（章节序即后端下发序）。 */
-function buildTree(items: MasteryWithMeta[]): SubjectGroup[] {
+function buildTree(items: MasteryWithMeta[], weakThreshold: number): SubjectGroup[] {
   const groups: SubjectGroup[] = [];
   const byKey = new Map<string, SubjectGroup>();
   for (const m of items) {
@@ -271,14 +265,15 @@ function buildTree(items: MasteryWithMeta[]): SubjectGroup[] {
     }
     c.items.push(m);
     g.total += 1;
-    if (isWeak(m)) {
+    if (isWeak(m, weakThreshold)) {
       c.weakCount += 1;
       g.weakCount += 1;
     }
   }
   for (const g of groups) {
     for (const c of g.chapters) {
-      c.mean = c.items.reduce((s, x) => s + x.p_mastery, 0) / c.items.length;
+      const observed = c.items.filter((item) => item.evidence_state === "observed" && item.p_mastery != null);
+      c.mean = observed.length ? observed.reduce((sum, item) => sum + masteryValue(item), 0) / observed.length : 0;
     }
   }
   return groups;
@@ -288,24 +283,11 @@ function buildTree(items: MasteryWithMeta[]): SubjectGroup[] {
  * 掌握度明细行：压缩行高；桌面 hover/键盘聚焦浮出快捷动作，
  * 「…」菜单在所有尺寸可用（触屏兜底）；窄屏为两行卡片（名称行 + 元信息行）。
  */
-function MasteryRow({
-  item,
-  menuOpen,
-  overriding,
-  overrideDisabled,
-  onToggleMenu,
-  onCloseMenu,
-  onOverride,
-}: {
+function MasteryRow({ item, weakThreshold }: {
   item: MasteryWithMeta;
-  menuOpen: boolean;
-  overriding: boolean;
-  overrideDisabled: boolean;
-  onToggleMenu: () => void;
-  onCloseMenu: () => void;
-  onOverride: () => void;
+  weakThreshold: number;
 }) {
-  const weak = isWeak(item);
+  const weak = isWeak(item, weakThreshold);
   const ret3d = item.retention_in_3d;
   const retentionTitle =
     ret3d != null
@@ -316,17 +298,16 @@ function MasteryRow({
         }`
       : undefined;
 
-  const menuItemCls =
-    "flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-caption font-medium transition-colors";
-
   return (
     <li className="group relative rounded-lg transition-colors hover:bg-indigo-50/50">
       <div className="flex items-center gap-2.5 px-1.5 py-1">
         <ProgressRing
-          value={item.p_mastery}
+          value={masteryValue(item)}
+          color={item.p_mastery == null ? "#cbd5e1" : undefined}
+          showValue={item.p_mastery != null}
           size={32}
           strokeWidth={3.5}
-          title={`${item.name}：掌握度 ${fmtPct(item.p_mastery)}`}
+          title={`${item.name}：${item.evidence_state_label ?? (item.evidence_state === "unobserved" ? "尚无证据" : item.evidence_state === "estimated" ? "估计中" : `掌握度 ${fmtPct(masteryValue(item))}`)}`}
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
@@ -336,7 +317,7 @@ function MasteryRow({
             {weak && (
               <span
                 className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
-                title={`薄弱点：掌握度 ${fmtPct(item.p_mastery)} < ${fmtPct(WEAK_THRESHOLD)}`}
+                title={`薄弱点：掌握度 ${fmtPct(masteryValue(item))} < ${fmtPct(weakThreshold)}`}
               >
                 薄弱
               </span>
@@ -351,6 +332,7 @@ function MasteryRow({
                 证据 {evidenceStrengthLabel(item)}
               </span>
             )}
+            <span>{item.evidence_state_label ?? (item.evidence_state === "unobserved" ? "尚无证据" : item.evidence_state === "estimated" ? "估计中" : "已观测")}</span>
             {/* 遗忘快照（P2-7）缩成徽章，整句进 tooltip；<90% 才显示避免噪声 */}
             {ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
               <span
@@ -363,74 +345,16 @@ function MasteryRow({
           </div>
         </div>
 
-        {/* 「…」菜单触发（触屏与所有尺寸的动作入口） */}
-        <button
-          type="button"
-          aria-label={`${item.name} 的操作菜单`}
-          aria-expanded={menuOpen}
-          onClick={onToggleMenu}
-          className="shrink-0 rounded-lg border border-transparent px-1.5 py-1 text-slate-400 transition-colors hover:border-slate-200 hover:text-slate-600"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4" aria-hidden>
-            <circle cx="5" cy="12" r="1.8" />
-            <circle cx="12" cy="12" r="1.8" />
-            <circle cx="19" cy="12" r="1.8" />
-          </svg>
-        </button>
       </div>
-
-      {/* 桌面 hover / 键盘聚焦浮出的快捷动作（绝对定位盖行右侧，不挤压行宽）
-          「练习」「验证」两个跳转已移除：派活统一由今日页承担，本页只回答"我现在什么水平"。
-          「已掌握」保留 —— 它是就地写 p_mastery 的动作，不离开本页。 */}
-      <div className="pointer-events-none absolute inset-y-0.5 right-1 z-[5] hidden items-center gap-1 rounded-lg bg-white/95 pl-1.5 pr-1 opacity-0 shadow-sm ring-1 ring-slate-100 backdrop-blur-[2px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex sm:focus-within:pointer-events-auto sm:focus-within:opacity-100">
-        <button
-          type="button"
-          disabled={overrideDisabled}
-          onClick={onOverride}
-          title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志"
-          className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-caption font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {overriding && <Spinner className="h-3 w-3" />}
-          已掌握
-        </button>
-      </div>
-
-      {/* 「…」弹出菜单：动作全集 + 副说明（B1/B2 动作收纳） */}
-      {menuOpen && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={onCloseMenu} aria-hidden />
-          <div className="absolute right-1 top-9 z-20 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-            <button
-              type="button"
-              disabled={overrideDisabled}
-              onClick={() => {
-                onCloseMenu();
-                onOverride();
-              }}
-              title="用户对画像有最终解释权：直写 p_mastery=0.9 并留审计日志"
-              className={`${menuItemCls} text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40`}
-            >
-              <span className="flex items-center gap-1">
-                {overriding && <Spinner className="h-3 w-3" />}
-                我已掌握
-              </span>
-              <span className="text-caption font-normal text-slate-400">
-                直接标记，不验证
-              </span>
-            </button>
-          </div>
-        </>
-      )}
     </li>
   );
 }
 
-export default function ProfilePage() {
+export function CurrentLearningState() {
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
-  const [overridingId, setOverridingId] = useState<string | null>(null);
 
   // 记忆条目（P2-1）：null=加载中；主画像失败不牵连本区块，各自兜底
   const [insights, setInsights] = useState<InsightItem[] | null>(null);
@@ -446,7 +370,6 @@ export default function ProfilePage() {
   // 折叠覆写：未覆写时科目默认展开、章节默认「含薄弱才展开」
   const [subjectOverrides, setSubjectOverrides] = useState<Record<string, boolean>>({});
   const [chapterOverrides, setChapterOverrides] = useState<Record<string, boolean>>({});
-  const [actionMenuId, setActionMenuId] = useState<string | null>(null);
 
   // 最近变化展开态（C1）
   const [changesExpanded, setChangesExpanded] = useState(false);
@@ -488,23 +411,6 @@ export default function ProfilePage() {
     };
   }, [reloadKey]);
 
-  const override = async (item: MasteryWithMeta) => {
-    setOverridingId(item.kc_id);
-    setBanner(null);
-    try {
-      await apiJson<OverrideResult>(`/api/profile/kc/${item.kc_id}/override`, {
-        method: "POST",
-        body: { p_mastery: 0.9 },
-      });
-      // 静默即时刷新（含变化流水里新增的 user_override 记录）
-      setProfile(await apiJson<ProfileResponse>("/api/profile"));
-    } catch (e) {
-      setBanner(e instanceof ApiError ? e.message : "标记失败，请重试");
-    } finally {
-      setOverridingId(null);
-    }
-  };
-
   const deleteInsight = async (id: string) => {
     setDeletingInsightId(id);
     try {
@@ -526,7 +432,7 @@ export default function ProfilePage() {
   if (error || !profile) {
     return (
       <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
-        <PageHeader title="我的画像" subtitle="AI 眼中的我" />
+        <h2 className="text-[20px] font-semibold text-ink">当前状态</h2>
         <ErrorBanner message={error ?? "画像为空"} />
         <button
           type="button"
@@ -540,23 +446,23 @@ export default function ProfilePage() {
   }
 
   const mastery = profile.mastery as MasteryWithMeta[];
+  const weakThreshold = profile.weak_threshold;
   const q = query.trim().toLowerCase();
   const filtered = mastery.filter(
     (m) =>
-      (!q || matchesQuery(m, q)) && (!weakOnly || isWeak(m)) && (!dueOnly || isDue(m)),
+      (!q || matchesQuery(m, q)) && (!weakOnly || isWeak(m, weakThreshold)) && (!dueOnly || isDue(m)),
   );
-  const tree = buildTree(filtered);
+  const tree = buildTree(filtered, weakThreshold);
   const filterActive = Boolean(q) || weakOnly || dueOnly;
   // 零变化行后端已滤（?include_noop=1 保留审计口径），前端再兜底一次（C1）
-  const changes = profile.recent_changes.filter(
-    (c) => Math.abs(c.new_p - c.old_p) >= 0.0001 || c.evidence_type === "user_override",
-  );
+  const changes = profile.recent_changes.filter((c) => Math.abs(c.new_p - c.old_p) >= 0.0001);
   const shownChanges = changesExpanded ? changes : changes.slice(0, CHANGES_PAGE_SIZE);
-  const consolidateItems = [...mastery].filter((item) => item.p_mastery < 0.5).sort((a, b) => a.p_mastery - b.p_mastery);
+  const consolidateItems = [...mastery].filter((item) => isWeak(item, weakThreshold)).sort((a, b) => masteryValue(a) - masteryValue(b));
   const dueItems = [...mastery].filter((item) => isDue(item)).sort((a, b) => (a.retention_in_3d ?? 1) - (b.retention_in_3d ?? 1));
-  const verifyItems = mastery.filter((item) => item.evidence_strength === "limited" || !item.evidence_strength);
-  const strongest = [...mastery].sort((a, b) => b.p_mastery - a.p_mastery)[0];
-  const weakest = [...mastery].sort((a, b) => a.p_mastery - b.p_mastery)[0];
+  const verifyItems = mastery.filter((item) => item.evidence_state !== "observed");
+  const observed = mastery.filter((item) => item.evidence_state === "observed" && item.p_mastery != null);
+  const strongest = [...observed].sort((a, b) => masteryValue(b) - masteryValue(a))[0];
+  const weakest = [...observed].sort((a, b) => masteryValue(a) - masteryValue(b))[0];
 
   const chipCls = (on: boolean) =>
     `rounded-full border px-2.5 py-1 text-caption font-medium transition-colors ${
@@ -567,19 +473,7 @@ export default function ProfilePage() {
 
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
-      <PageHeader
-        title="学习画像"
-        subtitle="系统此刻如何认识你，以及你接下来能做什么。"
-        action={
-          <button
-            type="button"
-            onClick={() => setReloadKey((k) => k + 1)}
-            className="rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
-          >
-            刷新画像
-          </button>
-        }
-      />
+      <div className="flex items-end justify-between gap-3"><div><h2 className="text-[20px] font-semibold tracking-[-0.03em] text-ink">当前状态</h2><p className="mt-1 text-body-sm text-ink-muted">系统基于真实学习证据形成的当前认识。</p></div><button type="button" onClick={() => setReloadKey((k) => k + 1)} className="rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary">刷新</button></div>
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
       {/* 画像概述：陈述性信息，不是主操作 —— 用浅色面，近黑只留给本页唯一的黑按钮。
@@ -589,7 +483,7 @@ export default function ProfilePage() {
         <p className="text-body-sm font-medium text-ink-secondary">系统此刻如何认识你</p>
         <p className="mt-2 max-w-4xl text-[15px] leading-7 text-ink">
           {mastery.length === 0
-            ? "还没有足够的真实作答证据。完成第一次练习、复习或辅导后，这里会逐步形成你的学习画像。"
+            ? "还没有足够的真实作答证据。完成第一次练习、复习或受控理解验证后，这里会逐步形成你的学习画像。"
             : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实证据持续更新。</>}
         </p>
         {changes[0] && <p className="mt-3 text-caption text-ink-muted">最近更新 {fmtDateTime(changes[0].at)} · {EVIDENCE_LABELS[changes[0].evidence_type] ?? changes[0].evidence_type}</p>}
@@ -602,7 +496,7 @@ export default function ProfilePage() {
       </div>
 
       {/* 雷达（A1）：库 tab + 章节聚合轴 + 少轴条形降级 + 轴下钻（组件内实现） */}
-      <MasteryRadarPanel items={mastery} />
+      <MasteryRadarPanel items={mastery} weakThreshold={weakThreshold} />
 
       {/* 明细折叠树（B1/B2）：科目 → 章节 → KC */}
       <Card
@@ -616,7 +510,7 @@ export default function ProfilePage() {
         {mastery.length === 0 ? (
           <EmptyState
             title="还没有掌握度证据"
-            description="去练习或复习，作答会即时写入画像"
+            description="练习、复习或受控理解验证会形成可追溯的掌握度证据"
           />
         ) : (
           <div className="space-y-2.5">
@@ -700,20 +594,7 @@ export default function ProfilePage() {
                                 {chapterOpen && (
                                   <ul className="space-y-0.5 px-1 pb-1">
                                     {c.items.map((m) => (
-                                      <MasteryRow
-                                        key={m.kc_id}
-                                        item={m}
-                                        menuOpen={actionMenuId === m.kc_id}
-                                        overriding={overridingId === m.kc_id}
-                                        overrideDisabled={overridingId !== null}
-                                        onToggleMenu={() =>
-                                          setActionMenuId((cur) =>
-                                            cur === m.kc_id ? null : m.kc_id,
-                                          )
-                                        }
-                                        onCloseMenu={() => setActionMenuId(null)}
-                                        onOverride={() => override(m)}
-                                      />
+                                      <MasteryRow key={m.kc_id} item={m} weakThreshold={weakThreshold} />
                                     ))}
                                   </ul>
                                 )}

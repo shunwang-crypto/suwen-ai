@@ -372,7 +372,7 @@ select:focus-visible {
 
 /* Markdown 行内公式也可能很长；限制在正文宽度内，窄屏局部滚动而非撑宽 body。
    同样不设 overflow-y: hidden（理由见上）；行内公式的上下标全靠这里不被裁剪。 */
-.markdown-answer .katex {
+.model-markdown .katex {
   display: inline-block;
   max-width: 100%;
   overflow-x: auto;

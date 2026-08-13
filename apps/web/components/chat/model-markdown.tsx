@@ -107,7 +107,7 @@ function remarkCitations() {
   };
 }
 
-export function MarkdownAnswer({
+export function ModelMarkdown({
   text,
   onCitationClick,
   activeCitation,
@@ -215,7 +215,7 @@ export function MarkdownAnswer({
   };
 
   return (
-    <div className="markdown-answer break-words">
+    <div className="model-markdown break-words">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkBareInlineMath, remarkCitations]}
         rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, errorColor: "inherit" }]]}

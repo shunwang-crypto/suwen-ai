@@ -1,5 +1,6 @@
-"""B2/B6 pure contracts: confidence snapshots, due ordering and rubric gate."""
+"""Learning evidence, confidence snapshots, due ordering and rubric contracts."""
 
+import ast
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -14,6 +15,29 @@ from eduagents_core.metacognition_quality import (
 )
 
 NOW = datetime(2026, 8, 8, 12, tzinfo=UTC)
+
+
+def test_runtime_mastery_writes_are_confined_to_services() -> None:
+    """Prevent pages/workers from growing a second BKT update path."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    allowed = root / "apps/api/src/eduagents_api/services.py"
+    offenders: list[str] = []
+    for base in (root / "apps/api/src", root / "apps/worker/src"):
+        for path in base.rglob("*.py"):
+            if path == allowed:
+                continue
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    if any(
+                        isinstance(target, ast.Attribute) and target.attr == "p_mastery"
+                        for target in targets
+                    ):
+                        offenders.append(str(path.relative_to(root)))
+    assert offenders == []
 
 
 def _row(row_id: str, due: datetime, confidence: float | None):

@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 MASTERED_THRESHOLD = 0.8
 WEAK_THRESHOLD = 0.5
 QUIZ_WEAK_THRESHOLD = 0.6
@@ -27,6 +29,39 @@ DIFFICULTIES = ("easy", "mid", "hard")
 # 界面上写"置信 100%"会与我们自己的校准实验结论冲突, 故只对外给定性档。
 EVIDENCE_MODERATE_ABOVE = 0.4
 EVIDENCE_STRONG_ABOVE = 0.8
+
+# Evidence state is derived from valid MasteryLog rows, never from the BKT
+# prior or from the current p_mastery value.  Three independent observations
+# are the minimum stable sample used by the product for a weak/strong claim.
+EVIDENCE_OBSERVED_MIN_EVENTS = 3
+EvidenceState = Literal["unobserved", "estimated", "observed"]
+VALID_MASTERY_EVIDENCE_TYPES = frozenset(
+    {"quiz_attempt", "review", "assessment_answer", "appeal_regrade"}
+)
+EVIDENCE_STATE_LABELS: dict[EvidenceState, str] = {
+    "unobserved": "未观测",
+    "estimated": "估计中",
+    "observed": "已观测",
+}
+
+
+def evidence_state(evidence_count: int) -> EvidenceState:
+    """Classify the number of independent verified mastery events.
+
+    Callers must count distinct valid ``MasteryLog.evidence_id`` values.  A
+    BKT prior or the legacy confidence accumulator is not evidence.
+    """
+    count = max(0, int(evidence_count))
+    if count == 0:
+        return "unobserved"
+    if count < EVIDENCE_OBSERVED_MIN_EVENTS:
+        return "estimated"
+    return "observed"
+
+
+def evidence_state_label(state: EvidenceState) -> str:
+    """Return the stable Chinese display label for an evidence state."""
+    return EVIDENCE_STATE_LABELS[state]
 
 
 def evidence_strength(score: float) -> str:

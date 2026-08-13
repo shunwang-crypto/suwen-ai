@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
-import { MathText } from "@/lib/katex";
 import type { ExplainBackResult } from "@/lib/types";
 
 export function ExplainBackPanel({
@@ -89,9 +89,9 @@ export function ExplainBackPanel({
                 </span>
               )}
             </div>
-            <MathText text={result.feedback} />
-            {result.gap && <p><span className="font-medium text-ink">可补充：</span><MathText text={result.gap} /></p>}
-            {result.retry_guidance && <p><span className="font-medium text-ink">下一步：</span><MathText text={result.retry_guidance} /></p>}
+            <div><ModelMarkdown text={result.feedback} /></div>
+            {result.gap && <div><p className="font-medium text-ink">可补充：</p><ModelMarkdown text={result.gap} /></div>}
+            {result.retry_guidance && <div><p className="font-medium text-ink">下一步：</p><ModelMarkdown text={result.retry_guidance} /></div>}
           </div>
         )}
       </div>

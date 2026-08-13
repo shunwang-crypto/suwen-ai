@@ -14,8 +14,12 @@ FRONTEND_UPLOAD_DIALOG = (
     Path(__file__).resolve().parents[2]
     / "apps/web/components/resources/resource-upload-dialog.tsx"
 )
-FRONTEND_RESOURCES_PAGE = (
-    Path(__file__).resolve().parents[2] / "apps/web/app/resources/page.tsx"
+FRONTEND_MATERIALS_PAGE = (
+    Path(__file__).resolve().parents[2] / "apps/web/app/materials/page.tsx"
+)
+FRONTEND_RESOURCE_LIBRARY = (
+    Path(__file__).resolve().parents[2]
+    / "apps/web/components/resources/resource-library.tsx"
 )
 FRONTEND_RESOURCE_REVIEW = (
     Path(__file__).resolve().parents[2]
@@ -35,14 +39,16 @@ EXPECTED_UPLOAD_TYPES = [
 
 
 def test_frontend_resource_deep_link_and_dialog_contract():
-    page = FRONTEND_RESOURCES_PAGE.read_text(encoding="utf-8")
+    page = FRONTEND_MATERIALS_PAGE.read_text(encoding="utf-8")
+    library = FRONTEND_RESOURCE_LIBRARY.read_text(encoding="utf-8")
     review = FRONTEND_RESOURCE_REVIEW.read_text(encoding="utf-8")
     dialog = FRONTEND_CONFIRM_DIALOG.read_text(encoding="utf-8")
-    assert 'useSearchParams' in page
-    assert 'searchParams.get("resource_id")' in page
-    assert 'searchParams.get("question_id")' in page
-    assert "initialQuestionId" in page and "initialQuestionId" in review
-    assert 'router.replace("/resources"' in page
+    assert "ResourceLibrary" in page
+    assert 'useSearchParams' in library
+    assert 'searchParams.get("resource_id")' in library
+    assert 'searchParams.get("question_id")' in library
+    assert "initialQuestionId" in library and "initialQuestionId" in review
+    assert 'router.replace("/materials"' in library
     assert "useId" in dialog
     assert 'aria-modal="true"' in dialog
     assert 'event.key === "Escape"' in dialog

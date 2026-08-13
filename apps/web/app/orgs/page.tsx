@@ -347,7 +347,7 @@ export default function OrgsPage() {
                           </span>
                         </span>
                         <a
-                          href="/kb"
+                          href="/materials"
                           className="shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
                         >
                           {kb.writable ? "管理文档" : "查看文档"}

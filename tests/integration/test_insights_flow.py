@@ -112,12 +112,12 @@ async def test_reflection_insight_crud_and_isolation(client):
     gateway = _FakeGateway()
     assert (
         await reflect_session({}, user_id, user_id, session_id, gateway=gateway)
-        == "applied:1"
+            == "recorded:1"
     )
     # 重复入队 (worker 重试): BKT 与原话都不重复落
     assert (
         await reflect_session({}, user_id, user_id, session_id, gateway=gateway)
-        == "applied:0"
+        == "recorded:1"
     )
 
     # 本人可见: join KC 名 + 学生原话 + 会话回链

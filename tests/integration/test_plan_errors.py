@@ -52,6 +52,7 @@ def _structure(day_count: int = 3) -> dict:
                         "day": d,
                         "tasks": [
                             {
+                                "task_id": str(uuid.uuid4()),
                                 "title": f"第 {d} 天: 极限概念",
                                 "minutes": 60,
                                 "kc_names": ["极限"],
@@ -69,12 +70,14 @@ def _structure(day_count: int = 3) -> dict:
                         "day": day_count + 1,
                         "tasks": [
                             {
+                                "task_id": str(uuid.uuid4()),
                                 "title": "综合复习",
                                 "minutes": 40,
                                 "kc_names": [],
                                 "resource_ref": None,
                             },
                             {
+                                "task_id": str(uuid.uuid4()),
                                 "title": "自测",
                                 "minutes": 20,
                                 "kc_names": [],
@@ -111,7 +114,6 @@ async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client
     """Tutor context returns owned text only after the server resolves an ID pair."""
     from eduagents_api.db import tenant_session
     from eduagents_api.models import ErrorItem, Plan, Question, Quiz
-    from eduagents_api.plan_adjust import make_task_key
 
     owner_email = f"tutor-context-owner-{uuid.uuid4().hex[:8]}@test.eduagents.cn"
     other_email = f"tutor-context-other-{uuid.uuid4().hex[:8]}@test.eduagents.cn"
@@ -119,7 +121,7 @@ async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client
     other_headers = await _register_login(client, other_email)
     owner_id = await _uid(owner_email)
     structure = _structure(day_count=1)
-    task_key = make_task_key(0, 0, 0)
+    task_id = structure["stages"][0]["days"][0]["tasks"][0]["task_id"]
 
     async with tenant_session(owner_id) as session:
         plan = Plan(
@@ -172,15 +174,15 @@ async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client
     response = await client.get(f"/api/errors/{error_item_id}/tutor-context", headers=other_headers)
     assert response.status_code == 404, response.text
 
-    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_key}/tutor-context", headers=owner_headers)
+    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_id}/tutor-context", headers=owner_headers)
     assert response.status_code == 200, response.text
     assert response.json()["plan_id"] == plan_id
-    assert response.json()["task_key"] == task_key
+    assert response.json()["task_id"] == task_id
     assert response.json()["problem"] == structure["stages"][0]["days"][0]["tasks"][0]["title"]
 
     response = await client.get(f"/api/plans/{plan_id}/tasks/not-a-real-task/tutor-context", headers=owner_headers)
     assert response.status_code == 404, response.text
-    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_key}/tutor-context", headers=other_headers)
+    response = await client.get(f"/api/plans/{plan_id}/tasks/{task_id}/tutor-context", headers=other_headers)
     assert response.status_code == 404, response.text
 
     response = await client.get("/api/tutor/entrypoints", headers=owner_headers)
@@ -189,7 +191,7 @@ async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client
     assert entrypoints["today_task"] == {
         "status": "ready",
         "plan_id": plan_id,
-        "task_key": task_key,
+        "task_id": task_id,
     }
     assert entrypoints["errors"]["status"] == "ready"
     assert entrypoints["errors"]["error_ids"] == [error_item_id]
@@ -211,6 +213,7 @@ async def test_plan_alive_and_error_book(client):
         ErrorItem,
         KnowledgeBase,
         KnowledgeComponent,
+        MasteryLog,
         MasteryRecord,
         Plan,
         PlanAdjustment,
@@ -263,6 +266,28 @@ async def test_plan_alive_and_error_book(client):
         )
         session.add(q_quiz)
         await session.flush()
+        session.add(
+            MasteryRecord(
+                tenant_id=uid,
+                user_id=uid,
+                kc_id=kc_quiz.id,
+                p_mastery=0.3,
+                confidence=0.4,
+            )
+        )
+        for _ in range(2):
+            session.add(
+                MasteryLog(
+                    tenant_id=uid,
+                    user_id=uid,
+                    kc_id=kc_quiz.id,
+                    old_p=0.3,
+                    new_p=0.3,
+                    evidence_type="quiz_attempt",
+                    evidence_id=uuid.uuid4(),
+                    weight=1.0,
+                )
+            )
         plan_id, quiz_id = str(plan.id), str(quiz.id)
         kc_weak_id, kc_quiz_id = str(kc_weak.id), str(kc_quiz.id)
 
@@ -279,53 +304,55 @@ async def test_plan_alive_and_error_book(client):
         "effective_ratio": 0.0,
     }
     tasks = _all_tasks(detail["structure"])
-    assert all(t["done"] is False for t in tasks)
-    # task_key = 三层 0 基下标
-    keys = [t["task_key"] for t in tasks]
-    assert keys == [
-        "stage0.day0.task0",
-        "stage0.day1.task0",
-        "stage0.day2.task0",
-        "stage1.day0.task0",
-        "stage1.day0.task1",
-    ]
+    assert all(t["status"] == "pending" for t in tasks)
+    # 每个任务由服务端生成稳定 UUID
+    keys = [t["task_id"] for t in tasks]
+    assert all(uuid.UUID(key) for key in keys)
+    first_day_task = keys[1]
+    second_day_task = keys[2]
 
     r = await client.post(
-        f"/api/plans/{plan_id}/tasks/stage0.day1.task0/toggle", headers=headers, json={}
+        f"/api/plans/{plan_id}/tasks/{first_day_task}/toggle",
+        headers=headers,
+        json={"status": "done"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["done"] is True and r.json()["progress"]["done"] == 1
+    assert r.json()["status"] == "done" and r.json()["progress"]["done"] == 1
 
     r = await client.get(f"/api/plans/{plan_id}", headers=headers)
     detail = r.json()
     assert detail["progress"]["done"] == 1
-    done_flags = [t["done"] for t in _all_tasks(detail["structure"])]
-    assert done_flags == [False, True, False, False, False]
+    statuses = [t["status"] for t in _all_tasks(detail["structure"])]
+    assert statuses == ["pending", "done", "pending", "pending", "pending"]
 
     # 幂等置位 + 取反回滚
     r = await client.post(
-        f"/api/plans/{plan_id}/tasks/stage0.day1.task0/toggle",
+        f"/api/plans/{plan_id}/tasks/{first_day_task}/toggle",
         headers=headers,
-        json={"done": True},
+        json={"status": "done"},
     )
-    assert r.json()["done"] is True
+    assert r.json()["status"] == "done"
     r = await client.post(
-        f"/api/plans/{plan_id}/tasks/stage0.day2.task0/toggle",
+        f"/api/plans/{plan_id}/tasks/{second_day_task}/toggle",
         headers=headers,
         json={"status": "skipped"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "skipped"
-    assert r.json()["done"] is False
+    assert r.json()["status"] == "skipped"
     assert r.json()["progress"]["skipped"] == 1
     assert r.json()["progress"]["pending"] == 3
     r = await client.post(
-        f"/api/plans/{plan_id}/tasks/stage0.day1.task0/toggle", headers=headers, json={}
+        f"/api/plans/{plan_id}/tasks/{first_day_task}/toggle",
+        headers=headers,
+        json={"status": "pending"},
     )
-    assert r.json()["done"] is False and r.json()["progress"]["done"] == 0
-    # 不存在的 task_key → 404
+    assert r.json()["status"] == "pending" and r.json()["progress"]["done"] == 0
+    # 不存在的 task_id → 404
     r = await client.post(
-        f"/api/plans/{plan_id}/tasks/stage9.day9.task9/toggle", headers=headers, json={}
+        f"/api/plans/{plan_id}/tasks/{uuid.uuid4()}/toggle",
+        headers=headers,
+        json={"status": "done"},
     )
     assert r.status_code == 404
 
@@ -345,6 +372,19 @@ async def test_plan_alive_and_error_book(client):
                 confidence=0.8,
             )
         )
+        for _ in range(3):
+            session.add(
+                MasteryLog(
+                    tenant_id=uid,
+                    user_id=uid,
+                    kc_id=uuid.UUID(kc_weak_id),
+                    old_p=0.15,
+                    new_p=0.15,
+                    evidence_type="quiz_attempt",
+                    evidence_id=uuid.uuid4(),
+                    weight=1.0,
+                )
+            )
 
     r = await client.post(f"/api/plans/{plan_id}/adjust", headers=headers)
     assert r.status_code == 200, r.text
@@ -363,8 +403,8 @@ async def test_plan_alive_and_error_book(client):
     inserted_task = next(
         t for t in _all_tasks(detail["structure"]) if t["title"] == "补强: 洛必达法则"
     )
-    assert inserted_task["done"] is False and inserted_task["source"] == "adjust"
-    assert inserted_task["task_key"] == ins["task_key"] == "stage0.day0.task1"
+    assert inserted_task["status"] == "pending" and inserted_task["source"] == "adjust"
+    assert inserted_task["task_id"] == ins["task_id"]
 
     # 幂等: 该 KC 已被任务覆盖 → 不重复插
     r = await client.post(f"/api/plans/{plan_id}/adjust", headers=headers)

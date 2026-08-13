@@ -124,7 +124,7 @@ const FEATURES = [
   {
     icon: <IconAdaptive />,
     title: "薄弱点自适应练习",
-    desc: "答错即入学情画像，出题引擎围绕你的薄弱知识点精准加练。",
+    desc: "基于真实作答持续积累证据，证据充分后再识别薄弱点并精准加练。",
   },
   {
     icon: <IconForgetting />,

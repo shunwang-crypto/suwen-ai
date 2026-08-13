@@ -393,7 +393,7 @@ export function splitBareInlineMath(text: string): BareInlineMathSegment[] {
  * 这里绝不改写 API payload 或数据库字段。
  */
 export function normalizeMathDisplayText(text: string): string {
-  // MathText 与 MarkdownAnswer 必须共用同一套定界符纠错。否则 remark 链路
+  // MathText 与 ModelMarkdown 必须共用同一套定界符纠错。否则 remark 链路
   // 已修复的 `$$中文$$ 真公式$$` 在题库、测验、错题等纯文本界面仍会错配。
   const delimited = normalizeMarkdownMath(String(text ?? ""));
   const trimmed = delimited.trim();

@@ -1,15 +1,10 @@
-"""F3 "计划是活的": 任务勾选态 + 依据学情自动插入补强任务 (纯逻辑, 供路由与 services 共用)。
+"""F3 "计划是活的": 任务状态 + 依据学情自动插入补强任务。
 
-决策 D-F3-1 (任务完成态存哪): **内嵌进 structure_json 任务对象的 done 字段**, 不新增
-plan_progress 列。理由:
-1. 计划结构本身就是任务的唯一权威载体 —— 另起一列会产生"计划被调整插入了新任务、
-   进度列却按旧下标记账"的二源不一致;
-2. 不动 schema 即不需要 alembic 迁移, 与并行开发的其他模块零冲突;
-3. 代价只是每次勾选整块回写 JSONB —— 计划上限 90 天 × 数个任务, 体量以 KB 计, 可忽略。
+任务状态内嵌在 structure_json 任务对象的 ``status`` 字段中，计划结构是任务与进度的
+唯一权威载体。每次变更都深拷贝并整体回写 JSONB，避免原地修改无法被 ORM 识别。
 
-task_key 形如 "stage0.day3.task1": 三段分别是 stages / days / tasks 三层数组的
-**0 基下标** (不是 day 字段的天编号)。key 由服务端读取时生成并随任务下发,
-前端只回传不自造; 越界/不匹配一律 404, 不做模糊定位。
+每个任务使用服务端生成的 UUID task_id。结构位置只用于遍历，不能成为任务身份；
+前端只回传服务端下发的 UUID，非法或不匹配一律 404。
 
 注: JSONB 列未挂 MutableDict, 原地改 dict 不会被 SQLAlchemy 标记为脏 —— 本模块
 一律深拷贝后整体重新赋值 (structure_json = new_structure)。
@@ -18,21 +13,19 @@ task_key 形如 "stage0.day3.task1": 三段分别是 stages / days / tasks 三�
 from __future__ import annotations
 
 import copy
-import re
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
 from eduagents_core.logging import get_logger
-from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD, zone_label
+from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD, evidence_state, zone_label
 from sqlalchemy import select
 
-from .models import KnowledgeComponent, MasteryRecord, Plan, PlanAdjustment
+from .models import KnowledgeComponent, MasteryLog, MasteryRecord, Plan, PlanAdjustment
 
 log = get_logger("plan_adjust")
 
-TASK_KEY_RE = re.compile(r"^stage(\d+)\.day(\d+)\.task(\d+)$")
 TASK_STATUSES: tuple[str, ...] = ("pending", "done", "skipped")
 PLAN_TASK_SOURCE_ACTIONS: dict[str, set[str]] = {
     "quiz_attempt": {"practice", "mixed"},
@@ -56,15 +49,19 @@ REINFORCE_MINUTES = 30  # 补强任务时长 (固定, 与 F3-A1 日预算校验�
 MAX_INSERTS_PER_ADJUST = 5  # 单次调整最多插入的补强任务数 (防一次灌满计划)
 
 
-def make_task_key(stage_idx: int, day_idx: int, task_idx: int) -> str:
-    return f"stage{stage_idx}.day{day_idx}.task{task_idx}"
+def new_task_id() -> str:
+    """Create the only task identity format accepted by the plan service."""
+    return str(uuid.uuid4())
 
 
-def parse_task_key(task_key: str) -> tuple[int, int, int] | None:
-    match = TASK_KEY_RE.match(task_key or "")
-    if match is None:
+def task_identity(task: dict) -> str | None:
+    value = task.get("task_id")
+    if not isinstance(value, str):
         return None
-    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    try:
+        return str(uuid.UUID(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _stages(structure: dict | None) -> list:
@@ -88,24 +85,24 @@ def iter_tasks(structure: dict | None):
 
 
 def task_status(task: dict) -> str:
-    """Return a normalized task status, including legacy ``done`` plans."""
+    """Return the persisted task status; every stored task has an explicit status."""
     raw = task.get("status")
     if isinstance(raw, str) and raw in TASK_STATUSES:
         return raw
-    return "done" if task.get("done") is True else "pending"
+    return "pending"
 
 
 def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -> dict:
     """Return the server-owned day buckets used by plan detail and today.
 
     The plan clock is a calendar clock: the creation date is day 1.  Tasks
-    whose legacy structure has no usable ``day`` are deliberately put in the
+    whose malformed structure has no usable ``day`` are deliberately put in the
     overdue bucket, never silently guessed as today's task.  Once the plan is
     past its last numbered day, every unfinished numbered task is overdue;
     future-looking schedule entries must not be promoted to today.
 
-    Bucket values are stable task keys.  The task payload itself remains in
-    ``structure`` so old plans continue to be readable without a migration.
+    Bucket values are stable task UUIDs. The task payload itself remains in
+    ``structure`` and carries the identity used by every downstream action.
     """
     current_day = max(1, (today - created).days + 1)
     numbered_days = [
@@ -117,17 +114,19 @@ def plan_schedule_snapshot(created: date, structure: dict | None, today: date) -
     today_tasks: list[str] = []
     overdue_tasks: list[str] = []
     upcoming_tasks: list[str] = []
-    for stage_idx, day_idx, task_idx, _stage, day, _task in iter_tasks(structure):
-        task_key = make_task_key(stage_idx, day_idx, task_idx)
+    for _stage_idx, _day_idx, _task_idx, _stage, day, task in iter_tasks(structure):
+        current_task_id = task_identity(task)
+        if current_task_id is None:
+            continue
         day_number = day.get("day")
         if not isinstance(day_number, int) or isinstance(day_number, bool) or day_number <= 0:
-            overdue_tasks.append(task_key)
+            overdue_tasks.append(current_task_id)
         elif past_schedule or day_number < current_day:
-            overdue_tasks.append(task_key)
+            overdue_tasks.append(current_task_id)
         elif day_number == current_day:
-            today_tasks.append(task_key)
+            today_tasks.append(current_task_id)
         else:
-            upcoming_tasks.append(task_key)
+            upcoming_tasks.append(current_task_id)
     return {
         "current_day": current_day,
         "today_tasks": today_tasks,
@@ -140,8 +139,9 @@ def compute_task_locks(
     structure: dict | None,
     mastery_by_kc: dict[str, float] | None,
     prereq_by_kc: dict[str, list[str]] | None,
+    evidence_state_by_kc: dict[str, str] | None = None,
 ) -> dict[str, dict]:
-    """任务 -> 先修未达标信息 (task_key -> {"blockers": [...]})。纯函数, 零 IO。
+    """任务 -> 先修未达标信息 (task_id -> {"blockers": [...]})。纯函数, 零 IO。
 
     锁定是**派生态, 不落库**: 它依赖实时 p_mastery, 掌握度一变就该自动解锁。写进
     structure_json 会立刻陈旧, 还会污染 plan_progress 的分母口径 (locked 任务仍是
@@ -154,8 +154,12 @@ def compute_task_locks(
     """
     if not mastery_by_kc or not prereq_by_kc:
         return {}
+    # The explicit map is required for a lock decision. A caller that has no
+    # evidence snapshot must not infer observed weakness from p_mastery.
+    if evidence_state_by_kc is None:
+        return {}
     locks: dict[str, dict] = {}
-    for si, di, ti, _stage, _day, task in iter_tasks(structure):
+    for _si, _di, _ti, _stage, _day, task in iter_tasks(structure):
         if task_status(task) != "pending":
             continue
         blockers: list[dict] = []
@@ -165,12 +169,23 @@ def compute_task_locks(
                 continue
             for prereq in prereq_by_kc.get(normalize_kc_name(name), ()):
                 score = mastery_by_kc.get(prereq)
-                if score is None or score >= REINFORCE_THRESHOLD or prereq in seen:
+                if (
+                    score is None
+                    or score >= REINFORCE_THRESHOLD
+                    or prereq in seen
+                    or evidence_state_by_kc.get(prereq) != "observed"
+                ):
                     continue
                 seen.add(prereq)
                 blockers.append({"kc_name": prereq, "zone": zone_label(score)})
+        current_task_id = task_identity(task)
+        if current_task_id is None:
+            # Structure creation is the only place that should produce plan
+            # tasks. Read-side helpers still expose normalized state for a
+            # malformed in-memory object without inventing an identity.
+            continue
         if blockers:
-            locks[make_task_key(si, di, ti)] = {"blockers": blockers}
+            locks[current_task_id] = {"blockers": blockers}
     return locks
 
 
@@ -179,22 +194,20 @@ def enrich_structure(
     resources: dict[str, dict] | None = None,
     locks: dict[str, dict] | None = None,
 ) -> dict:
-    """读取侧加工 task_key/status/done and a same-plan resource object.
+    """读取侧加工 task_id/status and a same-plan resource object.
 
-    Missing resource ids are represented as ``resource: None`` so legacy
-    plans remain readable without inventing a resource association.
+    Missing resource ids are represented as ``resource: None``.
     ``locked`` 是派生展示态 (见 compute_task_locks), 不进 status 也不落库。
     """
     out = copy.deepcopy(structure or {})
     if not isinstance(out, dict):
         return {"stages": []}
-    for si, di, ti, _stage, _day, task in iter_tasks(out):
-        task_key = make_task_key(si, di, ti)
-        task["task_key"] = task_key
+    for _si, _di, _ti, _stage, _day, task in iter_tasks(out):
+        current_task_id = task_identity(task)
+        task["task_id"] = current_task_id
         status = task_status(task)
         task["status"] = status
-        task["done"] = status == "done"
-        lock = (locks or {}).get(task_key)
+        lock = (locks or {}).get(current_task_id)
         task["locked"] = bool(lock)
         task["lock_blockers"] = lock["blockers"] if lock else []
         resource_id = task.get("resource_id")
@@ -204,7 +217,7 @@ def enrich_structure(
 
 
 def plan_progress(structure: dict | None) -> dict:
-    """Return legacy completion and skip-aware effective progress."""
+    """Return completion and skip-aware effective progress."""
     total = 0
     done = 0
     skipped = 0
@@ -229,40 +242,38 @@ def plan_progress(structure: dict | None) -> dict:
 
 
 def set_task_status(
-    structure: dict | None, task_key: str, status: str | None
+    structure: dict | None, task_id: str, status: str
 ) -> tuple[dict, str]:
-    """Set a task to pending/done/skipped and return an immutable copy.
-
-    ``None`` preserves the legacy toggle behavior: pending becomes done, while
-    done or skipped returns to pending.  Explicit values are idempotent.
-    """
-    if status is not None and status not in TASK_STATUSES:
+    """Set a task to pending/done/skipped and return an immutable copy."""
+    if status not in TASK_STATUSES:
         raise ValueError("invalid task status")
-    parsed = parse_task_key(task_key)
-    if parsed is None:
-        raise KeyError(task_key)
-    si, di, ti = parsed
+    try:
+        normalized_id = str(uuid.UUID(task_id))
+    except (TypeError, ValueError):
+        raise KeyError(task_id) from None
     new_structure = copy.deepcopy(structure or {})
-    for csi, cdi, cti, _stage, _day, task in iter_tasks(new_structure):
-        if (csi, cdi, cti) != (si, di, ti):
+    for _csi, _cdi, _cti, _stage, _day, task in iter_tasks(new_structure):
+        if task_id_value := task_identity(task):
+            if task_id_value != normalized_id:
+                continue
+        else:
             continue
-        current = task_status(task)
-        final = status or ("done" if current == "pending" else "pending")
+        final = status
         task["status"] = final
-        task["done"] = final == "done"
         if final != "done":
             # A reopened/skipped task no longer has valid completion evidence.
             task.pop("completion", None)
         return new_structure, final
-    raise KeyError(task_key)
+    raise KeyError(task_id)
 
 
-def _task_for_key(structure: dict | None, task_key: str) -> dict | None:
-    parsed = parse_task_key(task_key)
-    if parsed is None:
+def _task_for_id(structure: dict | None, requested_id: str) -> dict | None:
+    try:
+        normalized_id = str(uuid.UUID(requested_id))
+    except (TypeError, ValueError):
         return None
-    for si, di, ti, _stage, _day, task in iter_tasks(structure):
-        if (si, di, ti) == parsed:
+    for _si, _di, _ti, _stage, _day, task in iter_tasks(structure):
+        if task_identity(task) == normalized_id:
             return task
     return None
 
@@ -284,7 +295,7 @@ async def validate_plan_task_attribution(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     plan_id: uuid.UUID,
-    task_key: str,
+    task_id: str,
     source_type: str,
 ) -> None:
     """Validate an attribution without mutating the plan.
@@ -302,7 +313,9 @@ async def validate_plan_task_attribution(
     )
     if plan is None:
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
-    task = _task_for_key(plan.structure_json, task_key)
+    if plan.status != "active":
+        raise PlanTaskAttributionError("PLAN_NOT_ACTIVE")
+    task = _task_for_id(plan.structure_json, task_id)
     if task is None:
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
     _validate_completion_source(task, source_type)
@@ -314,7 +327,7 @@ async def complete_plan_task(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     plan_id: uuid.UUID,
-    task_key: str,
+    task_id: str,
     source_type: str,
     source_id: str,
     completed_at: datetime | None = None,
@@ -336,25 +349,25 @@ async def complete_plan_task(
     )
     if plan is None:
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
-    task = _task_for_key(plan.structure_json, task_key)
+    task = _task_for_id(plan.structure_json, task_id)
     if task is None:
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
-    _validate_completion_source(task, source_type)
-
     previous = task.get("completion") if isinstance(task.get("completion"), dict) else None
     if task_status(task) == "done" and previous:
         return {
-            "task_key": task_key,
+            "task_id": task_id,
             "status": "done",
-            "done": True,
             "completed": True,
             "changed": False,
             "completion": previous,
             "progress": plan_progress(plan.structure_json),
         }
+    if plan.status != "active":
+        raise PlanTaskAttributionError("PLAN_NOT_ACTIVE")
+    _validate_completion_source(task, source_type)
 
     new_structure = copy.deepcopy(plan.structure_json or {})
-    target = _task_for_key(new_structure, task_key)
+    target = _task_for_id(new_structure, task_id)
     if target is None:  # Defensive: structure changed between copy and lookup.
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
     completion = {
@@ -363,14 +376,15 @@ async def complete_plan_task(
         "completed_at": (completed_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
     }
     target["status"] = "done"
-    target["done"] = True
     target["completion"] = completion
     plan.structure_json = new_structure
+    progress = plan_progress(new_structure)
+    if progress["pending"] == 0 and progress["total"] > 0:
+        plan.status = "completed"
     await session.flush()
     return {
-        "task_key": task_key,
+        "task_id": task_id,
         "status": "done",
-        "done": True,
         "completed": True,
         "changed": True,
         "completion": completion,
@@ -421,29 +435,46 @@ def _day_number(structure: dict, stage_idx: int, day_idx: int) -> int:
 
 
 async def _weak_kcs(session, user_id: uuid.UUID) -> list[tuple[str, str, float]]:
-    """(kc_id, kc_name, p_mastery) 列表, p_mastery < 阈值, 由弱到强。"""
+    """Only observed, below-threshold KC rows, ordered from weak to strong."""
+    from sqlalchemy import func
+
     rows = (
         await session.execute(
             select(
                 MasteryRecord.kc_id,
                 KnowledgeComponent.canonical_name,
                 MasteryRecord.p_mastery,
+                func.count(MasteryLog.id),
             )
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
+            .join(
+                MasteryLog,
+                (MasteryLog.user_id == MasteryRecord.user_id)
+                & (MasteryLog.kc_id == MasteryRecord.kc_id),
+            )
             .where(
                 MasteryRecord.user_id == user_id,
                 MasteryRecord.p_mastery < REINFORCE_THRESHOLD,
             )
+            .group_by(MasteryRecord.kc_id, KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
             .order_by(MasteryRecord.p_mastery.asc())
         )
     ).all()
-    return [(str(kc_id), name, float(p)) for kc_id, name, p in rows]
+    return [
+        (str(kc_id), name, float(p))
+        for kc_id, name, p, count in rows
+        if evidence_state(int(count)) == "observed"
+    ]
 
 
-async def latest_plan(session, user_id: uuid.UUID) -> Plan | None:
-    """当前活跃计划 = 该用户最近创建的一个 (M4 暂无 status 列, 以最新为准)。"""
+async def active_plan(session, user_id: uuid.UUID) -> Plan | None:
+    """Return the explicitly active plan; creation time is not a lifecycle rule."""
     return await session.scalar(
-        select(Plan).where(Plan.user_id == user_id).order_by(Plan.created_at.desc()).limit(1)
+        select(Plan).where(
+            Plan.tenant_id == user_id,
+            Plan.user_id == user_id,
+            Plan.status == "active",
+        )
     )
 
 
@@ -494,6 +525,7 @@ async def adjust_plan(
         stage_idx, day_idx = slots[i % len(slots)]
         tasks = new_structure["stages"][stage_idx]["days"][day_idx].setdefault("tasks", [])
         task = {
+            "task_id": new_task_id(),
             "title": f"补强: {name}",
             "objective": f"补强{name}，把掌握度从当前薄弱状态提升到可以独立应用",
             "instructions": [
@@ -508,14 +540,13 @@ async def adjust_plan(
             "action_type": "practice",
             "practice_count": 3,
             "difficulty": "mid",
-            "done": False,
             "status": "pending",
             "source": "adjust",  # 前端据此高亮"本次插入"
         }
         tasks.append(task)
         inserted.append(
             {
-                "task_key": make_task_key(stage_idx, day_idx, len(tasks) - 1),
+                "task_id": task["task_id"],
                 "day": _day_number(new_structure, stage_idx, day_idx),
                 "stage_name": new_structure["stages"][stage_idx].get("name", ""),
                 "title": task["title"],
@@ -567,7 +598,7 @@ async def adjust_on_low_score(ctx, accuracy: float) -> dict | None:
 
     try:
         async with tenant_session(ctx.tenant_id) as session:
-            plan = await latest_plan(session, ctx.user_id)
+            plan = await active_plan(session, ctx.user_id)
             if plan is None:
                 return None
             result = await adjust_plan(

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
   Card,
   EmptyState,
@@ -22,6 +23,7 @@ import {
 } from "@/components/common";
 import { QuestionAnswer, QuestionMeta } from "@/components/quiz/question-answer";
 import { Celebrate } from "@/components/ui/celebrate";
+import { ErrorLibrary } from "@/components/reviews/error-library";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {
@@ -115,7 +117,7 @@ export default function ReviewsPage() {
   );
   const urlParams = new URLSearchParams(search);
   const planId = urlParams.get("plan_id") ?? "";
-  const taskKey = urlParams.get("task_key") ?? "";
+  const taskId = urlParams.get("task_id") ?? "";
   const [data, setData] = useState<ReviewTodayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +127,10 @@ export default function ReviewsPage() {
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [openExplanation, setOpenExplanation] = useState<Record<string, boolean>>({});
+  const [section, setSection] = useState<"due" | "errors">(() => {
+    if (typeof window === "undefined") return "due";
+    return new URLSearchParams(window.location.search).get("view") === "errors" ? "errors" : "due";
+  });
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -183,7 +189,7 @@ export default function ReviewsPage() {
           headers: { "Idempotency-Key": st.idempotencyKey },
           body: {
             response: st.value,
-            ...(planId && taskKey ? { plan_id: planId, task_key: taskKey } : {}),
+            ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
           },
         },
       );
@@ -230,8 +236,24 @@ export default function ReviewsPage() {
   const finishedCount = Object.values(states).filter((state) => state.result).length;
   const correctCount = Object.values(states).filter((state) => state.result?.correct).length;
 
+  if (section === "errors") {
+    return (
+      <div>
+        <div className="mx-auto flex w-full max-w-[1100px] gap-1 px-5 pt-5 sm:px-7 lg:px-8 lg:pt-6" role="tablist" aria-label="复习中心视图">
+          <button type="button" role="tab" aria-selected={false} onClick={() => { setSection("due"); window.history.replaceState({}, "", "/reviews"); }} className="rounded-[8px] px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-white">到期复习</button>
+          <button type="button" role="tab" aria-selected className="rounded-[8px] bg-ink px-4 py-2 text-body-sm font-medium text-white">错题管理</button>
+        </div>
+        <ErrorLibrary />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[980px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
+      <div className="flex gap-1" role="tablist" aria-label="复习中心视图">
+        <button type="button" role="tab" aria-selected className="rounded-[8px] bg-ink px-4 py-2 text-body-sm font-medium text-white">到期复习</button>
+        <button type="button" role="tab" aria-selected={false} onClick={() => { setSection("errors"); window.history.replaceState({}, "", "/reviews?view=errors"); }} className="rounded-[8px] px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-white">错题管理</button>
+      </div>
       <PageHeader
         title="今日复习"
         subtitle={
@@ -284,7 +306,7 @@ export default function ReviewsPage() {
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             <Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">返回今日</Link>
-            <Link href="/errors" className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题本</Link>
+            <button type="button" onClick={() => setSection("errors")} className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题</button>
             {data.items.find((item) => states[item.error_item_id]?.result?.correct === false) && (
               <Link href={`/tutor?error_id=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.error_item_id ?? "")}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2 text-body-sm font-medium text-brand-700">辅导未掌握题目</Link>
             )}
@@ -451,7 +473,7 @@ export default function ReviewsPage() {
                         {openExplanation[item.error_item_id] && (
                           <div className="space-y-2 border-t border-line px-3 py-3 text-caption leading-5 text-slate-600">
                             <p><span className="font-medium text-slate-500">参考答案：</span><MathText text={st.result.answer} /></p>
-                            {st.result.explanation && <p><span className="font-medium text-slate-500">解析：</span><MathText text={st.result.explanation} /></p>}
+                            {st.result.explanation && <div><p className="font-medium text-slate-500">解析：</p><ModelMarkdown text={st.result.explanation} /></div>}
                           </div>
                         )}
                       </div>

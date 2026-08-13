@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -229,6 +230,7 @@ function MathSourceField({
   disabled = false,
   required = false,
   open = false,
+  markdown = false,
 }: {
   label: string;
   value: string;
@@ -237,12 +239,13 @@ function MathSourceField({
   disabled?: boolean;
   required?: boolean;
   open?: boolean;
+  markdown?: boolean;
 }) {
   return (
     <div className="mt-4">
       <p className="text-caption font-medium text-ink-secondary">{label} {required && <em className="not-italic text-danger-600">*</em>}</p>
       <div className="mt-1 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-body-sm leading-6 text-ink">
-        <MathText text={value || `（尚未填写${label}）`} />
+        {markdown ? <ModelMarkdown text={value || `（尚未填写${label}）`} /> : <MathText text={value || `（尚未填写${label}）`} />}
       </div>
       <details open={open} className="mt-1.5 rounded-[7px] border border-line bg-white">
         <summary className="cursor-pointer px-2.5 py-1.5 text-body-sm text-ink-muted">编辑{label}/公式源码</summary>
@@ -665,7 +668,7 @@ export function ResourceReview({
                   <MathSourceField label="题干" value={draft.stem} required open={fieldNeedsReview(current, "stem")} onChange={(value) => updateDraft("stem", value)} rows={5} />
                   {(draft.type === "single" || draft.type === "multi") && <div className="mt-4"><p className="text-body-sm font-medium text-ink-secondary">选项（每行一个）</p><div className="mt-1 space-y-1 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-body-sm leading-6 text-ink">{draft.options.length > 0 ? draft.options.map((option, index) => <div key={index} className="flex gap-2"><span className="text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div>) : <span className="text-ink-muted">（暂无选项）</span>}</div><details open={fieldNeedsReview(current, "options")} className="mt-1.5 rounded-[7px] border border-line bg-white"><summary className="cursor-pointer px-2.5 py-1.5 text-body-sm text-ink-muted">编辑选项/公式源码</summary><textarea aria-label="选项（每行一个）" disabled={semanticLocked || answerHidden} rows={4} value={draft.options.join("\n")} onChange={(event) => updateDraft("options", event.target.value.split("\n"))} className={`${fieldClass} mt-0 resize-y rounded-t-none`} /></details></div>}
                   <div className="mt-4 grid gap-4 sm:grid-cols-2"><label><span className="text-caption font-medium text-ink-secondary">学生原答案</span><textarea aria-label="学生原答案" rows={3} value={draft.detected_student_answer} onChange={(event) => updateDraft("detected_student_answer", event.target.value)} className={`${fieldClass} resize-y`} /></label><MathSourceField label="参考答案" value={draft.detected_reference_answer} open={fieldNeedsReview(current, "answer")} disabled={semanticLocked || answerHidden} onChange={(value) => { updateDraft("detected_reference_answer", value); updateDraft("answer", value); }} rows={3} /></div>
-                  <details open={fieldNeedsReview(current, "kc_names") || fieldNeedsReview(current, "difficulty") || fieldNeedsReview(current, "points") || fieldNeedsReview(current, "explanation")} className="mt-4 rounded-[9px] border border-line bg-white"><summary className="cursor-pointer px-3 py-2 text-body-sm font-medium text-ink-secondary">修正识别（知识点、难度、分值、解析）</summary><div className="px-3 pb-3"><div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_160px]"><label><span className="text-body-sm font-medium text-ink-secondary">知识点（最多 3 个）</span><input disabled={semanticLocked || answerHidden} value={draft.kc_names.join("，")} onChange={(event) => updateDraft("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：二次函数，最值" className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">分值</span><input type="number" min={0} step="0.5" value={draft.points} onChange={(event) => updateDraft("points", event.target.value)} className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">难度</span><select value={draft.difficulty} onChange={(event) => updateDraft("difficulty", event.target.value)} className={fieldClass}>{DIFFICULTIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><MathSourceField label="解析" value={draft.explanation} onChange={(value) => updateDraft("explanation", value)} open={fieldNeedsReview(current, "explanation")} /></div></details>
+                  <details open={fieldNeedsReview(current, "kc_names") || fieldNeedsReview(current, "difficulty") || fieldNeedsReview(current, "points") || fieldNeedsReview(current, "explanation")} className="mt-4 rounded-[9px] border border-line bg-white"><summary className="cursor-pointer px-3 py-2 text-body-sm font-medium text-ink-secondary">修正识别（知识点、难度、分值、解析）</summary><div className="px-3 pb-3"><div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_160px]"><label><span className="text-body-sm font-medium text-ink-secondary">知识点（最多 3 个）</span><input disabled={semanticLocked || answerHidden} value={draft.kc_names.join("，")} onChange={(event) => updateDraft("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：二次函数，最值" className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">分值</span><input type="number" min={0} step="0.5" value={draft.points} onChange={(event) => updateDraft("points", event.target.value)} className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">难度</span><select value={draft.difficulty} onChange={(event) => updateDraft("difficulty", event.target.value)} className={fieldClass}>{DIFFICULTIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><MathSourceField label="解析" value={draft.explanation} markdown onChange={(value) => updateDraft("explanation", value)} open={fieldNeedsReview(current, "explanation")} /></div></details>
                   <div className="mt-4 rounded-[9px] bg-surface-muted px-3 py-2.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">核验规则：</span>只有点击“核验题目”后，题目才能进入真实作答；是否属于错题必须单独勾选。待校对和已拒绝题不会影响学习数据。{semanticLocked && <span className="mt-1 block text-warning-700">这道题已经产生 FSRS 或掌握度证据，题型、选项、参考答案和知识点已锁定。</span>}{answerHidden && <span className="mt-1 block text-warning-700">当前存在未完成作答记录，参考答案暂时隐藏；请先完成或关闭该草稿记录。</span>}</div>
                   {current.verification_status === "verified" && <div className={`mt-3 flex items-center gap-2 rounded-[8px] px-3 py-2 text-body-sm ${selectedErrors.has(current.id) ? "bg-warning-50 text-warning-700" : "bg-success-50 text-success-700"}`}><input type="checkbox" checked={selectedErrors.has(current.id)} onChange={(event) => setSelectedErrors((previous) => { const next = new Set(previous); if (event.target.checked) next.add(current.id); else next.delete(current.id); return next; })} className="h-3.5 w-3.5 accent-brand-700" />{selectedErrors.has(current.id) ? "已选择：这是一道错题" : "这道题暂不加入错题本"}</div>}
                 </>

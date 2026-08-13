@@ -1,12 +1,12 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { MarkdownAnswer } from "@/components/chat/markdown-answer";
+import { ModelMarkdown } from "@/components/chat/model-markdown";
 
-describe("MarkdownAnswer math compatibility", () => {
+describe("ModelMarkdown math compatibility", () => {
   it("renders parenthesized bare TeX in natural-language answers", () => {
     const { container } = render(
-      <MarkdownAnswer text={"如果极限是 (0/0) 或 (\\infty/\\infty) 这种未定式"} />,
+      <ModelMarkdown text={"如果极限是 (0/0) 或 (\\infty/\\infty) 这种未定式"} />,
     );
 
     expect(container.querySelectorAll(".katex")).toHaveLength(1);
@@ -16,7 +16,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("does not rewrap existing math or interpret inline and fenced code", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "已有 $\\infty$ 公式。",
           "",
@@ -36,7 +36,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("does not interpret TeX-like text inside links", () => {
     const { container } = render(
-      <MarkdownAnswer text={"[查看 (\\infty/\\infty)](https://example.com)"} />,
+      <ModelMarkdown text={"[查看 (\\infty/\\infty)](https://example.com)"} />,
     );
 
     expect(container.querySelector(".katex")).not.toBeInTheDocument();
@@ -45,7 +45,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("renders TeX bracket and paren delimiters instead of showing raw brackets", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={"先看：\\[\\lim_{x \\to 0}\\frac{\\sin x}{x}\\]\n再看 \\(x \\to 0\\)。"}
       />,
     );
@@ -57,7 +57,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("recovers inline double dollars and mismatched delimiters without swallowing prose", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "求导：$\\lim_{x \\to 0} \\frac{\\sin x}{x}$$ 这是第一个极限。",
           "另一个是 $$\\lim_{x \\to 0} \\frac{2\\sin x-\\sin 2x}{x-\\sin x}$$，代入 $x=0$。",
@@ -73,7 +73,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("keeps citations clickable around multiple normalized formulas", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "$$\\lim_{x \\to 0} \\frac{\\sin x}{x}=1$$ 这是第一个重要极限 [1]。",
           "另一个是 $$\\lim_{x \\to 0} \\frac{2\\sin x-\\sin 2x}{x-\\sin x}$$ [2]。",
@@ -92,7 +92,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("renders standalone bare formulas and common KaTeX environments", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "希腊字母：",
           "\\alpha+\\beta=\\gamma",
@@ -114,7 +114,7 @@ describe("MarkdownAnswer math compatibility", () => {
   });
 
   it("keeps invalid TeX readable without a red error node", () => {
-    const { container } = render(<MarkdownAnswer text={"无效公式 $\\notARealCommand{x}$ 后文"} />);
+    const { container } = render(<ModelMarkdown text={"无效公式 $\\notARealCommand{x}$ 后文"} />);
 
     expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
     expect(container).toHaveTextContent("\\notARealCommand{x}");
@@ -123,7 +123,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("prevalidates TeX bracket delimiters and standalone environments", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={"无效 \\[\\notARealCommand{x}\\] 与 \\begin{align}\\bad{x}\\end{align} 后文"}
       />,
     );
@@ -135,7 +135,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("keeps currency, code, tables, and formulas distinct", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "价格是 $5，不是公式；`$x$` 是代码。",
           "",
@@ -154,7 +154,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("recovers the exact Chinese double-dollar delimiter collision", () => {
     const { container } = render(
-      <MarkdownAnswer
+      <ModelMarkdown
         text={[
           "$ = \\lim_{x \\to 0} \\frac{(\\sin x)'}{x'} = 1$",
           "$$ 这就是两个重要极限之一，洛必达法则给出了验证 [1]。另一个例子：$$ \\lim_{x \\to 0} \\frac{2\\sin x-\\sin 2x}{x-\\sin x}$$ 代入 $x=0$。",
@@ -172,7 +172,7 @@ describe("MarkdownAnswer math compatibility", () => {
   });
 
   it("renders a valid formula that is still unclosed at the end of the final response", () => {
-    const { container } = render(<MarkdownAnswer text={"最终结果是 $\\frac{1}{2}"} />);
+    const { container } = render(<ModelMarkdown text={"最终结果是 $\\frac{1}{2}"} />);
 
     expect(container.querySelectorAll(".katex")).toHaveLength(1);
     expect(container.querySelector(".katex-error")).not.toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("MarkdownAnswer math compatibility", () => {
 
   it("renders an unambiguous unclosed final display formula", () => {
     const { container } = render(
-      <MarkdownAnswer text={"最终推导：$$\\sum_{n=1}^{\\infty}\\frac{1}{n^2}"} />,
+      <ModelMarkdown text={"最终推导：$$\\sum_{n=1}^{\\infty}\\frac{1}{n^2}"} />,
     );
 
     expect(container.querySelectorAll(".katex")).toHaveLength(1);

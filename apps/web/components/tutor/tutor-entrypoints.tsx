@@ -5,7 +5,7 @@ import type { TutorEntrypointsOut } from "@/lib/types";
 export function tutorTaskHref(
   task: Extract<TutorEntrypointsOut["today_task"], { status: "ready" }>,
 ): string {
-  return `/tutor?plan_id=${encodeURIComponent(task.plan_id)}&task_key=${encodeURIComponent(task.task_key)}`;
+  return `/tutor?plan_id=${encodeURIComponent(task.plan_id)}&task_id=${encodeURIComponent(task.task_id)}`;
 }
 
 export function tutorErrorHref(errorId: string): string {
