@@ -31,6 +31,7 @@ from .routers import (
     billing,
     chat,
     chat_attachments,
+    chat_sessions,
     error_imports,
     evals,
     feedback,
@@ -197,6 +198,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(chat.router)
+    app.include_router(chat_sessions.router)
     app.include_router(chat_attachments.router)
     app.include_router(kb.router)
     app.include_router(orgs.router)
