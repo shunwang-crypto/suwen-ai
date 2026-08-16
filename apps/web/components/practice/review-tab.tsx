@@ -5,9 +5,10 @@
 // 卡片附 FSRS 遗忘快照（P2-7「再不复习，3 天后预计保持率 N%」，<90% 才显示）。
 
 import Link from "next/link";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
+import { useFocusSession } from "@/components/focus/focus-shell";
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
   Card,
@@ -109,7 +110,8 @@ function createItemState(): ItemState {
   };
 }
 
-export function ReviewTab() {
+export function ReviewTab({ focus }: { focus?: { from: string } }) {
+  const focusApi = useFocusSession();
   const search = useSyncExternalStore(
     emptySubscribe,
     () => window.location.search,
@@ -211,8 +213,27 @@ export function ReviewTab() {
   const finishedCount = Object.values(states).filter((state) => state.result).length;
   const correctCount = Object.values(states).filter((state) => state.result?.correct).length;
 
+  // 专注壳内：上报进度（顶栏进度条）；退出按钮走既有「暂时退出」确认模态。
+  useEffect(() => {
+    if (!focusApi || !data) return;
+    if (completed) {
+      focusApi.setProgress({ label: `今日复习完成 · 共 ${data.items.length} 题`, ratio: 1 });
+      return;
+    }
+    focusApi.setProgress({
+      label: `第 ${Math.min(currentIndex + 1, data.items.length)} 题 / 共 ${data.items.length}`,
+      ratio: data.items.length ? (currentIndex + 1) / data.items.length : 0,
+    });
+  }, [focusApi, data, currentIndex, completed]);
+
+  useEffect(() => {
+    if (!focusApi) return;
+    focusApi.registerExit(() => setShowExitConfirm(true));
+    return () => focusApi.registerExit(null);
+  }, [focusApi]);
+
   return (
-    <div className="mx-auto w-full max-w-[980px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
+    <div className={focus ? "space-y-4" : "mx-auto w-full max-w-[980px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6"}>
       <PageHeader
         title="今日复习"
         subtitle={
@@ -264,7 +285,7 @@ export function ReviewTab() {
             完成 {finishedCount} 题，答对 {correctCount} 题；记忆进度和学习画像已按真实作答更新。
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
-            <Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">返回今日</Link>
+            <Link href={focus ? focus.from : "/today"} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">{focus ? "返回" : "返回今日"}</Link>
             <Link href="/practice?tab=errors" className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题</Link>
             {data.items.find((item) => states[item.error_item_id]?.result?.correct === false) && (
               <Link href={`/tutor?error_id=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.error_item_id ?? "")}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2 text-body-sm font-medium text-brand-700">辅导未掌握题目</Link>
@@ -279,8 +300,12 @@ export function ReviewTab() {
         />
       ) : (
         <>
-        <div className="flex flex-wrap items-center justify-between gap-3 py-1 text-body-sm"><p><strong className="text-ink">第 {currentIndex + 1} 题</strong><span className="ml-3 text-ink-muted">今日 {data.items.length} 题 · 已完成 {finishedCount} · 剩余 {Math.max(0, data.items.length - finishedCount)}</span></p><button type="button" onClick={() => setShowExitConfirm(true)} className="text-ink-secondary hover:text-brand-700">← 暂时退出</button></div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-line" aria-label={`复习进度 ${currentIndex + 1}/${data.items.length}`}><div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${((currentIndex + 1) / data.items.length) * 100}%` }} /></div>
+        {!focus && (
+          <div className="flex flex-wrap items-center justify-between gap-3 py-1 text-body-sm"><p><strong className="text-ink">第 {currentIndex + 1} 题</strong><span className="ml-3 text-ink-muted">今日 {data.items.length} 题 · 已完成 {finishedCount} · 剩余 {Math.max(0, data.items.length - finishedCount)}</span></p><button type="button" onClick={() => setShowExitConfirm(true)} className="text-ink-secondary hover:text-brand-700">← 暂时退出</button></div>
+        )}
+        {!focus && (
+          <div className="h-1.5 overflow-hidden rounded-full bg-line" aria-label={`复习进度 ${currentIndex + 1}/${data.items.length}`}><div className="h-full rounded-full bg-brand-600 transition-[width]" style={{ width: `${((currentIndex + 1) / data.items.length) * 100}%` }} /></div>
+        )}
         <ul className="space-y-4">
           {(data.items as ReviewItemWithRetention[]).slice(currentIndex, currentIndex + 1).map((item) => {
             const st = states[item.error_item_id] ?? createItemState();
@@ -487,7 +512,7 @@ export function ReviewTab() {
           <section role="dialog" aria-modal="true" aria-labelledby="review-exit-title" className="relative w-full max-w-[400px] rounded-[14px] border border-line bg-white p-5 shadow-floating">
             <h2 id="review-exit-title" className="text-[16px] font-semibold text-ink">暂时退出复习？</h2>
             <p className="mt-2 text-body-sm leading-5 text-ink-muted">已提交的答案和记忆进度会保留，未完成题目仍留在复习队列。</p>
-            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">继续复习</button><Link href="/today" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">确认退出</Link></div>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">继续复习</button><Link href={focus ? focus.from : "/today"} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">确认退出</Link></div>
           </section>
         </div>
       )}

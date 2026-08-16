@@ -15,7 +15,8 @@ import {
 } from "@/lib/use-hydrated-local-storage";
 
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot", "/reset"];
-const BARE_AUTHED_PATHS = ["/onboarding"];
+/** 脱离 AppShell 的登录后路由（可配置列表）：onboarding 引导与专注会话全屏壳。 */
+const BARE_AUTHED_PATHS = ["/onboarding", "/practice/session"];
 const NAV_COLLAPSED_KEY = "suwen:navigation-collapsed";
 
 interface NavItem {

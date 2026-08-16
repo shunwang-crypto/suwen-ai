@@ -306,7 +306,7 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
         {sorted.map((k) => (
           <li key={k.kc_id} className="flex items-center gap-2 text-xs">
             <Link
-              href={`/quiz?kc=${encodeURIComponent(k.name)}&n=3`}
+              href={`/practice/session?mode=quiz&from=${encodeURIComponent("/growth")}&kc=${encodeURIComponent(k.name)}&n=3`}
               title={`${k.name}：做 3 道该知识点的题，判分结果作为真实证据重估掌握度`}
               className="w-32 shrink-0 truncate font-medium text-slate-700 hover:text-indigo-700 hover:underline sm:w-40"
             >

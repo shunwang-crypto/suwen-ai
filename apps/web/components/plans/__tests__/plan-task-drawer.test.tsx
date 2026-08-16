@@ -66,7 +66,7 @@ describe("PlanTaskDrawer", () => {
     expect(screen.getAllByRole("link", { name: "阅读资料" }).length).toBe(1);
     expect(screen.getByRole("link", { name: "开始针对性练习" })).toHaveAttribute(
       "href",
-      "/quiz?topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0&kb=11111111-1111-4111-8111-111111111111&count=8&difficulty=hard",
+      "/practice/session?mode=quiz&from=%2Fplans&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0&kb=11111111-1111-4111-8111-111111111111&count=8&difficulty=hard",
     );
     expect(screen.getByRole("link", { name: "进入分级辅导" })).toHaveAttribute(
       "href",
@@ -74,7 +74,7 @@ describe("PlanTaskDrawer", () => {
     );
     expect(screen.getByRole("link", { name: "复习相关错题" })).toHaveAttribute(
       "href",
-      "/reviews",
+      "/practice/session?mode=review&from=%2Fplans",
     );
   });
 
@@ -120,7 +120,7 @@ describe("PlanTaskDrawer", () => {
     expect(screen.getByText("本任务没有可用的持久化资料关联。")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "开始针对性练习" })).toHaveAttribute(
       "href",
-      "/quiz?topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0&kb=11111111-1111-4111-8111-111111111111&count=3&difficulty=hard",
+      "/practice/session?mode=quiz&from=%2Fplans&topic=%E4%BA%8C%E6%AC%A1%E5%87%BD%E6%95%B0&kb=11111111-1111-4111-8111-111111111111&count=3&difficulty=hard",
     );
   });
 

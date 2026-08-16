@@ -30,6 +30,21 @@ function ArrowIcon() {
   );
 }
 
+/** 阶段 3（规则 B）：复习/练习类行动改入专注会话；后端 href 契约不变，前端做映射。 */
+function focusActionHref(href: string): string {
+  const from = encodeURIComponent("/today");
+  if (href === "/reviews") {
+    return `/practice/session?mode=review&from=${from}`;
+  }
+  if (href === "/quiz?weak=1") {
+    return `/practice/session?mode=quiz&from=${from}&weak=1`;
+  }
+  if (href === "/quiz") {
+    return `/practice/session?mode=quiz&from=${from}`;
+  }
+  return href;
+}
+
 export default function TodayPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [state, setState] = useState<TodayState>({ status: "loading" });
@@ -103,7 +118,7 @@ export default function TodayPage() {
           <div className="mt-2 max-w-2xl text-[13px] leading-6 text-ink-secondary">
             <MathText text={primary.reason} />
           </div>
-          <Link href={primary.href} className="mt-7 inline-flex h-11 items-center gap-2 rounded-[9px] bg-ink px-5 text-[13px] font-semibold text-white transition-colors hover:bg-black">
+          <Link href={focusActionHref(primary.href)} className="mt-7 inline-flex h-11 items-center gap-2 rounded-[9px] bg-ink px-5 text-[13px] font-semibold text-white transition-colors hover:bg-black">
             开始这一项
             <ArrowIcon />
           </Link>
@@ -117,7 +132,7 @@ export default function TodayPage() {
             <ul className="divide-y divide-line border-t border-line">
               {secondary.map((item) => (
                 <li key={`${item.type}-${item.href}`}>
-                  <Link href={item.href} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-surface-muted sm:px-8">
+                  <Link href={focusActionHref(item.href)} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-surface-muted sm:px-8">
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-medium text-ink"><MathText text={item.title} singleLine /></span>
                       <span className="mt-1 block truncate text-body-sm text-ink-muted"><MathText text={item.reason} singleLine /></span>

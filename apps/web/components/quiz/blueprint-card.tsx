@@ -27,11 +27,14 @@ export function BlueprintCard({
   busy,
   onConfirm,
   onCancel,
+  editable = true,
 }: {
   blueprint: Blueprint;
   busy: boolean;
   onConfirm: (edited: Blueprint) => void;
   onCancel: () => void;
+  /** 专注会话内只读确认（编辑任务不进专注模式，实施指令阶段 3）；默认可编辑 */
+  editable?: boolean;
 }) {
   const [items, setItems] = useState<BlueprintItem[]>(
     blueprint.items.map((it) => ({ ...it })),
@@ -64,7 +67,9 @@ export function BlueprintCard({
         <div>
           <h3 className="text-[16px] font-semibold text-ink">练习蓝图</h3>
           <p className="text-caption text-slate-500">
-            确认无误后再生成正式题目；每一题都可以单独调整。
+            {editable
+              ? "确认无误后再生成正式题目；每一题都可以单独调整。"
+              : "确认无误后生成正式题目。"}
           </p>
         </div>
       </div>
@@ -86,9 +91,11 @@ export function BlueprintCard({
             <div className="flex items-center gap-3">
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[#efede9] text-body-sm font-semibold text-ink-secondary">{i + 1}</span>
               <div className="min-w-0 flex-1"><p className="truncate text-body-sm font-semibold text-ink">{it.kc_name || "未命名知识点"}</p><p className="mt-0.5 text-caption text-ink-muted">{TYPE_OPTIONS.find((option) => option.value === it.type)?.label ?? it.type} · {DIFFICULTY_OPTIONS.find((option) => option.value === it.difficulty)?.label ?? it.difficulty}</p></div>
-              <button type="button" onClick={() => setEditingIndex(editingIndex === i ? null : i)} className="rounded-[6px] px-2 py-1 text-caption font-medium text-ink-secondary hover:bg-surface-muted hover:text-brand-700">{editingIndex === i ? "完成" : "调整"}</button>
+              {editable && (
+                <button type="button" onClick={() => setEditingIndex(editingIndex === i ? null : i)} className="rounded-[6px] px-2 py-1 text-caption font-medium text-ink-secondary hover:bg-surface-muted hover:text-brand-700">{editingIndex === i ? "完成" : "调整"}</button>
+              )}
             </div>
-            {editingIndex === i && <div className="mt-3 grid gap-2 border-t border-line pt-3 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
+            {editable && editingIndex === i && <div className="mt-3 grid gap-2 border-t border-line pt-3 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
               <label className="flex flex-col gap-0.5"><span className="text-caption text-ink-muted">知识点</span><input value={it.kc_name} onChange={(e) => patch(i, { kc_name: e.target.value })} className="h-8 rounded-[7px] border border-line-strong px-2 text-body-sm outline-none focus:border-brand-400" /></label>
               <label className="flex flex-col gap-0.5">
                 <span className="text-caption text-ink-muted">题型</span>

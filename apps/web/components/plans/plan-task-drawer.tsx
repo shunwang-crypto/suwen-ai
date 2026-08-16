@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ApiError, apiJson } from "@/lib/api";
@@ -55,11 +56,14 @@ export function PlanTaskDrawer({
   const attribution = !readOnly && planId && task.task_id
     ? `&plan_id=${encodeURIComponent(planId)}&task_id=${encodeURIComponent(task.task_id)}`
     : "";
-  const quizHref = `/quiz?topic=${encodeURIComponent(topic)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}&count=${count}&difficulty=${encodeURIComponent(difficulty)}${attribution}`;
+  // 阶段 3/5：练习/复习改为专注会话（规则 B），from=当前页面（抽屉可从 /plans、今日、课程计划 tab 打开）
+  const pathname = usePathname();
+  const focusFrom = encodeURIComponent(pathname || "/plans");
+  const quizHref = `/practice/session?mode=quiz&from=${focusFrom}&topic=${encodeURIComponent(topic)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}&count=${count}&difficulty=${encodeURIComponent(difficulty)}${attribution}`;
   const tutorHref = !readOnly && planId && task.task_id
     ? `/tutor?plan_id=${encodeURIComponent(planId)}&task_id=${encodeURIComponent(task.task_id)}${kbId ? `&kb=${encodeURIComponent(kbId)}` : ""}`
     : `/tutor${kbId ? `?kb=${encodeURIComponent(kbId)}` : ""}`;
-  const reviewHref = attribution ? `/reviews?${attribution.slice(1)}` : "/reviews";
+  const reviewHref = `/practice/session?mode=review&from=${focusFrom}${attribution}`;
   const resourceUrl = resource ? resourceHref(resource) : null;
   const action = task.action_type ?? "tutor";
 

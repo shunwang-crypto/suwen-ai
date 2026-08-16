@@ -4,6 +4,7 @@
 // 题目作答（四种控件，MathText 渲染）→ 逐题结果 + 掌握度变化；历史卷可重开。
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -47,9 +48,12 @@ import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {AttemptResult, Blueprint, ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, MetacognitionSummary, NodeUpdateData, PracticeRecommendation, QuizDetail, QuizListItem, WeakPointsResponse} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
+import { useFocusSession } from "@/components/focus/focus-shell";
 import * as Parts from "@/components/quiz/quiz-parts";
 
-export function QuizTab() {
+export function QuizTab({ focus }: { focus?: { from: string } }) {
+  const router = useRouter();
+  const focusApi = useFocusSession();
   const { user } = useAuth();
   const userId = user?.id ?? "anonymous";
   // URL 预填（/quiz?topic=..&kb=..，来自对话页「考考我」chip）。
@@ -524,6 +528,47 @@ export function QuizTab() {
     void consume("/api/quiz", requestBody);
   }, [verifyKc, verifyCount, consume, userId]);
 
+  /* 专注会话一次性自动发起（阶段 3）：按入口参数选择发起方式；已有进行中草稿
+   * （含 await_confirm）时优先恢复，不重复发起；无任何可发起参数则回练习页。
+   * ref 守卫保证只跑一次，其余依赖只为 lint 完整性。 */
+  const focusAutoStartedRef = useRef(false);
+  /* eslint-disable react-hooks/set-state-in-effect -- 入口动作等价于用户点击发起按钮的一次性启动 */
+  useEffect(() => {
+    if (!focus || focusAutoStartedRef.current) return;
+    focusAutoStartedRef.current = true;
+    const pending = Parts.readPendingQuiz(userId);
+    if (pending && pending.status !== "failed") return;
+    if (verifyKc) {
+      startVerifyQuiz();
+      return;
+    }
+    if (fromWeakLink) {
+      startWeakQuiz();
+      return;
+    }
+    if (prefillTopic.trim()) {
+      const total = prefillQuestionCount ?? 5;
+      const base = Math.floor(total / 3);
+      const rem = total % 3;
+      startQuiz({
+        topic: prefillTopic.trim(),
+        ...(prefillKb ? { kb_id: prefillKb } : {}),
+        num_questions: total,
+        difficulty_mix: prefillDifficulty
+          ? {
+              easy: prefillDifficulty === "easy" ? total : 0,
+              mid: prefillDifficulty === "mid" ? total : 0,
+              hard: prefillDifficulty === "hard" ? total : 0,
+            }
+          : { easy: base + (rem > 0 ? 1 : 0), mid: base + (rem > 1 ? 1 : 0), hard: base },
+      });
+      return;
+    }
+    router.replace("/practice?tab=quiz");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const resume = useCallback(
     (approved: boolean, blueprint?: Blueprint) => {
       if (!interruptData) return;
@@ -623,8 +668,29 @@ export function QuizTab() {
     : 0;
   const practiceStage = attempt ? 4 : quiz ? 3 : phase === "await_confirm" || phase === "resuming" ? 2 : 1;
 
+  // 专注壳内：向顶栏上报进度（作答中=已答占比；生成中=不确定进度）
+  useEffect(() => {
+    if (!focusApi) return;
+    if (quiz) {
+      focusApi.setProgress({
+        label: attempt
+          ? `已判分 · 答对 ${attempt.correct}/${attempt.total}`
+          : `已答 ${answeredCount} / 共 ${quiz.questions.length} 题`,
+        ratio: quiz.questions.length
+          ? attempt
+            ? 1
+            : answeredCount / quiz.questions.length
+          : 0,
+      });
+    } else if (busy) {
+      focusApi.setProgress({ label: "正在生成题目…", ratio: null });
+    } else {
+      focusApi.setProgress(null);
+    }
+  }, [focusApi, quiz, attempt, answeredCount, busy]);
+
   return (
-    <div className="mx-auto w-full max-w-[1120px] space-y-5 px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+    <div className={focus ? "space-y-5" : "mx-auto w-full max-w-[1120px] space-y-5 px-5 py-8 sm:px-8 lg:px-10 lg:py-10"}>
       {practiceStage > 1 && <Parts.PracticeSteps current={practiceStage} />}
       {flowError && (
         <ErrorBanner message={flowError} onClose={() => setFlowError(null)} />
@@ -663,6 +729,10 @@ export function QuizTab() {
               <button
                 type="button"
                 onClick={() => {
+                  if (focus) {
+                    router.push(focus.from);
+                    return;
+                  }
                   setQuiz(null);
                   setAttempt(null);
                   setPredictions({});
@@ -670,7 +740,7 @@ export function QuizTab() {
                 }}
                 className="rounded-control border border-line-strong bg-white px-3.5 py-1.5 text-sm font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
               >
-                返回列表
+                {focus ? "返回" : "返回列表"}
               </button>
             }
           />
@@ -881,6 +951,56 @@ export function QuizTab() {
                 {submitting ? "判分中…" : "提交答卷"}
               </button>
             </div>
+          )}
+        </div>
+      ) : focus ? (
+        /* ---- 专注会话精简流（阶段 3）：发起与蓝图编辑留在 /practice；此处只承接
+             自动发起后的生成过程与 await_confirm 的只读确认（编辑任务不进专注模式） ---- */
+        <div className="space-y-4">
+          {phase === "await_confirm" && interruptData?.blueprint && (
+            <div className="space-y-2">
+              {difficultyReasons.length > 0 && (
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">为什么是这套题</h3>
+                  <p className="mt-0.5 text-caption text-slate-500">难度由学情画像按掌握区间自动分档</p>
+                  <ul className="mt-2 space-y-1">
+                    {difficultyReasons.map((r) => (
+                      <li key={r.kc_name} className="text-caption leading-relaxed text-slate-600">
+                        <span className="font-medium text-slate-800">{r.kc_name}</span>
+                        <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">{r.zone}</span>
+                        <MathText text={r.reason} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <BlueprintCard
+                key={interruptData.thread_id}
+                blueprint={interruptData.blueprint}
+                busy={false}
+                editable={false}
+                onConfirm={() => resume(true, interruptData.blueprint)}
+                onCancel={() => resume(false)}
+              />
+              <p className="text-center text-caption text-ink-muted">
+                如需调整蓝图题目，请
+                <Link href="/practice?tab=quiz" className="mx-0.5 text-brand-700 underline-offset-2 hover:underline">前往练习页编辑</Link>
+                （草稿已同步保留）。
+              </p>
+            </div>
+          )}
+          {phase === "resuming" && (
+            <p className="flex items-center gap-2 text-sm text-slate-500"><Spinner /> 蓝图已提交，正在生成并校验题目…</p>
+          )}
+          {phase === "streaming" && (
+            <p className="flex items-center gap-2 text-sm text-slate-500"><Spinner /> 正在按你的上下文生成练习…</p>
+          )}
+          {phase === "idle" && !notice && !flowError && (
+            <EmptyState
+              title="正在准备练习"
+              description="即将按入口上下文自动发起；若无反应可返回练习页手动发起"
+              illustration="target"
+            />
           )}
         </div>
       ) : (

@@ -318,7 +318,7 @@ export function MessageList(props: MessageListProps) {
                             type="button"
                             onClick={() =>
                               router.push(
-                                `/quiz?topic=${encodeURIComponent(m.kbName ?? "")}&kb=${encodeURIComponent(m.kbId ?? "")}`,
+                                `/practice/session?mode=quiz&from=${encodeURIComponent("/chat")}&topic=${encodeURIComponent(m.kbName ?? "")}&kb=${encodeURIComponent(m.kbId ?? "")}`,
                               )
                             }
                             style={
