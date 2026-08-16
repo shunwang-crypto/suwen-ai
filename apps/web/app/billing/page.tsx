@@ -24,7 +24,6 @@ import {
   RECHARGE_AMOUNTS,
   emitWalletChanged,
   fmtAmount,
-  type LedgerEntryOut,
   type LedgerKind,
   type LedgerPageOut,
   type MockPayOut,
