@@ -134,3 +134,18 @@
   - course-materials-tab 的上传错误码表随迁移复制自 materials（materials 已是 shim，表只剩一处）。
 
 ---
+
+## 阶段 6：tutor 会话类型化
+
+- 状态：**STOPPED（触发实施指令 7.7 停止条件）**
+- 冲突点详述：
+  1. **会话列表接口无法容纳 tutor thread**：`/api/chat/sessions`（routers/chat_sessions.py:41 `list_sessions`）只查 ChatSession 表；辅导会话的消息/题目/提示层级全部存于 LangGraph checkpoint（`/api/tutor/{thread_local_id}` 从 graph state 恢复，plans.py:833），tutor 轮次不写 ChatSession。tutor 仅有三个端点：GET /entrypoints、GET /{thread_local_id}（按已知 id 单线程恢复）、POST ""（单轮）——**不存在「列出用户全部辅导线程」的端点**。
+  2. **running/completed 指示不可迁移**：chat 指示依赖 `GET /api/chat/sessions/{id}/run` 的 run 状态机；tutor 轮次是同步非流式请求，无 run 概念。
+  3. 前端绕行方案（localStorage 自维护 tutor 会话索引）只能记录迁移后本浏览器创建的会话，跨设备/历史会话全部丢失——属提示词明令禁止的虚假实现路径。
+- 处置：保留 /tutor 独立路由与阶段 5 状态；阶段 6 相关跳转按钮（quiz 结果「进入分级辅导」、错题「带题去辅导」、任务抽屉「进入分级辅导」、today tutor 类 href、/tutor 全参数直达）维持现有跳转行为不变。
+- 建议方案（供下轮决策，需后端改动）：
+  - 方案 A（推荐）：tutor 会话落库 ChatSession 表，加 `kind` 列（'chat' | 'tutor'）+ `thread_local_id` 外键列；list_sessions 返回混合列表带 kind 徽章。前端混排即插即用，历史辅导自动可列。
+  - 方案 B：新增 `GET /api/tutor/sessions`（从 checkpoint store 按 user 前缀扫描或另建索引表），前端在 chat 页并行拉取合并。
+  - 两案均不动 SSE/轮次契约；A 数据一致性更好，B 改动面更小。
+
+---
