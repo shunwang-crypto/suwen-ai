@@ -27,23 +27,20 @@ from .base import (
 )
 from .circuit import CircuitBreaker
 from .faults import FaultInjector, get_fault_injector
-from .openai_gateway_mixins import (  # noqa: F401 — 常量转发供 test_cost_safety 既有导入路径
+from .mixin_breakers import GatewayBreakersMixin
+from .mixin_live_calls import (  # noqa: F401 — 常量转发供 test_cost_safety 既有导入路径
     _DEGRADE,
     _TIER_RANK,
-    GatewayBreakersMixin,
     GatewayLiveCallsMixin,
-    GatewayReplayMixin,
     _warn_if_upcost,
 )
+from .mixin_replay import GatewayReplayMixin
 from .recorder import Cassette
 from .routing import (
     BusinessRoute,
     ProviderCandidate,
     configured_candidates,
 )
-
-log = get_logger("gateway")
-
 
 log = get_logger("gateway")
 
