@@ -14,7 +14,8 @@ import {
   type FormEvent,
 } from "react";
 
-import { ModelMarkdown } from "@/components/chat/model-markdown";
+import { useRouter } from "next/navigation";
+
 import {
   Card,
   EmptyState,
@@ -23,14 +24,11 @@ import {
   SkeletonList,
   Spinner,
   fmtDateTime,
-  fmtPct,
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
-import { KcDependencyPath } from "@/components/plans/kc-dependency-path";
-import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
+import { PlanDetailPanel } from "@/components/plans/plan-detail-panel";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { MathText } from "@/lib/katex";
 import {
   PLAN_GOAL_EXAMPLES,
   isPlanGoalReady,
@@ -38,11 +36,12 @@ import {
   planGoalReadiness,
 } from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
-import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanAdjustResult, PlanAdjustmentItem, PlanDetail, PlanListItem, PlanStructure, PlanToggleResult} from "@/lib/types";
+import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanListItem, PlanStructure} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/plans/plan-parts";
 
 export default function PlansPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const userId = user?.id ?? "anonymous";
   const search = useSyncExternalStore(
@@ -54,18 +53,6 @@ export default function PlansPage() {
   const [plans, setPlans] = useState<PlanListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanListItem | null>(null);
-
-  // 计划详情（含 done/进度）+ 调整历史
-  const [detail, setDetail] = useState<PlanDetail | null>(null);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [adjustments, setAdjustments] = useState<PlanAdjustmentItem[]>([]);
-  const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
-  const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
-  const [adjusting, setAdjusting] = useState(false);
-  const [adjustResult, setAdjustResult] = useState<PlanAdjustResult | null>(null);
-  const [taskBanner, setTaskBanner] = useState<string | null>(null);
-  const [detailKey, setDetailKey] = useState(0);
-  const [openTask, setOpenTask] = useState<PlanTaskLocation | null>(null);
 
   // 表单
   const [goal, setGoal] = useState("");
@@ -112,10 +99,17 @@ export default function PlansPage() {
     const list = plansListRes.data;
     if (!list) return;
     setPlans(list);
-    setSelected(
-      list.find((plan) => plan.id === requestedPlanId) ?? list[0] ?? null,
-    );
-  }, [plansListRes.data, requestedPlanId]);
+    // ?id= 深链解析（实施指令 5.5）：有 kb 的计划 canonical 位置是课程计划 tab，
+    // 页内 client-side replace（需查列表数据，不做服务端重定向）。
+    const requested = requestedPlanId
+      ? (list.find((plan) => plan.id === requestedPlanId) ?? null)
+      : null;
+    if (requested?.kb_id) {
+      router.replace(`/courses/${requested.kb_id}?tab=plan`);
+      return;
+    }
+    setSelected(requested ?? list[0] ?? null);
+  }, [plansListRes.data, requestedPlanId, router]);
 
   useEffect(() => {
     setListError(plansListRes.error);
@@ -173,97 +167,13 @@ export default function PlansPage() {
     return () => clearInterval(timer);
   }, [phase, loadPlans, userId]);
 
-  // 选中计划后拉详情 + 调整历史（A5 收敛; detailKey 自增经 deps 强制重拉）
-  const selectedPlanId = selected?.id ?? "";
-  const detailRes = useApiResource<PlanDetail>(
-    selectedPlanId ? `/api/plans/${selectedPlanId}` : null,
-    { errorMessage: "计划详情加载失败", deps: [detailKey] },
-  );
-  const adjustmentsRes = useApiResource<PlanAdjustmentItem[]>(
-    selectedPlanId ? `/api/plans/${selectedPlanId}/adjustments` : null,
-    { deps: [detailKey] },
-  );
-
-  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 详情/调整历史的单向同步, 无纯派生替代 */
-  useEffect(() => {
-    setDetail(detailRes.data);
-    setDetailError(detailRes.error);
-  }, [detailRes.data, detailRes.error]);
-
-  useEffect(() => {
-    setAdjustments(adjustmentsRes.data ?? []);
-  }, [adjustmentsRes.data]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  /** 切换选中计划：详情态在事件处理器里清空（effect 内不允许同步 setState）。 */
+  /** 切换选中计划：有 kb 的计划点击直达课程计划 tab；全局计划留在本页看详情。 */
   const selectPlan = (plan: PlanListItem | null) => {
+    if (plan?.kb_id) {
+      router.push(`/courses/${plan.kb_id}?tab=plan`);
+      return;
+    }
     setSelected(plan);
-    setDetail(null);
-    setDetailError(null);
-    setAdjustments([]);
-    setAdjustResult(null);
-    setHighlightKeys(new Set());
-    setTaskBanner(null);
-    setOpenTask(null);
-  };
-
-  /** 任务三态更新：乐观更新；失败只恢复当前任务，保留其他并发更新。 */
-  const updateTaskStatus = async (taskId: string, status: Parts.PlanTaskStatus) => {
-    if (!detail || detail.status !== "active" || pendingKeys.has(taskId)) return;
-    const snapshot = detail;
-    const previousTask = Parts.flattenDays(detail.structure)
-      .flatMap((day) => day.tasks)
-      .find((task) => task.task_id === taskId);
-    if (!previousTask) return;
-    const previousStatus = Parts.normalizedTaskStatus(previousTask);
-    setDetail(Parts.withTaskStatus(detail, taskId, status));
-    setPendingKeys((prev) => new Set(prev).add(taskId));
-    setTaskBanner(null);
-    try {
-      const res = await apiJson<PlanToggleResult>(
-        `/api/plans/${snapshot.id}/tasks/${taskId}/toggle`,
-        { body: { status } },
-      );
-      // 以服务端进度为准（并发勾选时避免本地计数漂移）
-      setDetail((prev) =>
-        prev && prev.id === snapshot.id ? { ...prev, progress: res.progress } : prev,
-      );
-    } catch (err) {
-      setDetail((prev) =>
-        prev && prev.id === snapshot.id
-          ? Parts.withTaskStatus(prev, taskId, previousStatus)
-          : prev,
-      );
-      setTaskBanner(
-        err instanceof ApiError ? err.message : "任务状态更新失败，已回滚",
-      );
-    } finally {
-      setPendingKeys((prev) => {
-        const next = new Set(prev);
-        next.delete(taskId);
-        return next;
-      });
-    }
-  };
-
-  /** 根据学情调整计划：插入补强任务 → 重拉详情并高亮新任务。 */
-  const runAdjust = async () => {
-    if (!detail || detail.status !== "active" || adjusting) return;
-    setAdjusting(true);
-    setTaskBanner(null);
-    try {
-      const res = await apiJson<PlanAdjustResult>(`/api/plans/${detail.id}/adjust`, {
-        method: "POST",
-        body: {},
-      });
-      setAdjustResult(res);
-      setHighlightKeys(new Set(res.inserted.map((t) => t.task_id)));
-      setDetailKey((k) => k + 1);
-    } catch (err) {
-      setTaskBanner(err instanceof ApiError ? err.message : "计划调整失败，请重试");
-    } finally {
-      setAdjusting(false);
-    }
   };
 
   const consume = useCallback(
@@ -317,10 +227,6 @@ export default function PlansPage() {
               setInterruptData(null);
               if (planId) {
                 setNotice(null);
-                setDetail(null);
-                setAdjustments([]);
-                setAdjustResult(null);
-                setHighlightKeys(new Set());
                 void loadPlans().then((list) => {
                   setSelected(
                     list.find((p) => p.id === planId) ?? list[0] ?? null,
@@ -473,26 +379,6 @@ export default function PlansPage() {
     (planIntent.dailyHours ?? hours) != null &&
     Boolean(confirmedDeadline || confirmedTotalDays);
   const scopeReady = kbs.length <= 1 || Boolean(kbId);
-
-  const openDependencyTask = (taskId: string) => {
-    if (!detail) return;
-    for (const stage of detail.structure.stages) {
-      for (const day of stage.days ?? []) {
-        const task = (day.tasks ?? []).find((item) => item.task_id === taskId);
-        if (task) {
-          setOpenTask({
-            task,
-            stageName: stage.name,
-            day: day.day,
-            planId: detail.id,
-            planKbId: detail.kb_id,
-            readOnly: detail.status !== "active",
-          });
-          return;
-        }
-      }
-    }
-  };
 
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
@@ -780,273 +666,14 @@ export default function PlansPage() {
             </p>
           )}
 
-          {taskBanner && (
-            <ErrorBanner message={taskBanner} onClose={() => setTaskBanner(null)} />
-          )}
-
           {selected ? (
-            <>
-              <Card
-                title={
-                  <span className="block max-w-100 truncate">{selected.goal}</span>
-                }
-                extra={
-                  <span className="text-caption text-slate-400">
-                    {selected.status === "active" ? "进行中 · " : selected.status === "completed" ? "已完成 · " : "已归档 · "}每日 {selected.budget_hours} 小时
-                  </span>
-                }
-              >
-                {/* 计划头部：任务粒度进度（分段式，每阶段一段）+ 学情调整入口 */}
-                <div className="mb-3 flex flex-wrap items-center gap-3">
-                  <div className="min-w-40 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-caption font-medium text-slate-500">
-                        已完成 {detail?.progress.done ?? 0} / {detail?.progress.total ?? 0} 个任务
-                        {(detail?.progress.skipped ?? 0) > 0 &&
-                          ` · 跳过 ${detail?.progress.skipped ?? 0} 个`}
-                      </span>
-                      <span className="font-mono text-caption text-slate-500">
-                        {fmtPct(detail?.progress.effective_ratio ?? detail?.progress.ratio ?? 0)}
-                      </span>
-                    </div>
-                    {detail && detail.structure.stages.length > 0 ? (
-                      <div className="mt-1 flex h-2 gap-0.5 overflow-hidden rounded-full">
-                        {detail.structure.stages.map((stage, si) => {
-                          const tasks = (stage.days ?? []).flatMap(
-                            (d) => d.tasks ?? [],
-                          );
-                          const doneCount = tasks.filter(
-                            (task) => Parts.normalizedTaskStatus(task) === "done",
-                          ).length;
-                          const skippedCount = tasks.filter(
-                            (task) => Parts.normalizedTaskStatus(task) === "skipped",
-                          ).length;
-                          const effectiveTotal = tasks.length - skippedCount;
-                          const color = Parts.STAGE_COLORS[si % Parts.STAGE_COLORS.length];
-                          return (
-                            <div
-                              key={si}
-                              className="h-full min-w-2 bg-slate-100"
-                              style={{ flexGrow: Math.max(tasks.length, 1) }}
-                              title={`${stage.name}：完成 ${doneCount} 个，跳过 ${skippedCount} 个`}
-                            >
-                              <div
-                                className={`h-full ${color.bar} transition-all duration-300`}
-                                style={{
-                                  width: `${
-                                    effectiveTotal
-                                      ? Math.round((doneCount / effectiveTotal) * 100)
-                                      : tasks.length
-                                        ? 100
-                                        : 0
-                                  }%`,
-                                }}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="mt-1 h-2 rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
-                          style={{
-                            width: `${Math.round((detail?.progress.effective_ratio ?? detail?.progress.ratio ?? 0) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!detail || detail.status !== "active" || adjusting}
-                    onClick={() => void runAdjust()}
-                    title="按当前掌握度（p<0.4 的知识点）在最近未完成日插入补强任务"
-                    className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {adjusting && <Spinner className="h-3.5 w-3.5" />}
-                    {adjusting ? "正在调整…" : "根据学情调整计划"}
-                  </button>
-                </div>
-
-                {adjustResult && (
-                  <div
-                    className={`mb-3 rounded-xl border px-3.5 py-2.5 text-sm ${
-                      adjustResult.inserted.length > 0
-                        ? "border-amber-300 bg-amber-50"
-                        : "border-slate-200 bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2 text-slate-700">
-                      <div className="min-w-0"><ModelMarkdown text={adjustResult.reason} /></div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAdjustResult(null);
-                          setHighlightKeys(new Set());
-                        }}
-                        className="shrink-0 text-slate-400 hover:text-slate-600"
-                        aria-label="关闭调整结果"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    {adjustResult.inserted.length > 0 && (
-                      <ul className="mt-2 space-y-1">
-                        {adjustResult.inserted.map((t) => (
-                          <li
-                            key={t.task_id}
-                            className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-caption"
-                          >
-                            <span className="rounded bg-amber-500 px-1.5 py-0.5 font-medium text-white">
-                              第 {t.day} 天
-                            </span>
-                            <span className="font-medium text-slate-700"><MathText text={t.title} /></span>
-                            <span className="text-slate-400">{t.minutes} 分钟</span>
-                            <span className="text-slate-400">
-                              当前掌握度 {fmtPct(t.p_mastery)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-                {detail?.structure.goal_analysis && (
-                  <details className="mb-3 rounded-xl border border-brand-100 bg-brand-50/30 px-3.5 py-3">
-                    <summary className="cursor-pointer text-body-sm font-medium text-brand-700">
-                      查看确认时的目标与验收标准
-                    </summary>
-                    <p className="mt-2 text-caption leading-5 text-ink-secondary">
-                      {detail.structure.goal_analysis.summary}
-                    </p>
-                    <div className="mt-2 grid gap-2 text-body-sm sm:grid-cols-2">
-                      <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
-                        <strong className="block text-caption text-ink-muted">可验证成果</strong>
-                        {detail.structure.goal_analysis.outcomes.map((item) => (
-                          <p key={item} className="mt-1">• {item}</p>
-                        ))}
-                      </div>
-                      <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
-                        <strong className="block text-caption text-ink-muted">验收标准</strong>
-                        {detail.structure.goal_analysis.success_criteria.map((item) => (
-                          <p key={item} className="mt-1">• {item}</p>
-                        ))}
-                      </div>
-                    </div>
-                    {detail.structure.skill_gaps && detail.structure.skill_gaps.length > 0 && (
-                      <p className="mt-2 text-body-sm text-warning-700">
-                        创建时优先补强：{detail.structure.skill_gaps.map((gap) => `${gap.skill}（${gap.zone}）`).join("、")}
-                      </p>
-                    )}
-                  </details>
-                )}
-
-                {detail?.kc_dependency?.levels.length ? (
-                  <KcDependencyPath
-                    dependency={detail.kc_dependency}
-                    onTaskOpen={openDependencyTask}
-                  />
-                ) : null}
-
-                {detailError && (
-                  <div className="mb-3">
-                    <ErrorBanner
-                      message={detailError}
-                      onRetry={() => setDetailKey((k) => k + 1)}
-                    />
-                  </div>
-                )}
-
-                {detail ? (
-                  <Parts.PlanCalendar
-                    key={detail.id}
-                    structure={detail.structure}
-                    onStatus={detail.status === "active" ? (taskId, status) => void updateTaskStatus(taskId, status) : undefined}
-                    onTaskOpen={(location) => setOpenTask({ ...location, planId: detail.id, planKbId: detail.kb_id, readOnly: detail.status !== "active" })}
-                    pendingKeys={pendingKeys}
-                    highlightKeys={highlightKeys}
-                  />
-                ) : detailError ? (
-                  <EmptyState title="该计划缺少结构数据" illustration="map" />
-                ) : (
-                  <SkeletonList rows={4} />
-                )}
-              </Card>
-
-              {openTask && <PlanTaskDrawer location={openTask} onClose={() => setOpenTask(null)} onCompleted={() => setDetailKey((key) => key + 1)} />}
-
-              <Card
-                title="调整历史"
-                extra={
-                  <span className="text-caption text-slate-400">
-                    共 {adjustments.length} 次
-                  </span>
-                }
-              >
-                {adjustments.length === 0 ? (
-                  <p className="py-3 text-center text-caption text-slate-400">
-                    还没有调整记录；低分测评或点击「根据学情调整计划」都会在这里留痕
-                  </p>
-                ) : (
-                  <ol className="ml-1.5 space-y-4 border-l-2 border-slate-100 pl-5">
-                    {adjustments.map((a) => {
-                      const auto = a.trigger === "low_score_attempt";
-                      return (
-                        <li key={a.id} className="relative">
-                          {/* 时间线节点：低分自动触发=琥珀，手动=靛蓝 */}
-                          <span
-                            aria-hidden
-                            className={`absolute -left-[27px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-white ${
-                              auto ? "bg-amber-500" : "bg-indigo-500"
-                            }`}
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="#fff"
-                              strokeWidth="3"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              className="h-2.5 w-2.5"
-                            >
-                              {auto ? (
-                                <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
-                              ) : (
-                                <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z" />
-                              )}
-                            </svg>
-                          </span>
-                          <div className="rounded-xl bg-slate-50/80 px-3 py-2.5 transition-colors hover:bg-slate-50">
-                            <p className="flex flex-wrap items-center gap-2">
-                              <span className="text-caption text-slate-400">
-                                {fmtDateTime(a.at)}
-                              </span>
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-caption font-medium ${
-                                  auto
-                                    ? "bg-amber-100/70 text-amber-700"
-                                    : "bg-indigo-50 text-indigo-600"
-                                }`}
-                              >
-                                {Parts.TRIGGER_LABELS[a.trigger] ?? a.trigger}
-                              </span>
-                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-caption font-medium text-amber-700">
-                                插入 {a.inserted.length} 个任务
-                              </span>
-                            </p>
-                            <div className="mt-1 text-sm leading-relaxed text-slate-700">
-                              <ModelMarkdown text={a.reason} />
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-              </Card>
-            </>
+            <PlanDetailPanel
+              planId={selected.id}
+              goal={selected.goal}
+              status={selected.status}
+              budgetHours={selected.budget_hours}
+              onChanged={loadPlans}
+            />
           ) : (
             phase === "idle" &&
             timeline.length === 0 && (

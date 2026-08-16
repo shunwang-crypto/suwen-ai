@@ -231,7 +231,7 @@ export function StudyGuidePanel({
                 {guide.suggested_questions.map((q) => (
                   <Link
                     key={q}
-                    href={`/chat?kb=${encodeURIComponent(kbId)}&q=${encodeURIComponent(q)}`}
+                    href={`/chat?new=1&kb=${encodeURIComponent(kbId)}&q=${encodeURIComponent(q)}`}
                     className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
                     title={`在「${kbName}」中提问`}
                   >

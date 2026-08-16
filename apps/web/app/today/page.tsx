@@ -174,7 +174,7 @@ export default function TodayPage() {
     return (
       <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-8 sm:px-8 lg:py-12">
         <ErrorBanner message={state.message} onRetry={() => { setState({ status: "loading" }); setReloadKey((key) => key + 1); }} />
-        <Link href="/materials" className="inline-flex rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary">先整理学习资料</Link>
+        <Link href="/courses" className="inline-flex rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary">先创建一门课程</Link>
       </div>
     );
   }
@@ -186,7 +186,7 @@ export default function TodayPage() {
           <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">从你的资料开始</p>
           <h2 className="mt-3 text-[24px] font-semibold tracking-[-0.035em] text-ink">先建立一个学习空间</h2>
           <p className="mx-auto mt-2 max-w-lg text-[13px] leading-6 text-ink-secondary">上传教材、讲义、试卷或作业后，苏问才能基于真实资料安排学习。</p>
-          <Link href="/materials" className="mt-6 inline-flex h-10 items-center rounded-[8px] bg-ink px-5 text-[13px] font-semibold text-white">前往资料</Link>
+          <Link href="/courses" className="mt-6 inline-flex h-10 items-center rounded-[8px] bg-ink px-5 text-[13px] font-semibold text-white">创建第一门课程</Link>
         </section>
       </div>
     );

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / "apps" / "web"
 
 RETIRED_STUDENT_ROUTES = ("kb", "resources", "errors", "profile", "reports")
-PRIMARY_NAV_ROUTES = ["/today", "/chat", "/practice", "/materials", "/growth", "/plans"]
+PRIMARY_NAV_ROUTES = ["/today", "/chat", "/practice", "/courses", "/growth"]
 
 
 def _runtime_python_files() -> list[Path]:

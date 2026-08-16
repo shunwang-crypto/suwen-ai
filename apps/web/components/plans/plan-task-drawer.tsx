@@ -19,7 +19,7 @@ export interface PlanTaskLocation {
 
 function resourceHref(resource: PlanResource): string | null {
   if (resource.url) return resource.url;
-  if (resource.kb_id) return `/materials?kb=${encodeURIComponent(resource.kb_id)}`;
+  if (resource.kb_id) return `/courses/${encodeURIComponent(resource.kb_id)}?tab=materials`;
   return null;
 }
 

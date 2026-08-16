@@ -3,12 +3,17 @@
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
+import { RecentCourses } from "@/components/nav/recent-courses";
 import { RecentSessions } from "@/components/nav/recent-sessions";
 import { useAuth } from "@/lib/auth-context";
+import {
+  getSnapshotPageTitle,
+  subscribePageTitle,
+} from "@/lib/page-title";
 import {
   booleanStorageCodec,
   useHydratedLocalStorage,
@@ -67,18 +72,17 @@ export const PRIMARY_NAV_ITEMS: NavItem[] = [
   { href: "/today", label: "今日", icon: <FigmaNavIcon name="today" /> },
   { href: "/chat", label: "对话", icon: <FigmaNavIcon name="chat" /> },
   { href: "/practice", label: "练习", icon: <FigmaNavIcon name="practice" /> },
-  { href: "/materials", label: "课程", icon: <FigmaNavIcon name="knowledge" /> },
+  { href: "/courses", label: "课程", icon: <FigmaNavIcon name="knowledge" /> },
   { href: "/growth", label: "成长", icon: <FigmaNavIcon name="profile" /> },
-  { href: "/plans", label: "学习计划", icon: <FigmaNavIcon name="plans" /> },
 ];
 
 /** 访问路径前缀 → 实际要高亮的导航项（显式映射表，取代旧的通配高亮 hack；
- *  /quiz、/reviews 为旧路由重定向过程中的瞬时路径，/courses 为阶段 5 预留）。 */
+ *  /quiz、/reviews、/materials 为旧路由重定向过程中的瞬时路径）。 */
 const NAV_HIGHLIGHT_ALIASES: Record<string, string> = {
   "/tutor": "/chat",
   "/quiz": "/practice",
   "/reviews": "/practice",
-  "/courses": "/materials",
+  "/materials": "/courses",
 };
 
 const UTILITY_ITEMS: NavItem[] = [
@@ -99,6 +103,7 @@ const TITLE_MAP: Record<string, string> = {
   "/chat": "AI 对话",
   "/tutor": "分级辅导",
   "/materials": "课程",
+  "/courses": "课程",
   "/practice": "练习",
   "/quiz": "智能练习",
   "/reviews": "复习",
@@ -145,12 +150,19 @@ function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: NavI
   );
 }
 
-function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: string; collapsed?: boolean; onNavigate?: () => void }) {
+function Navigation({ pathname, userId, collapsed = false, onNavigate }: { pathname: string; userId?: string; collapsed?: boolean; onNavigate?: () => void }) {
   return (
     <>
       <nav className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-1 pt-2">
-          {PRIMARY_NAV_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
+          {PRIMARY_NAV_ITEMS.map((item) => (
+            <div key={item.href}>
+              <NavLink item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />
+              {item.href === "/courses" && !collapsed && (
+                <RecentCourses userId={userId} pathname={pathname} onNavigate={onNavigate} />
+              )}
+            </div>
+          ))}
         </div>
         {!collapsed && <RecentSessions onNavigate={onNavigate} />}
       </nav>
@@ -241,6 +253,7 @@ function AccountMenu({
       </div>
       <div className="border-t border-line pt-1.5">
         <Link href="/settings?section=profile" onClick={onClose} className={menuClass}>账户设置</Link>
+        <Link href="/plans" onClick={onClose} className={menuClass}>学习计划</Link>
       </div>
       {(isTeacher || isAdmin) && (
         <div className="mt-1 border-t border-line pt-1.5">
@@ -259,6 +272,12 @@ function AccountMenu({
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  // 动态页标题（阶段 5：/courses/[kbId] 显示课程名）；SSR 快照为 null
+  const dynamicTitle = useSyncExternalStore(
+    subscribePageTitle,
+    getSnapshotPageTitle,
+    () => null,
+  );
   const { user, status, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -297,7 +316,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isTeacher = user?.role === "teacher" || isAdmin;
   // 顶栏标题与「对话页隐藏滚动」用路径本身判断，不吃导航高亮别名（/tutor 仍显示自己的标题）。
   const isChatRoute = matchesPath(pathname, "/chat");
-  const title = Object.entries(TITLE_MAP).find(([path]) => matchesPath(pathname, path))?.[1] ?? "苏问";
+  const title =
+    dynamicTitle ??
+    (Object.entries(TITLE_MAP).find(([path]) => matchesPath(pathname, path))?.[1] ?? "苏问");
   const displayName = user?.display_name?.trim() || "同学";
   const initial = displayName[0] ?? "学";
   const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hour12: false }).format(new Date()));
@@ -325,7 +346,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex h-dvh overflow-hidden bg-canvas">
         <aside className={`hidden shrink-0 flex-col border-r border-line bg-[#f4f3f1] transition-[width] duration-200 md:flex ${navCollapsed ? "w-16" : "w-[200px]"}`}>
           <Brand collapsed={navCollapsed} onToggle={() => setNavCollapsed((value) => !value)} />
-          <Navigation pathname={pathname} collapsed={navCollapsed} />
+          <Navigation pathname={pathname} userId={user?.id} collapsed={navCollapsed} />
         </aside>
 
         <AnimatePresence>
@@ -334,7 +355,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button type="button" aria-label="关闭导航" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setDrawerOpen(false)} />
               <motion.aside className="absolute inset-y-0 left-0 flex w-[260px] flex-col border-r border-line bg-[#f4f3f1] shadow-floating" initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
                 <Brand />
-                <Navigation pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
+                <Navigation pathname={pathname} userId={user?.id} onNavigate={() => setDrawerOpen(false)} />
               </motion.aside>
             </motion.div>
           )}
