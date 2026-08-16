@@ -56,6 +56,7 @@ from .routing import (
     route_candidates,
 )
 from .stub import estimate_tokens, stub_text
+from .thought_filter import ThoughtFilter, strip_thought
 
 log = get_logger("gateway")
 
@@ -280,7 +281,7 @@ class GatewayLiveCallsMixin:
         c_tok = usage.completion_tokens if usage else 0
         cost = self._cost(candidate, p_tok, c_tok)
         return ChatResult(
-            text=resp.choices[0].message.content or "",
+            text=strip_thought(resp.choices[0].message.content or ""),
             model=candidate.model,
             tier=req.tier.value,
             prompt_tokens=p_tok,
@@ -480,15 +481,18 @@ class GatewayLiveCallsMixin:
                         apply_soft_downgrade=False,
                     )
                 stream = await self._create_candidate_stream(candidate_req, candidate)
+                tf = ThoughtFilter()
                 p_tok = c_tok = 0
                 async for chunk in stream:
                     if chunk.usage:
                         p_tok = chunk.usage.prompt_tokens
                         c_tok = chunk.usage.completion_tokens
                     if chunk.choices and chunk.choices[0].delta.content:
-                        delta = chunk.choices[0].delta.content
-                        parts.append(delta)
-                        yield StreamDelta(delta)
+                        delta = tf.feed(chunk.choices[0].delta.content)
+                        if delta:
+                            parts.append(delta)
+                            yield StreamDelta(delta)
+                parts.append(tf.flush())
                 breaker.record(True)
                 text = "".join(parts)
                 if not p_tok:
@@ -652,7 +656,7 @@ class GatewayLiveCallsMixin:
         c_tok = usage.completion_tokens if usage else 0
         cost = self._cost(cfg, p_tok, c_tok)
         return ChatResult(
-            text=resp.choices[0].message.content or "",
+            text=strip_thought(resp.choices[0].message.content or ""),
             model=resp.model or req.model_override or cfg.model,
             tier=tier.value,
             prompt_tokens=p_tok,
@@ -697,7 +701,7 @@ class GatewayLiveCallsMixin:
             p_tok = usage.prompt_tokens if usage else 0
             c_tok = usage.completion_tokens if usage else 0
             return ChatResult(
-                text=resp.choices[0].message.content or "",
+                text=strip_thought(resp.choices[0].message.content or ""),
                 model=resp.model or cfg.model,
                 tier=tier.value,
                 prompt_tokens=p_tok,
@@ -836,20 +840,22 @@ class GatewayLiveCallsMixin:
                             stream_options={"include_usage": True},
                             **self._completion_kwargs(req, cfg),
                         )
+                tf = ThoughtFilter()
                 p_tok = c_tok = 0
                 async for chunk in stream:
                     if chunk.usage:
                         p_tok = chunk.usage.prompt_tokens
                         c_tok = chunk.usage.completion_tokens
                     if chunk.choices and chunk.choices[0].delta.content:
-                        delta = chunk.choices[0].delta.content
-                        parts.append(delta)
-                        yield StreamDelta(delta)
+                        delta = tf.feed(chunk.choices[0].delta.content)
+                        if delta:
+                            parts.append(delta)
+                            yield StreamDelta(delta)
                 if not p_tok:
                     p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
                     c_tok = estimate_tokens("".join(parts))
                 result = ChatResult(
-                    text="".join(parts),
+                    text=strip_thought("".join(parts)),
                     model=model,
                     tier=req.tier.value,
                     prompt_tokens=p_tok,
@@ -965,15 +971,18 @@ class GatewayLiveCallsMixin:
                     )
                     parts = []
                     streaming_tier = tier
+                    tf = ThoughtFilter()
                     p_tok = c_tok = 0
                     async for chunk in stream:
                         if chunk.usage:
                             p_tok = chunk.usage.prompt_tokens
                             c_tok = chunk.usage.completion_tokens
                         if chunk.choices and chunk.choices[0].delta.content:
-                            delta = chunk.choices[0].delta.content
-                            parts.append(delta)
-                            yield StreamDelta(delta)
+                            delta = tf.feed(chunk.choices[0].delta.content)
+                            if delta:
+                                parts.append(delta)
+                                yield StreamDelta(delta)
+                    parts.append(tf.flush())
                     breaker.record(True)
                     if tier != req.tier:
                         _warn_if_upcost(self._s, req.tier, tier)
