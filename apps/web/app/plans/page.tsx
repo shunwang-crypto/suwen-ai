@@ -38,24 +38,7 @@ import {
   planGoalReadiness,
 } from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
-import type {
-  ErrorEventData,
-  GraphDoneData,
-  GraphInterruptData,
-  GraphTraceData,
-  KbOut,
-  NodeUpdateData,
-  PlanAdjustResult,
-  PlanAdjustmentItem,
-  PlanDetail,
-  PlanGoalAnalysis,
-  PlanListItem,
-  PlanSkillGap,
-  PlanStructure,
-  PlanTask,
-  PlanResource,
-  PlanToggleResult,
-} from "@/lib/types";
+import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanAdjustResult, PlanAdjustmentItem, PlanDetail, PlanListItem, PlanStructure, PlanToggleResult} from "@/lib/types";
 import * as Parts from "@/components/plans/plan-parts";
 
 export default function PlansPage() {

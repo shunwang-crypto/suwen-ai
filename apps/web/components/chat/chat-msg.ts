@@ -1,11 +1,5 @@
 import type { TimelineItem } from "@/components/chat/timeline";
-import type {
-  ChatAttachmentOut,
-  CitationData,
-  DoneData,
-  InterruptData,
-  TraceEventData,
-} from "@/lib/types";
+import type {ChatAttachmentOut, CitationData, DoneData, InterruptData} from "@/lib/types";
 
 export interface ChatMsg {
   id: string;

@@ -6,7 +6,7 @@
 // 图表一律纯 SVG / 纯 CSS div，颜色只作辅助——每根柱都带文字数值与 title tooltip。
 // 每张卡片底部固定标注 embedding/rerank、语料与黄金集版本。
 
-import { useEffect, useState, type ReactNode } from "react";
+import {useEffect, useState} from "react";
 
 import {
   Card,
@@ -18,18 +18,7 @@ import {
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import type {
-  EvalCompareResponse,
-  EvalImportResponse,
-  EvalJobInfo,
-  EvalRunDetail,
-  EvalRunJobStart,
-  EvalRunListItem,
-  EvalRunsResponse,
-  RetrievalCategoryRow,
-  RetrievalEvalMetrics,
-  RetrievalRefusal,
-} from "@/lib/types";
+import type {EvalImportResponse, EvalJobInfo, EvalRunJobStart, EvalRunListItem, EvalRunsResponse} from "@/lib/types";
 import * as Parts from "@/components/evals/evals-parts";
 
 export default function EvalsPage() {

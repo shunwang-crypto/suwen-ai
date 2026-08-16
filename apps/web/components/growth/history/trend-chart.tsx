@@ -8,48 +8,10 @@
 // + 可执行建议（带跳转）+ narrative 三段式诊断（统一由 ModelMarkdown 渲染）。
 
 
-import {
-  PageHeader,
-  SkeletonPage,
-  Spinner,
-  fmtPct,
-} from "@/components/common";
-import type {
-  LearningReportResponse,
-  ReportRadarItem,
-  ReportTrendPoint,
-  ReportWeakPoint,
-} from "@/lib/types";
+import {fmtPct} from "@/components/common";
+import type {ReportTrendPoint} from "@/lib/types";
 
 // ---- 后端可选字段与空值降级 ----
-
-/** 章节聚合轴的下钻明细项（?kb_id= 时每轴附带）。 */
-interface RadarAxisKcDetail {
-  kc_id?: string;
-  name?: string;
-  p_mastery?: number | null;
-}
-
-/** 雷达轴：章节聚合模式附带 kc_count/weak_count/kcs；KC 模式与旧契约一致。 */
-type RadarAxis = ReportRadarItem & {
-  kc_count?: number | null;
-  weak_count?: number | null;
-  kcs?: RadarAxisKcDetail[] | null;
-};
-
-/** 薄弱点：分科目契约附带 subject；缺失时降级为单节展示。 */
-type SubjectWeakPoint = ReportWeakPoint & { subject?: string | null };
-
-/** 报告响应扩展：axes_kind（"chapter"=章节聚合轴）与「待巩固」阈值。 */
-type ScaledReportResponse = LearningReportResponse & {
-  axes_kind?: string | null;
-  consolidate_threshold?: number | null;
-  /** 待巩固档（红线以上、未达定向出题线），与 weak_points 同结构 */
-  consolidate_points?: SubjectWeakPoint[] | null;
-  report_status?: "pending" | "generating" | "completed" | "unavailable" | "failed";
-  report_updated_at?: string | null;
-  cached?: boolean;
-};
 
 /** 每节薄弱点默认展示条数（p 升序 top5，其余「展开全部」）。 */
 

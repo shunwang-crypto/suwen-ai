@@ -5,57 +5,14 @@
 // 「计划是活的」：任务复选框（乐观更新+失败回滚）、头部进度条、
 // 「根据学情调整计划」插入补强任务并高亮、调整历史时间线。
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type FormEvent,
-} from "react";
+import {useState} from "react";
 
-import { ModelMarkdown } from "@/components/chat/model-markdown";
-import {
-  Card,
-  EmptyState,
-  ErrorBanner,
-  PageHeader,
-  SkeletonList,
-  Spinner,
-  fmtDateTime,
-  fmtPct,
-} from "@/components/common";
-import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
-import { KcDependencyPath } from "@/components/plans/kc-dependency-path";
-import { PlanTaskDrawer, type PlanTaskLocation } from "@/components/plans/plan-task-drawer";
-import { ApiError, apiJson } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
+import {EmptyState} from "@/components/common";
+
+import {type PlanTaskLocation} from "@/components/plans/plan-task-drawer";
+
 import { MathText } from "@/lib/katex";
-import {
-  PLAN_GOAL_EXAMPLES,
-  isPlanGoalReady,
-  parsePlanIntent,
-  planGoalReadiness,
-} from "@/lib/plan-goal";
-import { streamSse } from "@/lib/sse";
-import type {
-  ErrorEventData,
-  GraphDoneData,
-  GraphInterruptData,
-  GraphTraceData,
-  KbOut,
-  NodeUpdateData,
-  PlanAdjustResult,
-  PlanAdjustmentItem,
-  PlanDetail,
-  PlanGoalAnalysis,
-  PlanListItem,
-  PlanSkillGap,
-  PlanStructure,
-  PlanTask,
-  PlanResource,
-  PlanToggleResult,
-} from "@/lib/types";
+import type {GraphInterruptData, PlanDetail, PlanGoalAnalysis, PlanSkillGap, PlanStructure, PlanTask, PlanResource} from "@/lib/types";
 
 export type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 export const PENDING_PLAN_KEY = "suwen:pending-plan-draft";

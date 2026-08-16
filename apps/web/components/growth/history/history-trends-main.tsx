@@ -12,25 +12,11 @@ import { WeakPointCard, groupWeakPoints } from "./weak-points";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import {
-  Card,
-  EmptyState,
-  ErrorBanner,
-  PageHeader,
-  SkeletonPage,
-  Spinner,
-  fmtPct,
-} from "@/components/common";
+import {Card, EmptyState, ErrorBanner, PageHeader, SkeletonPage, Spinner} from "@/components/common";
 import { RADAR_MAX_DIMS } from "@/components/radar";
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
-import type {
-  KbOut,
-  LearningReportResponse,
-  ReportRadarItem,
-  ReportTrendPoint,
-  ReportWeakPoint,
-} from "@/lib/types";
+import type {KbOut, LearningReportResponse, ReportRadarItem, ReportWeakPoint} from "@/lib/types";
 
 // ---- 后端可选字段与空值降级 ----
 

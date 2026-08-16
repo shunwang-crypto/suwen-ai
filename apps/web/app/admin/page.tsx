@@ -15,27 +15,9 @@ import {
   Spinner,
   fmtDateTime,
 } from "@/components/common";
-import { FEEDBACK_CATEGORY_LABELS } from "@/components/feedback-widget";
-import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import type {
-  AdminUserOut,
-  AdminUserDetailOut,
-  AdminUserPageOut,
-  AdminWalletAdjustOut,
-  AdminLatencyResponse,
-  AdminUsageResponse,
-  BreakerState,
-  FaultPatch,
-  FaultState,
-  FeedbackCategory,
-  FeedbackListResponse,
-  FeedbackOut,
-  KbOut,
-  RegistrationInviteOut,
-  TimeTravelInfo,
-} from "@/lib/types";
+import type {AdminLatencyResponse, AdminUsageResponse, TimeTravelInfo} from "@/lib/types";
 import * as Parts from "@/components/admin/admin-parts";
 
 export default function AdminPage() {

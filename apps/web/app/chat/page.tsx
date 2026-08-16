@@ -4,17 +4,7 @@
 // SSE 走 fetch+ReadableStream（lib/sse.ts），支持契约七类事件。
 
 import { useRouter, useSearchParams } from "next/navigation";
-import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ClipboardEvent,
-  type CSSProperties,
-  type KeyboardEvent,
-} from "react";
+import {Suspense, useCallback, useEffect, useRef, useState, ChangeEvent, ClipboardEvent, KeyboardEvent} from "react";
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
@@ -174,50 +164,6 @@ function historyToMessages(history: MessageOut[]): ChatMsg[] {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function WebSearchStatus({
-  mode,
-  streaming,
-  timeline,
-  citations,
-  onOpen,
-}: {
-  mode: ChatMode;
-  streaming: boolean;
-  timeline: TimelineItem[];
-  citations: CitationData[];
-  onOpen: () => void;
-}) {
-  if (mode !== "web" && mode !== "research") return null;
-  const searchEvents = timeline.filter(
-    (item) => item.kind === "trace" && item.data.type === "web_search",
-  );
-  const completedRounds = searchEvents.filter(
-    (item) => item.kind === "trace" && !item.data.skipped,
-  ).length;
-  const deep = mode === "research";
-  if (streaming || citations.length === 0) return null;
-  const searchedTotal = searchEvents.reduce((total, item) => {
-    const value = Number(item.data.total ?? item.data.returned ?? 0);
-    return Number.isFinite(value) ? Math.max(total, value) : total;
-  }, citations.length);
-  const citedCount = citations.filter((citation) => citation.cited).length;
-  const status = `搜索 ${searchedTotal} 个网页${citedCount > 0 ? ` · 引用 ${citedCount} 个` : ""}${deep && completedRounds > 1 ? " · 2 轮搜索" : ""}`;
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="mb-3 inline-flex items-center gap-2 rounded-full bg-surface-muted px-3 py-1.5 text-body-sm text-ink-secondary hover:bg-line hover:text-ink"
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0" aria-hidden>
-        <circle cx="11" cy="11" r="7" />
-        <path d="m16 16 4 4" />
-      </svg>
-      <span>{status}</span>
-    </button>
-  );
 }
 
 /**

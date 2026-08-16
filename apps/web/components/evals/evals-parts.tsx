@@ -8,29 +8,10 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 
-import {
-  Card,
-  EmptyState,
-  ErrorBanner,
-  LoadingState,
-  Spinner,
-  fmtDateTime,
-} from "@/components/common";
+import {Card, ErrorBanner, LoadingState, Spinner, fmtDateTime} from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
-import { useAuth } from "@/lib/auth-context";
-import type {
-  EvalCompareResponse,
-  EvalImportResponse,
-  EvalJobInfo,
-  EvalRunDetail,
-  EvalRunJobStart,
-  EvalRunListItem,
-  EvalRunsResponse,
-  RetrievalCategoryRow,
-  RetrievalEvalMetrics,
-  RetrievalRefusal,
-} from "@/lib/types";
+import type {EvalCompareResponse, EvalJobInfo, EvalRunDetail, RetrievalCategoryRow, RetrievalEvalMetrics, RetrievalRefusal} from "@/lib/types";
 
 export const DEFAULT_GOLDEN = "eval/golden_set/v2.jsonl";
 export const POLL_INTERVAL_MS = 3000;

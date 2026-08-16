@@ -18,24 +18,7 @@ import {
 import { FEEDBACK_CATEGORY_LABELS } from "@/components/feedback-widget";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { ApiError, apiJson } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
-import type {
-  AdminUserOut,
-  AdminUserDetailOut,
-  AdminUserPageOut,
-  AdminWalletAdjustOut,
-  AdminLatencyResponse,
-  AdminUsageResponse,
-  BreakerState,
-  FaultPatch,
-  FaultState,
-  FeedbackCategory,
-  FeedbackListResponse,
-  FeedbackOut,
-  KbOut,
-  RegistrationInviteOut,
-  TimeTravelInfo,
-} from "@/lib/types";
+import type {AdminUserOut, AdminUserDetailOut, AdminUserPageOut, AdminWalletAdjustOut, AdminUsageResponse, BreakerState, FaultPatch, FaultState, FeedbackCategory, FeedbackListResponse, FeedbackOut, KbOut, RegistrationInviteOut} from "@/lib/types";
 
 export const DAY_OPTIONS = [7, 14, 30];
 

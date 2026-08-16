@@ -3,65 +3,11 @@
 // 练习（F5）：发起表单 → SSE 流（过程时间线 + interrupt 蓝图确认）→ resume →
 // 题目作答（四种控件，MathText 渲染）→ 逐题结果 + 掌握度变化；历史卷可重开。
 
-import Link from "next/link";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
 
-import { AppealEntry } from "@/components/appeal-entry";
-import { ModelMarkdown } from "@/components/chat/model-markdown";
-import {
-  Card,
-  EmptyState,
-  ErrorBanner,
-  MasteryDelta,
-  PageHeader,
-  SkeletonList,
-  Spinner,
-  fmtDateTime,
-  fmtPct,
-} from "@/components/common";
-import type { FlowItem } from "@/components/flow-timeline";
-import { BlueprintCard } from "@/components/quiz/blueprint-card";
-import { ExplainBackPanel } from "@/components/quiz/explain-back-panel";
-import { PredictionSlider } from "@/components/quiz/prediction-slider";
-import { QuizForm, type QuizFormValue } from "@/components/quiz/quiz-form";
-import {
-  QuestionAnswer,
-  QuestionMeta,
-} from "@/components/quiz/question-answer";
-import { buildAttemptAnswers } from "@/components/quiz/submission";
-import {
-  hasPersistedQuizResult,
-  quizOutcomeMessage,
-  quizSseErrorMessage,
-} from "@/app/quiz/quiz-flow";
-import { adjustmentLabels } from "@/app/quiz/practice-recommendation";
-import { ApiError, apiJson } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
-import { MathText } from "@/lib/katex";
-import { streamSse } from "@/lib/sse";
-import type {
-  AttemptResult,
-  Blueprint,
-  ErrorEventData,
-  GraphDoneData,
-  GraphInterruptData,
-  GraphTraceData,
-  KbOut,
-  MetacognitionSummary,
-  NodeUpdateData,
-  PracticeRecommendation,
-  QuizDetail,
-  QuizListItem,
-  QuizQuestion,
-  WeakPointItem,
-  WeakPointsResponse,
-} from "@/lib/types";
+
+
+
+import type {GraphDoneData, GraphInterruptData, QuizQuestion, WeakPointItem} from "@/lib/types";
 
 export type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 export const PENDING_QUIZ_KEY = "suwen:pending-quiz-draft";

@@ -45,23 +45,7 @@ import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
-import type {
-  AttemptResult,
-  Blueprint,
-  ErrorEventData,
-  GraphDoneData,
-  GraphInterruptData,
-  GraphTraceData,
-  KbOut,
-  MetacognitionSummary,
-  NodeUpdateData,
-  PracticeRecommendation,
-  QuizDetail,
-  QuizListItem,
-  QuizQuestion,
-  WeakPointItem,
-  WeakPointsResponse,
-} from "@/lib/types";
+import type {AttemptResult, Blueprint, ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, MetacognitionSummary, NodeUpdateData, PracticeRecommendation, QuizDetail, QuizListItem, WeakPointsResponse} from "@/lib/types";
 import * as Parts from "@/components/quiz/quiz-parts";
 
 export default function QuizPage() {
