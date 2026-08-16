@@ -441,7 +441,7 @@ async def test_answer_cache_scope_is_kb_owner():
     # 源级守卫: chat.py 的 cache.get/put 必须传 kb owner 作用域 (owner_ids[0])
     import inspect
 
-    from eduagents_api.routers import chat as chat_module
+    from eduagents_api.routers import chat_stream as chat_module
 
     src = inspect.getsource(chat_module)
     assert "cache_scope = owner_ids[0]" in src
