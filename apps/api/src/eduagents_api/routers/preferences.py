@@ -83,6 +83,7 @@ def _row_out(row: UserPreference | None) -> dict:
             "interests": [],
             "daily_minutes": None,
             "goal": None,
+            "personalization_enabled": True,
             "updated_at": None,
         }
     return {
@@ -91,6 +92,7 @@ def _row_out(row: UserPreference | None) -> dict:
         "interests": [str(x) for x in row.interests or []],
         "daily_minutes": row.daily_minutes,
         "goal": row.goal,
+        "personalization_enabled": bool(row.personalization_enabled),
         "updated_at": row.updated_at,
     }
 
@@ -108,7 +110,11 @@ async def put_preferences(
     ctx: AuthContext = Depends(api_rate_limited),
     redis=Depends(get_redis),
 ):
-    """整资源 upsert; 成功后失效 profile_summary 缓存, 画像段立即反映新偏好。"""
+    """整资源 upsert; 成功后失效 profile_summary 缓存, 画像段立即反映新偏好。
+
+    personalization_enabled 不在替换语义内 (0031): 保存偏好不动记忆总开关,
+    开关只走 POST /api/preferences/personalization, 避免整包保存误关个性化。
+    """
     style, verbosity, interests, minutes, goal = _validate(body)
     async with tenant_session(ctx.tenant_id) as session:
         row = await session.get(UserPreference, ctx.user_id)
@@ -133,5 +139,40 @@ async def put_preferences(
         await session.refresh(row)  # 取回 server 端 updated_at (server_default/onupdate)
         payload = _row_out(row)
     # 事务提交后再失效缓存: 避免"删了缓存又回滚"导致旧值回填窗口
+    await invalidate_profile_summary_cache(redis, ctx.user_id)
+    return payload
+
+
+class PersonalizationToggle(BaseModel):
+    """记忆总开关 (0031): 关 = 停读画像段; 聊天历史照存, 再开即恢复。"""
+
+    enabled: bool
+
+
+@router.post("/personalization")
+async def set_personalization(
+    body: PersonalizationToggle,
+    ctx: AuthContext = Depends(api_rate_limited),
+    redis=Depends(get_redis),
+):
+    """切换画像注入总开关; 成功后失效 profile_summary 缓存 (下一条消息立即生效)。
+
+    豁免清单 (设计红线, 永不受此开关影响): 未成年判定、内容审核、掌握度计算。
+    关闭不删除任何画像数据 (关闭 ≠ 删除, 同 ChatGPT 语义)。
+    """
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.get(UserPreference, ctx.user_id)
+        if row is None:
+            row = UserPreference(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                personalization_enabled=body.enabled,
+            )
+            session.add(row)
+        else:
+            row.personalization_enabled = body.enabled
+        await session.flush()
+        await session.refresh(row)
+        payload = _row_out(row)
     await invalidate_profile_summary_cache(redis, ctx.user_id)
     return payload

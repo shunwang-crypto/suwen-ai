@@ -8,6 +8,10 @@
   的 from_weak_points 走同一函数, 预览即所得)。
 - GET/DELETE /api/profile/insights (P2-1): 长期记忆条目 (学生原话/误解语境)
   用户可见可删 — F8 规格"记忆条目"的最终解释权同样归用户。
+- PATCH /api/profile/insights/{id} (0031): 软抑制开关 ("不要再提及") —
+  保留原文只停注入, 与 DELETE (物理删除) 互补。
+- GET /api/profile/memory/preview (0031): "AI 眼中的我" — 复用问答同一
+  build_profile_context, 让用户看到注入 prompt 的真实摘要 (透明度)。
 """
 
 from __future__ import annotations
@@ -24,11 +28,12 @@ from eduagents_core.mastery.thresholds import (
     evidence_strength,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from .. import timectl
 from ..db import tenant_session
-from ..deps import AuthContext, api_rate_limited
+from ..deps import AuthContext, api_rate_limited, get_redis
 from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
     ErrorItem,
@@ -37,7 +42,7 @@ from ..models import (
     MasteryLog,
     MasteryRecord,
 )
-from ..profile_summary import QUIZ_WEAK_TOP, weak_point_kcs
+from ..profile_summary import QUIZ_WEAK_TOP, build_profile_context, weak_point_kcs
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -291,10 +296,51 @@ async def list_insights(ctx: AuthContext = Depends(api_rate_limited)):
                 "kind": r.kind,
                 "text": r.text,
                 "session_id": str(r.session_id) if r.session_id else None,
+                "suppressed": bool(r.suppressed),
                 "created_at": r.created_at,
             }
             for r, name in rows
         ]
+    }
+
+
+class InsightPatch(BaseModel):
+    """软抑制开关 (0031): True = "不要再提及" (保留原文, 注入侧过滤)。"""
+
+    suppressed: bool
+
+
+@router.patch("/insights/{insight_id}")
+async def patch_insight(
+    insight_id: uuid.UUID,
+    body: InsightPatch,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """切换一条记忆条目的软抑制 (用户纠正权; 与 DELETE 的物理删除互补)。"""
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.get(LearnerInsight, insight_id)
+        if row is None or row.user_id != ctx.user_id:
+            raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
+        row.suppressed = body.suppressed
+        await session.flush()
+        return {
+            "id": str(row.id),
+            "suppressed": bool(row.suppressed),
+        }
+
+
+@router.get("/memory/preview")
+async def memory_preview(
+    ctx: AuthContext = Depends(api_rate_limited), redis=Depends(get_redis)
+):
+    """记忆摘要预览 (0031): 与问答注入同源同缓存 — 用户看到的就是 AI 看到的。"""
+    pref_ctx = await build_profile_context(
+        ctx.tenant_id, ctx.user_id, redis=redis, role="qa"
+    )
+    return {
+        "summary": pref_ctx.summary,
+        "weak_points": pref_ctx.weak_points,
+        "mastered": pref_ctx.mastered,
     }
 
 

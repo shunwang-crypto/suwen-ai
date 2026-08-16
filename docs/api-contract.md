@@ -194,6 +194,23 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   `learner_insights`；普通对话中的 `confused/understood` 均不写 `mastery_log`、不推进 BKT。
   stub 网关下跳过。
 
+个性化记忆控制面（0031，ChatGPT 式用户控制层）：
+- `POST /api/preferences/personalization` `{enabled: bool}` 记忆总开关：关闭后
+  `/api/chat` 不再注入画像摘要、`/api/quiz from_weak_points` 与 `weak-points` 预览返回空、
+  开场卡不再引用软抑制条目；**豁免清单**：未成年判定、内容审核、掌握度计算永不受此开关
+  影响；关闭不删除任何数据（关闭 ≠ 删除）。切换即失效画像缓存。
+- `GET /api/profile/insights` 每条新增 `suppressed`；`PATCH /api/profile/insights/{id}`
+  `{suppressed: bool}` 软抑制（"不要再提及"）：保留原文只停注入，与 DELETE 物理删除互补。
+- `GET /api/profile/memory/preview` → `{summary, weak_points, mastered}`：与问答注入同源
+  同缓存的摘要预览（设置页"AI 眼中的你"），所见即 AI 所得。
+- `POST /api/profile/answer-ratings` `{message_id?, rating: good|bad, reason?
+  (too_long|too_short|confusing|off_topic), weak_points?[], profile_used}`：回答级评价遥测
+  （独立于 0004 工单 feedback）；`(user_id, message_id)` 唯一，改主意为 UPDATE；提交后内联
+  跑确定性统计：同一讲解风格近 30 天 ≥3 次评价且"没听懂"占比 ≥50% 时，写一条
+  `learner_insights(kind=preference_signal, source=ai_inferred)` 建议（7 天同文去重、
+  每用户 ≤3 条），仅展示待用户在设置页确认——**推断永不直接改偏好，评分链路
+  （review_grade/quiz_grade）永不注入画像**。
+
 ### AI 工作流（用户级鉴权 + 限流；SSE 流均含 node_update/trace_event/interrupt/done/error）
 | 方法 | 路径 | 说明 |
 |---|---|---|

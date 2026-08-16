@@ -25,6 +25,7 @@ from .ratelimit import RateLimiter
 from .routers import (
     account,
     admin,
+    answer_ratings,
     assessments,
     auth,
     billing,
@@ -206,6 +207,7 @@ def create_app() -> FastAPI:
     app.include_router(plans.tutor_router)
     app.include_router(tutor_attachments.router)
     app.include_router(profile.router)
+    app.include_router(answer_ratings.router)  # 0031 M2 回答级评分 (画像遥测)
     app.include_router(public_config.router)
     app.include_router(preferences.router)  # P2-3 用户偏好 (讲解风格/兴趣/时长/目标)
     app.include_router(settings_router.router)

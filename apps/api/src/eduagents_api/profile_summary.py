@@ -227,6 +227,8 @@ async def _load_snapshot(
                 "interests": [str(x) for x in pref_row.interests or []],
                 "daily_minutes": pref_row.daily_minutes,
                 "goal": pref_row.goal,
+                # 0031 总开关随快照一起读/缓存: 开关接口负责失效缓存, 这里不加二次查询
+                "personalization_enabled": bool(pref_row.personalization_enabled),
             }
         )
 
@@ -373,6 +375,20 @@ async def build_profile_context(
         except Exception:  # noqa: BLE001 — 缓存故障一律回源, 不阻塞问答
             log.warning("profile_summary_cache_get_failed", user_id=str(user_id))
     mastery, error_names, causes, prefs = await _load_snapshot(tenant_id, user_id, ids)
+    if prefs is not None and not prefs.get("personalization_enabled", True):
+        # 0031 总开关: 关闭 = 画像层整体停用 (摘要为空, 前端/下游按 empty 分支走)。
+        # 豁免清单 (永不受此开关影响): 未成年判定、内容审核、掌握度计算 —
+        # 它们本来就不读本模块, 此处显式声明防未来误接线。
+        # 空结果照常写缓存 (开关接口负责失效), 关闭状态下不反复回源。
+        ctx = ProfileContext()
+        if redis is not None:
+            try:
+                await redis.setex(
+                    key, CACHE_TTL_SECONDS, orjson.dumps({"summary": "", "weak_points": [], "mastered": []})
+                )
+            except Exception:  # noqa: BLE001
+                log.warning("profile_summary_cache_put_failed", user_id=str(user_id))
+        return ctx
     ctx = _compose_summary(mastery, error_names, causes, prefs, role=role)
     if redis is not None:
         try:
@@ -550,6 +566,10 @@ async def _load_weak_point_candidates(
     uid = uuid.UUID(str(user_id))
     tid = uuid.UUID(str(tenant_id))
     ids = _norm_ids(kb_ids)
+    # 0031 总开关: 关闭时定向出题一并停用 (调用方约定空列表须显式提示, 不静默降级)
+    pref_row = await session.get(UserPreference, uid)
+    if pref_row is not None and not pref_row.personalization_enabled:
+        return []
     stmt = (
         select(
             MasteryRecord.kc_id,

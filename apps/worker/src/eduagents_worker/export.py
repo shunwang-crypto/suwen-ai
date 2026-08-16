@@ -74,6 +74,7 @@ def _resource_zip_path(resource_id: str, filename: str | None) -> str:
 async def export_user_data(ctx: dict, tenant_id: str) -> str:
     from eduagents_api.db import plain_session, tenant_session
     from eduagents_api.models import (
+        AnswerRating,
         AssessmentAnswer,
         AssessmentAttempt,
         Attempt,
@@ -139,6 +140,8 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         # 0005 (P2-1): 长期记忆与偏好 — 个性化数据同属个保法可携带权范围
         "learner_insights": LearnerInsight,
         "user_preferences": UserPreference,
+        # 0031: 回答评分遥测 (含画像指纹) 同属可携带范围
+        "answer_ratings": AnswerRating,
         "learning_report_snapshots": LearningReportSnapshot,
     }
     dumped: dict[str, list[dict]] = {}

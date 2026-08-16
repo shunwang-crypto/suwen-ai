@@ -1088,6 +1088,10 @@ class LearnerInsight(Base):
     - 每用户只保留最近 INSIGHTS_KEEP_PER_USER=100 条, 超出删最旧 (同一写入口);
     - kc_id 可空: tutor 误解文本匹配不上词表也如实保留原文 (不新建 KC, F5-A2)。
     - 用户可见可删 (GET/DELETE /api/profile/insights, 用户纠正权);
+    - suppressed (0031 "不要再提及"): 软抑制保留原文, 注入侧读路径 (next_actions
+      resume 卡) 过滤, 记忆管理页可随时恢复;
+    - kind=preference_signal + source=ai_inferred (0031 M3): 评分统计生成的
+      讲解风格建议, 只在记忆页展示并待用户确认, 不自动改偏好;
     - PIPL: user_id FK CASCADE 随注销级联删; 导出纳入 worker/export.py。
     新表可直接在 ORM 声明外键: 0001 的建表范围已冻结, 本表只由 0005 create_all
     建出, 不存在 0003 注释里"重复建约束"的问题。
@@ -1107,9 +1111,41 @@ class LearnerInsight(Base):
         nullable=True,
     )
     source: Mapped[str] = mapped_column(String(24), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 0031: 'preference_signal' (17 字符) 需要超过 0005 原始 16 的列宽
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # 软抑制 (0031): True = 注入侧过滤, 原文保留; 与物理删除互补
+    suppressed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = _created_at()
+
+
+class AnswerRating(Base):
+    """回答级 👍/👎 遥测 (0031 M2/M3): ChatGPT "回复优秀/不佳" 的对应物。
+
+    - 与 0004 feedback (工单) 分离: 这是画像信号, 不进客服队列;
+    - (user_id, message_id) 部分唯一索引保证一条消息一条评价, 改主意走 UPDATE;
+    - fingerprint: 评分时的画像指纹 {style, verbosity, weak_points, profile_used} —
+      style/verbosity 由服务端落库时补全 (当前偏好), weak_points/profile_used
+      来自前端捕获的该消息 profile trace;
+    - M3 统计 (preference_signals.maybe_update_preference_signal) 只读本表,
+      产出 preference_signal 洞察待用户确认, 绝不直接改偏好/掌握度;
+    - PIPL: user_id FK CASCADE; RLS 同全库 tenant_isolation。
+    """
+
+    __tablename__ = "answer_ratings"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    rating: Mapped[str] = mapped_column(String(8), nullable=False)
+    # bad 档的快捷原因: too_long|too_short|confusing|off_topic
+    reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    fingerprint: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -1201,6 +1237,9 @@ class UserPreference(Base):
     - explanation_style: rigorous|colloquial|analogy (严谨/口语/类比优先) —
       **内容组织维度**, 不是任何感官类型分类 (该类说法已被证伪, 全仓禁用);
     - verbosity: concise|detailed; interests: list[str] ≤8 项/单项 ≤20 字 (应用层校验);
+    - personalization_enabled (0031): 画像注入层总开关。关闭 = profile_summary
+      返回空摘要、weak_point_kcs 返回空; 豁免清单见 profile_summary 模块注释
+      (未成年判定/审核/掌握度永不受此开关影响)。
     - 一人一行 (user_id 即主键), FK CASCADE 随注销级联删; 导出纳入 worker/export.py。
     """
 
@@ -1214,6 +1253,9 @@ class UserPreference(Base):
     interests: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     daily_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     goal: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    personalization_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

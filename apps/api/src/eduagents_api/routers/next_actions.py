@@ -222,6 +222,8 @@ async def _load_snapshots(
                 .where(
                     LearnerInsight.user_id == ctx.user_id,
                     LearnerInsight.kind.in_(_RESUME_KINDS),
+                    # 0031 软抑制: "不要再提及"的条目不再进入开场卡
+                    LearnerInsight.suppressed.is_(False),
                 )
                 .order_by(LearnerInsight.created_at.desc(), LearnerInsight.id.desc())
                 .limit(1)

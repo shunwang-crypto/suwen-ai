@@ -14,6 +14,7 @@ interface Preferences {
   interests: string[];
   daily_minutes: number | null;
   goal: string | null;
+  personalization_enabled: boolean;
   updated_at: string | null;
 }
 
@@ -23,7 +24,14 @@ interface InsightItem {
   source: string;
   kind: string;
   text: string;
+  suppressed: boolean;
   created_at: string;
+}
+
+interface MemoryPreview {
+  summary: string;
+  weak_points: string[];
+  mastered: string[];
 }
 
 interface InsightsResponse {
@@ -285,6 +293,9 @@ export default function SettingsPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [insights, setInsights] = useState<InsightItem[] | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [preview, setPreview] = useState<MemoryPreview | null>(null);
   const [displayName, setDisplayName] = useState(() => user?.display_name ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -304,10 +315,18 @@ export default function SettingsPage() {
         setStyle(data.explanation_style);
         setVerbosity(data.verbosity);
         setUpdatedAt(data.updated_at);
+        setMemoryEnabled(data.personalization_enabled !== false);
       } else {
         setError("学习偏好加载失败，可稍后重试");
       }
       setInsights(insightsResult.status === "fulfilled" ? insightsResult.value.insights : []);
+      if (preferencesResult.status === "fulfilled" && preferencesResult.value.personalization_enabled !== false) {
+        try {
+          setPreview(await apiJson<MemoryPreview>("/api/profile/memory/preview"));
+        } catch {
+          setPreview(null);
+        }
+      }
       setLoading(false);
     })();
     return () => {
@@ -373,6 +392,83 @@ export default function SettingsPage() {
       setInsights((current) => (current ?? []).filter((item) => item.id !== id));
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "删除失败，请重试");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const toggleMemory = async (enabled: boolean) => {
+    setMemoryBusy(true);
+    setError(null);
+    setSaved(null);
+    try {
+      await apiJson("/api/preferences/personalization", { method: "POST", body: { enabled } });
+      setMemoryEnabled(enabled);
+      setSaved(enabled ? "记忆已开启：讲解与练习将继续参考你的学情画像" : "记忆已关闭：讲解和出题不再参考你的画像；历史与错题照常保存");
+      if (!enabled) {
+        setPreview(null);
+      } else {
+        try {
+          setPreview(await apiJson<MemoryPreview>("/api/profile/memory/preview"));
+        } catch {
+          setPreview(null);
+        }
+      }
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "切换失败，请重试");
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
+
+  const toggleSuppress = async (item: InsightItem) => {
+    setDeletingId(item.id);
+    setError(null);
+    try {
+      await apiJson(`/api/profile/insights/${item.id}`, {
+        method: "PATCH",
+        body: { suppressed: !item.suppressed },
+      });
+      setInsights((current) =>
+        (current ?? []).map((row) => (row.id === item.id ? { ...row, suppressed: !row.suppressed } : row)),
+      );
+      setSaved(item.suppressed ? "已恢复该条记忆的引用" : "已暂停引用该条记忆（原文保留，可随时恢复）");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "操作失败，请重试");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const acceptSuggestion = async (item: InsightItem) => {
+    // 建议文本由后端确定性生成（"建议尝试「严谨」讲解"），据此映射回风格枚举；
+    // 解析失败则退化为引导到偏好区手动确认 — 推断永不直接改偏好
+    const labelMatch = item.text.match(/建议尝试「([^」]+)」/);
+    const target = STYLE_OPTIONS.find((option) => option.label === labelMatch?.[1]);
+    if (!target) {
+      setSection("preferences");
+      setSaved("请在「学习偏好」中调整讲解风格");
+      return;
+    }
+    setDeletingId(item.id);
+    setError(null);
+    try {
+      await apiJson<Preferences>("/api/preferences", {
+        method: "PUT",
+        body: {
+          explanation_style: target.value,
+          verbosity,
+          interests,
+          daily_minutes: minutes,
+          goal: goal.trim() || null,
+        },
+      });
+      setStyle(target.value);
+      await apiJson<void>(`/api/profile/insights/${item.id}`, { method: "DELETE" });
+      setInsights((current) => (current ?? []).filter((row) => row.id !== item.id));
+      setSaved(`已把讲解风格切换为「${target.label}」，可在学习偏好中随时改回`);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "采纳失败，请手动在学习偏好中调整");
     } finally {
       setDeletingId(null);
     }
@@ -513,12 +609,80 @@ export default function SettingsPage() {
 
           {section === "memory" && (
             <section>
-              <SettingsHeader title="AI 记住的你" description="仅展示从学习对话和辅导中提取的长期洞察；你可以逐条删除。" />
-              {insights === null ? <div className="mt-7 h-40 animate-pulse rounded-overlay bg-line/60" /> : insights.length === 0 ? <p className="border-b border-line py-10 text-sm text-ink-muted">目前没有长期记忆条目。</p> : (
-                <div className="divide-y divide-line">{insights.map((item) => (
-                  <article key={item.id} className="grid gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span><span className="rounded-full bg-surface-muted px-2 py-0.5 text-caption text-ink-muted">{item.kind}</span></div><div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div><p className="mt-2 text-caption text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p></div>
-                    <button type="button" disabled={deletingId === item.id} onClick={() => deleteInsight(item.id)} className="self-start text-xs font-medium text-danger-600 disabled:opacity-50">{deletingId === item.id ? "删除中…" : "删除"}</button>
+              <SettingsHeader title="AI 记住的你" description="管理个性化记忆：总开关、AI 生成的摘要、学习洞察与讲解风格建议。" />
+              <SettingRow
+                label="启用记忆"
+                value={memoryEnabled ? "开启" : "关闭"}
+                note="关闭后，讲解与出题不再参考你的学情画像；对话历史和错题照常保存，随时可重新开启。关闭不会删除任何数据。"
+                action={
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={memoryEnabled}
+                    disabled={memoryBusy}
+                    onClick={() => void toggleMemory(!memoryEnabled)}
+                    className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-50 ${memoryEnabled ? "bg-brand-600" : "bg-line-strong"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${memoryEnabled ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                }
+              />
+              {memoryEnabled && (
+                <div className="border-b border-line py-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-ink">AI 眼中的你（摘要预览）</p>
+                    <span className="text-caption text-ink-muted">与问答注入同源 · 约 60 秒刷新</span>
+                  </div>
+                  {preview === null ? (
+                    <p className="mt-2 text-body-sm leading-5 text-ink-muted">暂无画像摘要：还没有足够的学习记录，或摘要生成中。</p>
+                  ) : (
+                    <div className="mt-2 rounded-control border border-line bg-surface-muted px-3.5 py-3">
+                      <p className="text-[13px] leading-6 text-ink-secondary">{preview.summary || "（当前为空摘要）"}</p>
+                      {preview.weak_points.length > 0 && (
+                        <p className="mt-2 text-caption text-ink-muted">薄弱点关注：{preview.weak_points.join("、")}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {(() => {
+                const suggestions = (insights ?? []).filter((item) => item.kind === "preference_signal");
+                if (suggestions.length === 0) return null;
+                return (
+                  <div className="border-b border-line py-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-medium text-ink">AI 的建议</p>
+                      <span className="text-caption text-ink-muted">根据你对讲解的评价推断，需你确认后生效</span>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {suggestions.map((item) => (
+                        <div key={item.id} className="rounded-control border border-brand-100 bg-brand-50/50 px-3.5 py-3">
+                          <p className="text-[13px] leading-6 text-ink-secondary">{item.text}</p>
+                          <div className="mt-2 flex gap-3">
+                            <button type="button" disabled={deletingId === item.id} onClick={() => void acceptSuggestion(item)} className="rounded-control bg-ink px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">{deletingId === item.id ? "处理中…" : "采纳"}</button>
+                            <button type="button" disabled={deletingId === item.id} onClick={() => void deleteInsight(item.id)} className="rounded-control border border-line-strong px-3 py-1.5 text-xs text-ink-secondary disabled:opacity-50">忽略</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+              {insights === null ? <div className="mt-7 h-40 animate-pulse rounded-overlay bg-line/60" /> : insights.filter((item) => item.kind !== "preference_signal").length === 0 ? <p className="border-b border-line py-10 text-sm text-ink-muted">目前没有长期记忆条目。</p> : (
+                <div className="divide-y divide-line">{insights.filter((item) => item.kind !== "preference_signal").map((item) => (
+                  <article key={item.id} className={`grid gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto] ${item.suppressed ? "opacity-55" : ""}`}>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span>
+                        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-caption text-ink-muted">{item.suppressed ? "已暂停引用" : "引用中"}</span>
+                      </div>
+                      <div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div>
+                      <p className="mt-2 text-caption text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                      <button type="button" disabled={deletingId === item.id} onClick={() => void toggleSuppress(item)} className="text-xs font-medium text-ink-secondary hover:text-ink disabled:opacity-50">{item.suppressed ? "恢复引用" : "不要再提及"}</button>
+                      <button type="button" disabled={deletingId === item.id} onClick={() => deleteInsight(item.id)} className="text-xs font-medium text-danger-600 disabled:opacity-50">{deletingId === item.id ? "删除中…" : "删除"}</button>
+                    </div>
                   </article>
                 ))}</div>
               )}
@@ -530,7 +694,7 @@ export default function SettingsPage() {
               <SettingsHeader title="隐私与数据" description="查看不同数据如何参与个性化。未接入的能力不会伪装成可操作开关。" />
               <SettingRow label="账户资料" value="仅用于认证与权限" note="邮箱和角色不会作为学习能力证据。" />
               <SettingRow label="学习证据" value="用于掌握度更新" note="练习、复习和受控理解验证共同形成成长页画像，并保留来源。" action={<Link href="/growth" className="text-xs font-medium text-brand-600">查看成长</Link>} />
-              <SettingRow label="长期记忆" value={`${insights?.length ?? 0} 条`} note="你可以在“AI 记住的你”中逐条查看和删除。" action={<button type="button" onClick={() => setSection("memory")} className="text-xs font-medium text-brand-600">管理</button>} />
+              <SettingRow label="长期记忆" value={memoryEnabled ? `${insights?.length ?? 0} 条 · 引用中` : "已暂停引用"} note="你可以在“AI 记住的你”中开关记忆、逐条暂停引用或删除。" action={<button type="button" onClick={() => setSection("memory")} className="text-xs font-medium text-brand-600">管理</button>} />
               <div className="mt-5 rounded-overlay border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">免费 AI 通道由第三方提供，请求可能被用于服务改进；不要上传身份证、成绩单姓名页或其他敏感资料。平台不承诺零保留或完全私密。</div>
             </section>
           )}

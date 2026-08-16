@@ -195,6 +195,8 @@ async def test_get_returns_defaults_when_never_set(monkeypatch):
         "interests": [],
         "daily_minutes": None,
         "goal": None,
+        # 0031: 记忆总开关随偏好行返回; 无行 = 默认开启
+        "personalization_enabled": True,
         "updated_at": None,
     }
 

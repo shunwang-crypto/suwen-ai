@@ -73,6 +73,9 @@ interface ChatMsg {
   stalled?: boolean;
   attachments?: ChatAttachmentOut[];
   chatMode?: ChatMode;
+  /** 回答评价 (0031 M2): good/bad 已提交; 未评价为 undefined */
+  rating?: "good" | "bad";
+  ratingReason?: string | null;
 }
 
 type ChatMode = "fast" | "think" | "web" | "research";
@@ -291,6 +294,8 @@ function ChatView() {
 
   // 消息与流式状态
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  /** 正在选"讲得不好"原因的消息 id (0031 M2) */
+  const [ratingPick, setRatingPick] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -1085,6 +1090,40 @@ function ChatView() {
     setCitationsOpen(true);
   }, []);
 
+  // 回答评价 (0031 M2): 指纹取自该消息的 profile trace — 评的是"当时那版画像"
+  const submitRating = useCallback(
+    async (m: ChatMsg, rating: "good" | "bad", reason: string | null) => {
+      const profileTrace = m.timeline.find(
+        (item) => item.kind === "trace" && item.data?.type === "profile",
+      );
+      const weakPoints = Array.isArray(profileTrace?.data?.weak_points)
+        ? (profileTrace?.data?.weak_points as unknown[])
+            .filter((w): w is string => typeof w === "string")
+            .slice(0, 5)
+        : [];
+      try {
+        await apiJson("/api/profile/answer-ratings", {
+          method: "POST",
+          body: {
+            message_id: m.id,
+            rating,
+            reason,
+            weak_points: weakPoints,
+            profile_used: profileTrace != null,
+          },
+        });
+      } catch {
+        // 评价是尽力而为: 失败不打断聊天, 也不弹错误 (下次可再评)
+      }
+      setMessages((prev) =>
+        prev.map((row) =>
+          row.id === m.id ? { ...row, rating, ratingReason: reason } : row,
+        ),
+      );
+    },
+    [],
+  );
+
   // 引用面板数据源：优先用户选中的消息，否则最近一条带引用的助手消息
   const citedMsg =
     messages.find((m) => m.id === citationMsgId && m.citations.length > 0) ??
@@ -1535,7 +1574,7 @@ function ChatView() {
                       )}
 
                       {!m.streaming && m.done && !m.errorText && (
-                        <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                           <span
                             className="h-2 w-2 shrink-0 rounded-full bg-sky-500"
                             aria-hidden
@@ -1557,6 +1596,85 @@ function ChatView() {
                                 {m.citations.length} 条知识库引用
                               </button>
                             )}
+                          {m.timeline.some(
+                            (item) => item.kind === "trace" && item.data?.type === "profile",
+                          ) && (
+                            <span
+                              className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-violet-600"
+                              title="本次回答参考了你的学情摘要（偏好与薄弱点），可在设置 → AI 记住的你 中管理"
+                            >
+                              已参考学情画像
+                            </span>
+                          )}
+                          <span className="mx-1 h-3 w-px bg-slate-200" aria-hidden />
+                          <button
+                            type="button"
+                            aria-label="讲得好"
+                            aria-pressed={m.rating === "good"}
+                            onClick={() => void submitRating(m, "good", null)}
+                            className={`rounded-full px-2 py-0.5 transition-colors ${
+                              m.rating === "good"
+                                ? "bg-emerald-50 text-emerald-600"
+                                : "text-slate-400 hover:bg-surface-muted hover:text-ink-secondary"
+                            }`}
+                          >
+                            👍 讲得好
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="讲得不好"
+                            aria-pressed={m.rating === "bad"}
+                            onClick={() =>
+                              m.rating === "bad"
+                                ? setRatingPick(ratingPick === m.id ? null : m.id)
+                                : setRatingPick(m.id)
+                            }
+                            className={`rounded-full px-2 py-0.5 transition-colors ${
+                              m.rating === "bad"
+                                ? "bg-amber-50 text-amber-600"
+                                : "text-slate-400 hover:bg-surface-muted hover:text-ink-secondary"
+                            }`}
+                          >
+                            👎 讲得不好
+                          </button>
+                        </div>
+                      )}
+
+                      {ratingPick === m.id && !m.streaming && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                          <span className="text-ink-muted">哪里不好：</span>
+                          {[
+                            { value: "too_long", label: "太啰嗦" },
+                            { value: "too_short", label: "太简略" },
+                            { value: "confusing", label: "没听懂" },
+                            { value: "off_topic", label: "不是我想问的" },
+                          ].map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                setRatingPick(null);
+                                void submitRating(m, "bad", option.value);
+                              }}
+                              className={`rounded-full border px-2.5 py-1 transition-colors ${
+                                m.ratingReason === option.value
+                                  ? "border-amber-300 bg-amber-50 text-amber-700"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-amber-200 hover:text-amber-700"
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRatingPick(null);
+                              void submitRating(m, "bad", null);
+                            }}
+                            className="rounded-full px-2 py-1 text-ink-muted hover:text-ink-secondary"
+                          >
+                            直接标记不佳
+                          </button>
                         </div>
                       )}
                     </div>
