@@ -1,8 +1,8 @@
 """LLM JSON 输出的容错解析 (唯一实现)。
 
-此前同一逻辑存在四份逐字重复 (kc/extraction、graphs/qa_graph、graphs/quiz_graph、
-apps/api/routers/reviews), 漂移风险与维护成本同源 —— 收敛到本模块, 调用方一律
-import 公共名 parse_json_object。
+此前同一逻辑存在六份逐字重复 (core: kc/extraction、graphs/qa_graph、quiz_graph;
+api: routers/reviews; worker: study_guide、reflection), 漂移风险与维护成本同源 ——
+收敛到本模块, 调用方一律 import 公共名 parse_json_object。
 
 语义契约 (与四份旧实现完全一致, 行为不变):
 - 候选: 先整体 strip 后的文本, 再截取首个 "{" 到末个 "}" (容忍代码块围栏

@@ -12,13 +12,12 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
-from typing import Any
 
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import ChatMessage, ChatRequest, ModelGateway, Tier
+from eduagents_core.json_utils import parse_json_object
 from eduagents_core.logging import get_logger
 from sqlalchemy import select
 
@@ -38,22 +37,6 @@ CHAT_EVIDENCE_WEIGHT = 0.3
 
 def _load_prompt(name: str) -> str:
     return (_PROMPTS_DIR / name).read_text(encoding="utf-8")
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """尽力解析单个 JSON 对象 (整体 -> 首 { 到末 }); 失败返回 None。"""
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
 
 
 def match_insight_rows(
@@ -192,7 +175,7 @@ async def reflect_session(
             user_id=str(user_id),
         )
     )
-    data = _parse_json_object(result.text)
+    data = parse_json_object(result.text)
     insights = data.get("insights") if isinstance(data, dict) else None
     if not isinstance(insights, list):
         log.warning("reflect_parse_failed", session_id=session_id)

@@ -37,7 +37,8 @@ from ..models import (
 )
 from ..profile_summary import invalidate_profile_summary_cache
 from ..services import _resolve_kc_ids
-from .chat_attachments import _extract_document, _read_capped, _safe_filename, _validate_file
+from ..uploads import read_chat_attachment
+from .chat_attachments import _extract_document, _safe_filename, _validate_file
 
 router = APIRouter(prefix="/api/errors", tags=["errors"])
 
@@ -312,7 +313,7 @@ async def upload_error_import(
 ):
     await _prepare_new_import(ctx, request, settings)
     filename = _safe_filename(file.filename)
-    data = await _read_capped(file, settings.max_chat_attachment_mb * 1024 * 1024)
+    data = await read_chat_attachment(file, settings)
     kind, mime = _validate_file(
         filename, data, vision_enabled=settings.routing_vision_enabled
     )

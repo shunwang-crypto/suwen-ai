@@ -14,7 +14,6 @@ stub 网关跳过 (D2: stub 不产生可入库内容)。
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +21,7 @@ from typing import Any
 
 from eduagents_core.config import get_settings
 from eduagents_core.gateway import ChatMessage, ChatRequest, ModelGateway, Tier
+from eduagents_core.json_utils import parse_json_object
 from eduagents_core.logging import get_logger
 from sqlalchemy import select, update
 
@@ -77,22 +77,6 @@ async def _set_generation_status(
         config["study_guide_generation"] = generation
         kb.config_json = config
     return True
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """尽力解析单个 JSON 对象 (容忍代码块围栏); 失败返回 None 不抛裸异常。"""
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
 
 
 def _clean_str_list(raw: object, *, limit: int, max_len: int) -> list[str]:
@@ -206,7 +190,7 @@ async def _generate(
         )
         if result.mode == "stub":
             return None  # stub 网关不产生可入库内容 (D2)
-        data = _parse_json_object(result.text)
+        data = parse_json_object(result.text)
         if data is None:
             continue
         guide = parse_guide_payload(data, valid)

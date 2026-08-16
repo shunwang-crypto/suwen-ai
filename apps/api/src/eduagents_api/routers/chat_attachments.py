@@ -15,7 +15,7 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..models import ChatAttachment
 from ..schemas import ChatAttachmentOut
-from ..uploads import read_upload_capped
+from ..uploads import read_chat_attachment
 
 router = APIRouter(prefix="/api/chat/attachments", tags=["chat"])
 
@@ -47,13 +47,6 @@ def _safe_filename(value: str | None) -> str:
     name = Path((value or "attachment").replace("\\", "/")).name.strip().replace("\x00", "")
     name = name.replace("\r", "").replace("\n", "")
     return (name or "attachment")[:255]
-
-
-async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
-    """本地入口: 收敛到 uploads.read_upload_capped (空文件 400 + 超限 413 语义不变)。"""
-    return await read_upload_capped(
-        file, max_bytes, too_large_detail="CHAT_ATTACHMENT_TOO_LARGE", reject_empty=True
-    )
 
 
 def _validate_file(filename: str, data: bytes, *, vision_enabled: bool) -> tuple[str, str]:
@@ -147,7 +140,7 @@ async def upload_chat_attachment(
     settings=Depends(get_app_settings),
 ):
     filename = _safe_filename(file.filename)
-    data = await _read_capped(file, settings.max_chat_attachment_mb * 1024 * 1024)
+    data = await read_chat_attachment(file, settings)
     kind, mime_type = _validate_file(
         filename, data, vision_enabled=settings.routing_vision_enabled
     )

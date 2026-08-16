@@ -446,7 +446,10 @@ class Settings(BaseSettings):
     web_import_allow_private_hosts: bool = False
 
     # --- upload constraints ---
-    max_upload_mb: int = 50
+    # ge=1: 0 不是"关闭"而是配置错误 —— 上限配置手误必须启动期拒绝,
+    # 不能退化成无上限读入 (fail-closed)。tutor/resources 的 0=不限量是
+    # 文档化语义, 不在此列。
+    max_upload_mb: int = Field(default=50, ge=1)
     # Business-neutral PDF inspection/rendering limits.  Tutor may apply
     # tighter page-selection limits, but all PDF consumers share these safety
     # and classification thresholds.
@@ -466,7 +469,8 @@ class Settings(BaseSettings):
     pdf_page_timeout_seconds: float = 45.0
     pdf_document_timeout_seconds: float = 300.0
     pdf_question_structuring_max_tokens: int = Field(default=8000, ge=1000, le=12000)
-    max_chat_attachment_mb: int = 20
+    # 同 max_upload_mb: 0 曾被解释为不限量, 变成 fail-open (review 36af54e)
+    max_chat_attachment_mb: int = Field(default=20, ge=1)
     max_chat_attachments_per_message: int = 4
     max_chat_attachment_text_chars: int = 2_000_000
     # Tutor attachment extraction is intentionally bounded independently from

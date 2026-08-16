@@ -23,7 +23,7 @@ from langgraph.types import interrupt
 
 from ..gateway.base import ChatMessage, ChatRequest, Tier
 
-# 容错 JSON 解析 (整体 -> 截取首尾大括号), 与 KC 抽取共用同一套宽容策略
+# 容错 JSON 解析 (整体 -> 截取首尾大括号), 与全仓共用 json_utils.parse_json_object
 from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
 from ..mastery.thresholds import zone_label
