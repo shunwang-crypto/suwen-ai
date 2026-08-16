@@ -17,6 +17,7 @@ import {
   fmtDateTime,
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import { useAuth } from "@/lib/auth-context";
 import type {
   EvalCompareResponse,
@@ -272,7 +273,7 @@ export function RefusalBlock({ refusal }: { refusal: RetrievalRefusal }) {
                 >
                   <td className="py-1.5 pr-2 font-mono text-xs text-slate-500">{r.qid}</td>
                   <td className="max-w-80 py-1.5 pr-2 text-xs text-slate-700">
-                    {r.question}
+                    <MathText text={r.question} />
                   </td>
                   <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
                     {r.n_chunks}

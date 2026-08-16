@@ -38,7 +38,11 @@ from ..models import (
 from ..profile_summary import invalidate_profile_summary_cache
 from ..services import _resolve_kc_ids
 from ..uploads import read_chat_attachment
-from .chat_attachments import _extract_document, _safe_filename, _validate_file
+from .chat_attachments import (
+    extract_attachment_document,
+    safe_attachment_filename,
+    validate_attachment_file,
+)
 
 router = APIRouter(prefix="/api/errors", tags=["errors"])
 
@@ -193,7 +197,7 @@ async def _prepare_new_import(ctx: AuthContext, request: Request, settings) -> N
 
 
 def _source_headers(filename: str, mime_type: str) -> dict[str, str]:
-    safe_name = _safe_filename(filename)
+    safe_name = safe_attachment_filename(filename)
     ascii_name = "".join(
         char if 32 <= ord(char) < 127 and char not in {'"', "\\"} else "_"
         for char in safe_name
@@ -312,9 +316,9 @@ async def upload_error_import(
     settings=Depends(get_app_settings),
 ):
     await _prepare_new_import(ctx, request, settings)
-    filename = _safe_filename(file.filename)
+    filename = safe_attachment_filename(file.filename)
     data = await read_chat_attachment(file, settings)
-    kind, mime = _validate_file(
+    kind, mime = validate_attachment_file(
         filename, data, vision_enabled=settings.routing_vision_enabled
     )
     from .resources import _resource_quota_used
@@ -327,7 +331,7 @@ async def upload_error_import(
         ):
             raise HTTPException(status_code=400, detail="STORAGE_QUOTA_EXCEEDED")
     extracted_text = (
-        await _extract_document(filename, data, settings.max_chat_attachment_text_chars)
+        await extract_attachment_document(filename, data, settings.max_chat_attachment_text_chars)
         if kind == "document"
         else None
     )

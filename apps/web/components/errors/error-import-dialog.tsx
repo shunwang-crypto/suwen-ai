@@ -5,6 +5,7 @@ import Image from "next/image";
 
 import { Spinner } from "@/components/common";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
+import { MathText } from "@/lib/katex";
 import type {
   ErrorImportCapabilities,
   ErrorImportDraft,
@@ -453,6 +454,9 @@ export function ErrorImportDialog({
           <label className="mt-4 block">
             <span className="mb-1.5 block text-caption font-medium text-ink-secondary">题目 <span className="text-danger-600">必填</span></span>
             <textarea value={form.stem} onChange={(event) => set("stem", event.target.value)} rows={4} maxLength={12000} placeholder="完整输入题干和条件" className={`${fieldClass} resize-y leading-5`} />
+            {form.stem.trim() && (
+              <MathText text={form.stem} className="mt-1 block text-[13px] leading-6 text-ink" />
+            )}
           </label>
 
           {(form.type === "single" || form.type === "multi") && (

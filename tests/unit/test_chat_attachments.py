@@ -2,25 +2,25 @@ from types import SimpleNamespace
 
 import pytest
 from eduagents_api.routers.chat import _document_excerpts
-from eduagents_api.routers.chat_attachments import _render_document, _validate_file
+from eduagents_api.routers.chat_attachments import _render_document, validate_attachment_file
 from eduagents_core.gateway.base import message_text
 from eduagents_core.parsing.base import Element, ParsedDocument
 from fastapi import HTTPException
 
 
 def test_validate_chat_document_and_image_signatures():
-    assert _validate_file("notes.txt", "泰勒公式".encode(), vision_enabled=True) == (
+    assert validate_attachment_file("notes.txt", "泰勒公式".encode(), vision_enabled=True) == (
         "document",
         "text/plain",
     )
-    assert _validate_file(
+    assert validate_attachment_file(
         "question.png", b"\x89PNG\r\n\x1a\nrest", vision_enabled=True
     ) == ("image", "image/png")
 
 
 def test_image_upload_requires_configured_vision_model():
     with pytest.raises(HTTPException) as exc:
-        _validate_file("question.jpg", b"\xff\xd8\xffrest", vision_enabled=False)
+        validate_attachment_file("question.jpg", b"\xff\xd8\xffrest", vision_enabled=False)
     assert exc.value.status_code == 503
     assert exc.value.detail == "VISION_MODEL_UNAVAILABLE"
 

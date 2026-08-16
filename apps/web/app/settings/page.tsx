@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import { useApiResource } from "@/lib/use-api-resource";
 
 interface Preferences {
   explanation_style: string | null;
@@ -115,7 +116,9 @@ function InlineNotice({ children, tone = "success" }: { children: ReactNode; ton
 }
 
 function ModelCredentialSection() {
-  const [credential, setCredential] = useState<ModelCredential | null>(null);
+  const credentialRes = useApiResource<ModelCredential>("/api/settings/model-credential", {
+    errorMessage: "模型服务配置加载失败",
+  });
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [normalModel, setNormalModel] = useState("deepseek-chat");
@@ -127,24 +130,24 @@ function ModelCredentialSection() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
 
+  const credential = credentialRes.data;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  // 到达后回填表单 (原加载 effect 的联动部分; setData 更新时同样重放, 值与表单一致无感)
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<ModelCredential>("/api/settings/model-credential");
-        if (!alive) return;
-        setCredential(data);
-        if (data.normal_model) setNormalModel(data.normal_model);
-        if (data.reasoning_model) setReasoningModel(data.reasoning_model);
-        setFallback(data.fallback_to_platform);
-      } catch (caught) {
-        if (alive) setError(caught instanceof ApiError ? caught.message : "模型服务配置加载失败");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const data = credentialRes.data;
+    if (!data) return;
+    if (data.normal_model) setNormalModel(data.normal_model);
+    if (data.reasoning_model) setReasoningModel(data.reasoning_model);
+    setFallback(data.fallback_to_platform);
+  }, [credentialRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  useEffect(() => {
+    if (credentialRes.error) setError(credentialRes.error);
+  }, [credentialRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (!confirmDelete) return;
@@ -169,7 +172,7 @@ function ModelCredentialSection() {
         method: "PUT",
         body: { provider: "deepseek", api_key: apiKey, normal_model: normalModel, reasoning_model: reasoningModel, fallback_to_platform: fallback },
       });
-      setCredential(data);
+      credentialRes.setData(data);
       setApiKey("");
       setShowKey(false);
       setNotice("DeepSeek 配置已验证并保存");
@@ -185,7 +188,7 @@ function ModelCredentialSection() {
     setError(null);
     try {
       const data = await apiJson<ModelCredential>("/api/settings/model-credential", { method: "PATCH", body });
-      setCredential(data);
+      credentialRes.setData(data);
       setFallback(data.fallback_to_platform);
       setNotice(data.enabled ? "已恢复使用自带 Key" : "已暂停使用自带 Key");
     } catch (caught) {
@@ -200,7 +203,7 @@ function ModelCredentialSection() {
     setError(null);
     try {
       await apiJson<void>("/api/settings/model-credential", { method: "DELETE" });
-      setCredential(null);
+      credentialRes.setData(null);
       setApiKey("");
       setConfirmDelete(false);
       setNotice("已删除自带模型配置");
@@ -280,7 +283,6 @@ export default function SettingsPage() {
     : "profile";
   const [sectionOverride, setSection] = useState<SettingsSection | null>(null);
   const section = sectionOverride ?? querySection;
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -291,48 +293,53 @@ export default function SettingsPage() {
   const [style, setStyle] = useState<string | null>(null);
   const [verbosity, setVerbosity] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [insights, setInsights] = useState<InsightItem[] | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [memoryBusy, setMemoryBusy] = useState(false);
-  const [preview, setPreview] = useState<MemoryPreview | null>(null);
   const [displayName, setDisplayName] = useState(() => user?.display_name ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
 
+  const prefsRes = useApiResource<Preferences>("/api/preferences", {
+    errorMessage: "学习偏好加载失败，可稍后重试",
+    toErrorMessage: () => "学习偏好加载失败，可稍后重试",
+  });
+  const insightsRes = useApiResource<InsightsResponse>("/api/profile/insights", {
+    errorMessage: "画像洞察加载失败",
+  });
+  const previewRes = useApiResource<MemoryPreview>(
+    prefsRes.data && prefsRes.data.personalization_enabled !== false
+      ? "/api/profile/memory/preview"
+      : null,
+  );
+  // 原语义: 洞察失败呈现空态 (非骨架), 仅加载中为 null
+  const insights = insightsRes.data
+    ? insightsRes.data.insights
+    : prefsRes.loading || insightsRes.loading
+      ? null
+      : [];
+  const preview = previewRes.data;
+  const loading = prefsRes.loading || insightsRes.loading;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  // 偏好到达后回填表单 (原加载 effect 的联动部分)
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [preferencesResult, insightsResult] = await Promise.allSettled([
-        apiJson<Preferences>("/api/preferences"),
-        apiJson<InsightsResponse>("/api/profile/insights"),
-      ]);
-      if (!alive) return;
-      if (preferencesResult.status === "fulfilled") {
-        const data = preferencesResult.value;
-        setGoal(data.goal ?? "");
-        setInterests(data.interests ?? []);
-        setMinutes(data.daily_minutes);
-        setStyle(data.explanation_style);
-        setVerbosity(data.verbosity);
-        setUpdatedAt(data.updated_at);
-        setMemoryEnabled(data.personalization_enabled !== false);
-      } else {
-        setError("学习偏好加载失败，可稍后重试");
-      }
-      setInsights(insightsResult.status === "fulfilled" ? insightsResult.value.insights : []);
-      if (preferencesResult.status === "fulfilled" && preferencesResult.value.personalization_enabled !== false) {
-        try {
-          setPreview(await apiJson<MemoryPreview>("/api/profile/memory/preview"));
-        } catch {
-          setPreview(null);
-        }
-      }
-      setLoading(false);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const data = prefsRes.data;
+    if (!data) return;
+    setGoal(data.goal ?? "");
+    setInterests(data.interests ?? []);
+    setMinutes(data.daily_minutes);
+    setStyle(data.explanation_style);
+    setVerbosity(data.verbosity);
+    setUpdatedAt(data.updated_at);
+    setMemoryEnabled(data.personalization_enabled !== false);
+  }, [prefsRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  useEffect(() => {
+    if (prefsRes.error) setError(prefsRes.error);
+  }, [prefsRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const toggleInterest = (tag: string) => {
     setSaved(null);
@@ -389,7 +396,9 @@ export default function SettingsPage() {
     setError(null);
     try {
       await apiJson<void>(`/api/profile/insights/${id}`, { method: "DELETE" });
-      setInsights((current) => (current ?? []).filter((item) => item.id !== id));
+      insightsRes.setData((current) =>
+        current ? { insights: current.insights.filter((item) => item.id !== id) } : current,
+      );
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "删除失败，请重试");
     } finally {
@@ -406,13 +415,9 @@ export default function SettingsPage() {
       setMemoryEnabled(enabled);
       setSaved(enabled ? "记忆已开启：讲解与练习将继续参考你的学情画像" : "记忆已关闭：讲解和出题不再参考你的画像；历史与错题照常保存");
       if (!enabled) {
-        setPreview(null);
+        previewRes.setData(null);
       } else {
-        try {
-          setPreview(await apiJson<MemoryPreview>("/api/profile/memory/preview"));
-        } catch {
-          setPreview(null);
-        }
+        previewRes.reload();
       }
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "切换失败，请重试");
@@ -429,8 +434,10 @@ export default function SettingsPage() {
         method: "PATCH",
         body: { suppressed: !item.suppressed },
       });
-      setInsights((current) =>
-        (current ?? []).map((row) => (row.id === item.id ? { ...row, suppressed: !row.suppressed } : row)),
+      insightsRes.setData((current) =>
+        current
+          ? { insights: current.insights.map((row) => (row.id === item.id ? { ...row, suppressed: !row.suppressed } : row)) }
+          : current,
       );
       setSaved(item.suppressed ? "已恢复该条记忆的引用" : "已暂停引用该条记忆（原文保留，可随时恢复）");
     } catch (caught) {
@@ -465,7 +472,9 @@ export default function SettingsPage() {
       });
       setStyle(target.value);
       await apiJson<void>(`/api/profile/insights/${item.id}`, { method: "DELETE" });
-      setInsights((current) => (current ?? []).filter((row) => row.id !== item.id));
+      insightsRes.setData((current) =>
+        current ? { insights: current.insights.filter((row) => row.id !== item.id) } : current,
+      );
       setSaved(`已把讲解风格切换为「${target.label}」，可在学习偏好中随时改回`);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "采纳失败，请手动在学习偏好中调整");

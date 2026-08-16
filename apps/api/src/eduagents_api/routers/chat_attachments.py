@@ -43,13 +43,15 @@ _MAGIC = {
 }
 
 
-def _safe_filename(value: str | None) -> str:
+def safe_attachment_filename(value: str | None) -> str:
+    """文件名净化具名入口 (chat_attachments 与 error_imports 共用, 消跨路由私有依赖)。"""
     name = Path((value or "attachment").replace("\\", "/")).name.strip().replace("\x00", "")
     name = name.replace("\r", "").replace("\n", "")
     return (name or "attachment")[:255]
 
 
-def _validate_file(filename: str, data: bytes, *, vision_enabled: bool) -> tuple[str, str]:
+def validate_attachment_file(filename: str, data: bytes, *, vision_enabled: bool) -> tuple[str, str]:
+    """类型/魔数校验具名入口 (chat_attachments 与 error_imports 共用)。"""
     suffix = Path(filename).suffix.lower()
     if suffix in _IMAGE_SUFFIXES:
         if not vision_enabled:
@@ -86,7 +88,8 @@ def _render_document(parsed: ParsedDocument) -> str:
     return "\n\n".join(part for part in parts if part.strip()).strip()
 
 
-async def _extract_document(filename: str, data: bytes, max_chars: int) -> str:
+async def extract_attachment_document(filename: str, data: bytes, max_chars: int) -> str:
+    """文档解析提取具名入口 (chat_attachments 与 error_imports 共用)。"""
     suffix = Path(filename).suffix.lower()
     parser = get_parser(suffix)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -139,9 +142,9 @@ async def upload_chat_attachment(
     ctx: AuthContext = Depends(api_rate_limited),
     settings=Depends(get_app_settings),
 ):
-    filename = _safe_filename(file.filename)
+    filename = safe_attachment_filename(file.filename)
     data = await read_chat_attachment(file, settings)
-    kind, mime_type = _validate_file(
+    kind, mime_type = validate_attachment_file(
         filename, data, vision_enabled=settings.routing_vision_enabled
     )
 
@@ -182,7 +185,7 @@ async def upload_chat_attachment(
 
     extracted_text = None
     if kind == "document":
-        extracted_text = await _extract_document(
+        extracted_text = await extract_attachment_document(
             filename, data, settings.max_chat_attachment_text_chars
         )
 

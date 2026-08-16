@@ -15,6 +15,7 @@ import {
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
 import type { KbOut, OrgMemberOut, OrgOut } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 function errText(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -29,9 +30,8 @@ function errText(err: unknown, fallback: string): string {
 }
 
 export default function OrgsPage() {
-  // 机构列表（orgsReload 自增触发重新加载：effect 内联 IIFE 模式，同 kb 页）
-  const [orgs, setOrgs] = useState<OrgOut[] | null>(null);
-  const [orgsReload, setOrgsReload] = useState(0);
+  // 机构列表 (useApiResource: 过期防护与重载由 hook 承担; 到达后回填 selectedId 见下方同步 effect)
+  const orgsRes = useApiResource<OrgOut[]>("/api/orgs", { errorMessage: "机构列表加载失败" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -41,64 +41,75 @@ export default function OrgsPage() {
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
 
-  // 选中机构详情（detailOrgId 标记数据归属：切机构自然呈现加载态）
-  const [members, setMembers] = useState<OrgMemberOut[] | null>(null);
-  const [orgKbs, setOrgKbs] = useState<KbOut[] | null>(null);
+  // 选中机构详情 (条件加载: 未选中不发请求); orgKbs 为按选中机构过滤的派生值,
+  // detailOrgId 标记数据归属：切机构自然呈现加载态
+  const membersRes = useApiResource<OrgMemberOut[]>(
+    selectedId ? `/api/orgs/${selectedId}/members` : null,
+    { errorMessage: "成员列表加载失败" },
+  );
+  const kbRes = useApiResource<KbOut[]>(selectedId ? "/api/kb" : null, {
+    errorMessage: "机构库列表加载失败",
+  });
   const [detailOrgId, setDetailOrgId] = useState<string | null>(null);
   const [newKbName, setNewKbName] = useState("");
   const [newKbSubject, setNewKbSubject] = useState("");
   const [creatingKb, setCreatingKb] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const orgs = orgsRes.data;
+  const members = membersRes.data;
+  const orgKbs = kbRes.data ? kbRes.data.filter((k) => k.org_id === selectedId) : null;
   const selected = orgs?.find((o) => o.id === selectedId) ?? null;
   const detailReady = detailOrgId === selectedId;
 
-  const reloadOrgs = useCallback(() => setOrgsReload((k) => k + 1), []);
+  const { reload: reloadOrgList } = orgsRes;
+  const { reload: reloadMembers } = membersRes;
+  const { reload: reloadKbs } = kbRes;
+  // reload 均为 hook 内 useCallback 稳定引用
+  const reloadOrgs = useCallback(() => {
+    reloadOrgList();
+    reloadMembers();
+    reloadKbs();
+  }, [reloadOrgList, reloadMembers, reloadKbs]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  // 列表到达后回填选中项: 保留仍存在的当前选中, 否则取第一个
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const list = await apiJson<OrgOut[]>("/api/orgs");
-        if (!alive) return;
-        setOrgs(list);
-        setSelectedId((prev) =>
-          prev && list.some((o) => o.id === prev) ? prev : (list[0]?.id ?? null),
-        );
-      } catch (err) {
-        if (!alive) return;
-        setOrgs((prev) => prev ?? []);
-        setBanner(errText(err, "机构列表加载失败"));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [orgsReload]);
+    const list = orgsRes.data;
+    if (!list) return;
+    setSelectedId((prev) =>
+      prev && list.some((o) => o.id === prev) ? prev : (list[0]?.id ?? null),
+    );
+  }, [orgsRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  // 选中机构 → 拉成员列表 + 该机构的库（从 /api/kb 过滤 org_id）
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  // 失败兜底同原实现: 保留已有列表 (无则空列表) 并以横幅提示
   useEffect(() => {
-    if (!selectedId) return;
-    let alive = true;
-    (async () => {
-      const [membersRes, kbsRes] = await Promise.allSettled([
-        apiJson<OrgMemberOut[]>(`/api/orgs/${selectedId}/members`),
-        apiJson<KbOut[]>("/api/kb"),
-      ]);
-      if (!alive) return;
-      if (membersRes.status === "fulfilled") setMembers(membersRes.value);
-      else setBanner("成员列表加载失败");
-      if (kbsRes.status === "fulfilled") {
-        setOrgKbs(kbsRes.value.filter((k) => k.org_id === selectedId));
-      } else {
-        setBanner("机构库列表加载失败");
-      }
-      setDetailOrgId(selectedId);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [selectedId, orgsReload]);
+    if (!orgsRes.error) return;
+    setBanner(orgsRes.error);
+    orgsRes.setData((prev) => prev ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setData 为稳定 setState 引用
+  }, [orgsRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // 成员/机构库任一失败 → 横幅 (原 allSettled 语义: 部分成功照常渲染)
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  useEffect(() => {
+    if (membersRes.error) setBanner(membersRes.error);
+  }, [membersRes.error]);
+  useEffect(() => {
+    if (kbRes.error) setBanner(kbRes.error);
+  }, [kbRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地表单或横幅的单向同步, 无纯派生替代 */
+  // 两路均落定 (无论成败) 后标记详情归属 (原 setDetailOrgId(selectedId) 语义)
+  useEffect(() => {
+    if (!selectedId || membersRes.loading || kbRes.loading) return;
+    setDetailOrgId(selectedId);
+  }, [selectedId, membersRes.loading, kbRes.loading]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const createOrg = async (e: FormEvent) => {
     e.preventDefault();
@@ -150,7 +161,7 @@ export default function OrgsPage() {
       });
       setNewKbName("");
       setNewKbSubject("");
-      setOrgKbs((prev) => [...(prev ?? []), kb]);
+      kbRes.setData((prev) => [...(prev ?? []), kb]);
     } catch (err) {
       setBanner(errText(err, "创建机构库失败"));
     } finally {
