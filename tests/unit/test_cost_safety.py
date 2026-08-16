@@ -70,7 +70,7 @@ def test_degrade_chain_never_upgrades_price():
 
 
 def test_plan_fallback_cost_warning_uses_active_prices(monkeypatch):
-    from eduagents_core.gateway import openai_gateway
+    from eduagents_core.gateway import openai_gateway_mixins
 
     settings = Settings(
         _env_file=None,
@@ -83,7 +83,7 @@ def test_plan_fallback_cost_warning_uses_active_prices(monkeypatch):
     )
     warnings: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        openai_gateway.log,
+        openai_gateway_mixins.log,
         "warning",
         lambda event, **fields: warnings.append((event, fields)),
     )
