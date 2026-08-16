@@ -19,7 +19,13 @@ import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {AdminLatencyResponse, AdminUsageResponse, TimeTravelInfo} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
-import * as Parts from "@/components/admin/admin-parts";
+import { BarRows, DAY_OPTIONS, DailyTrend, StatTile, fmtCny, fmtInt } from "@/components/admin/usage-parts";
+import { RetrievalTestSection } from "@/components/admin/retrieval-test";
+import { FaultInjectionSection } from "@/components/admin/fault-injection";
+import { FeedbackAdminSection } from "@/components/admin/feedback-admin";
+import { UserWalletSection } from "@/components/admin/user-wallet";
+import { RegistrationInvitesSection } from "@/components/admin/registration-invites";
+import { NoAccess } from "@/components/admin/no-access";
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -72,7 +78,7 @@ export default function AdminPage() {
     }
   };
 
-  if (!isAdmin) return <Parts.NoAccess />;
+  if (!isAdmin) return <NoAccess />;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
@@ -103,22 +109,22 @@ export default function AdminPage() {
         ))}
       </div>
 
-      {tab === "retrieval" && <Parts.RetrievalTestSection />}
+      {tab === "retrieval" && <RetrievalTestSection />}
 
-      {tab === "faults" && <Parts.FaultInjectionSection />}
+      {tab === "faults" && <FaultInjectionSection />}
 
-      {tab === "feedback" && <Parts.FeedbackAdminSection />}
+      {tab === "feedback" && <FeedbackAdminSection />}
 
-      {tab === "invites" && <Parts.RegistrationInvitesSection />}
+      {tab === "invites" && <RegistrationInvitesSection />}
 
-      {tab === "users" && <Parts.UserWalletSection />}
+      {tab === "users" && <UserWalletSection />}
 
       {tab === "ops" && (
         <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold text-slate-900">运营与成本</h2>
         <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
-          {Parts.DAY_OPTIONS.map((d) => (
+          {DAY_OPTIONS.map((d) => (
             <button
               key={d}
               type="button"
@@ -197,58 +203,58 @@ export default function AdminPage() {
         <>
           {/* 大数卡片 */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Parts.StatTile
+            <StatTile
               label={`总成本（近 ${usage.days} 天）`}
-              value={Parts.fmtCny(usage.totals.cost_cny)}
-              sub={`${Parts.fmtInt(usage.totals.calls)} 次模型调用`}
+              value={fmtCny(usage.totals.cost_cny)}
+              sub={`${fmtInt(usage.totals.calls)} 次模型调用`}
             />
-            <Parts.StatTile
+            <StatTile
               label="输入 tokens"
-              value={Parts.fmtInt(usage.totals.prompt_tokens)}
+              value={fmtInt(usage.totals.prompt_tokens)}
             />
-            <Parts.StatTile
+            <StatTile
               label="输出 tokens"
-              value={Parts.fmtInt(usage.totals.completion_tokens)}
+              value={fmtInt(usage.totals.completion_tokens)}
             />
-            <Parts.StatTile
+            <StatTile
               label="缓存命中 tokens"
-              value={Parts.fmtInt(usage.totals.cached_tokens)}
+              value={fmtInt(usage.totals.cached_tokens)}
               sub="命中前缀缓存的部分按折扣计价"
             />
           </div>
 
           <Card title="日趋势 · 成本">
-            <Parts.DailyTrend daily={usage.daily} />
+            <DailyTrend daily={usage.daily} />
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-3">
             <Card title="按功能（成本）">
-              <Parts.BarRows
+              <BarRows
                 rows={usage.by_feature.map((f) => ({
                   key: f.feature,
                   label: f.feature,
                   value: f.cost_cny,
-                  detail: `${Parts.fmtCny(f.cost_cny)} · ${f.calls} 次`,
+                  detail: `${fmtCny(f.cost_cny)} · ${f.calls} 次`,
                 }))}
               />
             </Card>
             <Card title="按模型（成本）">
-              <Parts.BarRows
+              <BarRows
                 rows={usage.by_model.map((m) => ({
                   key: `${m.model}-${m.tier}`,
                   label: `${m.model}（${m.tier}）`,
                   value: m.cost_cny,
-                  detail: `${Parts.fmtCny(m.cost_cny)} · ${m.calls} 次`,
+                  detail: `${fmtCny(m.cost_cny)} · ${m.calls} 次`,
                 }))}
               />
             </Card>
             <Card title="按模式（成本）">
-              <Parts.BarRows
+              <BarRows
                 rows={usage.by_mode.map((m) => ({
                   key: m.mode,
                   label: m.mode,
                   value: m.cost_cny,
-                  detail: `${Parts.fmtCny(m.cost_cny)} · ${m.calls} 次`,
+                  detail: `${fmtCny(m.cost_cny)} · ${m.calls} 次`,
                 }))}
               />
             </Card>
@@ -275,10 +281,10 @@ export default function AdminPage() {
                           {u.user}…
                         </td>
                         <td className="py-1.5 text-right text-slate-600">
-                          {Parts.fmtInt(u.calls)}
+                          {fmtInt(u.calls)}
                         </td>
                         <td className="py-1.5 text-right font-mono text-slate-700">
-                          {Parts.fmtCny(u.cost_cny)}
+                          {fmtCny(u.cost_cny)}
                         </td>
                       </tr>
                     ))}
@@ -309,7 +315,7 @@ export default function AdminPage() {
                           {f.feature}
                         </td>
                         <td className="py-1.5 text-right text-slate-600">
-                          {Parts.fmtInt(f.calls)}
+                          {fmtInt(f.calls)}
                         </td>
                         <td className="py-1.5 text-right font-mono text-slate-700">
                           {f.p50_ms != null ? f.p50_ms.toFixed(0) : "—"}
