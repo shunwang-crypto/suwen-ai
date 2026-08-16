@@ -20,14 +20,12 @@ import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
 import { SessionList } from "@/components/chat/session-list";
 import {
-  ProcessTimeline,
   type TimelineItem,
 } from "@/components/chat/timeline";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
-import { ChatMode, ChatMsg, MODE_LABELS } from "@/components/chat/chat-msg";
+import { ChatMode, ChatMsg } from "@/components/chat/chat-msg";
 import { MessageList } from "@/components/chat/message-list";
 import { Composer } from "@/components/chat/composer";
-import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import {
   booleanStorageCodec,
