@@ -41,6 +41,7 @@ from ..resource_utils import (
     validate_resource_file,
 )
 from ..services import _resolve_kc_ids
+from ..uploads import read_upload_capped
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
 questions_router = APIRouter(prefix="/api/resource-questions", tags=["resource-questions"])
@@ -378,17 +379,13 @@ async def _file_data(file, settings) -> tuple[str, str, bytes] | None:
     if file is None:
         return None
     filename = safe_filename(getattr(file, "filename", None))
-    data = bytearray()
-    max_bytes = settings.max_learning_resource_mb * 1024 * 1024
-    while True:
-        part = await file.read(1024 * 1024)
-        if not part:
-            break
-        data.extend(part)
-        if max_bytes > 0 and len(data) > max_bytes:
-            raise HTTPException(status_code=413, detail="RESOURCE_FILE_TOO_LARGE")
-    kind, mime = validate_resource_file(filename, bytes(data))
-    return filename, mime, bytes(data)
+    raw = await read_upload_capped(
+        file,
+        settings.max_learning_resource_mb * 1024 * 1024,
+        too_large_detail="RESOURCE_FILE_TOO_LARGE",
+    )
+    kind, mime = validate_resource_file(filename, raw)
+    return filename, mime, raw
 
 
 async def _resource_quota_used(session, ctx: AuthContext) -> int:

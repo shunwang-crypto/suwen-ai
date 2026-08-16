@@ -23,6 +23,7 @@ from ..resource_utils import (
     sha256_hex,
     validate_resource_file,
 )
+from ..uploads import read_upload_capped
 
 router = APIRouter(prefix="/api/tutor/drafts", tags=["tutor"])
 
@@ -188,16 +189,11 @@ async def upload_tutor_attachment(
     settings=Depends(get_app_settings),
 ):
     filename = safe_filename(file.filename)
-    data = bytearray()
-    maximum = settings.max_chat_attachment_mb * 1024 * 1024
-    while True:
-        part = await file.read(1024 * 1024)
-        if not part:
-            break
-        data.extend(part)
-        if maximum > 0 and len(data) > maximum:
-            raise HTTPException(status_code=413, detail="TUTOR_ATTACHMENT_TOO_LARGE")
-    raw = bytes(data)
+    raw = await read_upload_capped(
+        file,
+        settings.max_chat_attachment_mb * 1024 * 1024,
+        too_large_detail="TUTOR_ATTACHMENT_TOO_LARGE",
+    )
     kind, mime_type = validate_resource_file(filename, raw)
     suffix = Path(filename).suffix.lower()
     if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".pdf", ".docx", ".pptx"}:

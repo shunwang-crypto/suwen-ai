@@ -8,12 +8,12 @@ stub 网关的 {"stub": true, ...} 缺业务字段, 同样按解析失败处理 
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from ..gateway.base import ChatMessage, ChatRequest, ModelGateway, Tier
+from ..json_utils import parse_json_object
 from .dag import add_edge_safe
 from .types import KcEntry, KcVocabulary, PrereqEdge, normalize_kc_name
 
@@ -28,25 +28,6 @@ class KcExtractionError(Exception):
 
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """尽力解析单个 JSON 对象: 先整体, 再截取首 { 到末 } (容忍代码块围栏)。
-
-    任何失败返回 None, 不向外抛裸异常。
-    """
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
 
 
 def _clean_aliases(canonical: str, raw: object) -> list[str]:
@@ -170,7 +151,7 @@ async def build_vocabulary(
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await gateway.chat(request)
-        data = _parse_json_object(result.text)
+        data = parse_json_object(result.text)
         if data is None:
             continue
         parsed = _parse_vocab_payload(data)
@@ -210,7 +191,7 @@ async def extract_chunk_kcs(
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await gateway.chat(request)
-        data = _parse_json_object(result.text)
+        data = parse_json_object(result.text)
         if data is None:
             continue
         names = _parse_chunk_payload(data)

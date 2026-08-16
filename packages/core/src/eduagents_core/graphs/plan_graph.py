@@ -24,7 +24,7 @@ from langgraph.types import interrupt
 from ..gateway.base import ChatMessage, ChatRequest, Tier
 
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与 KC 抽取共用同一套宽容策略
-from ..kc.extraction import _parse_json_object
+from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
 from ..mastery.thresholds import zone_label
 from .state import GraphDeps, PlanState
@@ -420,7 +420,7 @@ async def _chat_json(
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await deps.gateway.chat(request)
-        data = _parse_json_object(result.text)
+        data = parse_json_object(result.text)
         if data is not None:
             return data
     return None

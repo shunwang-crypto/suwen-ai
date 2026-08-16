@@ -15,6 +15,7 @@ from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
 from ..models import ChatAttachment
 from ..schemas import ChatAttachmentOut
+from ..uploads import read_upload_capped
 
 router = APIRouter(prefix="/api/chat/attachments", tags=["chat"])
 
@@ -49,17 +50,10 @@ def _safe_filename(value: str | None) -> str:
 
 
 async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
-    data = bytearray()
-    while True:
-        part = await file.read(1024 * 1024)
-        if not part:
-            break
-        data.extend(part)
-        if len(data) > max_bytes:
-            raise HTTPException(status_code=413, detail="CHAT_ATTACHMENT_TOO_LARGE")
-    if not data:
-        raise HTTPException(status_code=400, detail="EMPTY_FILE")
-    return bytes(data)
+    """本地入口: 收敛到 uploads.read_upload_capped (空文件 400 + 超限 413 语义不变)。"""
+    return await read_upload_capped(
+        file, max_bytes, too_large_detail="CHAT_ATTACHMENT_TOO_LARGE", reject_empty=True
+    )
 
 
 def _validate_file(filename: str, data: bytes, *, vision_enabled: bool) -> tuple[str, str]:

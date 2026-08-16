@@ -21,6 +21,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ..gateway.base import BudgetExceeded, ChatMessage, ChatRequest, Tier
+from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
 from ..logging import get_logger
 from .state import GraphDeps, QuizState
@@ -174,22 +175,6 @@ def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
 
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """尽力解析单个 JSON 对象: 先整体, 再截取首 { 到末 } (容忍代码块围栏); 失败返回 None。"""
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
-
-
 def _diagnostic_top_level_keys(raw: dict[str, Any] | None) -> list[str]:
     """Return a bounded, content-safe summary of a model JSON object's keys."""
     if raw is None:
@@ -337,7 +322,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 request_id=state.get("request_id", ""),
             )
         )
-        raw = _parse_json_object(result.text) or {}
+        raw = parse_json_object(result.text) or {}
         # 定向出题的逐 KC 分档表: 蓝图 LLM 给错难度时程序性钉回 (mix 不是建议, 是约束)
         difficulty_by_kc = {
             normalize_kc_name(str(r.get("kc_name", ""))): r.get("difficulty")
@@ -478,7 +463,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 max_tokens=generation_max_tokens,
             )
         )
-        raw = _parse_json_object(result.text)
+        raw = parse_json_object(result.text)
         raw_questions = raw.get("questions") if raw else None
         questions: list[dict] = []
         if isinstance(raw_questions, list):
@@ -716,7 +701,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
                 ],
             }
 
-        data = _parse_json_object(result.text)
+        data = parse_json_object(result.text)
         if data is None or not isinstance(data.get("issues"), list):
             return {
                 "critic_issues": [],

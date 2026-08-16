@@ -15,7 +15,6 @@ router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → re
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -31,6 +30,7 @@ from ..gateway.base import (
     StreamDelta,
     Tier,
 )
+from ..json_utils import parse_json_object
 from ..logging import get_logger
 from ..moderation import get_moderator, minor_system_guard
 from ..retrieval.base import rrf_fuse
@@ -106,26 +106,6 @@ class _QaGraphState(QaState, total=False):
 
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """尽力解析单个 JSON 对象: 先整体, 再截取首 { 到末 } (容忍代码块围栏)。
-
-    任何失败返回 None, 不向外抛裸异常; stub 网关的 {"stub": true} 缺业务字段,
-    由各调用方的字段校验兜底为解析失败。
-    """
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
 
 
 def _format_sources(evidences: list[dict]) -> str:
@@ -247,7 +227,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 raise
             log.warning("qa_llm_call_failed", feature=feature, error=str(exc))
             return None
-        return _parse_json_object(result.text)
+        return parse_json_object(result.text)
 
     # ---- 节点 ----
 

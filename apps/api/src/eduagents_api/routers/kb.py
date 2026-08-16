@@ -23,6 +23,7 @@ from ..schemas import (
     RetrieveDebugIn,
     UrlImportIn,
 )
+from ..uploads import read_upload_capped
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
 log = get_logger("kb")
@@ -42,18 +43,8 @@ def _suffix(filename: str) -> str:
 
 
 async def _read_upload_capped(file: UploadFile, max_mb: int) -> bytes:
-    """分块读上传体 (P1-1): 每 1MB 累计, 超过 max_upload_mb 立即 413 断开,
-    不再把任意大的 multipart 先全量吞进内存再判大小。"""
-    max_bytes = max_mb * 1024 * 1024
-    buf = bytearray()
-    while True:
-        part = await file.read(1024 * 1024)
-        if not part:
-            break
-        buf.extend(part)
-        if len(buf) > max_bytes:
-            raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
-    return bytes(buf)
+    """分块限流读的本地入口 (P1-1): 语义不变, 实现收敛到 uploads.read_upload_capped。"""
+    return await read_upload_capped(file, max_mb * 1024 * 1024)
 
 
 def _quota_used_bytes_stmt():

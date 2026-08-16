@@ -22,6 +22,7 @@ from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import Tier
 from eduagents_core.graphs.quiz_graph import QuestionModel, grade_objective
+from eduagents_core.json_utils import parse_json_object
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery import scheduler
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -508,22 +509,6 @@ async def answer_review(
     }
 
 
-def _parse_json_object(text: str) -> dict | None:
-    """尽力解析单个 JSON 对象 (容忍代码块围栏), 失败返回 None。"""
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
-
-
 @router.post("/{error_item_id}/variant")
 async def make_variant(
     error_item_id: uuid.UUID,
@@ -577,7 +562,7 @@ async def make_variant(
                     request_id=request_id,
                 )
             )
-            raw = _parse_json_object(result.text) or {}
+            raw = parse_json_object(result.text) or {}
             if isinstance(raw.get("question"), dict):  # 容忍 {"question": {...}} 包装
                 raw = raw["question"]
             try:
@@ -1091,7 +1076,7 @@ async def appeal_score(
     new_score: float | None = None
     new_reason = ""
     if result.mode == "live":
-        parsed = _parse_json_object(result.text)
+        parsed = parse_json_object(result.text)
         if parsed is not None and "score" in parsed:
             try:
                 new_score = max(0.0, min(1.0, float(parsed.get("score", 0))))
