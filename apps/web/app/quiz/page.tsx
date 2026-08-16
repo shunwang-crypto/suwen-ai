@@ -62,101 +62,7 @@ import type {
   WeakPointItem,
   WeakPointsResponse,
 } from "@/lib/types";
-
-type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
-const PENDING_QUIZ_KEY = "suwen:pending-quiz-draft";
-
-interface PendingQuizDraft {
-  status: "generating" | "await_confirm" | "resuming" | "failed";
-  interrupt?: GraphInterruptData;
-  topic: string;
-  startedAt: number;
-  requestBody?: Record<string, unknown>;
-  requestPath?: string;
-  failureOutcome?: GraphDoneData["outcome"];
-}
-
-function pendingQuizKey(userId: string): string {
-  return `${PENDING_QUIZ_KEY}:${userId}`;
-}
-
-function readPendingQuiz(userId: string): PendingQuizDraft | null {
-  try {
-    const key = pendingQuizKey(userId);
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as Partial<PendingQuizDraft>;
-    const validStatus = ["generating", "await_confirm", "resuming", "failed"].includes(
-      value.status ?? "",
-    );
-    const stale = !value.startedAt || Date.now() - value.startedAt > 30 * 60 * 1000;
-    const invalidInterrupt =
-      ["await_confirm", "resuming"].includes(value.status ?? "") &&
-      (!value.interrupt?.thread_id?.startsWith("quiz:") ||
-        !value.interrupt.resume_url ||
-        !value.interrupt.blueprint);
-    if (!validStatus || !value.topic || stale || invalidInterrupt) {
-      window.localStorage.removeItem(key);
-      return null;
-    }
-    return value as PendingQuizDraft;
-  } catch {
-    window.localStorage.removeItem(pendingQuizKey(userId));
-    return null;
-  }
-}
-
-function clearPendingQuiz(userId: string): void {
-  window.localStorage.removeItem(pendingQuizKey(userId));
-}
-
-function writePendingQuiz(userId: string, value: PendingQuizDraft): void {
-  window.localStorage.setItem(pendingQuizKey(userId), JSON.stringify(value));
-}
-
-/** 后端下发的逐 KC 难度分档理由（P1-1 可解释出题：定性区间词，不含掌握度数值）。 */
-interface DifficultyReason {
-  kc_name: string;
-  zone: string;
-  difficulty: string;
-  reason: string;
-}
-
-/** 薄弱点预览项（/api/profile/weak-points 已附带 zone/reason 定性理由字段）。 */
-type WeakPointPreview = WeakPointItem & {
-  zone?: string;
-  difficulty?: string;
-  reason?: string;
-};
-
-// useSyncExternalStore 订阅占位：URL search 在页面生命周期内不变化（跳转即重挂载）
-const emptySubscribe = () => () => {};
-
-interface ActiveQuiz {
-  id: string;
-  title: string;
-  questions: QuizQuestion[];
-}
-
-function PracticeSteps({ current }: { current: number }) {
-  const labels = ["设置", "蓝图确认", "作答", "查看结果"];
-  return (
-    <ol className="flex flex-wrap items-center gap-2 border-b border-line pb-4 text-body-sm">
-      {labels.map((label, index) => {
-        const step = index + 1;
-        const done = step < current;
-        const active = step === current;
-        return (
-          <li key={label} className="flex items-center gap-2">
-            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-caption font-semibold ${done ? "bg-success-50 text-success-600" : active ? "bg-brand-600 text-white" : "bg-[#efede9] text-ink-muted"}`}>{done ? "✓" : step}</span>
-            <span className={active ? "font-semibold text-ink" : done ? "text-success-600" : "text-ink-muted"}>{label}</span>
-            {index < labels.length - 1 && <span className="h-px w-7 bg-line sm:w-12" aria-hidden />}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
+import * as Parts from "@/components/quiz/quiz-parts";
 
 export default function QuizPage() {
   const { user } = useAuth();
@@ -164,7 +70,7 @@ export default function QuizPage() {
   // URL 预填（/quiz?topic=..&kb=..，来自对话页「考考我」chip）。
   // SSR 快照为空串、客户端快照读真实 search：无水合不匹配，也无需 Suspense。
   const search = useSyncExternalStore(
-    emptySubscribe,
+    Parts.emptySubscribe,
     () => window.location.search,
     () => "",
   );
@@ -207,7 +113,7 @@ export default function QuizPage() {
   const weakRequestSeqRef = useRef(0);
 
   // SSE 出题流
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Parts.Phase>("idle");
   const [, setTimeline] = useState<FlowItem[]>([]);
   const [interruptData, setInterruptData] = useState<GraphInterruptData | null>(null);
   const [flowError, setFlowError] = useState<string | null>(null);
@@ -216,7 +122,7 @@ export default function QuizPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   // 作答
-  const [quiz, setQuiz] = useState<ActiveQuiz | null>(null);
+  const [quiz, setQuiz] = useState<Parts.ActiveQuiz | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [predictions, setPredictions] = useState<Record<string, number>>({});
@@ -278,7 +184,7 @@ export default function QuizPage() {
           : { threshold: 0.6, limit: 5, weak_points: [] },
       );
       void loadRecommendation();
-      const pending = readPendingQuiz(userId);
+      const pending = Parts.readPendingQuiz(userId);
       if (pending) {
         topicRef.current = pending.topic;
         if (pending.status === "failed") {
@@ -307,7 +213,7 @@ export default function QuizPage() {
   useEffect(() => {
     if (phase !== "streaming" && phase !== "resuming") return;
     const timer = setInterval(() => {
-      const pending = readPendingQuiz(userId);
+      const pending = Parts.readPendingQuiz(userId);
       if (!pending) {
         setPhase("idle");
         void loadQuizzes();
@@ -368,8 +274,8 @@ export default function QuizPage() {
               break;
             case "interrupt": {
               const interrupt = msg.data as GraphInterruptData;
-              const pending = readPendingQuiz(userId);
-              writePendingQuiz(userId, {
+              const pending = Parts.readPendingQuiz(userId);
+              Parts.writePendingQuiz(userId, {
                 status: "await_confirm",
                 interrupt,
                 topic: topicRef.current,
@@ -397,19 +303,19 @@ export default function QuizPage() {
                 setNotice(null);
               } else {
                 setNotice(quizOutcomeMessage(d.outcome));
-                const pending = readPendingQuiz(userId);
+                const pending = Parts.readPendingQuiz(userId);
                 const retryable = d.error?.retryable ?? d.outcome !== "cancelled_by_user";
                 if (pending?.requestBody && retryable) {
-                  writePendingQuiz(userId, {
+                  Parts.writePendingQuiz(userId, {
                     ...pending,
                     status: "failed",
                     failureOutcome: d.outcome,
                   });
                 } else if (!retryable) {
-                  clearPendingQuiz(userId);
+                  Parts.clearPendingQuiz(userId);
                 }
               }
-              if (succeeded) clearPendingQuiz(userId);
+              if (succeeded) Parts.clearPendingQuiz(userId);
               setPhase("idle");
               setInterruptData(null);
               void loadQuizzes();
@@ -419,15 +325,15 @@ export default function QuizPage() {
             case "error": {
               const d = msg.data as ErrorEventData;
               setFlowError(quizSseErrorMessage(d));
-              const pending = readPendingQuiz(userId);
+              const pending = Parts.readPendingQuiz(userId);
               if (path.includes("/api/threads/") && pending?.interrupt) {
-                writePendingQuiz(userId, { ...pending, status: "await_confirm" });
+                Parts.writePendingQuiz(userId, { ...pending, status: "await_confirm" });
                 setPhase("await_confirm");
               } else if (pending?.requestBody) {
-                writePendingQuiz(userId, { ...pending, status: "failed" });
+                Parts.writePendingQuiz(userId, { ...pending, status: "failed" });
                 setPhase("idle");
               } else {
-                clearPendingQuiz(userId);
+                Parts.clearPendingQuiz(userId);
                 setPhase("idle");
               }
               break;
@@ -445,15 +351,15 @@ export default function QuizPage() {
               ? err.message
               : "网络异常，请稍后重试",
         );
-        const pending = readPendingQuiz(userId);
+        const pending = Parts.readPendingQuiz(userId);
         if (path.includes("/api/threads/") && pending?.interrupt) {
-          writePendingQuiz(userId, { ...pending, status: "await_confirm" });
+          Parts.writePendingQuiz(userId, { ...pending, status: "await_confirm" });
           setPhase("await_confirm");
         } else if (pending?.requestBody) {
-          writePendingQuiz(userId, { ...pending, status: "failed" });
+          Parts.writePendingQuiz(userId, { ...pending, status: "failed" });
           setPhase("idle");
         } else {
-          clearPendingQuiz(userId);
+          Parts.clearPendingQuiz(userId);
           setPhase("idle");
         }
       } finally {
@@ -467,13 +373,13 @@ export default function QuizPage() {
 
   const startQuiz = useCallback(
     (value: QuizFormValue) => {
-      clearPendingQuiz(userId);
+      Parts.clearPendingQuiz(userId);
       topicRef.current = value.topic;
       const requestBody = {
         ...value,
         ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
       };
-      writePendingQuiz(userId, {
+      Parts.writePendingQuiz(userId, {
         status: "generating",
         topic: value.topic,
         startedAt: Date.now(),
@@ -496,9 +402,9 @@ export default function QuizPage() {
 
   const startRecommended = useCallback(
     (requestBody: Record<string, unknown>, title: string) => {
-      clearPendingQuiz(userId);
+      Parts.clearPendingQuiz(userId);
       topicRef.current = title;
-      writePendingQuiz(userId, {
+      Parts.writePendingQuiz(userId, {
         status: "generating",
         topic: title,
         startedAt: Date.now(),
@@ -537,13 +443,13 @@ export default function QuizPage() {
   );
 
   const retryFailedQuiz = useCallback(() => {
-    const pending = readPendingQuiz(userId);
+    const pending = Parts.readPendingQuiz(userId);
     if (!pending?.requestBody) return;
     const retryContext = { ...pending };
     delete retryContext.interrupt;
     delete retryContext.failureOutcome;
     topicRef.current = pending.topic;
-    writePendingQuiz(userId, {
+    Parts.writePendingQuiz(userId, {
       ...retryContext,
       status: "generating",
       startedAt: Date.now(),
@@ -565,9 +471,9 @@ export default function QuizPage() {
       // 与预览同一作用域：选了科目就只出该库的题，不跨学科混卷
       ...(weakKbId ? { kb_id: weakKbId } : {}),
     };
-    clearPendingQuiz(userId);
+    Parts.clearPendingQuiz(userId);
     topicRef.current = points.length > 0 ? "薄弱点强化练习" : "水平诊断练习";
-    writePendingQuiz(userId, {
+    Parts.writePendingQuiz(userId, {
       status: "generating",
       topic: topicRef.current,
       startedAt: Date.now(),
@@ -601,9 +507,9 @@ export default function QuizPage() {
         hard: base,
       },
     };
-    clearPendingQuiz(userId);
+    Parts.clearPendingQuiz(userId);
     topicRef.current = `验证：${verifyKc}`;
-    writePendingQuiz(userId, {
+    Parts.writePendingQuiz(userId, {
       status: "generating",
       topic: topicRef.current,
       startedAt: Date.now(),
@@ -624,8 +530,8 @@ export default function QuizPage() {
   const resume = useCallback(
     (approved: boolean, blueprint?: Blueprint) => {
       if (!interruptData) return;
-      const pending = readPendingQuiz(userId);
-      writePendingQuiz(userId, {
+      const pending = Parts.readPendingQuiz(userId);
+      Parts.writePendingQuiz(userId, {
         ...(pending ?? {}),
         status: "resuming",
         interrupt: interruptData,
@@ -703,7 +609,7 @@ export default function QuizPage() {
   const busy = phase === "streaming" || phase === "resuming";
   // 定向出题的逐 KC 分档理由（interrupt 负载平铺，普通出题为空数组）
   const difficultyReasons =
-    (interruptData?.difficulty_reasons as DifficultyReason[] | undefined) ?? [];
+    (interruptData?.difficulty_reasons as Parts.DifficultyReason[] | undefined) ?? [];
   const resultByQid = new Map(
     (attempt?.results ?? []).map((r) => [r.question_id, r]),
   );
@@ -722,14 +628,14 @@ export default function QuizPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1120px] space-y-5 px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
-      {practiceStage > 1 && <PracticeSteps current={practiceStage} />}
+      {practiceStage > 1 && <Parts.PracticeSteps current={practiceStage} />}
       {flowError && (
         <ErrorBanner message={flowError} onClose={() => setFlowError(null)} />
       )}
       {notice && (
         <div className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
           <span>{notice}</span>
-          {readPendingQuiz(userId)?.status === "failed" && (
+          {Parts.readPendingQuiz(userId)?.status === "failed" && (
             <button type="button" className="ml-3 underline" onClick={retryFailedQuiz}>重试</button>
           )}
           <button
@@ -1161,9 +1067,9 @@ export default function QuizPage() {
                     ))}
                   </ul>
                   {/* 为什么练这些（P1-1）：后端逐 KC 分档理由，与实际难度分布同源 */}
-                  {(weak.weak_points as WeakPointPreview[]).some((wp) => wp.reason) && (
+                  {(weak.weak_points as Parts.WeakPointPreview[]).some((wp) => wp.reason) && (
                     <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
-                      {(weak.weak_points as WeakPointPreview[])
+                      {(weak.weak_points as Parts.WeakPointPreview[])
                         .filter((wp) => wp.reason)
                         .map((wp) => (
                           <li key={wp.kc_id} className="text-caption leading-relaxed text-slate-600">
