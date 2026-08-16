@@ -25,7 +25,7 @@ import type {
   TokenEventData,
   TraceEventData,
 } from "@/lib/types";
-import { LAST_CHAT_SESSION_KEY, genId, normalizeAnswerCitations } from "./view-helpers";
+import { genId, normalizeAnswerCitations, rememberChatSession } from "./view-helpers";
 import type { SessionIndicator } from "./view-helpers";
 
 export interface UseChatStreamOptions {
@@ -190,10 +190,7 @@ export function useChatStream(options: UseChatStreamOptions) {
                 ...prev,
                 [d.session_id]: "running",
               }));
-              window.localStorage.setItem(
-                LAST_CHAT_SESSION_KEY,
-                d.session_id,
-              );
+              rememberChatSession(d.session_id);
               // 新会话在模型完成前就进入左栏，切走后仍可随时点回来查看运行状态。
               void loadSessions();
               break;

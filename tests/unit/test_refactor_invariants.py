@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / "apps" / "web"
 
 RETIRED_STUDENT_ROUTES = ("kb", "resources", "errors", "profile", "reports")
-PRIMARY_NAV_ROUTES = ["/today", "/materials", "/reviews", "/growth"]
+PRIMARY_NAV_ROUTES = ["/today", "/chat", "/quiz", "/materials", "/growth", "/plans"]
 
 
 def _runtime_python_files() -> list[Path]:
@@ -35,10 +35,13 @@ def _web_runtime_files() -> list[Path]:
     ]
 
 
-def test_student_navigation_has_only_four_primary_destinations() -> None:
+def test_student_navigation_primary_destinations_and_aliases() -> None:
     shell = (WEB / "components" / "app-shell.tsx").read_text(encoding="utf-8")
-    navigation = shell.split("PRIMARY_NAV_ITEMS", 1)[1].split("const TODAY_TOOL_PATHS", 1)[0]
+    navigation = shell.split("PRIMARY_NAV_ITEMS", 1)[1].split("const NAV_HIGHLIGHT_ALIASES", 1)[0]
     assert re.findall(r'href:\s*"([^"]+)"', navigation) == PRIMARY_NAV_ROUTES
+    # 旧的通配高亮 hack 不许回归；高亮必须走显式别名表。
+    assert "TODAY_TOOL_PATHS" not in shell
+    assert "NAV_HIGHLIGHT_ALIASES" in shell
 
 
 def test_retired_student_pages_and_links_are_absent() -> None:

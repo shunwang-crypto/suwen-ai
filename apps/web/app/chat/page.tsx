@@ -35,6 +35,7 @@ import {
   EMPTY_SESSION_INDICATORS,
   LAST_CHAT_SESSION_KEY,
   historyToMessages,
+  rememberChatSession,
   sessionIndicatorsCodec,
   wait,
 } from "./view-helpers";
@@ -102,7 +103,7 @@ function ChatView() {
 
   useEffect(() => {
     if (activeSessionId) {
-      window.localStorage.setItem(LAST_CHAT_SESSION_KEY, activeSessionId);
+      rememberChatSession(activeSessionId);
     }
   }, [activeSessionId]);
 
@@ -309,15 +310,34 @@ function ChatView() {
   useEffect(() => {
     if (sessionsLoading || restoredSessionRef.current) return;
     restoredSessionRef.current = true;
-    if (searchParams.get("q") || searchParams.get("new") === "1") return;
+    if (searchParams.get("q") || searchParams.get("new") === "1" || searchParams.get("session")) return;
     const remembered = window.localStorage.getItem(LAST_CHAT_SESSION_KEY);
     if (remembered && sessions.some((session) => session.id === remembered)) {
       const timer = window.setTimeout(() => void selectSession(remembered), 0);
       return () => window.clearTimeout(timer);
     } else if (remembered) {
-      window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+      rememberChatSession(null);
     }
   }, [searchParams, selectSession, sessions, sessionsLoading]);
+
+  // 侧栏「最近会话」带 ?session= 直达：选中后清参数，避免与上次会话恢复互相打架。
+  useEffect(() => {
+    const queued = searchParams.get("session");
+    if (!queued || sessionsLoading) return;
+    if (queued === activeSessionId) {
+      router.replace("/chat");
+      return;
+    }
+    if (!sessions.some((session) => session.id === queued)) {
+      router.replace("/chat");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void selectSession(queued);
+      router.replace("/chat");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [searchParams, sessions, sessionsLoading, activeSessionId, selectSession, router]);
 
   // 页面离开期间没有 SSE 订阅：只轮询本机记住的运行中会话，完成后换成蓝点。
   useEffect(() => {
@@ -376,7 +396,7 @@ function ChatView() {
     setActiveCitation(null);
     setCitationMsgId(null);
     setSessionsOpen(false);
-    window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+    rememberChatSession(null);
   }, [detachCurrentStream, discardPendingAttachments, setMessages, setActiveRunId, setStreaming, viewEpochRef]);
 
   // 全局导航的“新建对话”使用 ?new=1 明确请求空白会话，避免被上次会话恢复逻辑覆盖。
@@ -415,7 +435,7 @@ function ChatView() {
         if (id === activeSessionId) {
           setActiveSessionId(null);
           setMessages([]);
-          window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+          rememberChatSession(null);
         }
         setSessionIndicators((prev) => {
           if (!(id in prev)) return prev;

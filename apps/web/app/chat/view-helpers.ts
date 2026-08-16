@@ -13,6 +13,14 @@ export const LAST_CHAT_SESSION_KEY = "eduagents:last-chat-session";
 export const CHAT_SESSION_STATUS_KEY = "eduagents:chat-session-status";
 export const CHAT_HISTORY_COLLAPSED_KEY = "suwen:chat-history-collapsed";
 
+/** 写入/清除最近会话并按 use-hydrated-local-storage 约定派发同页通知，
+ * 供侧栏「最近会话」区（components/nav/recent-sessions）感知切换。 */
+export function rememberChatSession(sessionId: string | null): void {
+  if (sessionId === null) window.localStorage.removeItem(LAST_CHAT_SESSION_KEY);
+  else window.localStorage.setItem(LAST_CHAT_SESSION_KEY, sessionId);
+  window.dispatchEvent(new Event(`eduagents:storage:${LAST_CHAT_SESSION_KEY}`));
+}
+
 export type SessionIndicator = "running" | "completed";
 
 export const sessionIndicatorsCodec: StorageCodec<

@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
+import { RecentSessions } from "@/components/nav/recent-sessions";
 import { useAuth } from "@/lib/auth-context";
 import {
   booleanStorageCodec,
@@ -63,12 +64,21 @@ function FigmaNavIcon({ name }: { name: string }) {
 
 export const PRIMARY_NAV_ITEMS: NavItem[] = [
   { href: "/today", label: "今日", icon: <FigmaNavIcon name="today" /> },
-  { href: "/materials", label: "资料", icon: <FigmaNavIcon name="knowledge" /> },
-  { href: "/reviews", label: "复习", icon: <FigmaNavIcon name="review" /> },
+  { href: "/chat", label: "对话", icon: <FigmaNavIcon name="chat" /> },
+  { href: "/quiz", label: "练习", icon: <FigmaNavIcon name="practice" /> },
+  { href: "/materials", label: "课程", icon: <FigmaNavIcon name="knowledge" /> },
   { href: "/growth", label: "成长", icon: <FigmaNavIcon name="profile" /> },
+  { href: "/plans", label: "学习计划", icon: <FigmaNavIcon name="plans" /> },
 ];
 
-const TODAY_TOOL_PATHS = ["/chat", "/tutor", "/quiz", "/plans"];
+/** 访问路径前缀 → 实际要高亮的导航项（显式映射表，取代旧的通配高亮 hack；
+ *  /practice、/courses 为 UI 重构后续阶段启用后的预留别名）。 */
+const NAV_HIGHLIGHT_ALIASES: Record<string, string> = {
+  "/tutor": "/chat",
+  "/reviews": "/quiz",
+  "/practice": "/quiz",
+  "/courses": "/materials",
+};
 
 const UTILITY_ITEMS: NavItem[] = [
   {
@@ -100,11 +110,15 @@ const TITLE_MAP: Record<string, string> = {
   "/evals": "评估看板",
 };
 
-function isActive(pathname: string, href: string) {
-  if (href === "/today" && TODAY_TOOL_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
-    return true;
-  }
+function matchesPath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function isActive(pathname: string, href: string) {
+  const aliased = Object.entries(NAV_HIGHLIGHT_ALIASES).find(([prefix]) =>
+    matchesPath(pathname, prefix),
+  )?.[1];
+  return matchesPath(aliased ?? pathname, href);
 }
 
 function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: NavItem; pathname: string; collapsed?: boolean; onNavigate?: () => void }) {
@@ -136,6 +150,7 @@ function Navigation({ pathname, collapsed = false, onNavigate }: { pathname: str
         <div className="space-y-1 pt-2">
           {PRIMARY_NAV_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
         </div>
+        {!collapsed && <RecentSessions onNavigate={onNavigate} />}
       </nav>
       <div className={`shrink-0 border-t border-line py-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-0.5">
@@ -278,8 +293,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const isAdmin = user?.role === "admin";
   const isTeacher = user?.role === "teacher" || isAdmin;
-  const isChatRoute = isActive(pathname, "/chat");
-  const title = Object.entries(TITLE_MAP).find(([path]) => isActive(pathname, path))?.[1] ?? "苏问";
+  // 顶栏标题与「对话页隐藏滚动」用路径本身判断，不吃导航高亮别名（/tutor 仍显示自己的标题）。
+  const isChatRoute = matchesPath(pathname, "/chat");
+  const title = Object.entries(TITLE_MAP).find(([path]) => matchesPath(pathname, path))?.[1] ?? "苏问";
   const displayName = user?.display_name?.trim() || "同学";
   const initial = displayName[0] ?? "学";
   const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hour12: false }).format(new Date()));
