@@ -70,7 +70,7 @@ export function PageHeader({
   );
 }
 
-// ---- Shimmer 骨架（合流后可替换为第一路 components/ui/Skeleton） ----
+// ---- Shimmer 骨架（全仓唯一实现; 历史 ui/skeleton 死副本已删除） ----
 
 /** 单块 shimmer 骨架。 */
 export function Skeleton({ className }: { className?: string }) {

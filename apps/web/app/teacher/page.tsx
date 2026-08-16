@@ -5,7 +5,7 @@
 // 「打印视图」在新窗口写一份自包含 A4 打印 HTML（题目页 + 分页的答案页），
 // 打印 HTML 里的用户内容一律 escapeHtml 转义。
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -16,6 +16,7 @@ import {
   fmtDateTime,
 } from "@/components/common";
 import { ApiError, apiJson } from "@/lib/api";
+import { useApiResource } from "@/lib/use-api-resource";
 import { useAuth } from "@/lib/auth-context";
 import { MathText, renderMathInText } from "@/lib/katex";
 import type {
@@ -230,35 +231,21 @@ export default function TeacherPage() {
   const { user } = useAuth();
   const canAccess = user?.role === "teacher" || user?.role === "admin";
 
-  const [quizzes, setQuizzes] = useState<TeacherQuizItem[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
 
-  useEffect(() => {
-    if (!canAccess) return;
-    let alive = true;
-    (async () => {
-      try {
-        const list = await apiJson<TeacherQuizItem[]>("/api/teacher/quizzes");
-        if (!alive) return;
-        setQuizzes(list);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setQuizzes([]);
-        setError(err instanceof ApiError ? err.message : "卷子列表加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [canAccess, reloadKey]);
+  // A5 收敛: useApiResource + request-epoch (canAccess 为条件加载门)
+  const {
+    data: quizzes,
+    error: error,
+    loading: loading,
+    reload: reloadList,
+  } = useApiResource<TeacherQuizItem[]>("/api/teacher/quizzes", {
+    enabled: canAccess,
+    errorMessage: "卷子列表加载失败",
+  });
+
 
   const exportJson = async (quiz: TeacherQuizItem) => {
     if (busyId) return;
@@ -334,11 +321,7 @@ export default function TeacherPage() {
         </div>
         <button
           type="button"
-          onClick={() => {
-            setLoading(true);
-            setError(null);
-            setReloadKey((k) => k + 1);
-          }}
+          onClick={reloadList}
           className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
         >
           刷新列表
@@ -349,11 +332,7 @@ export default function TeacherPage() {
       {error && (
         <ErrorBanner
           message={error}
-          onRetry={() => {
-            setLoading(true);
-            setError(null);
-            setReloadKey((k) => k + 1);
-          }}
+          onRetry={reloadList}
         />
       )}
       {ok && (

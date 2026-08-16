@@ -4,7 +4,7 @@
 // 后端契约已冻结（见 lib/billing.ts 头注释），四块数据各自独立加载：
 // 后端未就绪时对应卡片展示骨架 -> 错误态（可重试），绝不写死或编造余额。
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -17,6 +17,7 @@ import {
   fmtRelative,
 } from "@/components/common";
 import { Celebrate } from "@/components/ui/celebrate";
+import { useApiResource } from "@/lib/use-api-resource";
 import { ApiError, apiJson } from "@/lib/api";
 import {
   LOW_BALANCE_THRESHOLD,
@@ -99,108 +100,40 @@ const errText = (err: unknown, fallback: string) =>
 type RechargePhase = "pick" | "pending" | "paid";
 
 export default function BillingPage() {
-  // 三块数据独立加载，reloadKey +1 触发重拉（首个 setState 在 await 之后，仓库先例）
+  // 三块数据独立加载 (A5 收敛: useApiResource + request-epoch, 替代三段手写 alive 样板)
 
   // ---- 余额 ----
-  const [wallet, setWallet] = useState<WalletOut | null>(null);
-  const [walletLoading, setWalletLoading] = useState(true);
-  const [walletError, setWalletError] = useState<string | null>(null);
-  const [walletKey, setWalletKey] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<WalletOut>("/api/billing/wallet");
-        if (!alive) return;
-        setWallet(data);
-        setWalletError(null);
-      } catch (err) {
-        if (!alive) return;
-        setWallet(null);
-        setWalletError(errText(err, "余额加载失败，请稍后重试"));
-      } finally {
-        if (alive) setWalletLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [walletKey]);
-
-  const reloadWallet = () => {
-    setWalletLoading(true);
-    setWalletError(null);
-    setWalletKey((k) => k + 1);
-  };
+  const {
+    data: wallet,
+    setData: setWallet,
+    error: walletError,
+    loading: walletLoading,
+    reload: reloadWallet,
+  } = useApiResource<WalletOut>("/api/billing/wallet", {
+    errorMessage: "余额加载失败，请稍后重试",
+    toErrorMessage: errText,
+  });
 
   // ---- 定价说明 ----
-  const [pricing, setPricing] = useState<PricingOut | null>(null);
-  const [pricingLoading, setPricingLoading] = useState(true);
-  const [pricingError, setPricingError] = useState<string | null>(null);
-  const [pricingKey, setPricingKey] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<PricingOut>("/api/billing/pricing");
-        if (!alive) return;
-        setPricing(data);
-        setPricingError(null);
-      } catch (err) {
-        if (!alive) return;
-        setPricing(null);
-        setPricingError(errText(err, "计费说明加载失败，请稍后重试"));
-      } finally {
-        if (alive) setPricingLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [pricingKey]);
-
-  const reloadPricing = () => {
-    setPricingLoading(true);
-    setPricingError(null);
-    setPricingKey((k) => k + 1);
-  };
+  const {
+    data: pricing,
+    error: pricingError,
+    loading: pricingLoading,
+    reload: reloadPricing,
+  } = useApiResource<PricingOut>("/api/billing/pricing", {
+    errorMessage: "计费说明加载失败，请稍后重试",
+    toErrorMessage: errText,
+  });
 
   // ---- 流水 ----
-  const [ledger, setLedger] = useState<LedgerEntryOut[] | null>(null);
-  const [ledgerLoading, setLedgerLoading] = useState(true);
-  const [ledgerError, setLedgerError] = useState<string | null>(null);
-  const [ledgerKey, setLedgerKey] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const page = await apiJson<LedgerPageOut>(
-          "/api/billing/ledger?limit=50",
-        );
-        if (!alive) return;
-        setLedger(page.data);
-        setLedgerError(null);
-      } catch (err) {
-        if (!alive) return;
-        setLedger(null);
-        setLedgerError(errText(err, "流水加载失败，请稍后重试"));
-      } finally {
-        if (alive) setLedgerLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [ledgerKey]);
-
-  const reloadLedger = () => {
-    setLedgerLoading(true);
-    setLedgerError(null);
-    setLedgerKey((k) => k + 1);
-  };
+  const ledgerPage = useApiResource<LedgerPageOut>("/api/billing/ledger?limit=50", {
+    errorMessage: "流水加载失败，请稍后重试",
+    toErrorMessage: errText,
+  });
+  const ledger = ledgerPage.data?.data ?? null;
+  const ledgerLoading = ledgerPage.loading;
+  const ledgerError = ledgerPage.error;
+  const reloadLedger = ledgerPage.reload;
 
   // ---- 充值（mock 通道）----
   const [amount, setAmount] = useState<number>(RECHARGE_AMOUNTS[0]);
