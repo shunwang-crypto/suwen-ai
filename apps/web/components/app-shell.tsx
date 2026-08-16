@@ -65,18 +65,18 @@ function FigmaNavIcon({ name }: { name: string }) {
 export const PRIMARY_NAV_ITEMS: NavItem[] = [
   { href: "/today", label: "今日", icon: <FigmaNavIcon name="today" /> },
   { href: "/chat", label: "对话", icon: <FigmaNavIcon name="chat" /> },
-  { href: "/quiz", label: "练习", icon: <FigmaNavIcon name="practice" /> },
+  { href: "/practice", label: "练习", icon: <FigmaNavIcon name="practice" /> },
   { href: "/materials", label: "课程", icon: <FigmaNavIcon name="knowledge" /> },
   { href: "/growth", label: "成长", icon: <FigmaNavIcon name="profile" /> },
   { href: "/plans", label: "学习计划", icon: <FigmaNavIcon name="plans" /> },
 ];
 
 /** 访问路径前缀 → 实际要高亮的导航项（显式映射表，取代旧的通配高亮 hack；
- *  /practice、/courses 为 UI 重构后续阶段启用后的预留别名）。 */
+ *  /quiz、/reviews 为旧路由重定向过程中的瞬时路径，/courses 为阶段 5 预留）。 */
 const NAV_HIGHLIGHT_ALIASES: Record<string, string> = {
   "/tutor": "/chat",
-  "/reviews": "/quiz",
-  "/practice": "/quiz",
+  "/quiz": "/practice",
+  "/reviews": "/practice",
   "/courses": "/materials",
 };
 
@@ -97,7 +97,8 @@ const TITLE_MAP: Record<string, string> = {
   "/today": "今日",
   "/chat": "AI 对话",
   "/tutor": "分级辅导",
-  "/materials": "资料",
+  "/materials": "课程",
+  "/practice": "练习",
   "/quiz": "智能练习",
   "/reviews": "复习",
   "/plans": "学习计划",
