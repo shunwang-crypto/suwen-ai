@@ -230,6 +230,43 @@ export function TaskStatusControls({
 }
 
 /** 日历视图：按 7 天一周分组的网格卡片；支持完成、跳过和恢复待办。 */
+/** 今日任务卡（UI 重构阶段 4 自 PlanCalendar 抽离的共享组件）：今日页与计划页
+ *  渲染同一份，checkbox/跳过/锁徽章/补强高亮/预计分钟全部沿用。 */
+export function PlanTodayCard({
+  structure,
+  onStatus,
+  onTaskOpen,
+  pendingKeys,
+  highlightKeys,
+}: {
+  structure: PlanStructure;
+  onStatus?: (taskId: string, status: PlanTaskStatus) => void;
+  onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
+  pendingKeys?: Set<string>;
+  highlightKeys?: Set<string>;
+}) {
+  const days = flattenDays(structure);
+  if (days.length === 0) return null;
+  const firstPendingIndex = days.findIndex((day) => day.tasks.some(taskIsPending));
+  const currentIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
+  const currentDay = days[currentIndex] ?? days[0];
+  return (
+    <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+      <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
+      <ul className="divide-y divide-line">
+        {currentDay.tasks.map((task, index) => {
+          const key = task.task_id;
+          const status = normalizedTaskStatus(task);
+          const busy = Boolean(key && pendingKeys?.has(key));
+          const isNew = Boolean(key && highlightKeys?.has(key));
+          return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskId={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
+        })}
+      </ul>
+      <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
+    </section>
+  );
+}
+
 export function PlanCalendar({
   structure,
   onStatus,
@@ -255,19 +292,7 @@ export function PlanCalendar({
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
-        <section className="overflow-hidden rounded-[12px] border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
-        <ul className="divide-y divide-line">
-          {currentDay.tasks.map((task, index) => {
-            const key = task.task_id;
-            const status = normalizedTaskStatus(task);
-            const busy = Boolean(key && pendingKeys?.has(key));
-            const isNew = Boolean(key && highlightKeys?.has(key));
-            return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskId={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
-          })}
-        </ul>
-        <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
-        </section>
+        <PlanTodayCard structure={structure} onStatus={onStatus} onTaskOpen={onTaskOpen} pendingKeys={pendingKeys} highlightKeys={highlightKeys} />
 
         <section className="overflow-hidden rounded-[12px] border border-line bg-white">
         <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-body-sm font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>

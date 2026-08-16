@@ -12,7 +12,7 @@ export default function GrowthPage() {
           <h1 className="mt-2 text-[26px] font-semibold tracking-[-0.04em] text-ink">成长</h1>
           <p className="mt-1.5 text-body-sm leading-5 text-ink-secondary">先看当前状态，再理解一段时间内发生的变化。</p>
         </div>
-        <Link href="/today" className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:text-ink">返回今日</Link>
+        <Link href="/today" className="text-body-sm font-medium text-ink-secondary underline-offset-2 hover:text-brand-700 hover:underline">返回今日</Link>
       </header>
       <CurrentLearningState />
       <div className="mx-auto my-8 h-px w-full max-w-[1180px] bg-line" />

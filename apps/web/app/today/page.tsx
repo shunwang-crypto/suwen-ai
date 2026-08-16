@@ -1,12 +1,23 @@
 "use client";
 
+// 今日（UI 重构阶段 4 加厚）：主推卡（next-actions 唯一决策源，保留）+ 今日计划任务卡
+// （复用 PlanTodayCard，无活跃计划整块隐藏）+ 到期复习计数条（0=复习清零）+
+// 本周活跃摘要一行（/api/reports/learning 已有聚合，拿不到不渲染）。
+// 次要推荐 <details> 与页脚「真实学习证据」说明保留。
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ErrorBanner } from "@/components/common";
+import { TodayPlanSection } from "@/components/plans/today-plan-section";
 import { apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
-import type { NextActionItem, NextActionsResponse } from "@/lib/types";
+import type {
+  LearningReportResponse,
+  NextActionItem,
+  NextActionsResponse,
+  ReviewTodayResponse,
+} from "@/lib/types";
 
 type TodayState =
   | { status: "loading" }
@@ -22,14 +33,6 @@ const ACTION_LABELS: Record<string, string> = {
   cold_start: "建立起点",
 };
 
-function ArrowIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4" aria-hidden>
-      <path d="M4 10h12m-4-4 4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 /** 阶段 3（规则 B）：复习/练习类行动改入专注会话；后端 href 契约不变，前端做映射。 */
 function focusActionHref(href: string): string {
   const from = encodeURIComponent("/today");
@@ -43,6 +46,96 @@ function focusActionHref(href: string): string {
     return `/practice/session?mode=quiz&from=${from}`;
   }
   return href;
+}
+
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4" aria-hidden>
+      <path d="M4 10h12m-4-4 4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 到期复习计数条：今日到期 N 题 → 专注复习（from=/today）；0 题=复习清零。 */
+function ReviewCountStrip() {
+  const [dueCount, setDueCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void apiJson<ReviewTodayResponse>("/api/reviews/today")
+      .then((data) => {
+        if (alive) setDueCount(Math.max(data.total_due ?? data.items.length, data.items.length));
+      })
+      .catch(() => {
+        if (alive) setDueCount(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (dueCount === null) return null;
+  if (dueCount === 0) {
+    return (
+      <p className="flex items-center gap-2 text-body-sm text-ink-muted">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-success-50 text-caption font-bold text-success-600">✓</span>
+        复习清零：今天没有到期错题。
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-line bg-white px-4 py-3">
+      <p className="text-body-sm text-ink-secondary">
+        <strong className="text-ink">今日到期 {dueCount} 题</strong>
+        <span className="ml-2 text-caption text-ink-muted">按遗忘曲线安排，答对两次即攻克</span>
+      </p>
+      <Link
+        href="/practice/session?mode=review&from=%2Ftoday"
+        className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-ink px-4 text-[13px] font-semibold text-white transition-colors hover:bg-black"
+      >
+        开始复习
+        <ArrowIcon />
+      </Link>
+    </div>
+  );
+}
+
+/** 本周活跃摘要（一行小字）：复用 /api/reports/learning 已有聚合；拿不到整行不渲染。 */
+function WeeklySummary() {
+  const [summary, setSummary] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void apiJson<LearningReportResponse>("/api/reports/learning")
+      .then((report) => {
+        if (!alive) return;
+        const metrics = report.metrics;
+        if (!metrics) {
+          setSummary(null);
+          return;
+        }
+        const delta =
+          metrics.attempt_count_delta > 0
+            ? `（较前 7 天 +${metrics.attempt_count_delta}）`
+            : metrics.attempt_count_delta < 0
+              ? `（较前 7 天 ${metrics.attempt_count_delta}）`
+              : "";
+        const accuracy =
+          metrics.accuracy != null ? ` · 正确率 ${Math.round(metrics.accuracy * 100)}%` : "";
+        setSummary(
+          `近 7 天作答 ${metrics.attempt_count} 次${delta} · 活跃 ${metrics.active_days}/30 天${accuracy}`,
+        );
+      })
+      .catch(() => {
+        if (alive) setSummary(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!summary) return null;
+  return <p className="text-center text-caption text-ink-muted">{summary}</p>;
 }
 
 export default function TodayPage() {
@@ -101,7 +194,7 @@ export default function TodayPage() {
 
   const [primary, ...secondary] = state.items;
   return (
-    <div className="mx-auto w-full max-w-[1040px] space-y-5 px-5 py-8 sm:px-8 lg:py-12">
+    <div className="mx-auto w-full max-w-[1040px] space-y-6 px-5 py-8 sm:px-8 lg:py-12">
       <header>
         <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">基于你的资料与真实学习证据</p>
         <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.04em] text-ink">现在只做这一件事</h2>
@@ -146,7 +239,12 @@ export default function TodayPage() {
         )}
       </section>
 
+      <TodayPlanSection />
+
+      <ReviewCountStrip />
+
       <p className="text-center text-caption text-ink-muted">阅读、普通对话和完成任务不会自动改变掌握度；真实作答与受控验证才会形成学习证据。</p>
+      <WeeklySummary />
     </div>
   );
 }

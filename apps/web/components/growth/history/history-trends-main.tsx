@@ -266,8 +266,8 @@ export function HistoryTrends() {
               illustration="chart"
             />
             <div className="flex justify-center gap-2">
-              <Link href="/quiz" className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800">开始摸底练习</Link>
-              <Link href="/plans" className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:border-brand-200 hover:text-brand-700">制定学习计划</Link>
+              <Link href="/practice/session?mode=quiz&from=%2Fgrowth&topic=%E6%91%B8%E5%BA%95%E7%BB%83%E4%B9%A0" className="text-body-sm font-medium text-brand-700 underline-offset-2 hover:underline">开始摸底练习</Link>
+              <Link href="/plans" className="text-body-sm font-medium text-ink-secondary underline-offset-2 hover:text-brand-700 hover:underline">制定学习计划</Link>
             </div>
           </div>
         )}
