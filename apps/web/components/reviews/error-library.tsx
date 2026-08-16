@@ -29,6 +29,7 @@ import type {
   KbOut,
   ReviewVariantResult,
 } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 /** 错因五分类中文化（models.py: ErrorItem.cause）。 */
 const CAUSE_LABELS: Record<string, string> = {
@@ -105,7 +106,6 @@ function StateBadge({ state }: { state: string }) {
 export function ErrorLibrary() {
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -131,91 +131,73 @@ export function ErrorLibrary() {
       if (next !== searchQuery) {
         setSearchQuery(next);
         setPage(1);
-        setLoading(true);
       }
     }, 300);
     return () => window.clearTimeout(timer);
   }, [query, searchQuery]);
 
-  // 列表 + 统计并行拉取（首个 setState 在 await 之后）
+  // 列表 + 统计并行拉取（A5 收敛: 两块 useApiResource, 过滤条件走路径, reloadKey 走 deps）
+  const listQuery = buildErrorQuery({
+    page,
+    pageSize: PAGE_SIZE,
+    state: stateFilter,
+    cause: causeFilter,
+    kbId: kbFilter,
+    query: searchQuery,
+  });
+  const listRes = useApiResource<ErrorListResponse>(`/api/errors?${listQuery}`, {
+    errorMessage: "错题本加载失败",
+    deps: [reloadKey],
+  });
+  const statsRes = useApiResource<ErrorStatsResponse>("/api/errors/stats", {
+    deps: [reloadKey],
+  });
+  const loading = listRes.loading || statsRes.loading;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 列表/统计/错误的单向同步, 无纯派生替代 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const query = buildErrorQuery({
-        page,
-        pageSize: PAGE_SIZE,
-        state: stateFilter,
-        cause: causeFilter,
-        kbId: kbFilter,
-        query: searchQuery,
-      });
-      const [listRes, statsRes] = await Promise.allSettled([
-        apiJson<ErrorListResponse>(`/api/errors?${query}`),
-        apiJson<ErrorStatsResponse>("/api/errors/stats"),
-      ]);
-      if (!alive) return;
-      if (listRes.status === "fulfilled") {
-        setList(listRes.value);
-        setError(null);
-      } else {
-        setError(
-          listRes.reason instanceof ApiError
-            ? listRes.reason.message
-            : "错题本加载失败",
-        );
-      }
-      if (statsRes.status === "fulfilled") setStats(statsRes.value);
-      setLoading(false);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [stateFilter, causeFilter, kbFilter, searchQuery, page, reloadKey]);
+    if (listRes.data) {
+      setList(listRes.data);
+      setError(null);
+    } else if (listRes.error) {
+      setError(listRes.error);
+    }
+  }, [listRes.data, listRes.error]);
+
+  useEffect(() => {
+    setStats(statsRes.data);
+  }, [statsRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 知识库列表 (科目 tab 数据源); 失败静默降级为"全部"单 tab, 不拖垮错题本
+  const kbListRes = useApiResource<KbOut[]>("/api/kb");
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源落定 → 科目 tab 数据源的单向同步 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<KbOut[]>("/api/kb");
-        if (alive) {
-          setKbs(res);
-          setKbListLoaded(true);
-        }
-      } catch {
-        if (alive) {
-          setKbs([]);
-          setKbListLoaded(true);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (kbListRes.data) {
+      setKbs(kbListRes.data);
+      setKbListLoaded(true);
+    } else if (kbListRes.error) {
+      setKbs([]);
+      setKbListLoaded(true);
+    }
+  }, [kbListRes.data, kbListRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  const reload = () => {
-    setLoading(true);
-    setError(null);
-    setReloadKey((k) => k + 1);
-  };
+  const reload = () => setReloadKey((k) => k + 1);
 
   const pickState = (next: string | null) => {
     setStateFilter((prev) => (prev === next ? null : next));
     setPage(1);
-    setLoading(true);
   };
 
   const pickCause = (next: string) => {
     setCauseFilter((prev) => (prev === next ? null : next));
     setPage(1);
-    setLoading(true);
   };
 
   const pickKb = (next: string | null) => {
     selectKb(next);
     setPage(1);
-    setLoading(true);
   };
 
   const patchItem = (id: string, patch: Partial<ErrorItemOut>) => {
@@ -522,7 +504,6 @@ export function ErrorLibrary() {
               setStateFilter(null);
               setCauseFilter(null);
               setPage(1);
-              setLoading(true);
             }}
             className="text-indigo-600 hover:underline"
           >
@@ -631,7 +612,6 @@ export function ErrorLibrary() {
                 disabled={list.page <= 1}
                 onClick={() => {
                   setPage((p) => Math.max(1, p - 1));
-                  setLoading(true);
                 }}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -645,7 +625,6 @@ export function ErrorLibrary() {
                 disabled={list.page >= list.pages}
                 onClick={() => {
                   setPage((p) => p + 1);
-                  setLoading(true);
                 }}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -684,7 +663,6 @@ export function ErrorLibrary() {
             setEditingItem(null);
             setSelectedItemId(null);
             setNotice(message);
-            setLoading(true);
             setReloadKey((key) => key + 1);
           }}
         />

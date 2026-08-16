@@ -4,12 +4,13 @@
 // 自动附带当前页面路径与最近一次 API 响应的 X-Request-ID（报障可与后端日志串联）。
 // 主线接线（一行，app/layout.tsx 的 AuthProvider 内）：<FeedbackWidget />
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { usePathname } from "next/navigation";
 
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import type { FeedbackCategory, FeedbackListResponse, FeedbackOut } from "@/lib/types";
+import type { FeedbackCategory, FeedbackListResponse } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 export const FEEDBACK_CATEGORY_LABELS: Record<FeedbackCategory, string> = {
   bug: "功能故障",
@@ -50,27 +51,13 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 function MyFeedbackList() {
-  const [items, setItems] = useState<FeedbackOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<FeedbackListResponse>("/api/feedback");
-        if (!alive) return;
-        setItems(res.items);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setItems([]);
-        setError(err instanceof ApiError ? err.message : "反馈记录加载失败");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // 我的反馈列表（A5 收敛: useApiResource 派生）
+  const listRes = useApiResource<FeedbackListResponse>("/api/feedback", {
+    errorMessage: "反馈记录加载失败",
+  });
+  const items =
+    listRes.data ? listRes.data.items : listRes.error ? [] : null;
+  const error = listRes.error;
 
   if (items === null) {
     return <p className="py-4 text-center text-xs text-slate-400">加载中…</p>;

@@ -28,6 +28,7 @@ import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type { MasteryItem, ProfileResponse } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 const CAUSE_LABELS: Record<string, string> = {
   concept_confusion: "概念混淆",
@@ -351,9 +352,6 @@ function MasteryRow({ item, weakThreshold }: {
 }
 
 export function CurrentLearningState() {
-  const [profile, setProfile] = useState<ProfileResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
   // 记忆条目（P2-1）：null=加载中；主画像失败不牵连本区块，各自兜底
@@ -374,42 +372,28 @@ export function CurrentLearningState() {
   // 最近变化展开态（C1）
   const [changesExpanded, setChangesExpanded] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await apiJson<ProfileResponse>("/api/profile");
-        if (!cancelled) setProfile(res);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : "画像加载失败");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  // 画像 + 记忆条目（A5 收敛: useApiResource; reloadKey 走 deps; insights 保留状态供删除后本地更新）
+  const profileRes = useApiResource<ProfileResponse>("/api/profile", {
+    errorMessage: "画像加载失败",
+    deps: [reloadKey],
+  });
+  const insightsRes = useApiResource<InsightsResponse>("/api/profile/insights", {
+    errorMessage: "记忆条目加载失败",
+    deps: [reloadKey],
+  });
+  const profile = profileRes.data;
+  const loading = profileRes.loading;
+  const error = profileRes.error;
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 记忆条目的单向同步, 无纯派生替代 */
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiJson<InsightsResponse>("/api/profile/insights");
-        if (!cancelled) setInsights(res.insights);
-      } catch (e) {
-        if (!cancelled) {
-          setInsights([]);
-          setInsightsError(e instanceof ApiError ? e.message : "记忆条目加载失败");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+    if (insightsRes.data) setInsights(insightsRes.data.insights);
+    else if (insightsRes.error) {
+      setInsights([]);
+      setInsightsError(insightsRes.error);
+    }
+  }, [insightsRes.data, insightsRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const deleteInsight = async (id: string) => {
     setDeletingInsightId(id);

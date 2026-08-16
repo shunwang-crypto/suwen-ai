@@ -2,12 +2,12 @@
 
 // 分块预览抽屉（F2）：heading_path / 页码 / 文本(<MathText>) / kc 数 / 向量化状态，分页浏览。
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { EmptyState, ErrorBanner, SkeletonList } from "@/components/common";
-import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type { ChunkOut, DocumentOut } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 const PAGE_SIZE = 20;
 
@@ -27,39 +27,16 @@ export function ChunksDrawer({
   doc: DocumentOut;
   onClose: () => void;
 }) {
-  const [chunks, setChunks] = useState<ChunkOut[] | null>(null);
   const [page, setPage] = useState(0);
   const [retryKey, setRetryKey] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // 分页加载：page/retryKey 变化触发；effect 内联 IIFE（同 chat 页模式）
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const rows = await apiJson<ChunkOut[]>(
-          `/api/kb/${kbId}/documents/${doc.id}/chunks?offset=${page * PAGE_SIZE}&limit=${PAGE_SIZE}`,
-        );
-        if (!alive) return;
-        setChunks(rows);
-        setError(null);
-      } catch (err) {
-        if (alive) {
-          setError(err instanceof ApiError ? err.message : "分块加载失败");
-        }
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [kbId, doc.id, page, retryKey]);
+  // 分页加载（A5 收敛: useApiResource; page 走路径, retryKey 走 deps）
+  const { data: chunks, loading, error } = useApiResource<ChunkOut[]>(
+    `/api/kb/${kbId}/documents/${doc.id}/chunks?offset=${page * PAGE_SIZE}&limit=${PAGE_SIZE}`,
+    { errorMessage: "分块加载失败", deps: [retryKey] },
+  );
 
   const goto = (p: number) => {
-    setLoading(true);
-    setError(null);
     if (p === page) setRetryKey((k) => k + 1);
     else setPage(p);
   };

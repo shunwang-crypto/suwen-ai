@@ -6,12 +6,12 @@
 // 图表一律纯 SVG / 纯 CSS div，颜色只作辅助——每根柱都带文字数值与 title tooltip。
 // 每张卡片底部固定标注 embedding/rerank、语料与黄金集版本。
 
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import {Card, ErrorBanner, LoadingState, Spinner, fmtDateTime} from "@/components/common";
-import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type {EvalCompareResponse, EvalJobInfo, EvalRunDetail, RetrievalCategoryRow, RetrievalEvalMetrics, RetrievalRefusal} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 export const DEFAULT_GOLDEN = "eval/golden_set/v2.jsonl";
 export const POLL_INTERVAL_MS = 3000;
@@ -391,31 +391,11 @@ export function RetrievalDetail({
 // ---- 详情容器 ----
 
 export function RunDetailPanel({ id }: { id: string }) {
-  const [detail, setDetail] = useState<EvalRunDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // 调用侧用 key={id} 强制重挂载，故这里不需要在 effect 里重置 loading
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<EvalRunDetail>(`/api/evals/${id}`);
-        if (!alive) return;
-        setDetail(res);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setDetail(null);
-        setError(err instanceof ApiError ? err.message : "跑分详情加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [id]);
+  // 调用侧用 key={id} 强制重挂载; 详情加载（A5 收敛: useApiResource 派生）
+  const { data: detail, loading, error } = useApiResource<EvalRunDetail>(
+    `/api/evals/${id}`,
+    { errorMessage: "跑分详情加载失败" },
+  );
 
   if (loading) return <LoadingState text="跑分详情加载中…" />;
   if (error) return <ErrorBanner message={error} />;
@@ -437,33 +417,11 @@ export function RunDetailPanel({ id }: { id: string }) {
 // ---- A/B 对比 ----
 
 export function CompareSection({ leftId, rightId }: { leftId: string; rightId: string }) {
-  const [data, setData] = useState<EvalCompareResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // 同上：调用侧按 A/B 组合 key 重挂载
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<EvalCompareResponse>(
-          `/api/evals/compare?ids=${encodeURIComponent(leftId)},${encodeURIComponent(rightId)}`,
-        );
-        if (!alive) return;
-        setData(res);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setData(null);
-        setError(err instanceof ApiError ? err.message : "对比加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [leftId, rightId]);
+  // 同上：调用侧按 A/B 组合 key 重挂载; 对比加载（A5 收敛: useApiResource 派生）
+  const { data, loading, error } = useApiResource<EvalCompareResponse>(
+    `/api/evals/compare?ids=${encodeURIComponent(leftId)},${encodeURIComponent(rightId)}`,
+    { errorMessage: "对比加载失败" },
+  );
 
   return (
     <Card title="A / B 对比">

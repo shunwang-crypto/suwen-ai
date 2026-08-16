@@ -77,31 +77,12 @@ export function StudyGuidePanel({
     [kbId],
   );
 
-  // 首屏加载（父组件用 key={kbId} 挂载本组件，切库即重挂载，无需在 effect 里重置状态）
+  // 首屏加载（A5 收敛: 复用 load; 父组件用 key={kbId} 挂载本组件，切库即重挂载，无需在 effect 里重置状态）
+  /* eslint-disable react-hooks/set-state-in-effect -- 首屏复用 load, 其 setState 均在 await 之后作为加载反馈 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<StudyGuideOut>(`/api/kb/${kbId}/study-guide`);
-        if (!alive) return;
-        setGuide(res.guide);
-        setGenerating(generationActive(res.generation.status));
-        setError(
-          res.generation.status === "failed"
-            ? res.generation.message || "学习指南生成失败，请重试"
-            : null,
-        );
-      } catch (err) {
-        if (!alive) return;
-        setError(err instanceof ApiError ? err.message : "学习指南加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [kbId]);
+    void load();
+  }, [load]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 生成中轮询：后台 ARQ 任务完成后指南出现即停
   useEffect(() => {

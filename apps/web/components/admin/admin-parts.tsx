@@ -19,6 +19,7 @@ import { FEEDBACK_CATEGORY_LABELS } from "@/components/feedback-widget";
 import { RetrieveDebug } from "@/components/kb/retrieve-debug";
 import { ApiError, apiJson } from "@/lib/api";
 import type {AdminUserOut, AdminUserDetailOut, AdminUserPageOut, AdminWalletAdjustOut, AdminUsageResponse, BreakerState, FaultPatch, FaultState, FeedbackCategory, FeedbackListResponse, FeedbackOut, KbOut, RegistrationInviteOut} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 export const DAY_OPTIONS = [7, 14, 30];
 
@@ -163,30 +164,22 @@ export function DailyTrend({ daily }: { daily: AdminUsageResponse["daily"] }) {
 
 /** 检索命中测试（管理端）：选可见库或手输任意 kb_id + query → 四阶段命中对比。 */
 export function RetrievalTestSection() {
-  const [kbs, setKbs] = useState<KbOut[] | null>(null);
-  const [kbError, setKbError] = useState<string | null>(null);
+  // 知识库列表（A5 收敛: useApiResource + 单向同步回填下拉默认值）
+  const kbListRes = useApiResource<KbOut[]>("/api/kb", {
+    errorMessage: "知识库列表加载失败",
+  });
+  const kbs = kbListRes.data;
+  const kbError = kbListRes.error;
   const [selectedId, setSelectedId] = useState("");
   const [manualId, setManualId] = useState("");
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达 → 下拉默认值回填, 无纯派生替代 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const list = await apiJson<KbOut[]>("/api/kb");
-        if (!alive) return;
-        setKbs(list);
-        setSelectedId((prev) => prev || (list[0]?.id ?? ""));
-        setKbError(null);
-      } catch (err) {
-        if (!alive) return;
-        setKbs([]);
-        setKbError(err instanceof ApiError ? err.message : "知识库列表加载失败");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const list = kbListRes.data;
+    if (!list) return;
+    setSelectedId((prev) => prev || (list[0]?.id ?? ""));
+  }, [kbListRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 手输 kb_id 优先（admin 可测任意库），否则用下拉选中的可见库
   const kbId = manualId.trim() || selectedId;
@@ -201,7 +194,7 @@ export function RetrievalTestSection() {
       }
     >
       <div className="space-y-3">
-        {kbError && <ErrorBanner message={kbError} onClose={() => setKbError(null)} />}
+        {kbError && <ErrorBanner message={kbError} />}
 
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="block">
@@ -278,35 +271,31 @@ export const BREAKER_STATE_META: Record<
 
 /** 故障注入控制台：provider 宕机 / 附加延迟 / 错误率 + 熔断器一键操作与状态。 */
 export function FaultInjectionSection() {
+  // 状态加载（A5 收敛: useApiResource; patch 成功仍直接落 state）
+  const faultRes = useApiResource<FaultState>("/api/admin/faults", {
+    errorMessage: "故障注入状态加载失败",
+  });
+  const loading = faultRes.loading;
   const [state, setState] = useState<FaultState | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 滑块本地态：拖动只改本地，松手/失焦或点「应用」才发请求（避免每帧打接口）
   const [latency, setLatency] = useState(0);
   const [errorRate, setErrorRate] = useState(0);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 控制台初始态的单向同步 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const s = await apiJson<FaultState>("/api/admin/faults");
-        if (!alive) return;
-        setState(s);
-        setLatency(s.latency_ms);
-        setErrorRate(s.error_rate);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setError(err instanceof ApiError ? err.message : "故障注入状态加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const s = faultRes.data;
+    if (!s) return;
+    setState(s);
+    setLatency(s.latency_ms);
+    setErrorRate(s.error_rate);
+  }, [faultRes.data]);
+
+  useEffect(() => {
+    if (faultRes.error) setError(faultRes.error);
+  }, [faultRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const patch = async (body: FaultPatch) => {
     if (busy) return;
@@ -570,35 +559,25 @@ export const FEEDBACK_FILTERS = [
 
 export function FeedbackAdminSection() {
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
-  const [data, setData] = useState<FeedbackListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // 列表加载（A5 收敛: useApiResource; statusFilter 走路径, reloadKey 走 deps;
+  // error 保留本地状态, patch 失败也写同一通道）
+  const feedbackQuery = new URLSearchParams({ page_size: "50" });
+  if (statusFilter) feedbackQuery.set("status", statusFilter);
+  const feedbackRes = useApiResource<FeedbackListResponse>(
+    `/api/admin/feedback?${feedbackQuery}`,
+    { errorMessage: "反馈列表加载失败", deps: [reloadKey] },
+  );
+  const { data, loading } = feedbackRes;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源失败 → 错误横幅的单向同步 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const params = new URLSearchParams({ page_size: "50" });
-        if (statusFilter) params.set("status", statusFilter);
-        const res = await apiJson<FeedbackListResponse>(
-          `/api/admin/feedback?${params}`,
-        );
-        if (!alive) return;
-        setData(res);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setError(err instanceof ApiError ? err.message : "反馈列表加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [statusFilter, reloadKey]);
+    setError(feedbackRes.error);
+  }, [feedbackRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const setStatus = async (item: FeedbackOut, status: "open" | "closed") => {
     if (busyId) return;
@@ -627,7 +606,6 @@ export function FeedbackAdminSection() {
               key={key}
               type="button"
               onClick={() => {
-                setLoading(true);
                 setStatusFilter(key);
               }}
               className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
@@ -780,24 +758,12 @@ export function UserWalletSection() {
     }
   };
 
+  // 首屏列表（A5 收敛: 复用 loadPage, 初始加载也走 loading 态）
+  /* eslint-disable react-hooks/set-state-in-effect -- 首屏复用 loadPage, 其 setState 均为加载反馈 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<AdminUserPageOut>("/api/admin/users?page=1&page_size=20");
-        if (!alive) return;
-        setUsers(data.items);
-        setPage(data.page);
-        setHasMore(data.has_more);
-        setTotal(data.total);
-      } catch (err) {
-        if (alive) setError(err instanceof ApiError ? err.message : "用户列表加载失败，请稍后重试");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    void loadPage();
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const searchUsers = async () => {
     const normalized = query.trim();
@@ -1115,27 +1081,12 @@ export function RegistrationInvitesSection() {
     }
   };
 
+  // 首屏列表（A5 收敛: 复用 load, 初始加载也走 loading 态）
+  /* eslint-disable react-hooks/set-state-in-effect -- 首屏复用 load, 其 setState 均为加载反馈 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<RegistrationInviteOut[]>(
-          "/api/admin/registration-invites",
-        );
-        if (alive) {
-          setItems(data);
-          setError(null);
-        }
-      } catch (err) {
-        if (alive) setError(err instanceof ApiError ? err.message : "邀请码列表加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    void load();
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const create = async (requestedCount: number) => {
     if (busy) return;

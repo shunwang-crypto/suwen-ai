@@ -17,6 +17,7 @@ import { RADAR_MAX_DIMS } from "@/components/radar";
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
 import type {KbOut, LearningReportResponse, ReportRadarItem, ReportWeakPoint} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 // ---- 后端可选字段与空值降级 ----
 
@@ -63,21 +64,13 @@ export function HistoryTrends() {
   const [reloadKey, setReloadKey] = useState(0);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
-  // 知识库列表（tab 数据源）：失败只隐藏 tab，不影响报告主体
+  // 知识库列表（tab 数据源，A5 收敛）：失败只隐藏 tab，不影响报告主体
+  const kbListRes = useApiResource<KbOut[]>("/api/kb");
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达 → 科目 tab 数据源的单向同步 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<KbOut[]>("/api/kb");
-        if (alive) setKbs(res);
-      } catch {
-        // tab 缺席即全站聚合视图，报告仍可用
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (kbListRes.data) setKbs(kbListRes.data);
+  }, [kbListRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     let alive = true;

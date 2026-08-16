@@ -5,17 +5,9 @@
 // 展示面包屑 + 页码 + 前后相邻子块 + 父块全文；命中块内引用片段 <mark> 高亮
 // （quote indexOf 定位，找不到则整块淡高亮），全部文本经 <MathText> 渲染公式。
 
-import { useEffect, useState } from "react";
-
-import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
 import type { ChunkContextOut, CitationData } from "@/lib/types";
-
-interface FetchResult {
-  key: string;
-  data: ChunkContextOut | null;
-  error: string | null;
-}
+import { useApiResource } from "@/lib/use-api-resource";
 
 /** 命中块正文：quote 在 chunk 文本中 indexOf 精确定位 <mark>；失败整块淡高亮。 */
 function HighlightedChunk({ text, quote }: { text: string; quote?: string }) {
@@ -56,35 +48,11 @@ export function ContextDrawer({
   citation: CitationData;
   onClose: () => void;
 }) {
-  const key = `${kbId}/${citation.chunk_id}`;
-  const [result, setResult] = useState<FetchResult | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await apiJson<ChunkContextOut>(
-          `/api/kb/${kbId}/chunks/${citation.chunk_id}/context?window=1`,
-        );
-        if (alive) setResult({ key, data, error: null });
-      } catch (err) {
-        if (alive) {
-          setResult({
-            key,
-            data: null,
-            error: err instanceof ApiError ? err.message : "原文加载失败，请重试",
-          });
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [key, kbId, citation.chunk_id]);
-
-  const loading = result?.key !== key;
-  const data = loading ? null : result?.data ?? null;
-  const error = loading ? null : result?.error ?? null;
+  // 上下文加载（A5 收敛: useApiResource; 原 key 匹配过期防护由 request-epoch 承担）
+  const { data, loading, error } = useApiResource<ChunkContextOut>(
+    `/api/kb/${kbId}/chunks/${citation.chunk_id}/context?window=1`,
+    { errorMessage: "原文加载失败，请重试" },
+  );
   const page = data?.chunk.page_start ?? citation.page;
 
   return (
