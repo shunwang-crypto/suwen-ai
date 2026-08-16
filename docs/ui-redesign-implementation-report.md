@@ -149,3 +149,25 @@
   - 两案均不动 SSE/轮次契约；A 数据一致性更好，B 改动面更小。
 
 ---
+
+## 终验：真实前后端 + 浏览器全链路
+
+- 环境：PostgreSQL/Redis/Qdrant（本机常驻）+ uvicorn API :8000 + arq worker + Next dev :3000；GATEWAY_MODE=live（Gemini 兼容端点真实出话）；测试账号 uitest2026@gmail.com（直插 DB + bcrypt，钱包 100 额度）。
+- 浏览器：Playwright Chromium headless 141（本会话插件浏览器后端为空，改用本地 Chromium 真实驱动；截图存 gui-test-screenshots/ui*.png）。
+- 结果（33 项检查全部通过，2 处初验失败分别为测试时序与真实 bug，后者已修复）：
+  - ✅ 登录 → /today；侧栏 5 项（今日/对话/练习/课程/成长）+ 额度工具区；「学习计划」已移出导航、进入账户菜单
+  - ✅ 今日页：复习清零计数条、无计划时任务卡隐藏、页脚证据说明
+  - ✅ /quiz?topic=… → /practice 保参重定向；练习三 tab 切换；/reviews?view=errors → 错题本 tab
+  - ✅ 专注会话：BARE 无侧栏；空队列渲染；退出走既有确认模态；from=https://evil.com → 自动回 /practice?tab=quiz；from=//evil.com → 消毒为站内返回目标
+  - ✅ /materials → /courses 重定向；新建课程直达工作区；「问这门课」单入口；指南/计划 tab 空态引导；课程名动态标题
+  - ✅ 文档上传出现在文档表（.md 讲义）；chat 真实 LLM 对话（SSE 流式回复完成）+ 会话列表 + 侧栏最近会话区联动
+  - ✅ /plans 聚合壳发起表单
+- 终验修复的 bug：components/nav/recent-courses.tsx 空 /api/kb 列表被模块缓存后不再重拉，导致新建课程后侧栏最近课程不出现——改为「存在未知 id 即补拉」。
+- 已知非阻塞：登录态恢复窗口期偶发一条 /api 401 控制台噪声（登录前的匿名请求，原有行为）。
+
+## 总结
+
+- 阶段 1-5 完成，阶段 6 触发停止条件（tutor 线程无列表端点，会话列表无法容纳，保留 /tutor 独立路由）。
+- 6 个 [phase-N] commit + 文档 commit；每阶段独立通过 构建/单测(115)/invariants(7)/eslint/tsc。
+- SKIPPED 清单：①机构侧栏项条件显示（UserOut 无机构字段）；②错题本 ?filter=unclassified（后端无对应过滤参数）；③阶段 6 全部（停止条件）。
+- 待人工裁决：机构项的懒加载取数方案、错题未归类入口形态、tutor 融合的后端方案 A/B 选择（见各阶段节）。

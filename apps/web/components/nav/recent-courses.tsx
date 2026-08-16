@@ -55,15 +55,23 @@ export function RecentCourses({
     return () => window.removeEventListener(`eduagents:storage:${key}`, onChange);
   }, [userId]);
 
+  // 课程名映射：挂载与「最近课程变化后存在未知 id」时拉取（新课程可能晚于本组件挂载创建，
+  // 空列表不作终端缓存）
   useEffect(() => {
-    if (cachedKbs) return;
+    const missing = ids.some((id) => !kbs?.some((kb) => kb.id === id));
+    if (kbs !== null && kbs.length > 0 && !missing) return;
     void apiJson<KbOut[]>("/api/kb")
       .then((list) => {
-        cachedKbs = list;
-        setKbs(list);
+        if (list.length > 0) {
+          cachedKbs = list;
+          setKbs(list);
+        } else {
+          setKbs((prev) => prev ?? []);
+        }
       })
-      .catch(() => setKbs([]));
-  }, []);
+      .catch(() => setKbs((prev) => prev ?? []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅需在 ids 变化时补拉缺失映射
+  }, [ids]);
 
   if (!kbs || ids.length === 0) return null;
   const courses = ids
