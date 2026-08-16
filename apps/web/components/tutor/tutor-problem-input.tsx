@@ -306,23 +306,31 @@ export function TutorProblemInput({
       }}
     >
       {!locked && !draft && (
-        <textarea
-          aria-label="题目题干"
-          value={stem}
-          onChange={(event) => setStem(event.target.value)}
-          onPaste={(event) => {
-            const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
-            if (image) {
-              event.preventDefault();
-              const named = image.name ? image : new File([image], `clipboard-${Date.now()}.png`, { type: image.type || "image/png" });
-              void upload(named);
-            }
-          }}
-          rows={3}
-          maxLength={12000}
-          placeholder="粘贴题目文字或剪贴板图片，也可选择、拖拽题目文件"
-          className="w-full resize-y border-0 bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted"
-        />
+        <>
+          <textarea
+            aria-label="题目题干"
+            value={stem}
+            onChange={(event) => setStem(event.target.value)}
+            onPaste={(event) => {
+              const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
+              if (image) {
+                event.preventDefault();
+                const named = image.name ? image : new File([image], `clipboard-${Date.now()}.png`, { type: image.type || "image/png" });
+                void upload(named);
+              }
+            }}
+            rows={3}
+            maxLength={12000}
+            placeholder="粘贴题目文字或剪贴板图片，也可选择、拖拽题目文件"
+            className="w-full resize-y border-0 bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted"
+          />
+          {stem.trim() && (
+            <div className="border-t border-line px-3 py-2">
+              <p className="text-caption font-medium text-ink-muted">预览（公式实时渲染，上方为源码可编辑）</p>
+              <MathText text={stem} className="mt-0.5 block text-[13px] leading-6 text-ink" />
+            </div>
+          )}
+        </>
       )}
       {!locked && draft && (
         <div className="px-3 py-2.5">
