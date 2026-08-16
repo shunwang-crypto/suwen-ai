@@ -4,7 +4,7 @@
 // SSE 走 fetch+ReadableStream（lib/sse.ts），支持契约七类事件。
 
 import { useRouter, useSearchParams } from "next/navigation";
-import {Suspense, useCallback, useEffect, useRef, useState, ChangeEvent, ClipboardEvent, KeyboardEvent} from "react";
+import {Suspense, useCallback, useEffect, useMemo, useRef, useState, ChangeEvent, ClipboardEvent, KeyboardEvent} from "react";
 
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
@@ -39,6 +39,7 @@ import type {
   TokenEventData,
   TraceEventData,
 } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 
 /** done.usage.mode 中文化（P2-18）：内部枚举不直接暴露给用户 */
@@ -177,7 +178,6 @@ function ChatView() {
   const [sessions, setSessions] = useState<SessionOut[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [kbs, setKbs] = useState<KbOut[]>([]);
   // Wave3 联合检索：多选（checkbox 列表，个人库与机构库分组），发送 kb_ids。
   // 初值取 ?kb=（学习指南 chip 带过来的目标库），保证首帧的 send 闭包就绑定了它。
   const [kbIds, setKbIds] = useState<string[]>(() => {
@@ -190,8 +190,6 @@ function ChatView() {
   >(null);
   const [attachments, setAttachments] = useState<ChatAttachmentOut[]>([]);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
-  const [attachmentCapabilities, setAttachmentCapabilities] =
-    useState<ChatAttachmentCapabilities | null>(null);
   const chatAttachmentInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [composerMultiline, setComposerMultiline] = useState(false);
@@ -294,31 +292,30 @@ function ChatView() {
     }
   }, []);
 
-  // 首屏并行拉取会话、知识库与附件能力
+  // 首屏并行拉取会话、知识库与附件能力（A5 收敛: useApiResource + 派生/单向同步;
+  // 会话列表的后续刷新仍走 loadSessions）
+  const sessionsRes = useApiResource<SessionOut[]>("/api/chat/sessions", {
+    errorMessage: "会话列表加载失败",
+  });
+  const kbListRes = useApiResource<KbOut[]>("/api/kb", {
+    errorMessage: "知识库列表加载失败",
+  });
+  const attachmentRes = useApiResource<ChatAttachmentCapabilities>(
+    "/api/chat/attachments/capabilities",
+  );
+  const kbs = useMemo(() => kbListRes.data ?? [], [kbListRes.data]);
+  const attachmentCapabilities = attachmentRes.data ?? null;
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 本地列表/横幅的单向同步, 无纯派生替代 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [sessionsRes, kbsRes, attachmentRes] = await Promise.allSettled([
-        apiJson<SessionOut[]>("/api/chat/sessions"),
-        apiJson<KbOut[]>("/api/kb"),
-        apiJson<ChatAttachmentCapabilities>(
-          "/api/chat/attachments/capabilities",
-        ),
-      ]);
-      if (!alive) return;
-      if (sessionsRes.status === "fulfilled") setSessions(sessionsRes.value);
-      else setBanner("会话列表加载失败");
-      setSessionsLoading(false);
-      if (kbsRes.status === "fulfilled") setKbs(kbsRes.value);
-      else setBanner("知识库列表加载失败");
-      if (attachmentRes.status === "fulfilled") {
-        setAttachmentCapabilities(attachmentRes.value);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (sessionsRes.data) setSessions(sessionsRes.data);
+    else if (sessionsRes.error) setBanner("会话列表加载失败");
+  }, [sessionsRes.data, sessionsRes.error]);
+
+  useEffect(() => {
+    setSessionsLoading(sessionsRes.loading);
+  }, [sessionsRes.loading]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 新消息 / 新 token 时滚到底部
   useEffect(() => {

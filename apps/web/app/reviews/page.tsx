@@ -5,7 +5,7 @@
 // 卡片附 FSRS 遗忘快照（P2-7「再不复习，3 天后预计保持率 N%」，<90% 才显示）。
 
 import Link from "next/link";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
 import { ModelMarkdown } from "@/components/chat/model-markdown";
@@ -32,6 +32,7 @@ import type {
   ReviewTodayResponse,
   ReviewVariantResult,
 } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 /** 错因五分类中文化（models.py: concept_confusion/formula_error/calc_slip/misread/knowledge_gap）。 */
 const CAUSE_LABELS: Record<string, string> = {
@@ -118,9 +119,6 @@ export default function ReviewsPage() {
   const urlParams = new URLSearchParams(search);
   const planId = urlParams.get("plan_id") ?? "";
   const taskId = urlParams.get("task_id") ?? "";
-  const [data, setData] = useState<ReviewTodayResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [states, setStates] = useState<Record<string, ItemState>>({});
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -134,34 +132,17 @@ export default function ReviewsPage() {
 
   const [reloadKey, setReloadKey] = useState(0);
 
-  // 队列加载：reloadKey 自增触发（effect 内联 IIFE，同 chat 页模式）
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<ReviewTodayResponse>("/api/reviews/today");
-        if (!alive) return;
-        setData(res);
-        setStates({});
-        setCurrentIndex(0);
-        setCompleted(false);
-        setError(null);
-      } catch (err) {
-        if (alive) {
-          setError(err instanceof ApiError ? err.message : "复习队列加载失败");
-        }
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [reloadKey]);
+  // 队列加载（A5 收敛: useApiResource + reloadKey 重载; setData 供提交后本地更新）
+  const { data, setData, loading, error } = useApiResource<ReviewTodayResponse>(
+    "/api/reviews/today",
+    { errorMessage: "复习队列加载失败", deps: [reloadKey] },
+  );
 
   const reload = () => {
-    setLoading(true);
-    setError(null);
+    // 重载即重置作答进度（loading 态遮盖，等价于原"数据到达后重置"）
+    setStates({});
+    setCurrentIndex(0);
+    setCompleted(false);
     setReloadKey((k) => k + 1);
   };
 

@@ -29,6 +29,7 @@ import type {
   TutorEntrypointsOut,
   TutorTurnResult,
 } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 const emptySubscribe = () => () => {};
 const TUTOR_SESSION_KEY = "suwen:active-tutor-session";
@@ -334,8 +335,6 @@ export default function TutorPage() {
   const [masteryChanges, setMasteryChanges] = useState<MasteryChange[]>([]);
   const [hintsExpanded, setHintsExpanded] = useState(false);
   const [entryChoice, setEntryChoice] = useState<"new" | null>(null);
-  const [entrypoints, setEntrypoints] = useState<TutorEntrypointsOut | null>(null);
-  const [entrypointsLoading, setEntrypointsLoading] = useState(true);
 
   const started = messages.length > 0;
   const ended = summary !== null;
@@ -343,75 +342,53 @@ export default function TutorPage() {
   const hasProblemContext = Boolean(effectiveProblem.trim());
   const listRef = useRef<HTMLDivElement>(null);
 
+  // A5 收敛: 初始 GET 收敛为 useApiResource (过期防护由 request-epoch 承担);
+  // 错题/任务上下文加载后经同步 effect 落回页面状态
+  const entrypointsRes = useApiResource<TutorEntrypointsOut>(
+    prefilledProblem || errorId || planId || taskId || requestedDraftId
+      ? null
+      : "/api/tutor/entrypoints",
+  );
+  const kbListRes = useApiResource<KbOut[]>(sourceKbId ? "/api/kb" : null);
+  const errorCtxRes = useApiResource<TutorContextOut>(
+    errorId ? `/api/errors/${errorId}/tutor-context` : null,
+    { errorMessage: "错题加载失败" },
+  );
+  const taskCtxRes = useApiResource<TutorContextOut>(
+    planId && taskId && !hasProblemContext
+      ? `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskId)}/tutor-context`
+      : null,
+    { errorMessage: "今日任务加载失败" },
+  );
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 题目/知识库/错误的单向同步, 无纯派生替代 */
   useEffect(() => {
-    if (prefilledProblem || errorId || planId || taskId || requestedDraftId) return;
-    let alive = true;
-    void apiJson<TutorEntrypointsOut>("/api/tutor/entrypoints")
-      .then((value) => {
-        if (alive) setEntrypoints(value);
-      })
-      .catch(() => {
-        if (alive) setEntrypoints(null);
-      })
-      .finally(() => {
-        if (alive) setEntrypointsLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [errorId, planId, prefilledProblem, requestedDraftId, taskId]);
+    setSourceKb(kbListRes.data?.find((item) => item.id === sourceKbId) ?? null);
+  }, [kbListRes.data, sourceKbId]);
 
   useEffect(() => {
-    if (!sourceKbId) return;
-    let alive = true;
-    void apiJson<KbOut[]>("/api/kb")
-      .then((items) => {
-        if (alive) setSourceKb(items.find((item) => item.id === sourceKbId) ?? null);
-      })
-      .catch(() => {
-        if (alive) setSourceKb(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [sourceKbId]);
+    const context = errorCtxRes.data;
+    if (!context) return;
+    setProblem(context.problem);
+    setProblemTouched(true);
+    if (context.kc_ids?.length) setSourceKb(null);
+  }, [errorCtxRes.data]);
 
   useEffect(() => {
-    if (!errorId) return;
-    let alive = true;
-    void apiJson<TutorContextOut>(`/api/errors/${errorId}/tutor-context`)
-      .then((context) => {
-        if (!alive) return;
-        setProblem(context.problem);
-        setProblemTouched(true);
-        if (context.kc_ids?.length) setSourceKb(null);
-      })
-      .catch((caught) => {
-        if (alive) setError(caught instanceof ApiError ? caught.message : "错题加载失败");
-      });
-    return () => {
-      alive = false;
-    };
-  }, [errorId]);
+    const context = taskCtxRes.data;
+    if (!context) return;
+    setProblem(context.problem);
+    setProblemTouched(true);
+  }, [taskCtxRes.data]);
 
+  // 上下文加载失败统一走页面唯一的 error 展示通道 (可关闭)
   useEffect(() => {
-    if (!planId || !taskId || hasProblemContext) return;
-    let alive = true;
-    void apiJson<TutorContextOut>(
-      `/api/plans/${encodeURIComponent(planId)}/tasks/${encodeURIComponent(taskId)}/tutor-context`,
-    )
-      .then((context) => {
-        if (!alive) return;
-        setProblem(context.problem);
-        setProblemTouched(true);
-      })
-      .catch((caught) => {
-        if (alive) setError(caught instanceof ApiError ? caught.message : "今日任务加载失败");
-      });
-    return () => {
-      alive = false;
-    };
-  }, [hasProblemContext, planId, taskId]);
+    if (errorCtxRes.error) setError(errorCtxRes.error);
+  }, [errorCtxRes.error]);
+  useEffect(() => {
+    if (taskCtxRes.error) setError(taskCtxRes.error);
+  }, [taskCtxRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (!requestedDraftId) return;
@@ -609,8 +586,8 @@ export default function TutorPage() {
         )}
         {!started && !draftId && !hasProblemContext && !entryChoice && (
           <TutorEntrypoints
-            data={entrypoints}
-            loading={entrypointsLoading}
+            data={entrypointsRes.data}
+            loading={entrypointsRes.loading}
             onChooseNew={() => setEntryChoice("new")}
           />
         )}

@@ -46,6 +46,7 @@ import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
 import { streamSse } from "@/lib/sse";
 import type {AttemptResult, Blueprint, ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, MetacognitionSummary, NodeUpdateData, PracticeRecommendation, QuizDetail, QuizListItem, WeakPointsResponse} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/quiz/quiz-parts";
 
 export default function QuizPage() {
@@ -79,7 +80,6 @@ export default function QuizPage() {
       ? rawVerifyN
       : 3;
 
-  const [kbs, setKbs] = useState<KbOut[]>([]);
   const [quizzes, setQuizzes] = useState<QuizListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   // 画像联动出题（M4-D2）：预览与实际出题共用后端 weak_point_kcs，所见即所练
@@ -146,53 +146,66 @@ export default function QuizPage() {
     }
   }, []);
 
-  // 首屏并行拉取历史练习 / 知识库 / 薄弱点预览（effect 内联 IIFE，同 chat 页模式）
+  // 首屏: 历史练习（A5 收敛: useApiResource + 单向同步; loadQuizzes 供生成完成后刷新）/
+  // 知识库列表（派生）+ 弱项首拉与本地草稿恢复
+  const quizzesRes = useApiResource<QuizListItem[]>("/api/quiz", {
+    errorMessage: "历史练习加载失败",
+  });
+  const kbListRes = useApiResource<KbOut[]>("/api/kb");
+  const kbs = kbListRes.data ?? [];
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 列表/错误的单向同步, 无纯派生替代 */
+  useEffect(() => {
+    const list = quizzesRes.data;
+    if (!list) return;
+    setQuizzes(list);
+    setListError(null);
+  }, [quizzesRes.data]);
+
+  useEffect(() => {
+    if (quizzesRes.error) {
+      setQuizzes((prev) => prev ?? []);
+      setListError(quizzesRes.error);
+    }
+  }, [quizzesRes.error]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect -- localStorage 草稿恢复与弱项首拉的单向同步, 无纯派生替代 */
   useEffect(() => {
     let alive = true;
-    (async () => {
-      const [quizzesRes, kbsRes, weakRes] = await Promise.allSettled([
-        apiJson<QuizListItem[]>("/api/quiz"),
-        apiJson<KbOut[]>("/api/kb"),
-        apiJson<WeakPointsResponse>(weakPointsPath(weakKbId)),
-      ]);
-      if (!alive) return;
-      if (quizzesRes.status === "fulfilled") setQuizzes(quizzesRes.value);
-      else {
-        setQuizzes([]);
-        setListError("历史练习加载失败");
+    void apiJson<WeakPointsResponse>(weakPointsPath(""))
+      .then((value) => {
+        if (alive) setWeak(value);
+      })
+      .catch(() => {
+        // 弱项接口不可用时给空占位，不阻塞出题入口
+        if (alive) setWeak({ threshold: 0.6, limit: 5, weak_points: [] });
+      });
+    void loadRecommendation();
+    const pending = Parts.readPendingQuiz(userId);
+    if (pending) {
+      topicRef.current = pending.topic;
+      if (pending.status === "failed") {
+        setNotice(quizOutcomeMessage(pending.failureOutcome));
       }
-      setKbs(kbsRes.status === "fulfilled" ? kbsRes.value : []);
-      setWeak(
-        weakRes.status === "fulfilled"
-          ? weakRes.value
-          : { threshold: 0.6, limit: 5, weak_points: [] },
+      setInterruptData(pending.interrupt ?? null);
+      setPhase(
+        pending.status === "generating"
+          ? "streaming"
+          : pending.status === "resuming"
+            ? "resuming"
+            : pending.status === "await_confirm"
+              ? "await_confirm"
+              : "idle",
       );
-      void loadRecommendation();
-      const pending = Parts.readPendingQuiz(userId);
-      if (pending) {
-        topicRef.current = pending.topic;
-        if (pending.status === "failed") {
-          setNotice(quizOutcomeMessage(pending.failureOutcome));
-        }
-        setInterruptData(pending.interrupt ?? null);
-        setPhase(
-          pending.status === "generating"
-            ? "streaming"
-            : pending.status === "resuming"
-              ? "resuming"
-              : pending.status === "await_confirm"
-                ? "await_confirm"
-                : "idle",
-        );
-      }
-    })();
+    }
     return () => {
       alive = false;
     };
-    // 只在首屏跑一次: weakKbId 初值恒为空串, 后续切换由 pickWeakKb 自己重拉,
-    // 放进依赖会让每次切科目多打一轮首屏三连请求
+    // 只在首屏跑一次: 弱项切科目由 pickWeakKb 自己重拉（带请求序号竞态保护）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadRecommendation, userId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (phase !== "streaming" && phase !== "resuming") return;

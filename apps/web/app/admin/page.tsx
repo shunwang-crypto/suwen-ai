@@ -5,7 +5,7 @@
 // time-travel 虚拟时钟控制卡（演示遗忘曲线的操作台），
 // 以及「检索命中测试」分区（四阶段召回/融合/重排全过程）。
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -18,6 +18,7 @@ import {
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {AdminLatencyResponse, AdminUsageResponse, TimeTravelInfo} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/admin/admin-parts";
 
 export default function AdminPage() {
@@ -28,52 +29,32 @@ export default function AdminPage() {
     "ops" | "retrieval" | "faults" | "feedback" | "invites" | "users"
   >("ops");
   const [days, setDays] = useState(7);
-  const [usage, setUsage] = useState<AdminUsageResponse | null>(null);
-  const [latency, setLatency] = useState<AdminLatencyResponse | null>(null);
-  const [timeTravel, setTimeTravel] = useState<TimeTravelInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [travelBusy, setTravelBusy] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
 
-  // 数据加载：days/reloadKey 变化触发（effect 内联 IIFE，同 chat 页模式）；
-  // 切换时间窗口时保留旧数据展示，新数据到达后整体替换。
-  useEffect(() => {
-    if (!isAdmin) return;
-    let alive = true;
-    (async () => {
-      const [usageRes, latencyRes, ttRes] = await Promise.allSettled([
-        apiJson<AdminUsageResponse>(`/api/admin/usage?days=${days}`),
-        apiJson<AdminLatencyResponse>(`/api/admin/usage/latency?days=${days}`),
-        apiJson<TimeTravelInfo>("/api/admin/time-travel"),
-      ]);
-      if (!alive) return;
-      if (usageRes.status === "fulfilled") {
-        setUsage(usageRes.value);
-        setError(null);
-      } else {
-        setError(
-          usageRes.reason instanceof ApiError
-            ? usageRes.reason.message
-            : "用量数据加载失败",
-        );
-      }
-      if (latencyRes.status === "fulfilled") setLatency(latencyRes.value);
-      if (ttRes.status === "fulfilled") setTimeTravel(ttRes.value);
-      setLoading(false);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [isAdmin, days, reloadKey]);
+  // 数据加载（A5 收敛: 三块独立 useApiResource; days/reloadKey 经 deps 重载;
+  // 切换时间窗口时保留旧数据展示，新数据到达后整体替换）
+  const usageRes = useApiResource<AdminUsageResponse>(
+    isAdmin ? `/api/admin/usage?days=${days}` : null,
+    { errorMessage: "用量数据加载失败", deps: [reloadKey] },
+  );
+  const latencyRes = useApiResource<AdminLatencyResponse>(
+    isAdmin ? `/api/admin/usage/latency?days=${days}` : null,
+    { deps: [reloadKey] },
+  );
+  const ttRes = useApiResource<TimeTravelInfo>(
+    isAdmin ? "/api/admin/time-travel" : null,
+    { deps: [reloadKey] },
+  );
+  const usage = usageRes.data;
+  const latency = latencyRes.data;
+  const { data: timeTravel, setData: setTimeTravel } = ttRes;
+  const loading = isAdmin && (usageRes.loading || latencyRes.loading || ttRes.loading);
+  const error = usageRes.error;
 
-  const reload = () => {
-    setLoading(true);
-    setError(null);
-    setReloadKey((k) => k + 1);
-  };
+  const reload = () => setReloadKey((k) => k + 1);
 
   const travel = async (deltaDays: number) => {
     if (travelBusy || deltaDays === 0) return;

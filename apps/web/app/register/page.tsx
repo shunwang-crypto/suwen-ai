@@ -14,6 +14,7 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type { PublicRegistrationConfigOut, RegistrationMode } from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -36,22 +37,13 @@ export default function RegisterPage() {
   // 服务未就绪（captchaId 为 null）时不带字段提交，由后端裁决。
   const [captcha, setCaptcha] = useState<CaptchaState>(EMPTY_CAPTCHA);
   const [captchaEpoch, setCaptchaEpoch] = useState(0);
-  const [registrationMode, setRegistrationMode] = useState<RegistrationMode | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    apiJson<PublicRegistrationConfigOut>("/api/config/public")
-      .then((config) => {
-        if (alive) setRegistrationMode(config.registration_mode);
-      })
-      .catch(() => {
-        // Configuration failure must never accidentally open registration.
-        if (alive) setRegistrationMode("closed");
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // 注册模式（A5 收敛: useApiResource 派生; 加载中为 null → 关闭态占位,
+  // 配置拉取失败必须落入 closed，绝不能意外放开注册）
+  const configRes = useApiResource<PublicRegistrationConfigOut>("/api/config/public");
+  const registrationMode: RegistrationMode | null = configRes.error
+    ? "closed"
+    : (configRes.data?.registration_mode ?? null);
 
   useEffect(() => {
     if (cooldown <= 0) return;

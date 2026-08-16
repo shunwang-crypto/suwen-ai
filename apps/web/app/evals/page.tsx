@@ -19,15 +19,13 @@ import {
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type {EvalImportResponse, EvalJobInfo, EvalRunJobStart, EvalRunListItem, EvalRunsResponse} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/evals/evals-parts";
 
 export default function EvalsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
-  const [runs, setRuns] = useState<EvalRunListItem[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -50,28 +48,18 @@ export default function EvalsPage() {
   const [pickB, setPickB] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
 
-  // 列表加载
-  useEffect(() => {
-    if (!isAdmin) return;
-    let alive = true;
-    (async () => {
-      try {
-        const res = await apiJson<EvalRunsResponse>("/api/evals");
-        if (!alive) return;
-        setRuns(res.runs ?? []);
-        setError(null);
-      } catch (err) {
-        if (!alive) return;
-        setRuns([]);
-        setError(err instanceof ApiError ? err.message : "评估列表加载失败");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [isAdmin, reloadKey]);
+  // 列表加载（A5 收敛: useApiResource + reloadKey 重载）
+  const runsRes = useApiResource<EvalRunsResponse>(isAdmin ? "/api/evals" : null, {
+    errorMessage: "评估列表加载失败",
+    deps: [reloadKey],
+  });
+  const runs: EvalRunListItem[] | null = runsRes.data
+    ? (runsRes.data.runs ?? [])
+    : runsRes.error
+      ? []
+      : null;
+  const loading = runsRes.loading;
+  const error = runsRes.error;
 
   // 重跑任务轮询：每 3s 一次，最多 200 次，complete/not_found 即停并刷新列表
   useEffect(() => {
@@ -227,11 +215,7 @@ export default function EvalsPage() {
       {error && (
         <ErrorBanner
           message={error}
-          onRetry={() => {
-            setLoading(true);
-            setError(null);
-            setReloadKey((k) => k + 1);
-          }}
+          onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
 

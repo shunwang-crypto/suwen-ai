@@ -39,6 +39,7 @@ import {
 } from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
 import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanAdjustResult, PlanAdjustmentItem, PlanDetail, PlanListItem, PlanStructure, PlanToggleResult} from "@/lib/types";
+import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/plans/plan-parts";
 
 export default function PlansPage() {
@@ -50,7 +51,6 @@ export default function PlansPage() {
     () => "",
   );
   const requestedPlanId = new URLSearchParams(search).get("id");
-  const [kbs, setKbs] = useState<KbOut[]>([]);
   const [plans, setPlans] = useState<PlanListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanListItem | null>(null);
@@ -100,55 +100,61 @@ export default function PlansPage() {
     }
   }, []);
 
-  // 首屏并行拉取计划与知识库列表（effect 内联 IIFE，同 chat 页模式）
+  // A5 收敛: 首屏计划列表收敛为 useApiResource; kbs 派生; 本地草稿恢复独立为挂载 effect
+  const plansListRes = useApiResource<PlanListItem[]>("/api/plans", {
+    errorMessage: "计划列表加载失败",
+  });
+  const kbListRes = useApiResource<KbOut[]>("/api/kb");
+  const kbs = kbListRes.data ?? [];
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 选中项/错误横幅的单向同步, 无纯派生替代 */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const [plansRes, kbsRes] = await Promise.allSettled([
-        apiJson<PlanListItem[]>("/api/plans"),
-        apiJson<KbOut[]>("/api/kb"),
-      ]);
-      if (!alive) return;
-      if (plansRes.status === "fulfilled") {
-        setPlans(plansRes.value);
-        setSelected(
-          plansRes.value.find((plan) => plan.id === requestedPlanId) ??
-            plansRes.value[0] ??
-            null,
-        );
-      }
-      else {
-        setPlans([]);
-        setListError("计划列表加载失败");
-      }
-      const availableKbs = kbsRes.status === "fulfilled" ? kbsRes.value : [];
-      setKbs(availableKbs);
-      const pending = Parts.readPendingPlan(userId);
-      if (!pending && availableKbs.length === 1) setKbId(availableKbs[0].id);
-      if (pending) {
-        setGoal(pending.form.goal);
-        setCurrentLevel(pending.form.currentLevel ?? "");
-        setTargetOutcome(pending.form.targetOutcome ?? "");
-        setSuccessCriteria(pending.form.successCriteria ?? "");
-        setKbId(pending.form.kbId);
-        setHours(pending.form.hours);
-        setTotalDays(pending.form.totalDays);
-        setSelected(null);
-        setShowCreate(true);
-        setInterruptData(pending.interrupt ?? null);
-        setPhase(
-          pending.status === "generating"
-            ? "streaming"
-            : pending.status === "resuming"
-              ? "resuming"
-              : "await_confirm",
-        );
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [requestedPlanId, userId]);
+    const list = plansListRes.data;
+    if (!list) return;
+    setPlans(list);
+    setSelected(
+      list.find((plan) => plan.id === requestedPlanId) ?? list[0] ?? null,
+    );
+  }, [plansListRes.data, requestedPlanId]);
+
+  useEffect(() => {
+    setListError(plansListRes.error);
+    if (plansListRes.error) setPlans((prev) => prev ?? []);
+  }, [plansListRes.error]);
+
+  // 唯一知识库时回填表单默认值（有本地草稿则不抢）
+  useEffect(() => {
+    const availableKbs = kbListRes.data ?? [];
+    if (!Parts.readPendingPlan(userId) && availableKbs.length === 1) {
+      setKbId(availableKbs[0].id);
+    }
+  }, [kbListRes.data, userId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // 恢复本地待确认/生成中的计划草稿（含中断确认态）
+  /* eslint-disable react-hooks/set-state-in-effect -- localStorage 草稿 → 表单/阶段的单向恢复, 无纯派生替代 */
+  useEffect(() => {
+    const pending = Parts.readPendingPlan(userId);
+    if (!pending) return;
+    setGoal(pending.form.goal);
+    setCurrentLevel(pending.form.currentLevel ?? "");
+    setTargetOutcome(pending.form.targetOutcome ?? "");
+    setSuccessCriteria(pending.form.successCriteria ?? "");
+    setKbId(pending.form.kbId);
+    setHours(pending.form.hours);
+    setTotalDays(pending.form.totalDays);
+    setSelected(null);
+    setShowCreate(true);
+    setInterruptData(pending.interrupt ?? null);
+    setPhase(
+      pending.status === "generating"
+        ? "streaming"
+        : pending.status === "resuming"
+          ? "resuming"
+          : "await_confirm",
+    );
+  }, [userId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (phase !== "streaming" && phase !== "resuming") return;
@@ -167,34 +173,27 @@ export default function PlansPage() {
     return () => clearInterval(timer);
   }, [phase, loadPlans, userId]);
 
-  // 选中计划后拉详情 + 调整历史（detailKey 自增可强制重拉；首个 setState 在 await 之后）
+  // 选中计划后拉详情 + 调整历史（A5 收敛; detailKey 自增经 deps 强制重拉）
   const selectedPlanId = selected?.id ?? "";
+  const detailRes = useApiResource<PlanDetail>(
+    selectedPlanId ? `/api/plans/${selectedPlanId}` : null,
+    { errorMessage: "计划详情加载失败", deps: [detailKey] },
+  );
+  const adjustmentsRes = useApiResource<PlanAdjustmentItem[]>(
+    selectedPlanId ? `/api/plans/${selectedPlanId}/adjustments` : null,
+    { deps: [detailKey] },
+  );
+
+  /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 详情/调整历史的单向同步, 无纯派生替代 */
   useEffect(() => {
-    if (!selectedPlanId) return;
-    let alive = true;
-    (async () => {
-      const [detailRes, adjRes] = await Promise.allSettled([
-        apiJson<PlanDetail>(`/api/plans/${selectedPlanId}`),
-        apiJson<PlanAdjustmentItem[]>(`/api/plans/${selectedPlanId}/adjustments`),
-      ]);
-      if (!alive) return;
-      if (detailRes.status === "fulfilled") {
-        setDetail(detailRes.value);
-        setDetailError(null);
-      } else {
-        setDetail(null);
-        setDetailError(
-          detailRes.reason instanceof ApiError
-            ? detailRes.reason.message
-            : "计划详情加载失败",
-        );
-      }
-      setAdjustments(adjRes.status === "fulfilled" ? adjRes.value : []);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [selectedPlanId, detailKey]);
+    setDetail(detailRes.data);
+    setDetailError(detailRes.error);
+  }, [detailRes.data, detailRes.error]);
+
+  useEffect(() => {
+    setAdjustments(adjustmentsRes.data ?? []);
+  }, [adjustmentsRes.data]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   /** 切换选中计划：详情态在事件处理器里清空（effect 内不允许同步 setState）。 */
   const selectPlan = (plan: PlanListItem | null) => {
