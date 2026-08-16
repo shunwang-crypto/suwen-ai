@@ -61,7 +61,7 @@ interface TutorMessage {
   hintLevel?: number;
 }
 
-export interface SavedTutorSession {
+interface SavedTutorSession {
   draftId: string;
   threadId?: string;
 }

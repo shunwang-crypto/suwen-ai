@@ -10,30 +10,17 @@ import {
   refreshAccessToken,
 } from "./api";
 
-export interface SseMessage {
+interface SseMessage {
   event: string;
   data: unknown;
 }
-
-/** 契约事件名；session 在任务启动后立即下发，供切页后恢复后台运行状态。 */
-export const SSE_EVENT_NAMES = [
-  "session",
-  "token",
-  "node_update",
-  "trace_event",
-  "citation",
-  "followups",
-  "interrupt",
-  "done",
-  "error",
-] as const;
 
 /** 软超时（P2-18）：连续 N 毫秒收不到任何服务端事件时，产出一条客户端合成的
  *  `stall` 事件（非契约事件，服务端永远不会发），随后继续等待。上游恢复推送后
  *  正常事件继续产出。默认 45 秒。 */
 const DEFAULT_IDLE_TIMEOUT_MS = 45_000;
 
-export interface StreamSseOptions {
+interface StreamSseOptions {
   signal?: AbortSignal;
   /** 无事件软超时毫秒数；<=0 关闭。默认 45000。 */
   idleTimeoutMs?: number;

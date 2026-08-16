@@ -78,8 +78,7 @@ return (
 }
 
 /**
- * 对话页主体。使用 useSearchParams（读 ?kb=&q=），生产构建要求包在 Suspense 里，
- * 因此默认导出是下面的 ChatPage 壳（Next 16 文档 use-search-params#prerendering）。
+ * 消息流主体：渲染对话消息、过程时间线与联网搜索状态，由 ChatPage 组合使用。
  */
 
 export function MessageList(props: MessageListProps) {

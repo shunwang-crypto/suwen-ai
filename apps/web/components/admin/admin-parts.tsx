@@ -242,13 +242,13 @@ export function RetrievalTestSection() {
 
 // ---- 故障注入（M5-D2）：演示降级链路与熔断器，现场制造 provider 故障 ----
 
-export const BREAKER_TIER_LABEL: Record<string, string> = {
+const BREAKER_TIER_LABEL: Record<string, string> = {
   cheap: "cheap · 低成本档",
   standard: "standard · 主模型",
   strong: "strong · 强模型",
 };
 
-export const BREAKER_STATE_META: Record<
+const BREAKER_STATE_META: Record<
   BreakerState,
   { text: string; cls: string; dot: string }
 > = {
@@ -551,7 +551,7 @@ export function FaultInjectionSection() {
 
 // ---- 用户反馈（P2-1）：admin 工单列表，status 筛选 + 关闭 ----
 
-export const FEEDBACK_FILTERS = [
+const FEEDBACK_FILTERS = [
   ["", "全部"],
   ["open", "处理中"],
   ["closed", "已关闭"],
@@ -712,13 +712,13 @@ export function FeedbackAdminSection() {
   );
 }
 
-export const ADMIN_ROLE_LABEL: Record<string, string> = {
+const ADMIN_ROLE_LABEL: Record<string, string> = {
   student: "学生",
   teacher: "教师",
   admin: "管理员",
 };
 
-export const ADMIN_STATUS_LABEL: Record<string, string> = {
+const ADMIN_STATUS_LABEL: Record<string, string> = {
   active: "正常",
   disabled: "已停用",
 };
@@ -1051,7 +1051,7 @@ export function UserWalletSection() {
   );
 }
 
-export const INVITE_STATUS_LABEL: Record<RegistrationInviteOut["status"], string> = {
+const INVITE_STATUS_LABEL: Record<RegistrationInviteOut["status"], string> = {
   active: "有效",
   used: "已用",
   revoked: "已撤销",

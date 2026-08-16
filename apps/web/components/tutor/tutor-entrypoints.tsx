@@ -2,13 +2,13 @@ import Link from "next/link";
 
 import type { TutorEntrypointsOut } from "@/lib/types";
 
-export function tutorTaskHref(
+function tutorTaskHref(
   task: Extract<TutorEntrypointsOut["today_task"], { status: "ready" }>,
 ): string {
   return `/tutor?plan_id=${encodeURIComponent(task.plan_id)}&task_id=${encodeURIComponent(task.task_id)}`;
 }
 
-export function tutorErrorHref(errorId: string): string {
+function tutorErrorHref(errorId: string): string {
   return `/tutor?error_id=${encodeURIComponent(errorId)}`;
 }
 

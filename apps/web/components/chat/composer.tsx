@@ -10,7 +10,7 @@ import type { ChangeEvent, RefObject } from "react";
 import type { ChatAttachmentOut, KbOut } from "@/lib/types";
 import type { ChatMode } from "@/components/chat/chat-msg";
 
-export interface ComposerProps {
+interface ComposerProps {
   input: string;
   setInput: (value: string) => void;
   send: () => void;

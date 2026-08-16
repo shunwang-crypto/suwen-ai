@@ -7,7 +7,7 @@
  * state write. invalidate() retires all outstanding tokens when the owning
  * user/resource/route scope changes.
  */
-export interface RequestEpoch {
+interface RequestEpoch {
   begin: () => number;
   invalidate: () => void;
   isCurrent: (token: number) => boolean;
