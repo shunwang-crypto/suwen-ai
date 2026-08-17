@@ -171,3 +171,46 @@
 - 6 个 [phase-N] commit + 文档 commit；每阶段独立通过 构建/单测(115)/invariants(7)/eslint/tsc。
 - SKIPPED 清单：①机构侧栏项条件显示（UserOut 无机构字段）；②错题本 ?filter=unclassified（后端无对应过滤参数）；③阶段 6 全部（停止条件）。
 - 待人工裁决：机构项的懒加载取数方案、错题未归类入口形态、tutor 融合的后端方案 A/B 选择（见各阶段节）。
+
+---
+
+# 续篇：三项裁决执行 + 三处收尾（2026-08-17）
+
+前置：验收通过，阶段 1-5 保留；解除"后端零改动"约束，仅限三项裁决的最小后端改动。
+
+## 裁决 1 · 阶段 6 方案 A：tutor 会话落 ChatSession（完成，未触发停止条件）
+
+- 后端（commit 2b15221）：
+  - 迁移 `0032_chat_session_kind`：`chat_sessions.kind varchar(16) NOT NULL DEFAULT 'chat'`。**存量 tutor thread 不回填**——旧现场继续经 `suwen:active-tutor-session` 恢复（点击「辅导解题」时本地键恢复路径保留）。
+  - `tutor_turn` 成功后 upsert kind='tutor' 的 ChatSession（id=thread_local_id，与 checkpoint 同键）：首轮建行（标题=题目前 60 字），后续轮次仅刷新 updated_at；用户重命名不被覆盖。重命名/置顶/删除复用既有 sessions 端点（删除只删行，checkpoint 成为不可达孤儿，见"已知边界"）。
+  - `SessionOut` / `list_sessions` 返回 kind。
+- 前端（commit b9db3b2）：
+  - `TutorWorkspace` 自 /tutor 整页迁入 components/tutor（逻辑零改动 + 三处嵌入适配：initialThreadId 恢复 / onSessionsChanged 列表刷新 / draft 缺省直发——跨设备打开的线程无本地 draft 键，tutor_draft_id 本就可选）。
+  - chat 页：会话列表混排两类（辅导徽章）；kind='tutor' 的选中走 TutorWorkspace 渲染，普通会话路径零改动；「开启新对话」旁新增「辅导解题」；本地恢复 effect 在 initialThreadId/上下文参数（error/task）存在时让位（后者顺带修正了旧页"带题进入被上次现场抢占"的既有问题，属行为修正，记录在案）。
+  - `/tutor` 旧路由（全参数）→ `/chat?tutor=1&…` 客户端重定向；全站「带题去辅导」类跳转（错题抽屉/复习结果/quiz 结果/任务抽屉/resources/today tutor 类 href）经 shim 等价直达，未逐个改写（差异最小）。首轮后自动清 tutor 标记。
+  - 停止条件重评：ChatSession 行与 checkpoint 以同键关联、轮次同步非 SSE、列表/重命名/删除语义兼容——无超预期冲突，未触发。
+
+## 裁决 2 · 错题本未归类筛选（完成）
+
+- 后端：`/api/errors?linked=none`——scalar 子查询过滤"所属题目资料 linked_kb_id IS NULL"（含手动录入无资源情况），与分页/状态/错因/搜索 AND 组合，非法值 422 INVALID_LINKED；items 新增 linked_kb_id。
+- 前端：`/practice?tab=errors&filter=unclassified`（筛选徽章+全部清除联动 URL）；courses 底部入口与 `/materials?view=unclassified` 均改指该地址；`/courses?view=unclassified` 分支仅保留作未挂库**资源**深链（错题筛选与资源校对是两个视图，后者无替代路由）。
+- 覆盖范围说明：本次浏览器回归用"手动录入错题"验证筛选命中与分页（API 层 total/pages 遍历正确）；"有 kb 的错题被排除"仅经 SQL 语义评审（scalar subquery IS NULL），未造资源链路数据实测。
+
+## 裁决 3 · 机构侧栏项条件显示（完成）
+
+AppShell 登录后懒加载一次 `/api/orgs`（模块缓存，仅侧栏挂载后发起、不阻塞首屏）；空列表 → 隐藏机构项；失败 fail-open 保持显示。回归验证：无机构账号机构项隐藏、额度项保留。
+
+## 三处收尾（commit 8316a90）
+
+1. `resource-library` backToResourceList：清 resource_id/question_id 后 router.replace 回当前路由（不再跳 /materials；/courses/[kbId] 资料 tab 内返回列表）。
+2. 错题抽屉「查看原题资料」→ `linked_kb_id ? /courses/{kb}?tab=materials&resource_id&question_id : /courses?view=unclassified`；四处死链清理：error-library 导入整份题目资料→/courses、quiz-tab 上传资料→/courses、orgs 管理文档→/courses（并改 Link 组件）、onboarding 摸底 CTA→`/practice/session?mode=quiz&from=/today&topic=摸底练习`。
+3. /chat 页（isChatRoute）隐藏侧栏最近会话区含分隔线。
+
+## 检查清单与浏览器回归（统一验证）
+
+- ✅ 生产构建（28 路由）· web 单测 115 · invariants 7 · 相关后端单测 41（-k "error or session or tutor"）· eslint/tsc
+- ✅ 真实浏览器（Chromium + live LLM）18 项检查全过（截图 gui-test-screenshots/reg-*.png / dbg-tutor.png）：
+  - 机构项隐藏/额度保留；/today 显示侧栏最近会话区、/chat 隐藏（收尾 ③ 断言）
+  - tutor 全流程：辅导解题→入口三卡→手动输入→校对话框确认→**真实 LLM 首轮回复**→层级徽章→会话进列表（标题=题目）+「辅导」徽章→切普通对话→从列表重开（线程恢复）；/tutor 旧路由重定向进入辅导工作区
+  - 普通对话 SSE 流式回复无回归；手动录入错题→未归类筛选命中/清除移参/无筛选不丢；API 层 linked=none 分页（total/pages/页内条数）正确
+- 已知边界：删除辅导会话只删 ChatSession 行，LangGraph checkpoint 成不可达孤儿（可后续接 graph.adelete 清理）；辅导会话无 running/completed 指示（同步轮次无 run 概念，设计如此）。
