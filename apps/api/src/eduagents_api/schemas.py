@@ -272,6 +272,7 @@ class SessionOut(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
+    kind: str = "chat"
 
 
 class SessionRename(BaseModel):

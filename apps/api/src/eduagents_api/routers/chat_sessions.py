@@ -50,7 +50,13 @@ async def list_sessions(ctx: AuthContext = Depends(api_rate_limited)):
             )
         ).all()
         return [
-            SessionOut(id=r.id, title=r.title, created_at=r.created_at, updated_at=r.updated_at)
+            SessionOut(
+                id=r.id,
+                title=r.title,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                kind=r.kind,
+            )
             for r in rows
         ]
 

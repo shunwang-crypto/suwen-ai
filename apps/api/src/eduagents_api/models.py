@@ -993,6 +993,11 @@ class ChatSession(Base):
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="新对话")
+    # 会话类型（UI 重构阶段 6 方案 A）：chat=普通对话（默认），tutor=苏格拉底辅导。
+    # 辅导会话按 thread_local_id 落行（id=thread_local_id，与 checkpoint 同键）。
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="chat", default="chat"
+    )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

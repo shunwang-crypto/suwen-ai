@@ -18,6 +18,7 @@ from ..budget import CN_TZ
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..models import (
+    ChatSession,
     ErrorItem,
     KcEdge,
     KnowledgeBase,
@@ -1008,6 +1009,30 @@ async def tutor_turn(
                     code=code,
                 )
                 plan_task_completion = {"completed": False, "error_code": code}
+    # 会话列表混排（UI 重构阶段 6 方案 A）：辅导首轮落一行 kind='tutor' 的
+    # ChatSession（id=thread_local_id，与 checkpoint 同键），后续轮次仅刷新
+    # updated_at 维持排序；标题只在创建时写入，用户重命名不被覆盖。
+    title = " ".join((problem or body.message or "辅导解题").split())[:60] or "辅导解题"
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.scalar(
+            select(ChatSession).where(
+                ChatSession.id == uuid.UUID(local_id),
+                ChatSession.user_id == ctx.user_id,
+            )
+        )
+        if row is None:
+            session.add(
+                ChatSession(
+                    id=uuid.UUID(local_id),
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    title=title,
+                    kind="tutor",
+                )
+            )
+        else:
+            row.updated_at = func.now()
+        await session.commit()
     return {
         "thread_local_id": local_id,
         "reply": state.get("reply", ""),

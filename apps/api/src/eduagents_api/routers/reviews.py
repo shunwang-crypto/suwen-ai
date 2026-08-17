@@ -44,6 +44,7 @@ from ..models import (
     KnowledgeComponent,
     MasteryLog,
     Question,
+    LearningResource,
     ResourceQuestion,
 )
 from ..plan_adjust import PlanTaskAttributionError, complete_plan_task
@@ -630,6 +631,7 @@ async def list_errors(
     kc_id: uuid.UUID | None = Query(default=None),
     kb_id: uuid.UUID | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
+    linked: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     ctx: AuthContext = Depends(api_rate_limited),
@@ -646,6 +648,8 @@ async def list_errors(
         raise HTTPException(status_code=422, detail="INVALID_STATE")
     if cause is not None and cause not in CAUSES:
         raise HTTPException(status_code=422, detail="INVALID_CAUSE")
+    if linked is not None and linked != "none":
+        raise HTTPException(status_code=422, detail="INVALID_LINKED")
     async with tenant_session(ctx.tenant_id) as session:
         conditions = [ErrorItem.user_id == ctx.user_id]
         if state == "active":
@@ -655,6 +659,20 @@ async def list_errors(
             conditions.append(ErrorItem.state == state)
         if cause is not None:
             conditions.append(ErrorItem.cause == cause)
+        if linked == "none":
+            # 未归类（UI 重构裁决 2）：错题所属题目资料未关联知识库——含手动录入
+            # （无 resource_question 行）与资料未挂库两种情况，scalar 子查询对
+            # 无行/未挂库均产出 NULL，与分页/其他筛选条件按 AND 组合。
+            linked_kb = (
+                select(LearningResource.linked_kb_id)
+                .join(
+                    ResourceQuestion,
+                    ResourceQuestion.resource_id == LearningResource.id,
+                )
+                .where(ResourceQuestion.id == ErrorItem.resource_question_id)
+                .scalar_subquery()
+            )
+            conditions.append(linked_kb.is_(None))
         if kc_id is not None:
             conditions.append(ErrorItem.kc_ids.contains([str(kc_id)]))  # JSONB @>
         if kb_id is not None:
@@ -718,16 +736,31 @@ async def list_errors(
                     await session.scalars(select(Question).where(Question.id.in_(question_ids)))
                 ).all()
             }
+        resource_linked_kb: dict[str, str | None] = {}
         if resource_question_ids:
+            resource_rows = (
+                await session.execute(
+                    select(
+                        ResourceQuestion.id,
+                        ResourceQuestion.resource_id,
+                        LearningResource.linked_kb_id,
+                    )
+                    .join(
+                        LearningResource,
+                        LearningResource.id == ResourceQuestion.resource_id,
+                    )
+                    .where(ResourceQuestion.id.in_(resource_question_ids))
+                )
+            ).all()
             resource_ids = {
                 str(resource_question_id): str(resource_id)
-                for resource_question_id, resource_id in (
-                    await session.execute(
-                        select(ResourceQuestion.id, ResourceQuestion.resource_id).where(
-                            ResourceQuestion.id.in_(resource_question_ids)
-                        )
-                    )
-                ).all()
+                for resource_question_id, resource_id, _ in resource_rows
+            }
+            resource_linked_kb = {
+                str(resource_id): (
+                    str(linked_kb) if linked_kb is not None else None
+                )
+                for _, resource_id, linked_kb in resource_rows
             }
         # 我的作答 + 错误次数: 一次性拉本页题目的全部作答, 内存聚合 (避免 N+1)
         wrong_count: dict[str, int] = {}
@@ -797,6 +830,11 @@ async def list_errors(
                         str(row.source_import_id) if row.source_import_id else None
                     ),
                     "resource_id": resource_ids.get(str(row.resource_question_id))
+                    if row.resource_question_id
+                    else None,
+                    "linked_kb_id": resource_linked_kb.get(
+                        resource_ids.get(str(row.resource_question_id)) or ""
+                    )
                     if row.resource_question_id
                     else None,
                     "resource_question_id": str(row.resource_question_id)
