@@ -3,6 +3,7 @@
 // 机构（企业后台，Wave3）：建机构 / 凭邀请码加入 / 成员列表 / 机构库管理。
 // 权限：机构库仅 admin 可建可写；member 只读（对话页联合检索可用）。
 
+import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import {
@@ -357,12 +358,12 @@ export default function OrgsPage() {
                             {kb.subject} · v{kb.kb_version}
                           </span>
                         </span>
-                        <a
-                          href="/materials"
+                        <Link
+                          href="/courses"
                           className="shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
                         >
                           {kb.writable ? "管理文档" : "查看文档"}
-                        </a>
+                        </Link>
                       </li>
                     ))}
                   </ul>

@@ -1063,7 +1063,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                     <Link href="/practice?tab=review" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">去复习</Link>
                   )}
                   {recommendation.action === "upload" && (
-                    <Link href="/materials" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
+                    <Link href="/courses" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
                   )}
                 </div>
                 {recommendation.status === "needs_scope" && (

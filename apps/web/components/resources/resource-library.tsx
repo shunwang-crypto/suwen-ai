@@ -432,7 +432,12 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
     setQuestions([]);
     setSelectedDetailsLoaded(false);
     setAssessmentOpen(false);
-    router.replace("/materials", { scroll: false });
+    // 收尾 ①：返回列表不跳路由——清掉资源深链参数后留在当前页
+    // （/courses/[kbId] 资料 tab 内返回列表；深链进入时同样只回当前路由）。
+    const url = new URL(window.location.href);
+    url.searchParams.delete("resource_id");
+    url.searchParams.delete("question_id");
+    router.replace(`${url.pathname}${url.search || ""}`, { scroll: false });
     void loadResources();
   };
 

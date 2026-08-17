@@ -388,7 +388,7 @@ export default function OnboardingPage() {
               <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={() => router.replace("/quiz")}
+                  onClick={() => router.replace("/practice/session?mode=quiz&from=%2Ftoday&topic=%E6%91%B8%E5%BA%95%E7%BB%83%E4%B9%A0")}
                   className="btn-brand rounded-control px-6 py-2.5 text-sm font-semibold text-white shadow-card hover:shadow-floating"
                 >
                   先做 5 题摸底

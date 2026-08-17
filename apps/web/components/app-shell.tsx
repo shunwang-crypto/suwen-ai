@@ -188,7 +188,10 @@ function Navigation({ pathname, userId, collapsed = false, onNavigate }: { pathn
             </div>
           ))}
         </div>
-        {!collapsed && <RecentSessions onNavigate={onNavigate} />}
+        {/* 收尾 ③：/chat 页自身已有完整会话列表，侧栏最近会话区（含分隔线）隐藏 */}
+        {!collapsed && !matchesPath(pathname, "/chat") && (
+          <RecentSessions onNavigate={onNavigate} />
+        )}
       </nav>
       <div className={`shrink-0 border-t border-line py-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-0.5">
