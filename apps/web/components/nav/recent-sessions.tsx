@@ -71,8 +71,13 @@ export function RecentSessions({ onNavigate }: { onNavigate?: () => void }) {
                 title={session.title || "未命名会话"}
                 className="flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-[13px] text-ink-secondary transition-colors hover:bg-[#f4f3f0] hover:text-ink"
               >
-                <span className="min-w-0 flex-1 truncate">
-                  <MathText text={session.title || "未命名会话"} singleLine />
+                <span className="flex min-w-0 flex-1 items-center gap-1">
+                  <span className="min-w-0 truncate">
+                    <MathText text={session.title || "未命名会话"} singleLine />
+                  </span>
+                  {session.kind === "tutor" && (
+                    <span className="shrink-0 rounded-full bg-brand-50 px-1.5 py-0.5 text-caption font-medium text-brand-700">辅导</span>
+                  )}
                 </span>
                 {indicator === "running" ? (
                   <span

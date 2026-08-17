@@ -1,8 +1,11 @@
 "use client";
 
-// 苏格拉底辅导（F4）：左侧题目输入（数学公式实时预览）+ 提示阶梯状态；右侧多轮对话。
-// 提示层级徽章跟随每轮回复；「要个提示」发送固定话术；solved → 复盘卡
-// （误解 + 复习建议 + 掌握度变化）；换题重置 thread_local_id 开新会话。
+// 苏格拉底辅导（F4 · UI 重构阶段 6 会话类型化）：辅导是对话页里的一种会话类型
+// （ChatSession.kind='tutor'，id=thread_local_id）。本组件嵌入 /chat 中栏：
+// 左侧题目输入（公式实时预览）+ 提示阶梯状态；右侧多轮对话；提示层级徽章跟随
+// 每轮回复；solved → 复盘卡；换题重置 thread_local_id 开新会话。
+// 独立协议保持：非流式 POST /api/tutor、thread 轮询恢复、
+// suwen:active-tutor-session 兼容读取（存量 thread 不回填列表，经该键恢复）。
 
 import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -89,6 +92,11 @@ export function readTutorSession(userId: string): SavedTutorSession | null {
 
 export function writeTutorSession(userId: string, value: SavedTutorSession): void {
   window.localStorage.setItem(tutorSessionKey(userId), JSON.stringify(value));
+}
+
+/** draft 缺省时的本地回退（保持 SavedTutorSession.draftId 必填结构）。 */
+function savedDraftFallback(userId: string): string {
+  return readTutorSession(userId)?.draftId ?? "";
 }
 
 function parseTutorSummary(raw: string): TutorSessionSummary | null {
@@ -304,7 +312,15 @@ function ReviewCard({
   );
 }
 
-export default function TutorPage() {
+export function TutorWorkspace({
+  initialThreadId,
+  onSessionsChanged,
+}: {
+  /** 从 chat 会话列表打开的辅导线程 id；为空 = 新建模式（入口三卡/上下文参数/本地恢复） */
+  initialThreadId?: string | null;
+  /** 每轮落库后回调（chat 页刷新会话列表，辅导会话进列表/排序刷新） */
+  onSessionsChanged?: () => void;
+}) {
   const { user } = useAuth();
   const userId = user?.id ?? "anonymous";
   const search = useSyncExternalStore(
@@ -426,6 +442,10 @@ export default function TutorPage() {
   useEffect(() => {
     const saved = readTutorSession(userId);
     if (requestedDraftId || !saved || prefilledProblem) return;
+    // 从会话列表指定线程打开时，本地键恢复让位（initialThreadId effect 负责）
+    if (initialThreadId) return;
+    // error/task 上下文参数 = 明确要"带这道题开新辅导"，不让上次现场抢占
+    if (errorId || (planId && taskId)) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (!saved.threadId) {
@@ -485,7 +505,59 @@ export default function TutorPage() {
       alive = false;
       if (timer) clearTimeout(timer);
     };
+    // URL 上下文参数与 initialThreadId 只读一次用于让位判断
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefilledProblem, requestedDraftId, userId]);
+
+  // 从 chat 会话列表打开指定辅导线程（阶段 6）：id 即 ChatSession.id（=thread_local_id）
+  useEffect(() => {
+    if (!initialThreadId) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const saved = readTutorSession(userId);
+    const restore = async () => {
+      attempts += 1;
+      try {
+        const state = await apiJson<TutorSessionState>(`/api/tutor/${initialThreadId}`);
+        if (!alive) return;
+        setProblem(state.problem);
+        setProblemTouched(true);
+        setThreadId(initialThreadId);
+        setDraftId(saved?.draftId ?? null);
+        setMessages(
+          state.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            hintLevel: message.hint_level,
+          })),
+        );
+        setHintLevel(state.hint_level);
+        setStuckType(state.stuck_type);
+        setSummary(parseTutorSummary(state.session_summary));
+        setSending(state.pending);
+        if (state.pending && attempts < 60) {
+          timer = setTimeout(() => void restore(), 1500);
+        }
+      } catch (err) {
+        if (!alive) return;
+        if (err instanceof ApiError && err.status === 404 && attempts < 10) {
+          setThreadId(initialThreadId);
+          setSending(true);
+          timer = setTimeout(() => void restore(), 1500);
+          return;
+        }
+        setSending(false);
+        setError(err instanceof ApiError ? err.message : "辅导会话加载失败");
+      }
+    };
+    timer = setTimeout(() => void restore(), 0);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只按传入线程恢复一次
+  }, [initialThreadId]);
 
   // 新消息自动滚到底部
   useEffect(() => {
@@ -499,10 +571,15 @@ export default function TutorPage() {
     if (!message || !prob || sending || ended) return;
     const activeThreadId = confirmedDraft?.thread_local_id ?? threadId;
     const activeDraftId = confirmedDraft?.id ?? draftId;
-    if (!activeThreadId || !activeDraftId) return;
+    // 从会话列表打开的线程可能没有本地 draft 键（跨设备）；draft 缺省时直接以
+    // problem 文本走 POST /api/tutor（tutor_draft_id 本就可选，仅附件元数据用）。
+    if (!activeThreadId) return;
     if (!threadId) setThreadId(activeThreadId);
-    setDraftId(activeDraftId);
-    writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
+    if (activeDraftId) setDraftId(activeDraftId);
+    writeTutorSession(userId, {
+      threadId: activeThreadId,
+      ...(activeDraftId ? { draftId: activeDraftId } : { draftId: savedDraftFallback(userId) }),
+    });
     setSending(true);
     setError(null);
     setMessages((prev) => [...prev, { role: "user", content: message }]);
@@ -512,7 +589,7 @@ export default function TutorPage() {
           problem: prob,
           message,
           thread_local_id: activeThreadId,
-          tutor_draft_id: activeDraftId,
+          ...(activeDraftId ? { tutor_draft_id: activeDraftId } : {}),
           ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
         },
       });
@@ -529,12 +606,22 @@ export default function TutorPage() {
         setSummary(parseTutorSummary(res.session_summary));
         setMasteryChanges(res.mastery_changes ?? []);
       }
-      writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
+      writeTutorSession(userId, {
+        threadId: activeThreadId,
+        draftId: activeDraftId ?? savedDraftFallback(userId),
+      });
+      // 首轮已落库 kind='tutor' 的 ChatSession → 通知 chat 页刷新会话列表；
+      // 并清掉 ?tutor=1 标记（刷新后不再重复进入新建态）。
+      onSessionsChanged?.();
+      if (new URLSearchParams(window.location.search).get("tutor") === "1") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("tutor");
+        window.history.replaceState(window.history.state, "", url);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "辅导请求失败，请重试");
       // 回滚本轮未送达的学生消息，避免与服务端 thread 状态不一致
       setMessages((prev) => prev.slice(0, -1));
-      writeTutorSession(userId, { threadId: activeThreadId, draftId: activeDraftId });
     } finally {
       setSending(false);
     }
@@ -567,7 +654,7 @@ export default function TutorPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1080px] space-y-5 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
+    <div className="mx-auto w-full max-w-[1080px] space-y-5 px-5 py-5 sm:px-7 lg:px-8">
       <section className="relative overflow-hidden rounded-[12px] border border-line bg-white px-5 py-4">
         <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -1,8 +1,9 @@
 "use client";
 
 // 课程列表（UI 重构阶段 5）：知识库 = 课程。每库一卡（名称/学科/机构徽章）+
-// 「新建课程」；底部「未归类资料」文字链（?view=unclassified 承接原 materials 伪选项，
-// 阶段 2 的 ?filter=unclassified 因后端无对应过滤参数而 SKIPPED，见实施报告）。
+// 「新建课程」；底部「未归类错题」文字链 → /practice?tab=errors&filter=unclassified
+// （裁决 2 落地）。?view=unclassified 分支仅保留给 /materials 资源深链（未挂库资源的
+// 校对视图），见实施报告。
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -158,10 +159,10 @@ export default function CoursesPage() {
       <p className="pt-1 text-center text-caption text-ink-muted">
         还有未归类的题目资料？
         <Link
-          href="/courses?view=unclassified"
+          href="/practice?tab=errors&filter=unclassified"
           className="mx-0.5 text-brand-700 underline-offset-2 hover:underline"
         >
-          查看未归类资料
+          查看未归类错题
         </Link>
       </p>
     </div>

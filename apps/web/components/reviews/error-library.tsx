@@ -4,7 +4,7 @@
 // + 错题卡片列表（我的答案 vs 正确答案 / 解析 / 可改错因 / 变式重练 / 归档）+ 分页 + 空态。
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
@@ -103,7 +103,17 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
+const emptySubscribe = () => () => {};
+
 export function ErrorLibrary() {
+  // ?filter=unclassified（裁决 2）：未归类错题 = 所属题目资料未关联知识库，
+  // 服务端 linked=none 过滤，与分页/状态/错因/搜索按 AND 组合。
+  const search = useSyncExternalStore(
+    emptySubscribe,
+    () => window.location.search,
+    () => "",
+  );
+  const unclassified = new URLSearchParams(search).get("filter") === "unclassified";
   const [stats, setStats] = useState<ErrorStatsResponse | null>(null);
   const [list, setList] = useState<ErrorListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +154,7 @@ export function ErrorLibrary() {
     cause: causeFilter,
     kbId: kbFilter,
     query: searchQuery,
+    ...(unclassified ? { linked: "none" } : {}),
   });
   const listRes = useApiResource<ErrorListResponse>(`/api/errors?${listQuery}`, {
     errorMessage: "错题本加载失败",
@@ -291,7 +302,13 @@ export function ErrorLibrary() {
     return stats.by_state[key] ?? 0;
   };
 
-  const filtered = stateFilter !== null || causeFilter !== null;
+  const filtered = stateFilter !== null || causeFilter !== null || unclassified;
+  const clearUnclassified = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("filter");
+    window.history.replaceState(window.history.state, "", url);
+    setPage(1);
+  };
   const selectedItem = list?.items.find((item) => item.id === selectedItemId) ?? null;
 
   return (
@@ -498,11 +515,17 @@ export function ErrorLibrary() {
               {CAUSE_LABELS[causeFilter] ?? causeFilter}
             </span>
           )}
+          {unclassified && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+              未归类
+            </span>
+          )}
           <button
             type="button"
             onClick={() => {
               setStateFilter(null);
               setCauseFilter(null);
+              if (unclassified) clearUnclassified();
               setPage(1);
             }}
             className="text-indigo-600 hover:underline"

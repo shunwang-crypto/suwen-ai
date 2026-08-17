@@ -9,6 +9,7 @@ import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
 import { RecentCourses } from "@/components/nav/recent-courses";
 import { RecentSessions } from "@/components/nav/recent-sessions";
+import { apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
   getSnapshotPageTitle,
@@ -85,18 +86,39 @@ const NAV_HIGHLIGHT_ALIASES: Record<string, string> = {
   "/materials": "/courses",
 };
 
-const UTILITY_ITEMS: NavItem[] = [
-  {
-    href: "/orgs",
-    label: "机构",
-    icon: <FigmaNavIcon name="orgs" />,
-  },
-  {
-    href: "/billing",
-    label: "苏问 AI 额度",
-    icon: <FigmaNavIcon name="billing" />,
-  },
-];
+const ORG_ITEM: NavItem = {
+  href: "/orgs",
+  label: "机构",
+  icon: <FigmaNavIcon name="orgs" />,
+};
+const BILLING_ITEM: NavItem = {
+  href: "/billing",
+  label: "苏问 AI 额度",
+  icon: <FigmaNavIcon name="billing" />,
+};
+
+/** 机构成员关系模块缓存（裁决 3）：null=未知（fail-open 显示），登录后懒加载一次。 */
+let cachedHasOrgs: boolean | null = null;
+
+function useOrgMembership(userId: string | undefined) {
+  const [hasOrgs, setHasOrgs] = useState<boolean | null>(cachedHasOrgs);
+  useEffect(() => {
+    if (!userId || cachedHasOrgs !== null) return;
+    let alive = true;
+    void apiJson<unknown[]>("/api/orgs")
+      .then((list) => {
+        cachedHasOrgs = Array.isArray(list) && list.length > 0;
+        if (alive) setHasOrgs(cachedHasOrgs);
+      })
+      .catch(() => {
+        // 失败 fail-open：保持显示（与最近会话区同款"不阻塞、不打扰"约束）
+      });
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+  return hasOrgs;
+}
 
 const TITLE_MAP: Record<string, string> = {
   "/today": "今日",
@@ -151,6 +173,8 @@ function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: NavI
 }
 
 function Navigation({ pathname, userId, collapsed = false, onNavigate }: { pathname: string; userId?: string; collapsed?: boolean; onNavigate?: () => void }) {
+  const hasOrgs = useOrgMembership(userId);
+  const utilityItems = hasOrgs === false ? [BILLING_ITEM] : [ORG_ITEM, BILLING_ITEM];
   return (
     <>
       <nav className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-1.5" : "px-3"}`}>
@@ -168,7 +192,7 @@ function Navigation({ pathname, userId, collapsed = false, onNavigate }: { pathn
       </nav>
       <div className={`shrink-0 border-t border-line py-3 ${collapsed ? "px-1.5" : "px-3"}`}>
         <div className="space-y-0.5">
-          {UTILITY_ITEMS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
+          {utilityItems.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />)}
         </div>
       </div>
     </>

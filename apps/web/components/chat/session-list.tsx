@@ -38,6 +38,7 @@ export function SessionList({
   indicators,
   onSelect,
   onNew,
+  onNewTutor,
   onCollapse,
   onRename,
   onDelete,
@@ -48,6 +49,8 @@ export function SessionList({
   indicators: Record<string, "running" | "completed">;
   onSelect: (id: string) => void;
   onNew: () => void;
+  /** 新建辅导会话（阶段 6：辅导是对话页里的一种会话类型） */
+  onNewTutor?: () => void;
   onCollapse: () => void;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<boolean>;
@@ -255,6 +258,19 @@ export function SessionList({
           </svg>
           开启新对话
         </button>
+        {onNewTutor && (
+          <button
+            type="button"
+            onClick={onNewTutor}
+            className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-full border border-brand-200 bg-brand-50 text-[13px] font-medium text-brand-700 transition-colors hover:border-brand-300 hover:bg-brand-100"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[15px] w-[15px]" aria-hidden>
+              <path d="M12 3 2 8l10 5 10-5-10-5Z" strokeLinejoin="round" />
+              <path d="M6 10.5V15c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5" strokeLinecap="round" />
+            </svg>
+            辅导解题
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
@@ -325,6 +341,11 @@ export function SessionList({
                             className="min-w-0 flex-1 truncate"
                           >
                             <MathText text={s.title || "未命名会话"} singleLine />
+                            {s.kind === "tutor" && (
+                              <span className="ml-1 shrink-0 rounded-full bg-brand-50 px-1.5 py-0.5 text-caption font-medium text-brand-700">
+                                辅导
+                              </span>
+                            )}
                           </span>
                           <span className="flex shrink-0 items-center gap-1.5 group-hover:hidden">
                             {indicator === "running" && (

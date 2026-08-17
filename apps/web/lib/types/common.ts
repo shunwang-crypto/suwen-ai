@@ -99,6 +99,8 @@ export interface SessionOut {
   title: string;
   created_at: string;
   updated_at: string;
+  /** 会话类型（阶段 6 方案 A）：chat=普通对话，tutor=苏格拉底辅导 */
+  kind?: "chat" | "tutor";
 }
 
 export interface MessageOut {

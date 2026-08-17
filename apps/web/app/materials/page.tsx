@@ -3,7 +3,7 @@
 // 旧路由重定向（UI 重构阶段 5）：/materials* → /courses。知识库=课程，选中库视图
 // 已迁 /courses/[kbId]。query 转发规则：
 //   ?kb=X            → /courses/X
-//   ?view=unclassified → /courses?view=unclassified
+//   ?view=unclassified → /practice?tab=errors&filter=unclassified（裁决 2）
 //   ?resource_id=R   → 需查资源归属库（数据依赖），client-side 解析后 replace：
 //     linked_kb_id 有值 → /courses/{kb}?resource_id=&question_id=；无值 → 未归类视图
 //   其余             → /courses
@@ -36,7 +36,8 @@ export default function MaterialsRedirect() {
     }
     if (view === "unclassified") {
       dropHandled(incoming);
-      router.replace(`/courses?view=unclassified${incoming.toString() ? `&${incoming.toString()}` : ""}`);
+      // 裁决 2：未归类入口按定稿改为错题本筛选（/practice?tab=errors&filter=unclassified）
+      router.replace(`/practice?tab=errors&filter=unclassified${incoming.toString() ? `&${incoming.toString()}` : ""}`);
       return;
     }
     if (resourceId) {

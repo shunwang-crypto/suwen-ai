@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {Suspense, useCallback, useEffect, useMemo, useRef, useState, KeyboardEvent} from "react";
 
 import { ChatToolbar } from "@/components/chat/chat-toolbar";
+import { TutorWorkspace } from "@/components/tutor/tutor-workspace";
 import { CitationsPanel } from "@/components/chat/citations-panel";
 import { ContextDrawer } from "@/components/chat/context-drawer";
 import { SessionList } from "@/components/chat/session-list";
@@ -95,8 +96,23 @@ function ChatView() {
   const [citationsOpen, setCitationsOpen] = useState(false);
 
   const [banner, setBanner] = useState<string | null>(null);
+  /** 辅导会话类型（阶段 6）：tutorNewOpen=新建辅导；activeTutorThreadId=打开的辅导线程 */
+  const [tutorNewOpen, setTutorNewOpen] = useState(false);
+  const [activeTutorThreadId, setActiveTutorThreadId] = useState<string | null>(null);
+  const tutorMode = tutorNewOpen || activeTutorThreadId !== null;
   /** ?q= 自动发问只做一次（router.replace 清参数后 effect 会重跑） */
   const autoAskedRef = useRef(false);
+
+  /** ?tutor=1 全局辅导入口只消费一次（旧 /tutor 路由重定向而来）。 */
+  const tutorRequestedRef = useRef(false);
+  useEffect(() => {
+    if (searchParams.get("tutor") !== "1" || tutorRequestedRef.current) return;
+    tutorRequestedRef.current = true;
+    queueMicrotask(() => {
+      setActiveTutorThreadId(null);
+      setTutorNewOpen(true);
+    });
+  }, [searchParams]);
   /** ?new=1 全局新建入口只消费一次。 */
   const newChatRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -212,8 +228,32 @@ function ChatView() {
   const selectSession = useCallback(async (id: string) => {
     discardPendingAttachments();
     detachCurrentStream();
-    const epoch = ++viewEpochRef.current;
+    viewEpochRef.current += 1;
     setActiveSessionId(id);
+    // 辅导会话（阶段 6）：中栏渲染 TutorWorkspace（GET /api/tutor/{id} 恢复现场），
+    // 不走消息/run 拉取路径。
+    const target = sessions.find((session) => session.id === id);
+    if (target?.kind === "tutor") {
+      setTutorNewOpen(false);
+      setActiveTutorThreadId(id);
+      setSessionIndicators((prev) => {
+        if (prev[id] !== "completed") return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setActiveRunId(null);
+      setStreaming(false);
+      setMessages([]);
+      setSessionsOpen(false);
+      setActiveCitation(null);
+      setCitationMsgId(null);
+      rememberChatSession(id);
+      return;
+    }
+    setActiveTutorThreadId(null);
+    setTutorNewOpen(false);
+    const epoch = viewEpochRef.current;
     // 蓝点代表“后台回答已完成但尚未查看”；进入会话即视为已读。
     setSessionIndicators((prev) => {
       if (prev[id] !== "completed") return prev;
@@ -304,7 +344,7 @@ function ChatView() {
       setStreaming(false);
       setBanner(message);
     }
-  }, [detachCurrentStream, discardPendingAttachments, loadSessions, patchMsg, setSessionIndicators, setActiveRunId, setMessages, setStreaming, viewEpochRef]);
+  }, [detachCurrentStream, discardPendingAttachments, loadSessions, patchMsg, sessions, setSessionIndicators, setActiveRunId, setMessages, setStreaming, viewEpochRef]);
 
   // 从其他功能页返回 /chat 时恢复上次查看的会话；带 ?q= 的推荐问题仍开启新对话。
   useEffect(() => {
@@ -390,6 +430,8 @@ function ChatView() {
     detachCurrentStream();
     viewEpochRef.current += 1;
     setActiveSessionId(null);
+    setTutorNewOpen(false);
+    setActiveTutorThreadId(null);
     setActiveRunId(null);
     setStreaming(false);
     setMessages([]);
@@ -591,6 +633,20 @@ function ChatView() {
       indicators={sessionIndicators}
       onSelect={(id) => void selectSession(id)}
       onNew={newSession}
+      onNewTutor={() => {
+        discardPendingAttachments();
+        detachCurrentStream();
+        viewEpochRef.current += 1;
+        setActiveSessionId(null);
+        setActiveRunId(null);
+        setStreaming(false);
+        setMessages([]);
+        setSessionsOpen(false);
+        setActiveCitation(null);
+        setCitationMsgId(null);
+        setActiveTutorThreadId(null);
+        setTutorNewOpen(true);
+      }}
       onCollapse={onCollapse}
       onRename={renameSession}
       onDelete={deleteSession}
@@ -627,8 +683,8 @@ function ChatView() {
           historyCollapsed={historyCollapsed}
           onExpandHistory={() => setHistoryCollapsed(false)}
           onOpenSessions={() => setSessionsOpen(true)}
-          title={activeSessionTitle}
-          citationCount={panelCitations.length}
+          title={tutorMode ? (activeTutorThreadId ? activeSessionTitle : "辅导解题") : activeSessionTitle}
+          citationCount={tutorMode ? 0 : panelCitations.length}
           onOpenCitations={() => setCitationsOpen(true)}
         />
 
@@ -646,6 +702,17 @@ function ChatView() {
           </div>
         )}
 
+        {/* 辅导会话（阶段 6）：题目输入/多轮引导/提示阶梯整体进中栏 */}
+        {tutorMode ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <TutorWorkspace
+              key={activeTutorThreadId ?? "tutor-new"}
+              initialThreadId={activeTutorThreadId}
+              onSessionsChanged={loadSessions}
+            />
+          </div>
+        ) : (
+          <>
         {/* 消息流 */}
         <MessageList
           messages={messages}
@@ -690,6 +757,8 @@ function ChatView() {
           handleComposerKey={handleComposerKey}
           handleComposerPaste={handleComposerPaste}
         />
+          </>
+        )}
       </section>
 
       {/* 右：引用面板（桌面）—— 用户点击引用后才打开 */}

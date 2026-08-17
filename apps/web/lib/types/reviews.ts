@@ -66,6 +66,8 @@ export interface ErrorItemOut {
   source_import_id: string | null;
   resource_id: string | null;
   resource_question_id: string | null;
+  /** 所属题目资料的关联知识库（无资料或未挂库为 null，供「未归类」筛选展示） */
+  linked_kb_id: string | null;
   /** 尚未产生 FSRS/掌握度证据时可修改判分语义字段。 */
   content_editable: boolean;
   is_variant: boolean;

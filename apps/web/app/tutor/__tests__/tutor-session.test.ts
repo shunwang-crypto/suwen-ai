@@ -4,7 +4,7 @@ import {
   readTutorSession,
   tutorSessionKey,
   writeTutorSession,
-} from "@/app/tutor/page";
+} from "@/components/tutor/tutor-workspace";
 
 describe("tutor session persistence", () => {
   beforeEach(() => window.localStorage.clear());

@@ -81,6 +81,7 @@ export interface ErrorQueryInput {
   cause?: string | null;
   kbId?: string | null;
   query?: string | null;
+  linked?: "none";
 }
 
 /** Build the exact API query so null KB state cannot fall back to the URL. */
@@ -93,5 +94,6 @@ export function buildErrorQuery(input: ErrorQueryInput): string {
   if (input.cause) params.set("cause", input.cause);
   if (input.kbId) params.set("kb_id", input.kbId);
   if (input.query) params.set("q", input.query);
+  if (input.linked) params.set("linked", input.linked);
   return params.toString();
 }
