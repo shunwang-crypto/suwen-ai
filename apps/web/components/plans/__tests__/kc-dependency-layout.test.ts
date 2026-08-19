@@ -157,3 +157,53 @@ describe("节点档位与进度", () => {
     ).toBe("partial");
   });
 });
+
+describe("主学习线高亮（2b）", () => {
+  const chain: PlanKcDependency = {
+    levels: [
+      { index: 0, nodes: [node("a"), node("x")] },
+      { index: 1, nodes: [node("b")] },
+      { index: 2, nodes: [node("c", { task_ids: ["t1"], is_current_task: true })] },
+    ],
+    edges: [
+      { from_kc_id: "a", to_kc_id: "b" },
+      { from_kc_id: "b", to_kc_id: "c" },
+      { from_kc_id: "x", to_kc_id: "c" },
+    ],
+    primary_route: ["a", "b", "c"],
+  };
+
+  it("路径上的节点被标记，路径外的不被标记", () => {
+    const layout = layoutKcDependency(chain);
+    const onRoute = layout.nodes.filter((item) => item.onRoute).map((item) => item.node.kc_id);
+    expect(onRoute).toEqual(["a", "b", "c"]);
+  });
+
+  it("只高亮路径里相邻的真实边，旁支不高亮", () => {
+    const layout = layoutKcDependency(chain);
+    const highlighted = layout.edges.filter((edge) => edge.onRoute).map((e) => `${e.from}->${e.to}`);
+    expect(highlighted).toEqual(["a->b", "b->c"]);
+  });
+
+  it("A→C 跨点捷径即使两端都在路径里也不高亮（老仓踩过的坑）", () => {
+    const layout = layoutKcDependency({
+      ...chain,
+      edges: [...chain.edges, { from_kc_id: "a", to_kc_id: "c" }],
+    });
+    const highlighted = layout.edges.filter((edge) => edge.onRoute).map((e) => `${e.from}->${e.to}`);
+    expect(highlighted).toEqual(["a->b", "b->c"]);
+    expect(highlighted).not.toContain("a->c");
+  });
+
+  it("路径里出现渲染集合外的 id 时安全忽略，不产生假高亮", () => {
+    const layout = layoutKcDependency({ ...chain, primary_route: ["ghost", "a", "b", "c"] });
+    expect(layout.edges.filter((edge) => edge.onRoute)).toHaveLength(2);
+    expect(layout.nodes.filter((item) => item.onRoute)).toHaveLength(3);
+  });
+
+  it("没有 primary_route 时一切照旧，不高亮任何东西", () => {
+    const layout = layoutKcDependency({ ...chain, primary_route: undefined });
+    expect(layout.edges.some((edge) => edge.onRoute)).toBe(false);
+    expect(layout.nodes.some((item) => item.onRoute)).toBe(false);
+  });
+});

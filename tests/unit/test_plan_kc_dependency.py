@@ -108,3 +108,87 @@ def test_dependency_view_exposes_task_status_and_blocking_without_mastery_values
     serialized = str(view)
     assert "p_mastery" not in serialized
     assert "confidence" not in serialized
+
+
+# ---- primary_route: 主学习线 (2b) ----
+
+
+def _route_pairs(view: dict) -> set[tuple[str, str]]:
+    route = view["primary_route"]
+    return set(zip(route, route[1:], strict=False))  # 相邻对: 长度天然差 1
+
+
+def _edge_pairs(view: dict) -> set[tuple[str, str]]:
+    return {(edge["from_kc_id"], edge["to_kc_id"]) for edge in view["edges"]}
+
+
+def test_primary_route_walks_only_real_edges():
+    """路径里任意相邻两点必须有真实边 —— 界面高亮不得出现 A→C 捷径假边。"""
+    view = _build_kc_dependency(
+        _structure(("C", "pending")),
+        _rows(("a", "A"), ("b", "B"), ("c", "C")),
+        _edges(("a", "b"), ("b", "c")),
+    )
+    assert view["primary_route"] == ["a", "b", "c"]
+    assert _route_pairs(view) <= _edge_pairs(view)
+
+
+def test_primary_route_takes_the_longest_supporting_chain():
+    """并行前驱里取支撑链最长的那条 (关键路径), 而不是随便一条。"""
+    view = _build_kc_dependency(
+        _structure(("D", "pending")),
+        _rows(("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")),
+        # a → b → d 是长链; c → d 是短链
+        _edges(("a", "b"), ("b", "d"), ("c", "d")),
+    )
+    assert view["primary_route"] == ["a", "b", "d"]
+    assert _route_pairs(view) <= _edge_pairs(view)
+
+
+def test_primary_route_targets_the_deepest_task_kc():
+    """终点是"最深的计划任务 KC": 先修再多也要走到真正要学的那个任务。"""
+    view = _build_kc_dependency(
+        _structure(("B", "pending"), ("D", "pending")),
+        _rows(("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")),
+        _edges(("a", "b"), ("c", "d"), ("b", "d")),
+    )
+    assert view["primary_route"][-1] == "d"
+    assert _route_pairs(view) <= _edge_pairs(view)
+
+
+def test_primary_route_is_deterministic_for_ties():
+    """深度并列时按稳定库序取, 同一份数据永远同一条线。"""
+    first = _build_kc_dependency(
+        _structure(("B", "pending"), ("C", "pending")),
+        _rows(("b", "B"), ("c", "C")),
+        _edges(),
+    )
+    second = _build_kc_dependency(
+        _structure(("B", "pending"), ("C", "pending")),
+        _rows(("b", "B"), ("c", "C")),
+        _edges(),
+    )
+    assert first["primary_route"] == second["primary_route"] == ["b"]
+
+
+def test_primary_route_is_empty_without_any_task_kc():
+    """纯先修闭包 (没有任何任务 KC) 不编造终点。"""
+    view = _build_kc_dependency({"stages": []}, _rows(("a", "A")), _edges())
+    assert view["primary_route"] == []
+
+
+def test_primary_route_survives_a_stored_cycle():
+    """存量环被 add_edge_safe 降级后, 路径仍然只走被接受的边, 且不死循环。"""
+    view = _build_kc_dependency(
+        _structure(("B", "pending")),
+        _rows(("a", "A"), ("b", "B")),
+        _edges(("a", "b"), ("b", "a")),
+    )
+    assert view["primary_route"] == ["a", "b"]
+    assert _route_pairs(view) <= _edge_pairs(view)
+
+
+def test_empty_view_shapes_include_primary_route():
+    """空视图形状统一, 前端不必判 undefined。"""
+    view = _build_kc_dependency(None, [], [])
+    assert view == {"levels": [], "edges": [], "primary_route": []}

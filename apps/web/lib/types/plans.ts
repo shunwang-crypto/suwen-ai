@@ -135,6 +135,11 @@ export interface PlanKcDependencyLevel {
 export interface PlanKcDependency {
   levels: PlanKcDependencyLevel[];
   edges: Array<{ from_kc_id: string; to_kc_id: string }>;
+  /**
+   * 主学习线：到「最深的计划任务 KC」的关键路径，服务端沿真实先修边确定性算出。
+   * 相邻两点必然有真实边；前端高亮时仍会再校验一次，绝不把 A→C 当捷径高亮。
+   */
+  primary_route?: string[];
 }
 
 export interface PlanDetail {

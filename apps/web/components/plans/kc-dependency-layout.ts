@@ -6,10 +6,12 @@
  * 映射成连线。前端不新增、不猜测任何依赖关系（项目红线：不推断学习语义），
  * 所以这里也不需要图布局引擎。
  *
- * 两条必须成立的渲染契约（见 __tests__/kc-dependency-layout.test.ts）：
+ * 三条必须成立的渲染契约（见 __tests__/kc-dependency-layout.test.ts）：
  * 1. 画出的每条边都必须来自 `dependency.edges`，且两端节点都在渲染集合里
  *    —— 隐藏节点不得出边；
- * 2. 层内顺序与后端给的节点顺序一致 —— 顺序是稳定的数据库顺序，不重排。
+ * 2. 层内顺序与后端给的节点顺序一致 —— 顺序是稳定的数据库顺序，不重排；
+ * 3. 主线高亮只认「真实边」且「在 primary_route 里相邻」的那些 —— A→C 这类跨点
+ *    捷径即使两端都在路径里也不高亮（后端已保证相邻必有边，前端仍独立校验一次）。
  */
 
 import type { PlanKcDependency, PlanKcDependencyNode } from "@/lib/types";
@@ -22,6 +24,8 @@ export const PAD = 8;
 
 export interface PositionedKcNode {
   node: PlanKcDependencyNode;
+  /** 是否落在主学习线上 */
+  onRoute: boolean;
   /** 所在列（0 起，按 levels 数组顺序，不用后端 index 以防层号有空洞） */
   column: number;
   /** 后端层号，仅用于展示"第 N 层" */
@@ -35,6 +39,8 @@ export interface PositionedKcEdge {
   to: string;
   /** SVG path d 属性（三次贝塞尔，水平控制点） */
   d: string;
+  /** 是否落在主学习线上（仅当这条真实边的两端在 primary_route 里相邻） */
+  onRoute: boolean;
 }
 
 export interface KcDependencyLayout {
@@ -63,12 +69,21 @@ export function layoutKcDependency(
   const byId = new Map<string, PositionedKcNode>();
   let maxRows = 0;
 
+  const route = dependency?.primary_route ?? [];
+  const routeNodeIds = new Set(route);
+  // 只认 primary_route 里**相邻**的一对，避免把 A→C 这种跨点捷径当成主线边
+  const routePairs = new Set<string>();
+  for (let index = 0; index < route.length - 1; index += 1) {
+    routePairs.add(`${route[index]}->${route[index + 1]}`);
+  }
+
   levels.forEach((level, column) => {
     // 层内顺序沿用后端给的顺序（稳定数据库顺序），不做任何重排
     level.nodes.forEach((node, row) => {
       if (!node.kc_id || byId.has(node.kc_id)) return; // 同一 KC 只画一次
       const positioned: PositionedKcNode = {
         node,
+        onRoute: routeNodeIds.has(node.kc_id),
         column,
         levelIndex: level.index,
         x: PAD + column * (NODE_W + COL_GAP),
@@ -92,7 +107,13 @@ export function layoutKcDependency(
     const key = `${edge.from_kc_id}->${edge.to_kc_id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    edges.push({ from: edge.from_kc_id, to: edge.to_kc_id, d: edgePath(source, target) });
+    edges.push({
+      from: edge.from_kc_id,
+      to: edge.to_kc_id,
+      d: edgePath(source, target),
+      // 高亮的前提是这条边真实存在（我们此刻正在遍历真实边），且它是路径里的相邻对
+      onRoute: routePairs.has(key),
+    });
   }
 
   const columnCount = levels.length;

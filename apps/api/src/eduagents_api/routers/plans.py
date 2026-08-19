@@ -200,7 +200,7 @@ def _build_kc_dependency(
         names_by_id.setdefault(kc_id, name)
         id_by_name.setdefault(normalize_kc_name(name), kc_id)
     if not names_by_id:
-        return {"levels": [], "edges": []}
+        return {"levels": [], "edges": [], "primary_route": []}
 
     task_ids_by_kc: dict[str, list[str]] = defaultdict(list)
     task_statuses_by_kc: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -222,7 +222,7 @@ def _build_kc_dependency(
 
     direct_ids = set(task_ids_by_kc)
     if not direct_ids:
-        return {"levels": [], "edges": []}
+        return {"levels": [], "edges": [], "primary_route": []}
 
     raw_edges: list[PrereqEdge] = []
     for raw_from, raw_to in edge_rows:
@@ -317,7 +317,52 @@ def _build_kc_dependency(
             {"from_kc_id": edge.from_kc, "to_kc_id": edge.to_kc}
             for edge in scoped_edges
         ],
+        "primary_route": _primary_route(nodes_by_id, scoped_edges, depth, order_index),
     }
+
+
+def _primary_route(
+    nodes_by_id: dict[str, dict],
+    scoped_edges: list[PrereqEdge],
+    depth: dict[str, int],
+    order_index: dict[str, int],
+) -> list[str]:
+    """一条可讲清楚的主学习线: 到"最深的计划任务 KC"的关键路径。
+
+    确定性定义 (同一份数据永远给同一条线, 不含随机也不调模型):
+
+    1. 终点 = 有计划任务的 KC 中 depth 最大者; 并列取稳定库序在前者;
+    2. 从终点沿**真实先修边**逐步回退, 每步选 depth 最大的前驱 (即支撑链最长的
+       那条, 也就是关键路径); 并列同样取稳定库序;
+    3. 反转即得"最早的先修 → 目标"。
+
+    只走 ``scoped_edges`` 里真实存在的边, 因此路径里任意相邻两点都必然有边 ——
+    界面据此高亮时不会出现 A→C 的捷径假边 (前端仍会再校验一次)。
+    无任务 KC (纯先修闭包) 时返回空列表, 不编造终点。
+    """
+    task_nodes = [kc_id for kc_id, node in nodes_by_id.items() if node["task_ids"]]
+    if not task_nodes:
+        return []
+    target = min(task_nodes, key=lambda kc_id: (-depth.get(kc_id, 0), order_index.get(kc_id, 0)))
+
+    incoming: dict[str, list[str]] = defaultdict(list)
+    for edge in scoped_edges:
+        incoming[edge.to_kc].append(edge.from_kc)
+
+    route = [target]
+    seen = {target}
+    current = target
+    while True:
+        candidates = [kc_id for kc_id in incoming.get(current, []) if kc_id not in seen]
+        if not candidates:
+            break
+        current = min(
+            candidates, key=lambda kc_id: (-depth.get(kc_id, 0), order_index.get(kc_id, 0))
+        )
+        route.append(current)
+        seen.add(current)
+    route.reverse()
+    return route
 
 
 async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str, float], list[str]]:
@@ -568,7 +613,7 @@ async def _load_kc_dependency(
 ) -> dict:
     """Load real KC rows/edges and derive only the current plan's dependency closure."""
     if plan.kb_id is None:
-        return {"levels": [], "edges": []}
+        return {"levels": [], "edges": [], "primary_route": []}
     kc_rows = (
         await session.execute(
             select(KnowledgeComponent.id, KnowledgeComponent.canonical_name)
@@ -577,7 +622,7 @@ async def _load_kc_dependency(
         )
     ).all()
     if not kc_rows:
-        return {"levels": [], "edges": []}
+        return {"levels": [], "edges": [], "primary_route": []}
     kc_ids = [kc_id for kc_id, _name in kc_rows]
     edge_rows = (
         await session.execute(

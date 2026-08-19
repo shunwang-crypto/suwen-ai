@@ -84,8 +84,10 @@ function NodeBody({ node }: { node: PlanKcDependencyNode }) {
 export function KcDependencyGraph({ dependency, onTaskOpen }: KcDependencyGraphProps) {
   const layout = layoutKcDependency(dependency);
   if (layout.nodes.length === 0) return null;
+  const hasRoute = layout.edges.some((edge) => edge.onRoute) || layout.nodes.some((n) => n.onRoute);
 
   return (
+    <>
     <div className="overflow-x-auto pb-2" data-testid="kc-dependency-graph-scroll">
       <div className="relative min-w-max" style={{ width: layout.width, height: layout.height }}>
         <svg
@@ -105,22 +107,33 @@ export function KcDependencyGraph({ dependency, onTaskOpen }: KcDependencyGraphP
             >
               <path d="M 0 0 L 7 3.5 L 0 7 z" className="fill-brand-400" />
             </marker>
+            <marker
+              id="kc-dep-arrow-route"
+              markerWidth="7"
+              markerHeight="7"
+              refX="6"
+              refY="3.5"
+              orient="auto"
+            >
+              <path d="M 0 0 L 7 3.5 L 0 7 z" className="fill-brand-600" />
+            </marker>
           </defs>
           {layout.edges.map((edge) => (
             <path
               key={`${edge.from}->${edge.to}`}
               d={edge.d}
               fill="none"
-              strokeWidth="1.5"
-              className="stroke-brand-300"
-              markerEnd="url(#kc-dep-arrow)"
+              strokeWidth={edge.onRoute ? 2.5 : 1.5}
+              className={edge.onRoute ? "stroke-brand-600" : "stroke-brand-300"}
+              markerEnd={edge.onRoute ? "url(#kc-dep-arrow-route)" : "url(#kc-dep-arrow)"}
             />
           ))}
         </svg>
 
-        {layout.nodes.map(({ node, x, y }) => {
+        {layout.nodes.map(({ node, x, y, onRoute }) => {
           const kind = kcNodeKind(node);
-          const box = `absolute overflow-hidden rounded-xl border px-3 py-2 text-left ${KIND_BOX[kind]}`;
+          const route = onRoute ? " ring-2 ring-brand-500 ring-offset-1" : "";
+          const box = `absolute overflow-hidden rounded-xl border px-3 py-2 text-left ${KIND_BOX[kind]}${route}`;
           const style = { left: x, top: y, width: NODE_W, height: NODE_H };
           const taskId = node.task_ids[0];
           if (taskId && onTaskOpen) {
@@ -130,7 +143,7 @@ export function KcDependencyGraph({ dependency, onTaskOpen }: KcDependencyGraphP
                 type="button"
                 style={style}
                 onClick={() => onTaskOpen(taskId)}
-                aria-label={`查看${nodeAriaLabel(node)}`}
+                aria-label={`查看${nodeAriaLabel(node)}${onRoute ? "，在主学习线上" : ""}`}
                 className={`${box} shadow-sm transition-colors hover:border-brand-500 hover:bg-brand-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2`}
               >
                 <NodeBody node={node} />
@@ -138,12 +151,24 @@ export function KcDependencyGraph({ dependency, onTaskOpen }: KcDependencyGraphP
             );
           }
           return (
-            <article key={node.kc_id} style={style} aria-label={nodeAriaLabel(node)} className={box}>
+            <article
+              key={node.kc_id}
+              style={style}
+              aria-label={`${nodeAriaLabel(node)}${onRoute ? "，在主学习线上" : ""}`}
+              className={box}
+            >
               <NodeBody node={node} />
             </article>
           );
         })}
       </div>
     </div>
+    {hasRoute && (
+      <p className="mt-2 text-caption text-ink-muted">
+        加粗连线是<span className="font-medium text-ink-secondary">主学习线</span>
+        ：通往当前最关键任务的那条先修链。其余分支照实画出，不合并也不省略。
+      </p>
+    )}
+    </>
   );
 }
