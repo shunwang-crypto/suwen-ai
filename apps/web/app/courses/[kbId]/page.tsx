@@ -11,6 +11,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { CourseMaterialsTab } from "@/components/courses/course-materials-tab";
 import { Card, EmptyState, ErrorBanner, SkeletonList } from "@/components/common";
+import { KcGraphPanel } from "@/components/kb/kc-graph-panel";
 import { StudyGuidePanel } from "@/components/kb/study-guide";
 import { PlanDetailPanel } from "@/components/plans/plan-detail-panel";
 import { ApiError, apiJson } from "@/lib/api";
@@ -21,6 +22,7 @@ import type { KbOut, PlanListItem } from "@/lib/types";
 const TABS = [
   { key: "materials", label: "资料" },
   { key: "guide", label: "指南" },
+  { key: "graph", label: "知识图" },
   { key: "plan", label: "计划" },
 ] as const;
 
@@ -111,7 +113,8 @@ function CourseWorkspaceView() {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const rawTab = searchParams.get("tab");
-  const tab: TabKey = rawTab === "guide" || rawTab === "plan" ? rawTab : "materials";
+  const tab: TabKey =
+    rawTab === "guide" || rawTab === "plan" || rawTab === "graph" ? rawTab : "materials";
 
   const [kb, setKb] = useState<KbOut | null>(null);
   const [kbError, setKbError] = useState<string | null>(null);
@@ -212,6 +215,8 @@ function CourseWorkspaceView() {
             <SkeletonList rows={3} />
           </Card>
         ))}
+      {tab === "graph" && <KcGraphPanel key={kbId} kbId={kbId} />}
+
       {tab === "plan" && <CoursePlanTab kbId={kbId} />}
     </div>
   );

@@ -6,13 +6,26 @@ from datetime import UTC, datetime
 
 import xxhash
 from eduagents_core.logging import get_logger
+from eduagents_core.mastery.thresholds import VALID_MASTERY_EVIDENCE_TYPES
 from eduagents_core.parsing.web import WebFetchError, fetch_and_extract
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy import delete, func, select, update
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_app_settings
-from ..models import Chunk, Document, KnowledgeBase, Org, PendingCleanup
+from ..kb_kc_graph import build_kb_kc_graph
+from ..kc_hierarchy import resolve_kc_meta
+from ..models import (
+    Chunk,
+    Document,
+    KcEdge,
+    KnowledgeBase,
+    KnowledgeComponent,
+    MasteryLog,
+    MasteryRecord,
+    Org,
+    PendingCleanup,
+)
 from ..schemas import (
     ChunkContextItem,
     ChunkContextOut,
@@ -468,6 +481,79 @@ async def preview_chunks(
             )
         ).all()
         return [ChunkOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+# ---- 库级知识图 (Learning Map full 模式) ----
+# 计划级依赖图在 routers/plans（"下一步学什么"）；这里是"我在整门课的什么位置"。
+# 只读派生，不落新表；掌握度数值不出境，只给 evidence_state 与定性档。
+
+
+@router.get("/{kb_id}/kc-graph")
+async def get_kb_kc_graph(
+    kb_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
+    """该库全部 KC + 全部先修边 + 章节聚合 + 本人的定性掌握档。
+
+    章节由 kc_hierarchy 确定性推导（带 5 分钟缓存）；掌握档只在证据充分
+    （evidence_state=observed）时给出，未观测/估计中不叙述成薄弱或已掌握。
+
+    节点序 = ``(created_at, id)``：enrich 批量写入时同批 KC 的 created_at 相同，
+    因此同批内实际由 id 兜底 —— 它是**确定性可重复**的，但不等于插入顺序；
+    展示语义由章节分组承担，不依赖这一层顺序。
+    """
+    kb = await _resolve_kb(ctx, kb_id)
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        kc_rows = (
+            await session.execute(
+                select(KnowledgeComponent.id, KnowledgeComponent.canonical_name)
+                .where(
+                    KnowledgeComponent.kb_id == kb_id,
+                    KnowledgeComponent.superseded_by_id.is_(None),
+                )
+                .order_by(KnowledgeComponent.created_at.asc(), KnowledgeComponent.id.asc())
+            )
+        ).all()
+        kc_ids = [str(kc_id) for kc_id, _name in kc_rows]
+        edge_rows: list[tuple[object, object]] = []
+        mastery_rows: list[tuple[object, float, int]] = []
+        if kc_ids:
+            edge_rows = list(
+                (
+                    await session.execute(
+                        select(KcEdge.from_kc, KcEdge.to_kc).where(
+                            KcEdge.type == "prerequisite",
+                            KcEdge.from_kc.in_([uuid.UUID(x) for x in kc_ids]),
+                            KcEdge.to_kc.in_([uuid.UUID(x) for x in kc_ids]),
+                        )
+                    )
+                ).all()
+            )
+            mastery_rows = list(
+                (
+                    await session.execute(
+                        select(
+                            MasteryRecord.kc_id,
+                            MasteryRecord.p_mastery,
+                            func.count(func.distinct(MasteryLog.evidence_id)),
+                        )
+                        .outerjoin(
+                            MasteryLog,
+                            (MasteryLog.user_id == MasteryRecord.user_id)
+                            & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                            & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                        )
+                        .where(
+                            MasteryRecord.user_id == ctx.user_id,
+                            MasteryRecord.kc_id.in_([uuid.UUID(x) for x in kc_ids]),
+                        )
+                        .group_by(MasteryRecord.kc_id, MasteryRecord.p_mastery)
+                    )
+                ).all()
+            )
+    meta = await resolve_kc_meta(ctx.tenant_id, kc_ids, redis=request.app.state.redis)
+    chapter_by_kc = {kc_id: (info or {}).get("chapter") or "" for kc_id, info in meta.items()}
+    graph = build_kb_kc_graph(list(kc_rows), edge_rows, chapter_by_kc, mastery_rows)
+    return {"kb_id": str(kb_id), "kb_name": kb.name, **graph}
 
 
 # ---- 学习指南 (对标 NotebookLM Source guide / Studio: 摄取完成后"下一步干嘛") ----
