@@ -34,6 +34,7 @@ from .routers import (
     chat_sessions,
     error_imports,
     evals,
+    explanations,
     feedback,
     health,
     kb,
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_sessions.router)
     app.include_router(chat_attachments.router)
     app.include_router(kb.router)
+    app.include_router(explanations.router)  # 0033 按知识点的结构化讲解
     app.include_router(orgs.router)
     app.include_router(threads.router)
     app.include_router(quiz.router)

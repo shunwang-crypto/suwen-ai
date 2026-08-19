@@ -565,6 +565,57 @@ class FsrsReviewEvent(Base):
 FSRSReviewEvent = FsrsReviewEvent
 
 
+class KcExplanation(Base):
+    """按知识点的结构化讲解 (0033)，绑定学生本人资料里的真实 chunk。
+
+    唯一键含 ``band``：讲法随"会不会"变（掌握档来自 mastery_band / evidence_state），
+    所以同一个 KC 在不同档位下是不同的讲解。缓存失效由 ``generator_version``
+    （教学契约变更）与 ``context_hash``（资料/上下文变更）共同决定；读接口据此如实
+    标记 stale，不静默把旧内容当新内容。
+
+    生成失败不写行：保留已有内容，由接口报错让界面显示"暂不可用"——
+    一次失败不允许清空学生正在读的讲解。
+    """
+
+    __tablename__ = "kc_explanations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "kb_id", "kc_id", "band", name="uq_kc_explanations_scope"
+        ),
+        CheckConstraint(
+            "band IN ('unobserved', 'weak', 'reinforce', 'near', 'mastered')",
+            name="ck_kc_explanations_band",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(blocks_json) = 'array' AND jsonb_array_length(blocks_json) > 0",
+            name="ck_kc_explanations_blocks_non_empty",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(source_refs_json) = 'array'",
+            name="ck_kc_explanations_source_refs_array",
+        ),
+        Index("ix_kc_explanations_kb_kc", "kb_id", "kc_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    kc_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_components.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    band: Mapped[str] = mapped_column(String(16), nullable=False)
+    generator_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    blocks_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    source_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _created_at()
+
+
 class FsrsParams(Base):
     """Versioned, user-scoped FSRS-6 parameter artifact.
 

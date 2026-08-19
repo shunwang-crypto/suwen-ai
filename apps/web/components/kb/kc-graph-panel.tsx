@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 
 import { ErrorBanner } from "@/components/common";
+import { KcExplanationPanel } from "@/components/kb/kc-explanation-panel";
 import { NODE_H, NODE_W } from "@/components/plans/kc-dependency-layout";
 import {
   type KbKcGraphResponse,
@@ -33,6 +34,7 @@ const STATE_BOX: Record<string, string> = {
 export function KcGraphPanel({ kbId }: { kbId: string }) {
   const { data, error, loading } = useApiResource<KbKcGraphResponse>(`/api/kb/${kbId}/kc-graph`);
   const [chapter, setChapter] = useState<string | null>(null);
+  const [selectedKc, setSelectedKc] = useState<string | null>(null);
   const chapters = data?.chapters ?? [];
   const activeChapter = chapter ?? chapters[0]?.chapter ?? null;
 
@@ -108,15 +110,18 @@ export function KcGraphPanel({ kbId }: { kbId: string }) {
               ))}
             </svg>
             {layout.nodes.map(({ node, x, y, external }) => (
-              <article
+              <button
                 key={node.kc_id}
+                type="button"
+                onClick={() => setSelectedKc(node.kc_id)}
+                aria-pressed={selectedKc === node.kc_id}
                 style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
-                aria-label={`${node.kc_name}，${node.evidence_state_label}${
+                aria-label={`查看讲解：${node.kc_name}，${node.evidence_state_label}${
                   node.band ? `，${node.band}` : ""
                 }${external ? "，跨章前置" : ""}`}
-                className={`absolute overflow-hidden rounded-xl border px-3 py-2 ${
+                className={`absolute overflow-hidden rounded-xl border px-3 py-2 text-left transition-colors hover:border-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
                   STATE_BOX[node.evidence_state] ?? STATE_BOX.unobserved
-                }`}
+                }${selectedKc === node.kc_id ? " ring-2 ring-brand-500 ring-offset-1" : ""}`}
               >
                 <span className="block truncate text-body-sm font-semibold text-ink">{node.kc_name}</span>
                 <span className="mt-1 block truncate text-caption text-ink-muted">
@@ -125,9 +130,15 @@ export function KcGraphPanel({ kbId }: { kbId: string }) {
                 {external && (
                   <span className="mt-1 block truncate text-caption text-brand-700">跨章前置</span>
                 )}
-              </article>
+              </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {selectedKc && (
+        <div className="mt-4 border-t border-line pt-4">
+          <KcExplanationPanel key={selectedKc} kbId={kbId} kcId={selectedKc} />
         </div>
       )}
 

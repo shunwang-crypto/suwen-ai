@@ -189,6 +189,16 @@ review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户
 兼容错题录入草稿、原文件和识别任务。新导入题最终挂在 `LearningResource/ResourceQuestion`
 上；旧隐藏 Quiz 由 0012 迁移转换，不再作为当前实现模式。
 
+## 按知识点的结构化讲解
+
+`kc_explanations`（0033）保存一份讲解的 block 数组与引用到的 chunk id，唯一键
+`(tenant_id, kb_id, kc_id, band)` —— `band` 进键是因为讲法随"会不会"变（证据不足时
+一律 `unobserved`）。`generator_version` 记录教学契约版本，`context_hash` 是
+`KC 名 + 掌握档 + 参与生成的 chunk 原文` 的确定性指纹；两者任一不匹配即为过期，
+读接口如实标记但仍返回内容。生成失败不写行，也不覆盖已有内容。
+
+表随知识库/知识点 FK 级联删除，并纳入用户数据导出（由本人资料生成，属可携带范围）。
+
 ## 计划、会话、画像和运营
 
 | 实体 | 语义 |

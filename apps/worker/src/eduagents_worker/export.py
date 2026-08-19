@@ -88,6 +88,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         ExplainBack,
         FsrsParams,
         FsrsReviewEvent,
+        KcExplanation,
         KnowledgeBase,
         LearnerInsight,
         LearningEvent,
@@ -143,6 +144,8 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         # 0031: 回答评分遥测 (含画像指纹) 同属可携带范围
         "answer_ratings": AnswerRating,
         "learning_report_snapshots": LearningReportSnapshot,
+        # 0033: 按知识点的结构化讲解 (由本人资料生成并按掌握档适配, 同属可携带范围)
+        "kc_explanations": KcExplanation,
     }
     dumped: dict[str, list[dict]] = {}
     async with tenant_session(tenant_id) as session:

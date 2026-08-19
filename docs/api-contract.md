@@ -148,6 +148,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | GET | /api/kb/{id}/documents/{doc}/chunks | 分块预览器（text/页码/heading_path/向量化状态） |
 | POST | /api/kb/{id}/debug/retrieve | 检索调试面板：dense/sparse 命中、融合重排、置信度全透明 |
 | GET | /api/kb/{id}/kc-graph | 课程知识图（Learning Map full 模式，只读派生，不落新表）：该库全部存活 KC + 全部 `prerequisite` 边 + 按章聚合 + 本人证据档。节点带 `kc_id/kc_name/chapter/evidence_state/evidence_state_label/band`；**`band` 定性档只在 `evidence_state=observed` 时给出**（未观测/估计中不叙述成薄弱或已掌握），全程不出 `p_mastery`/百分比。章序按 `chapter_sort_key`，节点序 `(created_at, id)`（确定性可重复，同批 enrich 内不等于插入序）；被 `superseded_by_id` 归并的 KC 及其边不出境；他人库 404 |
+| GET · POST | /api/kb/{id}/kc/{kc}/explanation | 按知识点的结构化讲解（0033）。block 只允许 `concept/worked_example/misconception/diagram`，**每块必须引用本人资料里的真实 chunk**（`source_refs` 只能取自本次候选片段，编造 id 的块被丢弃；一块都不剩则 502 `EXPLANATION_UNAVAILABLE`，不写库、不清空已有内容）；`diagram` 过最小结构校验（节点非空、边两端存在、无自环、无环）。按 `(kb, kc, 掌握档)` 缓存；掌握档取 `mastery_band`，证据不足（evidence_state≠observed）一律按 `unobserved` 讲。`generator_version` 或 `context_hash` 不匹配 → 返回 `stale=true` 与 `stale_reason`（teaching_contract_changed / material_changed），**内容仍然返回**（过期不等于清空）。该 KC 在资料里没有对应片段 → 409 `NO_SOURCE_MATERIAL`（不生成无出处内容）。讲解不含题目/选项/答案/判分 |
 
 `/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
 
