@@ -42,9 +42,9 @@ from ..models import (
     ErrorItem,
     FsrsReviewEvent,
     KnowledgeComponent,
+    LearningResource,
     MasteryLog,
     Question,
-    LearningResource,
     ResourceQuestion,
 )
 from ..plan_adjust import PlanTaskAttributionError, complete_plan_task

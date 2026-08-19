@@ -120,6 +120,32 @@ flowchart LR
 本地开发使用 `make dev-infra` 启动 PostgreSQL、Redis 和 Qdrant；API、Worker 和 Web 分别
 在宿主机进程中运行。对象存储可按 `.env` 使用 MinIO 或本地实现。
 
+## 前端信息架构
+
+侧栏主导航固定 5 项（`PRIMARY_NAV_ITEMS`）：今日 `/today`、对话 `/chat`、练习 `/practice`、
+课程 `/courses`、成长 `/growth`。学习计划 `/plans` 是聚合页，入口在账户菜单而不占主导航；
+机构 `/orgs` 按登录后一次 `/api/orgs` 结果条件显示，请求失败时 fail-open 保持显示。
+
+高亮由显式别名表 `NAV_HIGHLIGHT_ALIASES` 决定（`/tutor`→`/chat`、`/quiz`/`/reviews`→`/practice`、
+`/materials`→`/courses`），不使用通配前缀推断，避免一个新路由静默改变高亮。
+
+课程工作区 `/courses/[kbId]` 就是知识库本身，三个 tab：资料、指南、计划（`?tab=`）。
+专注会话 `/practice/session?mode=review|quiz&from=<站内路径>` 全屏无侧栏，`from` 经
+`safeInternalPath` 校验，站外地址回落到站内默认返回目标。
+
+被合并的旧路由全部保留重定向且原样转发 query，任何时刻不产生 404：
+
+| 旧路由 | 目标 |
+|---|---|
+| `/quiz` | `/practice?tab=quiz`（8 类深链参数转发） |
+| `/reviews` | `/practice?tab=review`；`?view=errors` → `?tab=errors` |
+| `/materials` | `/courses`（按 `kb` / `view=unclassified` / `resource_id` 查库 / 默认四分支） |
+| `/tutor` | `/chat?tutor=1&…`，首轮后自动清标记 |
+| `/plans?id=` | 页内解析后 → `/courses/{kb_id}?tab=plan` |
+
+重定向是客户端 `router.replace` 而非 `next.config` redirects：当 destination 自带 query 时
+Next 不转发 incoming query，深链参数会丢失；需要查库才能确定目标的重定向也只能在页内做。
+
 ## 数据与信任边界
 
 - 应用数据库连接使用 `edu_app`（`NOSUPERUSER NOBYPASSRLS`），migration 使用独立连接。

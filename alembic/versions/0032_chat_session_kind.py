@@ -6,8 +6,9 @@
 suwen:active-tutor-session 恢复。
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0032"
 down_revision: str | None = "0031"
