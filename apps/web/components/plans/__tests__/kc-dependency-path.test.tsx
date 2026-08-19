@@ -47,10 +47,22 @@ describe("KcDependencyPath", () => {
     render(<KcDependencyPath dependency={dependency} onTaskOpen={onTaskOpen} />);
 
     expect(screen.getByRole("region", { name: "知识点学习路径" })).toBeInTheDocument();
-    expect(screen.getByTestId("kc-dependency-scroll")).toHaveClass("overflow-x-auto");
+    // 默认是图视图: 依赖关系画成真边, 而不是列间一个通用箭头
+    const graph = screen.getByTestId("kc-dependency-graph-scroll");
+    expect(graph).toHaveClass("overflow-x-auto");
+    expect(graph.querySelectorAll("path[marker-end]")).toHaveLength(1);
     expect(screen.getByText("极限")).toBeInTheDocument();
     expect(screen.getByText("导数")).toBeInTheDocument();
     expect(screen.getByText("阻塞 1 个后续任务")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "查看计划任务知识点：导数，待学习" }),
+    );
+
+    // 列表视图是等价视图: 切过去仍然逐层列出同样的知识点
+    fireEvent.click(screen.getByRole("button", { name: "列表" }));
+    expect(screen.queryByTestId("kc-dependency-graph-scroll")).toBeNull();
+    expect(screen.getByTestId("kc-dependency-scroll")).toHaveClass("overflow-x-auto");
+    expect(screen.getByText("极限")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看知识点任务：导数" }));
   });
 

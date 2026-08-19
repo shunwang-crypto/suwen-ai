@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
+
 import type {
   PlanKcDependency,
   PlanKcDependencyNode,
 } from "@/lib/types";
+
+import { KcDependencyGraph } from "./kc-dependency-graph";
 
 interface KcDependencyPathProps {
   dependency?: PlanKcDependency;
@@ -61,8 +65,15 @@ function KcNode({ node, onTaskOpen }: { node: PlanKcDependencyNode; onTaskOpen?:
   );
 }
 
+type DependencyView = "graph" | "list";
+
+const VIEW_LABELS: Record<DependencyView, string> = { graph: "图", list: "列表" };
+
 export function KcDependencyPath({ dependency, onTaskOpen }: KcDependencyPathProps) {
   const levels = dependency?.levels ?? [];
+  // 默认图视图：先修结构是"谁挡着谁"的关系，列表只能表达先后。列表保留为
+  // 等价视图（屏幕阅读器/窄屏/需要逐条阅读时更好用）。
+  const [view, setView] = useState<DependencyView>("graph");
   if (levels.length === 0) return null;
 
   return (
@@ -73,11 +84,35 @@ export function KcDependencyPath({ dependency, onTaskOpen }: KcDependencyPathPro
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <h3 className="text-body-sm font-semibold text-ink">知识点学习路径</h3>
-          <p className="mt-1 text-caption text-ink-muted">左侧先修知识点逐层连接到当前计划任务；点击任务节点可查看具体安排。</p>
+          <p className="mt-1 text-caption text-ink-muted">先修知识点按依赖关系连接到当前计划任务；点击任务节点可查看具体安排。</p>
         </div>
-        <span className="text-caption text-ink-muted">共 {levels.length} 层</span>
+        <div className="flex items-center gap-2">
+          <span className="text-caption text-ink-muted">共 {levels.length} 层</span>
+          <div role="group" aria-label="依赖视图切换" className="flex overflow-hidden rounded-[7px] border border-line">
+            {(["graph", "list"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setView(value)}
+                aria-pressed={view === value}
+                className={`px-2 py-1 text-caption font-medium transition-colors ${
+                  view === value ? "bg-ink text-white" : "bg-white text-ink-secondary hover:bg-surface-muted"
+                }`}
+              >
+                {VIEW_LABELS[value]}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
+      {view === "graph" && (
+        <div className="mt-3">
+          <KcDependencyGraph dependency={dependency} onTaskOpen={onTaskOpen} />
+        </div>
+      )}
+
+      {view === "list" && (
       <div className="mt-3 overflow-x-auto pb-2" data-testid="kc-dependency-scroll">
         <div className="flex min-w-max items-stretch gap-2">
           {levels.map((level, levelIndex) => (
@@ -97,6 +132,7 @@ export function KcDependencyPath({ dependency, onTaskOpen }: KcDependencyPathPro
           ))}
         </div>
       </div>
+      )}
 
       {dependency?.edges.length ? (
         <p className="mt-2 text-caption text-ink-muted" aria-label="知识点依赖方向">
