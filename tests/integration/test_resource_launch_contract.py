@@ -17,6 +17,15 @@ FRONTEND_UPLOAD_DIALOG = (
 FRONTEND_MATERIALS_PAGE = (
     Path(__file__).resolve().parents[2] / "apps/web/app/materials/page.tsx"
 )
+# UI 重构阶段 5 之后 ResourceLibrary 的宿主页: /courses (未归类) 与课程内 materials tab。
+# /materials 只保留旧路由重定向, 所以宿主断言必须跟着搬, 否则这条契约会静默失效。
+FRONTEND_COURSES_PAGE = (
+    Path(__file__).resolve().parents[2] / "apps/web/app/courses/page.tsx"
+)
+FRONTEND_COURSE_MATERIALS_TAB = (
+    Path(__file__).resolve().parents[2]
+    / "apps/web/components/courses/course-materials-tab.tsx"
+)
 FRONTEND_RESOURCE_LIBRARY = (
     Path(__file__).resolve().parents[2]
     / "apps/web/components/resources/resource-library.tsx"
@@ -40,15 +49,25 @@ EXPECTED_UPLOAD_TYPES = [
 
 def test_frontend_resource_deep_link_and_dialog_contract():
     page = FRONTEND_MATERIALS_PAGE.read_text(encoding="utf-8")
+    courses_page = FRONTEND_COURSES_PAGE.read_text(encoding="utf-8")
+    materials_tab = FRONTEND_COURSE_MATERIALS_TAB.read_text(encoding="utf-8")
     library = FRONTEND_RESOURCE_LIBRARY.read_text(encoding="utf-8")
     review = FRONTEND_RESOURCE_REVIEW.read_text(encoding="utf-8")
     dialog = FRONTEND_CONFIRM_DIALOG.read_text(encoding="utf-8")
-    assert "ResourceLibrary" in page
+    # 宿主页: 未归类资源在 /courses, 课程内资源在 materials tab。
+    assert "ResourceLibrary" in courses_page
+    assert "ResourceLibrary" in materials_tab
+    # 旧路由只做重定向, 不再自己渲染资源库 (阶段 5 契约)。
+    assert 'router.replace("/courses")' in page
+    assert "ResourceLibrary" not in page
     assert 'useSearchParams' in library
     assert 'searchParams.get("resource_id")' in library
     assert 'searchParams.get("question_id")' in library
     assert "initialQuestionId" in library and "initialQuestionId" in review
-    assert 'router.replace("/materials"' in library
+    # 返回列表时清掉深链 query, 且不写死路由 —— 资源库同时挂在 /courses 与
+    # /courses/[kbId] 下, 写死路径会把用户踢出当前课程。
+    assert "router.replace(`${url.pathname}" in library
+    assert '"/materials"' not in library
     assert "useId" in dialog
     assert 'aria-modal="true"' in dialog
     assert 'event.key === "Escape"' in dialog

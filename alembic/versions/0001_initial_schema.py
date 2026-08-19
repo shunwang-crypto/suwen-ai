@@ -67,6 +67,9 @@ def upgrade() -> None:
     op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS resource_question_id")
     op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS assessment_answer_id")
     op.execute("ALTER TABLE error_items DROP COLUMN IF EXISTS original_response")
+    # 同理: chat_sessions.kind 由 0032 引入, 从零重放时必须先回退为"当时不存在",
+    # 否则 0032 的 add_column 撞 already exists (整套集成测试与新库首次部署都会挂)。
+    op.execute("ALTER TABLE chat_sessions DROP COLUMN IF EXISTS kind")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
     # 本地开发默认密码为 'edu'；应用连接与 migration 连接仍使用不同角色。
