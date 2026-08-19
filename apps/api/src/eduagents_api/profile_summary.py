@@ -55,6 +55,7 @@ from sqlalchemy import and_, func, select
 
 from .db import tenant_session
 from .models import ErrorItem, KnowledgeComponent, MasteryLog, MasteryRecord, UserPreference
+from .reason_codes import ReasonCode, reason_payload
 
 log = get_logger("profile_summary")
 
@@ -457,6 +458,11 @@ def difficulty_rationale(name: str, p_mastery: float, recent_error: bool) -> dic
     理由随蓝图确认卡与薄弱点预览出境展示, 沿用 P2-7 脱敏口径: 只带定性区间词
     (zone_label), 不带掌握度小数、不带题干/作答原文。C3: 措辞按
     zone × 区间段位 × recent_error 差异化, 并以「KC 名」开头 (同卷理由不复读)。
+
+    同时产出稳定码 (reason_code=mastery_zone) 与其参数: 16 种措辞组合是
+    (zone, band_position, recent_error, difficulty) 的确定性函数, 所以一个码 +
+    四个定性参数就能让前端文案层无损复现, 无需把散文搬到前端 (见 reason_codes)。
+    ``reason`` 散文为过渡字段, 新前端代码只读 reason_code/reason_params。
     """
     zone = zone_label(p_mastery)
     difficulty = difficulty_for_mastery(p_mastery)
@@ -466,7 +472,21 @@ def difficulty_rationale(name: str, p_mastery: float, recent_error: bool) -> dic
     )
     if recent_error:
         reason += _RECENT_ERROR_SUFFIXES[pos]
-    return {"kc_name": name, "zone": zone, "difficulty": difficulty, "reason": reason}
+    return {
+        "kc_name": name,
+        "zone": zone,
+        "difficulty": difficulty,
+        "band_position": pos,
+        "reason": reason,
+        **reason_payload(
+            ReasonCode.MASTERY_ZONE,
+            kc_name=name,
+            zone=zone,
+            difficulty=difficulty,
+            band_position=pos,
+            recent_error="yes" if recent_error else "no",
+        ),
+    }
 
 
 async def problem_mastery_band(
@@ -642,7 +662,10 @@ async def _load_weak_point_candidates(
                 "recent_error": recent_error,
                 "zone": rationale["zone"],
                 "difficulty": rationale["difficulty"],
+                "band_position": rationale["band_position"],
                 "reason": rationale["reason"],
+                "reason_code": rationale["reason_code"],
+                "reason_params": rationale["reason_params"],
                 "_stable_order": (created_at, str(kc_id)),
             }
         )

@@ -12,6 +12,7 @@ import { ErrorBanner } from "@/components/common";
 import { TodayPlanSection } from "@/components/plans/today-plan-section";
 import { apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import { reasonTextOf } from "@/lib/reason-text";
 import type {
   LearningReportResponse,
   NextActionItem,
@@ -209,7 +210,7 @@ export default function TodayPage() {
             <MathText text={primary.title} />
           </h3>
           <div className="mt-2 max-w-2xl text-[13px] leading-6 text-ink-secondary">
-            <MathText text={primary.reason} />
+            <MathText text={reasonTextOf(primary, primary.reason)} />
           </div>
           <Link href={focusActionHref(primary.href)} className="mt-7 inline-flex h-11 items-center gap-2 rounded-[9px] bg-ink px-5 text-[13px] font-semibold text-white transition-colors hover:bg-black">
             开始这一项
@@ -228,7 +229,7 @@ export default function TodayPage() {
                   <Link href={focusActionHref(item.href)} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-surface-muted sm:px-8">
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-medium text-ink"><MathText text={item.title} singleLine /></span>
-                      <span className="mt-1 block truncate text-body-sm text-ink-muted"><MathText text={item.reason} singleLine /></span>
+                      <span className="mt-1 block truncate text-body-sm text-ink-muted"><MathText text={reasonTextOf(item, item.reason)} singleLine /></span>
                     </span>
                     <span className="shrink-0 text-body-sm text-brand-700">开始 →</span>
                   </Link>

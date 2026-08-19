@@ -203,6 +203,15 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   `{suppressed: bool}` 软抑制（"不要再提及"）：保留原文只停注入，与 DELETE 物理删除互补。
 - `GET /api/profile/memory/preview` → `{summary, weak_points, mastered}`：与问答注入同源
   同缓存的摘要预览（设置页"AI 眼中的你"），所见即 AI 所得。
+- `GET /api/next-actions` → `{items:[{type,title,reason_code,reason_params,reason,href}]}`：
+  今日页唯一决策源（确定性聚合，零 LLM）。**推荐理由走稳定码**：`reason_code` 是后端
+  `ReasonCode` 枚举值（snake_case），`reason_params` 只含计数（int）、定性档位枚举词与
+  有界展示字符串——参数是逐码闭合白名单且拒绝 float，掌握度小数在类型上无处落脚
+  （P2-7）。展示文案的唯一出处是前端 `lib/reason-text.ts`。`reason` 散文是**过渡字段**，
+  仅供未升级的旧客户端，新客户端只读 `reason_code`/`reason_params`。同一套码同时用于
+  `/api/practice/next` 与出题蓝图的逐 KC 理由（`difficulty_reasons[].reason_code`）。
+  例外：`/api/plans/{id}/adjust` 与 `adjustments` 的 `reason` 仍是中文散文——它是落库的
+  审计事实，历史行无法反解为码。
 - `POST /api/profile/answer-ratings` `{message_id?, rating: good|bad, reason?
   (too_long|too_short|confusing|off_topic), weak_points?[], profile_used}`：回答级评价遥测
   （独立于 0004 工单 feedback）；`(user_id, message_id)` 唯一，改主意为 UPDATE；提交后内联
@@ -216,7 +225,7 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
 |---|---|---|
 | POST | /api/threads/{thread_id}/resume | `{value}` interrupt 恢复协议；thread_id=`kind:user:local`，跨用户 404 |
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_id?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
-| GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason/question_count/difficulty_mix`，不返回题干或掌握度小数 |
+| GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason_code/reason_params/question_count/difficulty_mix`，不返回题干或掌握度小数 |
 | POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_id?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
 | POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |

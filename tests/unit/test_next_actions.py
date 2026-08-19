@@ -16,6 +16,7 @@ from datetime import date
 from urllib.parse import unquote
 
 from eduagents_api.plan_adjust import plan_schedule_snapshot
+from eduagents_api.reason_codes import ReasonCode
 from eduagents_api.routers.next_actions import (
     MAX_ITEMS,
     compose_next_actions,
@@ -69,10 +70,19 @@ def test_priority_order_and_cap():
         "plan_task",
     ]
     assert len(items) <= MAX_ITEMS
-    # 每条都能回答"为什么": type/title/reason/href 四字段齐且非空
+    # 每条都能回答"为什么": 四个展示字段齐全, 且带稳定码 + 参数 (reason 为过渡散文)
     for it in items:
-        assert set(it) == {"type", "title", "reason", "href"}
+        assert set(it) == {
+            "type",
+            "title",
+            "reason",
+            "reason_code",
+            "reason_params",
+            "href",
+        }
         assert it["title"] and it["reason"] and it["href"]
+        assert it["reason_code"] in set(ReasonCode)
+        assert isinstance(it["reason_params"], dict)
 
 
 def test_review_item_cites_due_count():

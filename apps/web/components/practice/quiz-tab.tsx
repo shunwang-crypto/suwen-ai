@@ -45,6 +45,7 @@ import { adjustmentLabels } from "@/app/quiz/practice-recommendation";
 import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { MathText } from "@/lib/katex";
+import { reasonTextOf } from "@/lib/reason-text";
 import { streamSse } from "@/lib/sse";
 import type {AttemptResult, Blueprint, ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, MetacognitionSummary, NodeUpdateData, PracticeRecommendation, QuizDetail, QuizListItem, WeakPointsResponse} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
@@ -968,7 +969,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                       <li key={r.kc_name} className="text-caption leading-relaxed text-slate-600">
                         <span className="font-medium text-slate-800">{r.kc_name}</span>
                         <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">{r.zone}</span>
-                        <MathText text={r.reason} />
+                        <MathText text={reasonTextOf(r, r.reason)} />
                       </li>
                     ))}
                   </ul>
@@ -1196,7 +1197,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                                 {wp.zone}
                               </span>
                             )}
-                            <MathText text={wp.reason ?? ""} />
+                            <MathText text={reasonTextOf(wp, wp.reason ?? "")} />
                           </li>
                         ))}
                     </ul>
@@ -1233,7 +1234,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                           <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">
                             {r.zone}
                           </span>
-                          <MathText text={r.reason} />
+                          <MathText text={reasonTextOf(r, r.reason)} />
                         </li>
                       ))}
                     </ul>

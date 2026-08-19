@@ -65,14 +65,20 @@ export interface DifficultyReason {
   kc_name: string;
   zone: string;
   difficulty: string;
+  /** @deprecated 过渡字段：新代码读 reason_code / reason_params（lib/reason-text.ts）。 */
   reason: string;
+  reason_code?: string;
+  reason_params?: Record<string, string | number>;
 }
 
 /** 薄弱点预览项（/api/profile/weak-points 已附带 zone/reason 定性理由字段）。 */
 export type WeakPointPreview = WeakPointItem & {
   zone?: string;
   difficulty?: string;
+  /** @deprecated 过渡字段：新代码读 reason_code / reason_params（lib/reason-text.ts）。 */
   reason?: string;
+  reason_code?: string;
+  reason_params?: Record<string, string | number>;
 };
 
 // useSyncExternalStore 订阅占位：URL search 在页面生命周期内不变化（跳转即重挂载）

@@ -56,7 +56,11 @@ export interface PracticeRecommendation {
   action: PracticeRecommendationAction;
   source: "due_review" | "plan_task" | "weak_kc" | "cold_start" | "mastery" | "choose_scope" | "sample";
   title: string;
+  /** @deprecated 过渡字段：仅供未升级的旧客户端；新代码读 reason_code / reason_params。 */
   reason: string;
+  /** 稳定推荐理由码（后端 ReasonCode），经 lib/reason-text.ts 转文案。 */
+  reason_code: string;
+  reason_params: Record<string, string | number>;
   question_count: number;
   difficulty_mix: Record<"easy" | "mid" | "hard", number>;
   kb: { id: string; name: string } | null;

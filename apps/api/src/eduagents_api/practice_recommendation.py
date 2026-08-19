@@ -38,6 +38,7 @@ from .plan_adjust import (
 from .profile_summary import (
     _load_weak_point_candidates,
 )
+from .reason_codes import ReasonCode, reason_payload
 from .services import quiz_kc_readiness
 
 Adjustment = Literal["easier", "harder", "switch_kc", "switch_kb"]
@@ -112,7 +113,7 @@ def _weak_mix(points: list[dict]) -> dict[str, int]:
 
 
 def _difficulty_mix_from_reasons(
-    reasons: tuple[dict[str, str], ...],
+    reasons: tuple[dict[str, Any], ...],
     count: int,
     fallback: dict[str, int] | None = None,
 ) -> dict[str, int]:
@@ -151,6 +152,10 @@ class PracticeRecommendation:
     title: str
     reason: str
     question_count: int
+    # 过渡字段边界 (reason_codes): reason 是给未升级旧客户端的散文, 新前端只读
+    # reason_code / reason_params; 新分支必须走 reason_payload() 产出这两个字段。
+    reason_code: str = ""
+    reason_params: dict[str, Any] = field(default_factory=dict)
     difficulty_mix: dict[str, int] = field(default_factory=dict)
     kb: dict[str, str] | None = None
     scope_options: tuple[dict[str, str], ...] = ()
@@ -159,7 +164,7 @@ class PracticeRecommendation:
     target_kc_names: tuple[str, ...] = ()
     # Server-only qualitative detail for the legacy Quiz adapter.  It is
     # deliberately absent from ``to_dict`` and contains no mastery/confidence.
-    difficulty_reasons: tuple[dict[str, str], ...] = ()
+    difficulty_reasons: tuple[dict[str, Any], ...] = ()
     plan_id: str | None = None
     task_id: str | None = None
     # Internal readiness fact used by compatibility Quiz adapters.  It is not
@@ -174,6 +179,8 @@ class PracticeRecommendation:
             "source": self.source,
             "title": self.title,
             "reason": self.reason,
+            "reason_code": self.reason_code,
+            "reason_params": dict(self.reason_params),
             "question_count": self.question_count,
             "difficulty_mix": dict(self.difficulty_mix),
             "kb": self.kb,
@@ -219,6 +226,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="due_review",
             title=f"{context.due_count} 道错题到期了",
             reason="FSRS 间隔复习排程显示这些错题今天到期，先复习能巩固记忆。",
+            **reason_payload(ReasonCode.REVIEW_DUE, count=int(context.due_count)),
             question_count=0,
         )
 
@@ -235,6 +243,10 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="plan_task",
             title=f"继续今天的任务：{str(task.get('title') or '计划练习')[:80]}",
             reason=f"今天的学习计划还有这个任务未完成：{str(task.get('goal') or '按计划练习')[:80]}",
+            **reason_payload(
+                ReasonCode.PLAN_TASK_PENDING,
+                goal=str(task.get("goal") or "按计划练习")[:80],
+            ),
             question_count=count,
             difficulty_mix=mix,
             kb=_kb_public(kb) if isinstance(kb, dict) else None,
@@ -254,6 +266,10 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
                 "zone": str(point.get("zone") or "待巩固"),
                 "difficulty": str(point.get("difficulty") or "mid"),
                 "reason": str(point.get("reason") or "按近期作答情况安排练习")[:240],
+                # 稳定码透传: 参数在 profile_summary.difficulty_rationale 一处组装,
+                # 这里不重算 (缺失时留空, 前端回退读 reason 散文)。
+                "reason_code": str(point.get("reason_code") or ""),
+                "reason_params": dict(point.get("reason_params") or {}),
             }
             for point in points
             if point.get("name")
@@ -264,6 +280,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="weak_kc",
             title="用 5 道题巩固薄弱知识点",
             reason="近期作答显示这些知识点还不稳定，先用一组短练习巩固。",
+            **reason_payload(ReasonCode.WEAK_KC_UNSTABLE),
             question_count=5,
             difficulty_mix=_adjust_mix(_weak_mix(points), adjustment),
             kb=_kb_public(context.ready_kbs[0]) if len(context.ready_kbs) == 1 else None,
@@ -295,6 +312,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
                 source="mastery",
                 title="继续巩固这份资料",
                 reason="已有作答记录，但目前没有需要优先补强的薄弱知识点；先做一组短练习保持熟练度。",
+                **reason_payload(ReasonCode.PRACTICE_MAINTAIN),
                 question_count=5,
                 difficulty_mix=_adjust_mix({"easy": 1, "mid": 3, "hard": 1}, adjustment),
                 kb=_kb_public(kb),
@@ -309,6 +327,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="cold_start",
             title="用 3 道题建立第一版画像",
             reason="这份资料已经准备好，先从真实章节知识点各取一道题了解你的起点。",
+            **reason_payload(ReasonCode.KB_READY_FIRST_QUIZ),
             question_count=3,
             difficulty_mix=_adjust_mix(FIXED_COLD_START_MIX, adjustment),
             kb=_kb_public(kb),
@@ -322,6 +341,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
                     "zone": "未验证",
                     "difficulty": "mid",
                     "reason": f"「{name}」尚未测过，先做一次快速验证",
+                    **reason_payload(ReasonCode.KC_UNVERIFIED, kc_name=name),
                 }
                 for name in names
             ),
@@ -338,6 +358,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="choose_scope",
             title="先选这次要练的科目",
             reason="你有多份已准备好的资料，但当前没有足够上下文判断练哪一科。",
+            **reason_payload(ReasonCode.KB_CHOICE_REQUIRED),
             question_count=0,
             scope_options=options,
         )
@@ -350,6 +371,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="cold_start",
             title="正在理解你的资料",
             reason="资料已收到，系统正在整理知识点；完成后会自动准备第一组练习。",
+            **reason_payload(ReasonCode.KB_PREPARING),
             question_count=0,
             kb=_kb_public(kb),
         )
@@ -362,6 +384,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
             source="sample",
             title="先上传这份资料",
             reason="这份知识库还没有可用资料；上传后才能建立章节知识点和练习。",
+            **reason_payload(ReasonCode.KB_EMPTY),
             question_count=0,
             kb=_kb_public(kb),
             readiness_code=kb.get("_readiness_code"),
@@ -373,6 +396,7 @@ def build_recommendation(context: PracticeContext) -> PracticeRecommendation:
         source="sample",
         title="先上传一份正在学的资料",
         reason="目前还没有可用的个人资料；上传后才能按你的内容建立练习。",
+        **reason_payload(ReasonCode.KB_ABSENT),
         question_count=0,
         adjustments=(),
     )

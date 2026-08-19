@@ -1,3 +1,4 @@
+import { reasonTextOf } from "@/lib/reason-text";
 import type { PracticeRecommendation } from "@/lib/types";
 
 type Adjustment = PracticeRecommendation["adjustments"][number];
@@ -27,7 +28,8 @@ export function recommendationStatusMessage(
   if (recommendation.status === "needs_upload") {
     return "请先上传一份正在学的资料";
   }
-  return recommendation.reason;
+  // 稳定码优先；reason 仅作过渡回退（后端未给码时）。
+  return reasonTextOf(recommendation, recommendation.reason);
 }
 
 export function recommendationScopeRequest(scopeKbId: string): Record<string, string> {

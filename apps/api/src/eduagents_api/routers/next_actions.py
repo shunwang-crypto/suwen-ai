@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from urllib.parse import quote, urlencode
+from urllib.parse import quote as quote_url
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -37,6 +38,7 @@ from ..plan_adjust import (
     task_status,
 )
 from ..profile_summary import weak_point_kcs
+from ..reason_codes import ZONE_VALUES, ReasonCode, reason_payload
 
 # B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
 # 开场卡与复习页的"到期数"不再各查各的 (此前 5 vs 37 打架)
@@ -111,18 +113,26 @@ def _resume_item(insight: dict) -> dict:
     kind = insight.get("kind") or ""
     text = (insight.get("text") or "").strip()
     label = kc_name or _ellipsis(text, _TITLE_LABEL_MAX)
+    quote = _ellipsis(text, _RESUME_QUOTE_MAX)
     if kind == "misconception":
-        reason = f"辅导小结记录过这个易错点：“{_ellipsis(text, _RESUME_QUOTE_MAX)}”"
+        reason = f"辅导小结记录过这个易错点：“{quote}”"
+        payload = reason_payload(
+            ReasonCode.RESUME_MISCONCEPTION, quote=quote, kc_name=kc_name or None
+        )
         href = "/tutor"
     else:
-        reason = f"长期记忆里记着你当时的原话：“{_ellipsis(text, _RESUME_QUOTE_MAX)}”"
+        reason = f"长期记忆里记着你当时的原话：“{quote}”"
+        payload = reason_payload(
+            ReasonCode.RESUME_CONFUSED, quote=quote, kc_name=kc_name or None
+        )
         topic = f"学「{kc_name}」时" if kc_name else ""
         question = f"上次{topic}我有个疑问：{_ellipsis(text, _RESUME_Q_MAX)} —— 请接着帮我讲清楚。"
-        href = "/chat?q=" + quote(question)
+        href = "/chat?q=" + quote_url(question)
     return {
         "type": "resume_insight",
         "title": f"上次你在『{label}』卡住了，要继续吗",
         "reason": reason,
+        **payload,
         "href": href,
     }
 
@@ -147,19 +157,32 @@ def compose_next_actions(
                 "type": "review",
                 "title": f"{due_count} 道错题到期了",
                 "reason": "FSRS 间隔复习排程：这些错题今天到了最佳复习时点，现在重练巩固效果最好",
+                **reason_payload(ReasonCode.REVIEW_DUE, count=due_count),
                 "href": "/reviews",
             }
         )
     if insight is not None and (insight.get("text") or "").strip():
         items.append(_resume_item(insight))
     for wp in weak_points[:_WEAK_TOP]:
-        # reason 沿用 difficulty_rationale 的定性话术 (zone 两档词, 无掌握度小数)
-        reason = wp.get("reason") or f"掌握度{wp.get('zone', '待巩固')}，定向练习最见效"
+        # reason 沿用 difficulty_rationale 的定性话术 (zone 两档词, 无掌握度小数)。
+        # 稳定码直接透传 weak_point_kcs 已产出的 MASTERY_ZONE payload —— 参数在
+        # difficulty_rationale 一处组装, 这里不重算, 免得两边漂。
+        zone = wp.get("zone") if wp.get("zone") in ZONE_VALUES else "待巩固"
+        if wp.get("reason_code") and isinstance(wp.get("reason_params"), dict):
+            reason = wp.get("reason") or f"掌握度{zone}，定向练习最见效"
+            payload = {
+                "reason_code": wp["reason_code"],
+                "reason_params": dict(wp["reason_params"]),
+            }
+        else:
+            reason = wp.get("reason") or f"掌握度{zone}，定向练习最见效"
+            payload = reason_payload(ReasonCode.WEAK_KC_GENERIC, zone=zone)
         items.append(
             {
                 "type": "weak_practice",
                 "title": f"练一练薄弱点『{wp.get('name', '')}』",
                 "reason": reason,
+                **payload,
                 "href": "/quiz?weak=1",
             }
         )
@@ -172,6 +195,12 @@ def compose_next_actions(
                     f"计划《{_ellipsis(plan['goal'], _GOAL_MAX)}》进行到第 {plan['day_no']} 天，"
                     f"按日程还有 {plan['undone']} 个任务没完成"
                 ),
+                **reason_payload(
+                    ReasonCode.PLAN_TASK_PROGRESS,
+                    goal=_ellipsis(plan["goal"], _GOAL_MAX),
+                    day_no=int(plan["day_no"]),
+                    undone=int(plan["undone"]),
+                ),
                 "href": _plan_task_href(plan),
             }
         )
@@ -181,6 +210,7 @@ def compose_next_actions(
                 "type": "cold_start",
                 "title": "先做一次摸底练习",
                 "reason": "还没有足够的真实作答证据，先用几道题建立起点，再决定接下来怎么学",
+                **reason_payload(ReasonCode.COLD_START_NO_EVIDENCE),
                 "href": "/quiz",
             }
         ]
