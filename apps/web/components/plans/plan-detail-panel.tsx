@@ -303,15 +303,23 @@ export function PlanDetailPanel({
             <div className="mt-2 grid gap-2 text-body-sm sm:grid-cols-2">
               <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
                 <strong className="block text-caption text-ink-muted">可验证成果</strong>
-                {view.structure.goal_analysis.outcomes.map((item) => (
-                  <p key={item} className="mt-1">• {item}</p>
-                ))}
+                {view.structure.goal_analysis.outcomes?.length ? (
+                  view.structure.goal_analysis.outcomes.map((item) => (
+                    <p key={item} className="mt-1">• {item}</p>
+                  ))
+                ) : (
+                  <p className="mt-1 text-ink-muted">未记录</p>
+                )}
               </div>
               <div className="rounded-lg bg-white px-2.5 py-2 text-ink-secondary">
                 <strong className="block text-caption text-ink-muted">验收标准</strong>
-                {view.structure.goal_analysis.success_criteria.map((item) => (
-                  <p key={item} className="mt-1">• {item}</p>
-                ))}
+                {view.structure.goal_analysis.success_criteria?.length ? (
+                  view.structure.goal_analysis.success_criteria.map((item) => (
+                    <p key={item} className="mt-1">• {item}</p>
+                  ))
+                ) : (
+                  <p className="mt-1 text-ink-muted">未记录</p>
+                )}
               </div>
             </div>
             {view.structure.skill_gaps && view.structure.skill_gaps.length > 0 && (
