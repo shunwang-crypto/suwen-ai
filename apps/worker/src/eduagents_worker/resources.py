@@ -314,7 +314,7 @@ async def _extract_pdf_questions(
         policy=policy,
         gateway=gateway,
         vision_model=(
-            settings.opencode_vision_model
+            settings.trenddao_vision_model
             if settings.model_routing_enabled
             else settings.vision_model
         ),

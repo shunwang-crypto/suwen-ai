@@ -102,129 +102,22 @@ def _candidate(
 
 
 def configured_candidates(settings: Settings, route: BusinessRoute) -> tuple[ProviderCandidate, ...]:
-    """Return the configured chain in the documented business order.
-
-    Empty-key candidates are retained for status/health reporting but filtered
-    by the gateway before a network call.
-    """
-
-    opencode_base = settings.opencode_zen_base_url
-    opencode_key = settings.opencode_zen_api_key
-    # Existing CHEAP/STANDARD/PLAN settings remain usable when the new route
-    # fields are left empty.  Explicit route values always win.
-    text_fallback_key = settings.text_fallback_api_key or settings.cheap_api_key
-    text_fallback_model = settings.text_fallback_model or settings.cheap_model
-    vision_fallback_key = settings.vision_fallback_api_key or settings.standard_api_key
-    vision_fallback_model = settings.vision_fallback_model or settings.vision_model
-    plan_primary_key = settings.plan_primary_api_key or settings.plan_api_key
-    plan_primary_model = settings.plan_primary_model or settings.plan_model
-    plan_secondary_key = settings.plan_secondary_api_key or opencode_key
-    plan_tertiary_key = settings.plan_tertiary_api_key or settings.cheap_api_key
-    plan_tertiary_model = settings.plan_tertiary_model or settings.cheap_model
-    if route == BusinessRoute.text:
-        return (
-            _candidate(
-                settings=settings,
-                id="opencode-text",
-                route=route,
-                provider="opencode",
-                base_url=opencode_base,
-                api_key=opencode_key,
-                model=settings.opencode_text_model,
-                input_price_per_m=settings.opencode_input_price_per_m,
-                output_price_per_m=settings.opencode_output_price_per_m,
-                supports_vision=False,
-                supports_json=True,
-                reserve_tier="standard",
-            ),
-            _candidate(
-                settings=settings,
-                id="siliconflow-text",
-                route=route,
-                provider="siliconflow",
-                base_url=settings.text_fallback_base_url,
-                api_key=text_fallback_key,
-                model=text_fallback_model,
-                input_price_per_m=settings.text_fallback_input_price_per_m,
-                output_price_per_m=settings.text_fallback_output_price_per_m,
-                supports_vision=False,
-                supports_json=True,
-                reserve_tier="standard",
-            ),
-        )
-    if route == BusinessRoute.vision:
-        return (
-            _candidate(
-                settings=settings,
-                id="opencode-vision",
-                route=route,
-                provider="opencode",
-                base_url=opencode_base,
-                api_key=opencode_key,
-                model=settings.opencode_vision_model,
-                input_price_per_m=settings.opencode_input_price_per_m,
-                output_price_per_m=settings.opencode_output_price_per_m,
-                supports_vision=True,
-                supports_json=False,
-                reserve_tier="standard",
-            ),
-            _candidate(
-                settings=settings,
-                id="siliconflow-vision",
-                route=route,
-                provider="siliconflow",
-                base_url=settings.vision_fallback_base_url,
-                api_key=vision_fallback_key,
-                model=vision_fallback_model,
-                input_price_per_m=settings.vision_fallback_input_price_per_m,
-                output_price_per_m=settings.vision_fallback_output_price_per_m,
-                supports_vision=True,
-                supports_json=False,
-                reserve_tier="standard",
-            ),
-        )
+    """Return the single local TrendDAO candidate for every business route."""
+    model = settings.trenddao_vision_model if route == BusinessRoute.vision else settings.trenddao_text_model
     return (
         _candidate(
             settings=settings,
-            id="deepseek-plan",
+            id=f"trenddao-{route.value}",
             route=route,
-            provider="deepseek",
-            base_url=settings.plan_primary_base_url,
-            api_key=plan_primary_key,
-            model=plan_primary_model,
-            input_price_per_m=settings.plan_primary_input_price_per_m,
-            output_price_per_m=settings.plan_primary_output_price_per_m,
-            supports_vision=False,
-            supports_json=True,
-            reserve_tier="plan",
-        ),
-        _candidate(
-            settings=settings,
-            id="opencode-plan",
-            route=route,
-            provider="opencode",
-            base_url=settings.plan_secondary_base_url,
-            api_key=plan_secondary_key,
-            model=settings.plan_secondary_model,
-            input_price_per_m=settings.plan_secondary_input_price_per_m,
-            output_price_per_m=settings.plan_secondary_output_price_per_m,
-            supports_vision=False,
-            supports_json=True,
-            reserve_tier="plan",
-        ),
-        _candidate(
-            settings=settings,
-            id="siliconflow-plan",
-            route=route,
-            provider="siliconflow",
-            base_url=settings.plan_tertiary_base_url,
-            api_key=plan_tertiary_key,
-            model=plan_tertiary_model,
-            input_price_per_m=settings.plan_tertiary_input_price_per_m,
-            output_price_per_m=settings.plan_tertiary_output_price_per_m,
-            supports_vision=False,
-            supports_json=True,
-            reserve_tier="plan",
+            provider="trenddao",
+            base_url=settings.trenddao_base_url,
+            api_key=settings.trenddao_api_key,
+            model=model,
+            input_price_per_m=settings.trenddao_input_price_per_m,
+            output_price_per_m=settings.trenddao_output_price_per_m,
+            supports_vision=route == BusinessRoute.vision,
+            supports_json=route != BusinessRoute.vision,
+            reserve_tier="plan" if route == BusinessRoute.plan else "standard",
         ),
     )
 

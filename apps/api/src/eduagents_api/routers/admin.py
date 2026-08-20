@@ -540,7 +540,7 @@ class FaultsIn(BaseModel):
     # 一键熔断: 直接把断路器拉开 (不必等错误率累积), "all" = 全档打开
     trip_breaker: str | None = Field(
         default=None,
-        pattern="^(cheap|standard|strong|plan|opencode-text|siliconflow-text|opencode-vision|siliconflow-vision|deepseek-plan|opencode-plan|siliconflow-plan|all)$",
+        pattern="^(cheap|standard|strong|plan|trenddao-text|trenddao-vision|trenddao-plan|all)$",
     )
     reset_breakers: bool = False
 

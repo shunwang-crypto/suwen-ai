@@ -110,6 +110,6 @@ export interface FaultPatch {
   provider_down?: boolean;
   latency_ms?: number;
   error_rate?: number;
-  trip_breaker?: "cheap" | "standard" | "strong" | "plan" | "opencode-text" | "siliconflow-text" | "opencode-vision" | "siliconflow-vision" | "deepseek-plan" | "opencode-plan" | "siliconflow-plan" | "all";
+  trip_breaker?: "cheap" | "standard" | "strong" | "plan" | "trenddao-text" | "trenddao-vision" | "trenddao-plan" | "all";
   reset_breakers?: boolean;
 }

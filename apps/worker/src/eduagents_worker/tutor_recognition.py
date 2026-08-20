@@ -267,7 +267,7 @@ async def _recognize_source(
             vision_model=(
                 settings.vision_model
                 if not settings.model_routing_enabled
-                else settings.opencode_vision_model
+                else settings.trenddao_vision_model
             ),
             tenant_id=tenant_id,
             user_id=user_id,
@@ -313,7 +313,7 @@ async def _recognize_source(
             vision_model=(
                 settings.vision_model
                 if not settings.model_routing_enabled
-                else settings.opencode_vision_model
+                else settings.trenddao_vision_model
             ),
             tenant_id=tenant_id,
             user_id=user_id,

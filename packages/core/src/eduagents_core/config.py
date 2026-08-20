@@ -157,42 +157,13 @@ class Settings(BaseSettings):
     # Explicit business-route provider chains.  False preserves the legacy
     # CHEAP/STANDARD/STRONG/PLAN behavior for existing deployments.
     model_routing_enabled: bool = False
-    opencode_zen_base_url: str = "https://opencode.ai/zen/v1"
-    opencode_zen_api_key: str = ""
-    opencode_text_model: str = "deepseek-v4-flash-free"
-    opencode_vision_model: str = "mimo-v2.5-free"
-    opencode_input_price_per_m: float = 0.0
-    opencode_output_price_per_m: float = 0.0
+    trenddao_base_url: str = "https://trenddao.com/v1"
+    trenddao_api_key: str = ""
+    trenddao_text_model: str = "muse-spark-1.2-contributor"
+    trenddao_vision_model: str = "muse-spark-1.2-contributor"
+    trenddao_input_price_per_m: float = 0.0
+    trenddao_output_price_per_m: float = 0.0
 
-    text_fallback_base_url: str = "https://api.siliconflow.cn/v1"
-    text_fallback_api_key: str = ""
-    text_fallback_model: str = ""
-    text_fallback_input_price_per_m: float = 0.35
-    text_fallback_output_price_per_m: float = 0.35
-
-    vision_fallback_base_url: str = "https://api.siliconflow.cn/v1"
-    vision_fallback_api_key: str = ""
-    vision_fallback_model: str = ""
-    vision_fallback_input_price_per_m: float = 0.35
-    vision_fallback_output_price_per_m: float = 0.35
-
-    plan_primary_base_url: str = "https://api.deepseek.com"
-    plan_primary_api_key: str = ""
-    plan_primary_model: str = "deepseek-v4-flash"
-    plan_primary_input_price_per_m: float = 1.0
-    plan_primary_output_price_per_m: float = 2.0
-
-    plan_secondary_base_url: str = "https://opencode.ai/zen/v1"
-    plan_secondary_api_key: str = ""
-    plan_secondary_model: str = "deepseek-v4-flash-free"
-    plan_secondary_input_price_per_m: float = 0.0
-    plan_secondary_output_price_per_m: float = 0.0
-
-    plan_tertiary_base_url: str = "https://api.siliconflow.cn/v1"
-    plan_tertiary_api_key: str = ""
-    plan_tertiary_model: str = ""
-    plan_tertiary_input_price_per_m: float = 0.35
-    plan_tertiary_output_price_per_m: float = 0.35
     # --- user-owned text model credentials (BYOK, 0017) ---
     # Disabled by default in local/test environments.  When enabled the
     # server must have a real 32-byte base64 key; no development fallback key
@@ -228,18 +199,8 @@ class Settings(BaseSettings):
         if not isinstance(values, dict):
             return values
         defaults = {
-            "opencode_input_price_per_m": 0.0,
-            "opencode_output_price_per_m": 0.0,
-            "text_fallback_input_price_per_m": 0.35,
-            "text_fallback_output_price_per_m": 0.35,
-            "vision_fallback_input_price_per_m": 0.35,
-            "vision_fallback_output_price_per_m": 0.35,
-            "plan_primary_input_price_per_m": 1.0,
-            "plan_primary_output_price_per_m": 2.0,
-            "plan_secondary_input_price_per_m": 0.0,
-            "plan_secondary_output_price_per_m": 0.0,
-            "plan_tertiary_input_price_per_m": 0.35,
-            "plan_tertiary_output_price_per_m": 0.35,
+            "trenddao_input_price_per_m": 0.0,
+            "trenddao_output_price_per_m": 0.0,
         }
         for name, default in defaults.items():
             if values.get(name) == "":
@@ -296,29 +257,14 @@ class Settings(BaseSettings):
                 raise ValueError("DEEPSEEK_BYOK_ALLOWED_MODELS cannot be empty")
         if self.model_routing_enabled:
             route_urls = {
-                "OPENCODE_ZEN_BASE_URL": self.opencode_zen_base_url,
-                "TEXT_FALLBACK_BASE_URL": self.text_fallback_base_url,
-                "VISION_FALLBACK_BASE_URL": self.vision_fallback_base_url,
-                "PLAN_PRIMARY_BASE_URL": self.plan_primary_base_url,
-                "PLAN_SECONDARY_BASE_URL": self.plan_secondary_base_url,
-                "PLAN_TERTIARY_BASE_URL": self.plan_tertiary_base_url,
+                "TRENDDAO_BASE_URL": self.trenddao_base_url,
             }
             for name, url in route_urls.items():
                 if url and urlparse(url).scheme != "https":
                     raise ValueError(f"{name} must be HTTPS")
             route_prices = {
-                "OPENCODE_INPUT_PRICE_PER_M": self.opencode_input_price_per_m,
-                "OPENCODE_OUTPUT_PRICE_PER_M": self.opencode_output_price_per_m,
-                "TEXT_FALLBACK_INPUT_PRICE_PER_M": self.text_fallback_input_price_per_m,
-                "TEXT_FALLBACK_OUTPUT_PRICE_PER_M": self.text_fallback_output_price_per_m,
-                "VISION_FALLBACK_INPUT_PRICE_PER_M": self.vision_fallback_input_price_per_m,
-                "VISION_FALLBACK_OUTPUT_PRICE_PER_M": self.vision_fallback_output_price_per_m,
-                "PLAN_PRIMARY_INPUT_PRICE_PER_M": self.plan_primary_input_price_per_m,
-                "PLAN_PRIMARY_OUTPUT_PRICE_PER_M": self.plan_primary_output_price_per_m,
-                "PLAN_SECONDARY_INPUT_PRICE_PER_M": self.plan_secondary_input_price_per_m,
-                "PLAN_SECONDARY_OUTPUT_PRICE_PER_M": self.plan_secondary_output_price_per_m,
-                "PLAN_TERTIARY_INPUT_PRICE_PER_M": self.plan_tertiary_input_price_per_m,
-                "PLAN_TERTIARY_OUTPUT_PRICE_PER_M": self.plan_tertiary_output_price_per_m,
+                "TRENDDAO_INPUT_PRICE_PER_M": self.trenddao_input_price_per_m,
+                "TRENDDAO_OUTPUT_PRICE_PER_M": self.trenddao_output_price_per_m,
             }
             if any(price < 0 for price in route_prices.values()):
                 raise ValueError("provider candidate prices cannot be negative")
@@ -342,12 +288,7 @@ class Settings(BaseSettings):
             # feature is disabled, so an accidental later enable cannot turn
             # an HTTP endpoint into a credential-bearing production call.
             for name in (
-                "opencode_zen_base_url",
-                "text_fallback_base_url",
-                "vision_fallback_base_url",
-                "plan_primary_base_url",
-                "plan_secondary_base_url",
-                "plan_tertiary_base_url",
+                "trenddao_base_url",
             ):
                 url = getattr(self, name)
                 if url and urlparse(url).scheme != "https":
@@ -513,48 +454,20 @@ class Settings(BaseSettings):
     def routing_text_enabled(self) -> bool:
         if not self.model_routing_enabled:
             return bool(self.standard_api_key and self.standard_model)
-        return bool(
-            self.opencode_zen_api_key
-            and self.opencode_zen_base_url
-            and self.opencode_text_model
-        ) or bool(
-            (self.text_fallback_api_key or self.cheap_api_key)
-            and self.text_fallback_base_url
-            and (self.text_fallback_model or self.cheap_model)
-        )
+        return bool(self.trenddao_api_key and self.trenddao_base_url and self.trenddao_text_model)
 
     @property
     def routing_vision_enabled(self) -> bool:
         """Whether at least one explicitly configured visual route candidate exists."""
         if self.model_routing_enabled:
-            return bool(
-                self.opencode_zen_api_key
-                and self.opencode_zen_base_url
-                and self.opencode_vision_model
-            ) or bool(
-                (self.vision_fallback_api_key or self.standard_api_key)
-                and self.vision_fallback_base_url
-                and (self.vision_fallback_model or self.vision_model)
-            )
+            return bool(self.trenddao_api_key and self.trenddao_base_url and self.trenddao_vision_model)
         return bool(self.vision_model)
 
     @property
     def routing_plan_enabled(self) -> bool:
         if not self.model_routing_enabled:
             return bool(self.plan_api_key and self.plan_model)
-        return bool(
-            (self.plan_primary_api_key or self.plan_api_key)
-            and self.plan_primary_base_url
-            and (self.plan_primary_model or self.plan_model)
-        ) or bool(
-            (self.plan_secondary_api_key or self.opencode_zen_api_key)
-            and self.plan_secondary_base_url
-            and self.plan_secondary_model
-        ) or bool(
-            (self.plan_tertiary_api_key or self.cheap_api_key)
-            and self.plan_tertiary_base_url
-            and (self.plan_tertiary_model or self.cheap_model)
-        )
+        return bool(self.trenddao_api_key and self.trenddao_base_url and self.trenddao_text_model)
 
 
 @lru_cache

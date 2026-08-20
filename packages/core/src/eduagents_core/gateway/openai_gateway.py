@@ -250,8 +250,7 @@ class OpenAIGateway(
     def _is_visual_request(self, req: ChatRequest) -> bool:
         vision_models = {self._s.vision_model}
         if self._s.model_routing_enabled:
-            vision_models.add(self._s.opencode_vision_model)
-            vision_models.add(self._s.vision_fallback_model)
+            vision_models.add(self._s.trenddao_vision_model)
         if req.model_override and req.model_override in vision_models:
             return True
         return any(
