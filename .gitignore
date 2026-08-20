@@ -28,3 +28,6 @@ exports/
 # data / artifacts
 *.lock.tmp
 gui-test-screenshots/
+# Local browser test artifacts
+test-results/
+apps/web/test-results/
