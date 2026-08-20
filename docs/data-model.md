@@ -199,6 +199,20 @@ review 不从当前 card 猜测回填。两张事件表启用 FORCE RLS、用户
 
 表随知识库/知识点 FK 级联删除，并纳入用户数据导出（由本人资料生成，属可携带范围）。
 
+## 计划临时概念与正式知识点的分层
+
+`plan_concepts`（0034）保存计划任务 `kc_names` 里**匹配不到正式知识点**的自然语言概念，
+唯一键 `(plan_id, normalized_name)`，`ordinal` 记录它在计划里首次出现的顺序
+（`created_at` 在同一事务批量插入时相同，排不出教学顺序）。
+
+分层的理由：计划里的概念不一定是稳定知识点、可能与之后 enrich 出来的 KC 重复、
+其先修关系是模型猜测。因此这张表**刻意没有 kc_id 外键**，也不存先修边，且不出现在
+掌握度、BKT、证据、推荐、报告的任何路径上——那些一律只认 `knowledge_components`
+外键（静态守卫见 `tests/unit/test_plan_concepts.py`，运行时验证见集成测试）。
+
+`status` 为 `provisional | promoted | dismissed`。升级为正式 KC 只能经资料归并
+（`KcNormalizer` 的别名/余弦归并）或用户确认，当前波次不自动升级。表随计划 FK 级联删除。
+
 ## 计划、会话、画像和运营
 
 | 实体 | 语义 |

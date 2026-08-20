@@ -27,6 +27,7 @@ from ..models import (
     MasteryRecord,
     Plan,
     PlanAdjustment,
+    PlanConcept,
     PlanResource,
     Question,
 )
@@ -655,6 +656,18 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
     kb = await session.get(KnowledgeBase, plan.kb_id) if plan.kb_id else None
     locks = await _load_task_locks(session, plan)
     kc_dependency = await _load_kc_dependency(session, plan, locks)
+    # 0034: 计划里没有正式 KC 承接的临时概念。只出给界面做"这份计划打算覆盖什么"
+    # 的说明, 不参与掌握度/依赖图 —— 它们本来就没有 KC 外键 (见 plan_concepts)。
+    provisional_concepts = [
+        {"name": row.display_name, "status": row.status}
+        for row in (
+            await session.scalars(
+                select(PlanConcept)
+                .where(PlanConcept.plan_id == plan.id, PlanConcept.status == "provisional")
+                .order_by(PlanConcept.ordinal.asc(), PlanConcept.id.asc())
+            )
+        ).all()
+    ]
     structure = enrich_structure(plan.structure_json, resources, locks)
     schedule = plan_schedule_snapshot(
         plan.created_at.astimezone(CN_TZ).date(), plan.structure_json, today
@@ -671,6 +684,7 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
         "schedule": schedule,
         "progress": plan_progress(plan.structure_json),
         "kc_dependency": kc_dependency,
+        "provisional_concepts": provisional_concepts,
         "created_at": plan.created_at,
         "status": plan.status,
     }

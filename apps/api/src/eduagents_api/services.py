@@ -32,10 +32,12 @@ from .models import (
     MasteryRecord,
     MetacognitionPrediction,
     Plan,
+    PlanConcept,
     PlanResource,
     Question,
     Quiz,
 )
+from .plan_concepts import collect_plan_concepts
 
 log = get_logger("services")
 
@@ -805,6 +807,34 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
         session.add(plan)
         session.add_all(resource_objects)
         await session.flush()
+        # 0034: 任务里匹配不到正式 KC 的概念落成"计划临时概念"。
+        # 它们只用于计划展示与将来的归并候选, 绝不进入掌握度/证据路径 —— 否则
+        # 模型猜的概念会污染 BKT 与成长报告 (见 plan_concepts 模块注释)。
+        known_names: list[str] = []
+        if kb_id is not None:
+            known_names = list(
+                (
+                    await session.scalars(
+                        select(KnowledgeComponent.canonical_name).where(
+                            KnowledgeComponent.kb_id == kb_id,
+                            KnowledgeComponent.superseded_by_id.is_(None),
+                        )
+                    )
+                ).all()
+            )
+        provisional = collect_plan_concepts(structure, known_names)
+        if provisional:
+            session.add_all(
+                PlanConcept(
+                    tenant_id=ctx.tenant_id,
+                    plan_id=plan.id,
+                    display_name=item["display_name"],
+                    normalized_name=item["normalized_name"],
+                    ordinal=index,
+                )
+                for index, item in enumerate(provisional)
+            )
+            await session.flush()
         return {
             "plan_id": local_id,
             "plan": structure,

@@ -565,6 +565,42 @@ class FsrsReviewEvent(Base):
 FSRSReviewEvent = FsrsReviewEvent
 
 
+class PlanConcept(Base):
+    """计划里的临时概念（0034）—— **不是知识点**。
+
+    计划任务的 kc_names 里匹配不到正式 KC 的那些自然语言概念落在这里：可以用于
+    计划展示与将来的归并候选，但绝不进入掌握度 / BKT / 证据 / 推荐 / 报告路径
+    （那些只认 knowledge_components 外键）。因此本表刻意没有 kc_id 外键。
+
+    升级为正式 KC 只能经资料归并或用户确认（后续波次），v1 不自动升级、不存先修边
+    —— 模型猜的关系一旦画出来就会被当成真实课程结构。
+    """
+
+    __tablename__ = "plan_concepts"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "normalized_name", name="uq_plan_concepts_plan_name"),
+        CheckConstraint(
+            "status IN ('provisional', 'promoted', 'dismissed')",
+            name="ck_plan_concepts_status",
+        ),
+        CheckConstraint("ordinal >= 0", name="ck_plan_concepts_ordinal"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("plans.id", ondelete="CASCADE"), nullable=False
+    )
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: 计划里首次出现的顺序（created_at 在批量插入时相同，排不出教学顺序）
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="provisional", server_default="provisional"
+    )
+    created_at: Mapped[datetime] = _created_at()
+
+
 class KcExplanation(Base):
     """按知识点的结构化讲解 (0033)，绑定学生本人资料里的真实 chunk。
 

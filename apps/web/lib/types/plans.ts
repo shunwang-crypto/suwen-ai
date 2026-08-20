@@ -155,6 +155,11 @@ export interface PlanDetail {
   progress: PlanProgress;
   /** 只读的当前计划 KC 及递归先修闭包；不含掌握度数值。 */
   kc_dependency?: PlanKcDependency;
+  /**
+   * 计划里没有正式知识点承接的临时概念（0034）。只用于说明"这份计划打算覆盖什么"，
+   * 不参与掌握度与依赖图 —— 它们尚未经资料或人工确认，不是知识点。
+   */
+  provisional_concepts?: Array<{ name: string; status: string }>;
   created_at: string;
   status: "active" | "completed" | "archived";
 }

@@ -329,6 +329,29 @@ export function PlanDetailPanel({
           />
         ) : null}
 
+        {view?.provisional_concepts?.length ? (
+          <section
+            aria-label="计划里的临时概念"
+            className="mb-4 min-w-0 rounded-xl border border-dashed border-line-strong bg-surface-muted/40 p-3 sm:p-4"
+          >
+            <h3 className="text-body-sm font-semibold text-ink">计划里的临时概念</h3>
+            <p className="mt-1 text-caption text-ink-muted">
+              这些概念还没有资料里的知识点承接，所以不在上面的依赖图里，也不计入掌握度。
+              上传或关联相关资料后，它们才会归并成正式知识点。
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {view.provisional_concepts.map((item) => (
+                <li
+                  key={item.name}
+                  className="rounded-full border border-dashed border-line-strong bg-white px-3 py-1 text-caption text-ink-secondary"
+                >
+                  {item.name}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
         {detailError && (
           <div className="mb-3">
             <ErrorBanner
