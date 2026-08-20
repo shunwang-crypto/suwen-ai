@@ -14,11 +14,12 @@
  * - **失败就说暂不可用**：生成失败不展示任何伪造内容（stub 网关下必然如此）。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ErrorBanner } from "@/components/common";
 import { apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import { useApiResource } from "@/lib/use-api-resource";
 
 interface ExplanationBlock {
   type: "concept" | "worked_example" | "misconception" | "diagram" | string;
@@ -118,46 +119,38 @@ function DiagramBlock({ data }: { data: NonNullable<ExplanationBlock["data"]> })
 }
 
 export function KcExplanationPanel({ kbId, kcId }: { kbId: string; kcId: string }) {
-  const [data, setData] = useState<ExplanationResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
   const path = `/api/kb/${kbId}/kc/${kcId}/explanation`;
+  // 读走仓内统一的 useApiResource（自带 request-epoch 过期防护，迟到响应不写状态）；
+  // 生成（POST）的结果作为覆盖值，避免在 effect 里直接 setState。
+  const resource = useApiResource<ExplanationResponse>(path, {
+    errorMessage: "讲解暂不可用，请稍后重试",
+  });
+  const [generated, setGenerated] = useState<{ path: string; body: ExplanationResponse } | null>(
+    null,
+  );
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const body = await apiJson<ExplanationResponse>(path);
-        if (alive) setData(body);
-      } catch {
-        if (alive) setError("讲解暂不可用，请稍后重试");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [path]);
+  const data = generated?.path === path ? generated.body : resource.data;
+  const error = generateError ?? resource.error;
 
   const generate = useCallback(async () => {
     setGenerating(true);
-    setError(null);
+    setGenerateError(null);
     try {
       const body = await apiJson<ExplanationResponse>(path, { method: "POST" });
-      setData(body);
+      setGenerated({ path, body });
     } catch {
       // 生成失败不动已有内容：只提示暂不可用，绝不展示伪造讲解
-      setError("这次没能生成可用的讲解，暂不可用；已保留原有内容");
+      setGenerateError("这次没能生成可用的讲解，暂不可用；已保留原有内容");
     } finally {
       setGenerating(false);
     }
   }, [path]);
 
-  if (loading) return <p className="text-body-sm text-ink-muted">正在读取讲解…</p>;
+  if (resource.loading && !data) {
+    return <p className="text-body-sm text-ink-muted">正在读取讲解…</p>;
+  }
 
   const blocks = data?.blocks ?? [];
   const sources = data?.sources ?? [];
