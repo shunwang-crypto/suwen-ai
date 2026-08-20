@@ -28,8 +28,7 @@ export function recommendationStatusMessage(
   if (recommendation.status === "needs_upload") {
     return "请先上传一份正在学的资料";
   }
-  // 稳定码优先；reason 仅作过渡回退（后端未给码时）。
-  return reasonTextOf(recommendation, recommendation.reason);
+  return reasonTextOf(recommendation);
 }
 
 export function recommendationScopeRequest(scopeKbId: string): Record<string, string> {

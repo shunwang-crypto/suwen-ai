@@ -10,8 +10,6 @@ const base = {
   action: "quiz" as const,
   source: "cold_start" as const,
   title: "用 3 道题建立第一版画像",
-  // 过渡字段：仍在类型里，但 ready 态的文案应来自稳定码而不是这段散文
-  reason: "旧散文（不应被展示）",
   reason_code: "kb_ready_first_quiz",
   reason_params: {},
   question_count: 3,
@@ -22,22 +20,20 @@ const base = {
 };
 
 describe("practice recommendation UI states", () => {
-  it("renders the ready state from the stable reason code, not the legacy prose", () => {
+  it("renders the ready state from the stable reason code", () => {
     expect(recommendationStatusMessage({ ...base, status: "ready" })).toContain(
       "先从真实章节知识点各取一道题",
     );
-    expect(recommendationStatusMessage({ ...base, status: "ready" })).not.toContain("旧散文");
   });
 
-  it("falls back to the legacy reason only while the server has no code", () => {
+  it("uses the safe fallback when the server has no known code", () => {
     expect(
       recommendationStatusMessage({
         ...base,
         status: "ready",
         reason_code: "",
-        reason: "资料已经准备好",
       }),
-    ).toBe("资料已经准备好");
+    ).toBe("系统按你当前的学习路径推荐");
   });
 
   it("does not turn KC preparation into a generation error", () => {

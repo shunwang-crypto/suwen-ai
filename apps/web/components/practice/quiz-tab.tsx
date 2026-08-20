@@ -969,7 +969,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                       <li key={r.kc_name} className="text-caption leading-relaxed text-slate-600">
                         <span className="font-medium text-slate-800">{r.kc_name}</span>
                         <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">{r.zone}</span>
-                        <MathText text={reasonTextOf(r, r.reason)} />
+                        <MathText text={reasonTextOf(r)} />
                       </li>
                     ))}
                   </ul>
@@ -1047,7 +1047,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
                     <h2 className="text-[16px] font-semibold text-ink">{recommendation.title}</h2>
-                    <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-secondary">{recommendation.reason}</p>
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-secondary">{reasonTextOf(recommendation)}</p>
                   </div>
                   {recommendation.status === "ready" && recommendation.action === "quiz" && (
                     <button
@@ -1185,10 +1185,10 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                     ))}
                   </ul>
                   {/* 为什么练这些（P1-1）：后端逐 KC 分档理由，与实际难度分布同源 */}
-                  {(weak.weak_points as Parts.WeakPointPreview[]).some((wp) => wp.reason) && (
+                  {(weak.weak_points as Parts.WeakPointPreview[]).some((wp) => wp.reason_code) && (
                     <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
                       {(weak.weak_points as Parts.WeakPointPreview[])
-                        .filter((wp) => wp.reason)
+                        .filter((wp) => wp.reason_code)
                         .map((wp) => (
                           <li key={wp.kc_id} className="text-caption leading-relaxed text-slate-600">
                             <span className="font-medium text-slate-700">{wp.name}</span>
@@ -1197,7 +1197,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                                 {wp.zone}
                               </span>
                             )}
-                            <MathText text={reasonTextOf(wp, wp.reason ?? "")} />
+                            <MathText text={reasonTextOf(wp)} />
                           </li>
                         ))}
                     </ul>
@@ -1234,7 +1234,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                           <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">
                             {r.zone}
                           </span>
-                          <MathText text={reasonTextOf(r, r.reason)} />
+                          <MathText text={reasonTextOf(r)} />
                         </li>
                       ))}
                     </ul>

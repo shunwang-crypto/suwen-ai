@@ -65,8 +65,6 @@ export interface DifficultyReason {
   kc_name: string;
   zone: string;
   difficulty: string;
-  /** @deprecated 过渡字段：新代码读 reason_code / reason_params（lib/reason-text.ts）。 */
-  reason: string;
   reason_code?: string;
   reason_params?: Record<string, string | number>;
 }
@@ -75,7 +73,6 @@ export interface DifficultyReason {
 export type WeakPointPreview = WeakPointItem & {
   zone?: string;
   difficulty?: string;
-  /** @deprecated 过渡字段：新代码读 reason_code / reason_params（lib/reason-text.ts）。 */
   reason?: string;
   reason_code?: string;
   reason_params?: Record<string, string | number>;

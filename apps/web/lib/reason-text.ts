@@ -144,11 +144,11 @@ export function reasonText(code: string | undefined, params?: ReasonParams): str
 }
 
 /**
- * 从带码载荷取展示文案。过渡期允许传入旧散文做回退（`legacyReason`）：
- * 只在后端还没给码时用，新接口一律走码。
+ * 从带码载荷取展示文案。推荐理由没有稳定码时统一走安全兜底，
+ * 不再读取后端旧散文字段。
  */
-export function reasonTextOf(carrier: ReasonCarrier | null | undefined, legacyReason = ""): string {
+export function reasonTextOf(carrier: ReasonCarrier | null | undefined): string {
   const code = carrier?.reason_code;
   if (code && isKnownCode(code)) return reasonText(code, carrier?.reason_params);
-  return legacyReason || REASON_FALLBACK;
+  return REASON_FALLBACK;
 }

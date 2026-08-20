@@ -94,16 +94,16 @@ describe("推荐理由文案层", () => {
     }
   });
 
-  it("reasonTextOf: 有码用码，无码才回退旧散文", () => {
+  it("reasonTextOf: 有码用码，无码走安全兜底", () => {
     expect(
-      reasonTextOf({ reason_code: "review_due", reason_params: { count: 5 } }, "旧散文"),
+      reasonTextOf({ reason_code: "review_due", reason_params: { count: 5 } }),
     ).toContain("5 道错题");
-    expect(reasonTextOf({ reason_code: "" }, "旧散文")).toBe("旧散文");
+    expect(reasonTextOf({ reason_code: "" })).toBe(REASON_FALLBACK);
     expect(reasonTextOf(null)).toBe(REASON_FALLBACK);
-    expect(reasonTextOf(undefined, "")).toBe(REASON_FALLBACK);
+    expect(reasonTextOf(undefined)).toBe(REASON_FALLBACK);
   });
 
-  it("未知码时不静默采用旧散文之外的内容（过渡边界清晰）", () => {
-    expect(reasonTextOf({ reason_code: "future_code" }, "旧散文")).toBe("旧散文");
+  it("未知码不读取旧散文", () => {
+    expect(reasonTextOf({ reason_code: "future_code" })).toBe(REASON_FALLBACK);
   });
 });
