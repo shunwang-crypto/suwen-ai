@@ -13,14 +13,14 @@ from sqlalchemy import or_, select
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import ERROR_IMPORT_QUIZ_KIND, Question, Quiz
+from ..models import ERROR_IMPORT_QUIZ_KIND, Attempt, ErrorItem, Question, Quiz
 from ..plan_adjust import PlanTaskAttributionError, validate_plan_task_attribution
 from ..practice_recommendation import (
     PracticeAdjustmentUnavailable,
     _difficulty_mix_from_reasons,
 )
 from ..profile_summary import build_profile_context
-from ..services import quiz_kc_readiness, record_attempts
+from ..services import QUIZ_PLAN_MODE_STANDALONE, quiz_kc_readiness, record_attempts
 from .practice import PracticeRequest, load_recommendation
 from .threads import stream_graph_run
 
@@ -153,6 +153,11 @@ async def create_quiz(
     effective_kb_id = body.kb_id
     effective_plan_id = body.plan_id
     effective_task_id = body.task_id
+    evidence_policy = "mastery_eligible"
+    # Plan mode describes an actual attributed plan.  An ordinary quiz with
+    # no plan attribution is standalone even when no KB was selected; missing
+    # kb_id alone must never turn it into goal-only calibration.
+    plan_mode = "course_bound" if effective_kb_id is not None else QUIZ_PLAN_MODE_STANDALONE
     # Wave 1B barrier: a KB-backed cold-start Quiz must not enter the graph
     # while its usable KC set is still being built.  Personalized and ordinary
     # Quiz paths share this barrier; weak-point requests must not spend
@@ -262,7 +267,13 @@ async def create_quiz(
                     "recommendation": recommendation.to_dict(),
                 },
             )
-        if not recommendation.kb or not recommendation.target_kc_names:
+        goal_only_plan_task = (
+            recommendation.source == "plan_task"
+            and recommendation.plan_id is not None
+            and recommendation.task_id is not None
+            and recommendation.kb is None
+        )
+        if (not recommendation.kb and not goal_only_plan_task) or not recommendation.target_kc_names:
             return JSONResponse(
                 status_code=409,
                 content={
@@ -271,7 +282,7 @@ async def create_quiz(
                     "recommendation": recommendation.to_dict(),
                 },
             )
-        effective_kb_id = uuid.UUID(recommendation.kb["id"])
+        effective_kb_id = uuid.UUID(recommendation.kb["id"]) if recommendation.kb else None
         kc_names = list(recommendation.target_kc_names)
         topic = topic or _WEAK_TOPIC
         quiz_mode = {
@@ -314,7 +325,7 @@ async def create_quiz(
     if effective_plan_id is not None and effective_task_id is not None:
         async with tenant_session(ctx.tenant_id) as session:
             try:
-                await validate_plan_task_attribution(
+                attribution = await validate_plan_task_attribution(
                     session,
                     tenant_id=ctx.tenant_id,
                     user_id=ctx.user_id,
@@ -325,20 +336,29 @@ async def create_quiz(
             except PlanTaskAttributionError as exc:
                 status = 404 if exc.code == "PLAN_TASK_NOT_FOUND" else 409
                 raise HTTPException(status_code=status, detail=exc.code) from None
+        evidence_policy = str(attribution["evidence_policy"])
+        plan_mode = str(attribution["plan_mode"])
+        authoritative_kb_id = attribution.get("kb_id")
+        if evidence_policy == "calibration_only":
+            effective_kb_id = None
+            difficulty_reasons = []
+        elif authoritative_kb_id is None or str(effective_kb_id) != authoritative_kb_id:
+            raise HTTPException(status_code=409, detail="PLAN_KB_MISMATCH")
     # 画像注入 (P1-2): 摘要已按 P2-7 脱敏 (定性词, 无题干原文), 供 generate 调整
     # 干扰项设计; 读画像失败一律降级为"无画像"继续出题, 不拖垮主链路
     profile_summary = ""
-    try:
-        profile = await build_profile_context(
-            ctx.tenant_id,
-            ctx.user_id,
-            [str(effective_kb_id)] if effective_kb_id else [],
-            redis=getattr(request.app.state, "redis", None),
-            role="quiz",
-        )
-        profile_summary = profile.summary
-    except Exception:  # noqa: BLE001
-        log.exception("quiz_profile_summary_failed")
+    if evidence_policy == "mastery_eligible":
+        try:
+            profile = await build_profile_context(
+                ctx.tenant_id,
+                ctx.user_id,
+                [str(effective_kb_id)] if effective_kb_id else [],
+                redis=getattr(request.app.state, "redis", None),
+                role="quiz",
+            )
+            profile_summary = profile.summary
+        except Exception:  # noqa: BLE001
+            log.exception("quiz_profile_summary_failed")
     local_id = str(uuid.uuid4())
     thread_id = runtime.thread_id("quiz", str(ctx.user_id), local_id)
     payload = {
@@ -347,6 +367,8 @@ async def create_quiz(
         "request_id": getattr(request.state, "request_id", ""),
         "thread_id": thread_id,
         "confirmation_mode": body.confirmation_mode,
+        "evidence_policy": evidence_policy,
+        "plan_mode": plan_mode,
         "kb_id": str(effective_kb_id) if effective_kb_id else "",
         "topic": topic,
         "num_questions": effective_count if body.from_weak_points else body.num_questions,
@@ -379,10 +401,98 @@ async def list_quizzes(ctx: AuthContext = Depends(api_rate_limited)):
                 .order_by(Quiz.created_at.desc())
             )
         ).all()
-        return [
-            {"id": str(r.id), "title": r.title, "status": r.status, "created_at": r.created_at}
-            for r in rows
-        ]
+        if not rows:
+            return []
+        quiz_ids = [row.id for row in rows]
+        questions = (
+            await session.scalars(select(Question).where(Question.quiz_id.in_(quiz_ids)))
+        ).all()
+        question_by_quiz: dict[uuid.UUID, list[Question]] = {}
+        for question in questions:
+            if question.quiz_id is None:
+                continue
+            question_by_quiz.setdefault(question.quiz_id, []).append(question)
+        attempt_rows = (
+            await session.execute(
+                select(Question.quiz_id, Attempt.is_correct, Attempt.at)
+                .join(Attempt, Attempt.question_id == Question.id)
+                .where(Question.quiz_id.in_(quiz_ids), Attempt.user_id == ctx.user_id)
+            )
+        ).all()
+        attempts_by_quiz: dict[uuid.UUID, list[tuple[bool | None, object]]] = {}
+        for quiz_id, is_correct, at in attempt_rows:
+            if quiz_id is not None:
+                attempts_by_quiz.setdefault(quiz_id, []).append((is_correct, at))
+        error_rows = (
+            await session.execute(
+                select(Question.quiz_id, ErrorItem.question_id)
+                .join(ErrorItem, ErrorItem.question_id == Question.id)
+                .where(
+                    Question.quiz_id.in_(quiz_ids),
+                    ErrorItem.user_id == ctx.user_id,
+                    ErrorItem.verification_status == "verified",
+                )
+            )
+        ).all()
+        errors_by_quiz: dict[uuid.UUID, set[uuid.UUID]] = {}
+        for quiz_id, question_id in error_rows:
+            if quiz_id is not None:
+                errors_by_quiz.setdefault(quiz_id, set()).add(question_id)
+        result = []
+        for row in rows:
+            quiz_questions = question_by_quiz.get(row.id, [])
+            attempts = attempts_by_quiz.get(row.id, [])
+            valid_attempts = [item for item in attempts if item[0] is not None]
+            score = (
+                round(sum(1 for item in valid_attempts if item[0]) / len(valid_attempts), 4)
+                if valid_attempts
+                else None
+            )
+            kc_ids = {
+                str(kc_id)
+                for question in quiz_questions
+                for kc_id in (question.kc_ids or [])
+                if kc_id
+            }
+            blueprint = row.blueprint_json or {}
+            evidence_policy = blueprint.get("_evidence_policy", "mastery_eligible")
+            raw_plan_mode = blueprint.get("_plan_mode")
+            attribution = blueprint.get("_plan_task_attribution")
+            has_plan_attribution = bool(
+                isinstance(attribution, dict)
+                and attribution.get("plan_id")
+                and attribution.get("task_id")
+            )
+            plan_mode = (
+                raw_plan_mode
+                if isinstance(raw_plan_mode, str)
+                and raw_plan_mode in {"course_bound", "goal_only", QUIZ_PLAN_MODE_STANDALONE}
+                else (
+                    "goal_only"
+                    if has_plan_attribution and evidence_policy == "calibration_only"
+                    else ("course_bound" if row.kb_id else QUIZ_PLAN_MODE_STANDALONE)
+                )
+            )
+            result.append(
+                {
+                    "id": str(row.id),
+                    "title": row.title,
+                    "status": row.status,
+                    "created_at": row.created_at,
+                    "kb_id": str(row.kb_id) if row.kb_id else None,
+                    "question_count": len(quiz_questions),
+                    "attempt_count": len(valid_attempts),
+                    "score": score,
+                    "error_count": len(errors_by_quiz.get(row.id, set())),
+                    "error_question_ids": [
+                        str(question_id) for question_id in errors_by_quiz.get(row.id, set())
+                    ],
+                    "kc_count": len(kc_ids),
+                    "evidence_policy": evidence_policy,
+                    "plan_mode": plan_mode,
+                }
+            )
+        return result
 
 
 @router.get("/{quiz_id}")

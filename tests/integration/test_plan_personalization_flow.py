@@ -1,8 +1,8 @@
 """计划个性化 (P1-3) 与 tutor 画像注入 (P1-4) 端到端集成验收。
 
-① POST /api/plans: 路由层预查 mastery_records / kc_edges 注入图 —
-   plan_diagnose 的 LLM prompt 不含有真实记录的 KC (只兜底无记录主题),
-   plan_draft prompt 的 DIAGNOSIS 携带真实 BKT 值、KC_ORDER 为先修拓扑序;
+① POST /api/plans: 路由层只从所选 KB 预查有效 mastery evidence / kc_edges 注入图 —
+   未知主题进入基线练习，不调用 LLM 猜掌握度；plan_draft 的 DIAGNOSIS
+   只携带证据状态与定性档，KC_ORDER 为先修拓扑序;
 ② POST /api/tutor: respond 的 system prompt 实收脱敏画像段, 开场轮题目命中
    薄弱 KC 时主动点明关联, 且 F4-A1 结构性禁答令仍压轴不受画像影响;
 ③ 无画像用户: tutor prompt 不含画像段, 占位符不残留。
@@ -165,14 +165,14 @@ async def _sse(client, method, url, headers, body) -> dict[str, list]:
 
 async def test_plan_create_uses_real_mastery_and_dag_order(client):
     uid, headers = await _register(client, "plan-pers")
-    await _seed_mastery_with_dag(uid)
+    seeded = await _seed_mastery_with_dag(uid)
 
     app = client._transport.app
     runtime = app.state.graphs
     assert runtime is not None, "集成环境应有 GraphRuntime"
     fake = FakeGateway(
         {
-            # 一个主题有真实记录 (导数定义), 一个无记录 (级数) -> LLM 只该摸底后者
+            # 一个主题有真实记录 (导数定义)，一个无记录 (级数)。
             "plan_parse_goal": [
                 {
                     "subject": "高等数学",
@@ -193,7 +193,6 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
                     ],
                 }
             ],
-            "plan_diagnose": [{"diagnosis": {"级数": 0.3}}],
             "plan_draft": [
                 {
                     "stages": [
@@ -239,6 +238,8 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             headers,
             {
                 "goal": "微积分薄弱点",
+                "plan_mode": "course_bound",
+                "kb_id": seeded["kb_id"],
                 "current_level": "会基本代数，导数定义不熟",
                 "target_outcome": "能独立完成导数与级数基础题",
                 "success_criteria": "10 题中至少正确 8 题",
@@ -258,17 +259,14 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     assert goal_analysis["outcomes"][0] == "能独立完成导数与级数基础题"
     assert goal_analysis["success_criteria"][0] == "10 题中至少正确 8 题"
 
-    # G1: LLM 摸底只对无记录主题兜底 — prompt 里没有任何有真实记录的 KC
-    diag_prompts = fake.prompts("plan_diagnose")
-    assert len(diag_prompts) == 1
-    pending_topics = diag_prompts[0].split("<主题列表>", 1)[1].split("</主题列表>", 1)[0]
-    assert "级数" in pending_topics
-    for known in ("导数定义", "极值判定", "泰勒公式"):
-        assert known not in pending_topics, f"有真实记录的 {known} 不该再让 LLM 猜"
+    # G1: diagnose 已改为确定性证据边界，不再调用模型估算未知主题。
+    assert fake.prompts("plan_diagnose") == []
 
     # 真实 BKT 进 draft 的 DIAGNOSIS, 但只以定性档出境 (P2-7 脱敏: 精确概率不发第三方 LLM)
     draft_prompt = fake.prompts("plan_draft")[0]
-    assert "导数定义: 较弱" in draft_prompt and "泰勒公式: 已掌握" in draft_prompt
+    assert "导数定义: 较弱（真实作答证据充分）" in draft_prompt
+    assert "泰勒公式: 已掌握（真实作答证据充分）" in draft_prompt
+    assert "级数: 尚未验证，先安排基线练习" in draft_prompt
     for decimal in ("0.24", "0.31", "0.92"):
         assert decimal not in draft_prompt, "精确掌握度小数不得出境第三方 LLM"
     assert "级数" in draft_prompt

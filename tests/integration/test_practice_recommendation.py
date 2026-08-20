@@ -107,6 +107,8 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
             user_id=user_id,
             kb_id=uuid.UUID(seeded["kb_id"]),
             goal="按章节完成计划",
+            plan_mode="course_bound",
+            grounding_status="kb_grounded",
             structure_json={
                 "stages": [{
                     "name": "基础",
@@ -246,6 +248,8 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
             user_id=user_id,
             kb_id=uuid.UUID(seeded["kb_id"]),
             goal="旧计划",
+            plan_mode="course_bound",
+            grounding_status="kb_grounded",
             status="archived",
             created_at=now,
             structure_json={
@@ -259,6 +263,8 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
             user_id=user_id,
             kb_id=uuid.UUID(seeded["kb_id"]),
             goal="新计划",
+            plan_mode="course_bound",
+            grounding_status="kb_grounded",
             status="active",
             created_at=now + timedelta(seconds=1),
             structure_json={
@@ -429,6 +435,8 @@ async def test_plan_task_switch_kc_overrides_plan_default_and_changes_target(cli
             user_id=user_id,
             kb_id=__import__("uuid").UUID(seeded["kb_id"]),
             goal="计划练习",
+            plan_mode="course_bound",
+            grounding_status="kb_grounded",
             structure_json={
                 "stages": [{"name": "基础", "days": [{"day": 1, "tasks": [{
                     "task_id": task_id, "title": "计划 KC 一",
@@ -484,6 +492,8 @@ async def test_plan_task_switch_kb_changes_ready_kb(client):
             user_id=user_id,
             kb_id=__import__("uuid").UUID(first["kb_id"]),
             goal="计划练习",
+            plan_mode="course_bound",
+            grounding_status="kb_grounded",
             structure_json={
                 "stages": [{"name": "基础", "days": [{"day": 1, "tasks": [{
                     "task_id": task_id, "title": "计划科目一",

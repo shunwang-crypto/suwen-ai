@@ -142,4 +142,24 @@ export interface KbOut {
   org_id: string | null;
   org_name: string | null;
   writable: boolean;
+  summary: {
+    source_total: number;
+    source_ready: number;
+    source_processing: number;
+    source_failed: number;
+    verified_questions: number;
+    pending_questions: number;
+    plan_id: string | null;
+    plan_status: "active" | "completed" | "archived" | null;
+    plan_done_tasks: number;
+    plan_total_tasks: number;
+    plan_progress_ratio: number;
+    last_activity_at: string | null;
+    next_action:
+      | "upload_source"
+      | "wait_for_sources"
+      | "retry_source"
+      | "continue_plan"
+      | "create_plan";
+  };
 }

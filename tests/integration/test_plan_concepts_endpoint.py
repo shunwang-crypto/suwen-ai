@@ -77,6 +77,8 @@ async def _seed_plan_with_concepts(
             goal="两周入门算法",
             budget_hours=1.0,
             kb_id=uuid.UUID(kb_id) if kb_id else None,
+            plan_mode="course_bound" if kb_id else "goal_only",
+            grounding_status="kb_grounded" if kb_id else "unreferenced",
             status="active",
             structure_json=structure,
         )

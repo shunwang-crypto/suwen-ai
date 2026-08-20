@@ -94,6 +94,7 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
             }
         ],
         "budget_hours_per_day": 1.0,
+        "plan_mode": "course_bound",
         "kb_id": str(kb_id),
         "resources": [
             {
@@ -103,7 +104,9 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
                 "doc_id": str(doc_id),
                 "chunk_id": str(chunk_id),
             },
-            {"type": "web", "title": "危险地址", "url": "javascript:alert(1)"},
+            # Invalid source types are ignored; a valid web source is covered
+            # by the explicit course-bound rejection contract below.
+            {"type": "unknown", "title": "危险地址", "url": "javascript:alert(1)"},
             {
                 "type": "kb_chunk",
                 "title": "伪造分块",
@@ -268,6 +271,8 @@ async def test_legacy_plan_detail_does_not_guess_resource_ref(client):
             user_id=user_id,
             goal="历史计划",
             budget_hours=1.0,
+            plan_mode="goal_only",
+            grounding_status="unreferenced",
             structure_json={
                 "stages": [
                     {
@@ -286,3 +291,103 @@ async def test_legacy_plan_detail_does_not_guess_resource_ref(client):
     assert task["resource_ref"] == 0
     assert task.get("resource_id") is None
     assert task["resource"] is None
+
+
+async def test_course_bound_plan_rejects_web_resource_without_persisting(client):
+    """A course plan cannot be widened by an edited/checkpoint web source."""
+    from eduagents_api.db import tenant_session
+    from eduagents_api.deps import AuthContext
+    from eduagents_api.models import KnowledgeBase, Plan, PlanResource
+    from eduagents_api.services import finalize_plan
+    from fastapi import HTTPException
+
+    user_id, _headers = await _register(client, "course-bound-web-guard")
+    async with tenant_session(user_id) as session:
+        kb = KnowledgeBase(tenant_id=user_id, name="课程资料", subject="math")
+        session.add(kb)
+        await session.flush()
+        kb_id = kb.id
+
+    plan_id = uuid.uuid4()
+    ctx = AuthContext(user_id=user_id, tenant_id=user_id, role="student", jti="test")
+    state = {
+        "goal": "掌握极限",
+        "plan_mode": "course_bound",
+        "kb_id": str(kb_id),
+        "budget_hours_per_day": 1.0,
+        "resources": [
+            {
+                "type": "web",
+                "title": "外部教程",
+                "url": "https://example.com/limits",
+            }
+        ],
+        "plan": {"stages": []},
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await finalize_plan(ctx, str(plan_id), state)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "COURSE_BOUND_WEB_RESOURCE_FORBIDDEN"
+
+    async with tenant_session(user_id) as session:
+        assert await session.get(Plan, plan_id) is None
+        assert await session.scalar(
+            select(func.count()).select_from(PlanResource).where(PlanResource.plan_id == plan_id)
+        ) == 0
+
+
+async def test_goal_only_plan_accepts_safe_web_resource(client):
+    from eduagents_api.db import tenant_session
+    from eduagents_api.deps import AuthContext
+    from eduagents_api.models import Plan, PlanResource
+    from eduagents_api.services import finalize_plan
+
+    user_id, _headers = await _register(client, "goal-only-web")
+    plan_id = uuid.uuid4()
+    ctx = AuthContext(user_id=user_id, tenant_id=user_id, role="student", jti="test")
+    state = {
+        "goal": "无资料学习极限",
+        "plan_mode": "goal_only",
+        "kb_id": "",
+        "budget_hours_per_day": 1.0,
+        "resources": [
+            {
+                "type": "web",
+                "title": "公开教程",
+                "url": "https://example.com/limits",
+            }
+        ],
+        "plan": {
+            "stages": [
+                {
+                    "name": "起步",
+                    "days": [
+                        {
+                            "day": 1,
+                            "tasks": [
+                                {
+                                    "title": "阅读公开教程",
+                                    "minutes": 60,
+                                    "action_type": "read",
+                                    "kc_names": ["极限"],
+                                    "resource_ref": 0,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    saved = await finalize_plan(ctx, str(plan_id), state)
+    assert saved["grounding_status"] == "web_assisted"
+    assert len(saved["resources"]) == 1
+    assert saved["resources"][0]["source_type"] == "web"
+
+    async with tenant_session(user_id) as session:
+        plan = await session.get(Plan, plan_id)
+        assert plan is not None and plan.plan_mode == "goal_only"
+        resources = (
+            await session.scalars(select(PlanResource).where(PlanResource.plan_id == plan_id))
+        ).all()
+        assert len(resources) == 1 and resources[0].source_type == "web"

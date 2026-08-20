@@ -21,11 +21,15 @@ from ..models import (
     KcEdge,
     KnowledgeBase,
     KnowledgeComponent,
+    LearningResource,
     MasteryLog,
     MasteryRecord,
     Org,
     PendingCleanup,
+    Plan,
+    ResourceQuestion,
 )
+from ..plan_adjust import plan_progress
 from ..schemas import (
     ChunkContextItem,
     ChunkContextOut,
@@ -33,6 +37,7 @@ from ..schemas import (
     DocumentOut,
     KbCreate,
     KbOut,
+    KbSummary,
     RetrieveDebugIn,
     UrlImportIn,
 )
@@ -48,6 +53,21 @@ _MAGIC = {
     ".docx": (b"PK\x03\x04",),
     ".pptx": (b"PK\x03\x04",),
 }
+_READY_DOCUMENT_STATUSES = frozenset({"ready", "partial_ready", "enriched"})
+
+
+def _course_next_action(
+    *, source_total: int, source_ready: int, source_processing: int, source_failed: int, plan_status: str | None
+) -> str:
+    if source_total == 0:
+        return "upload_source"
+    if source_ready == 0 and source_processing > 0:
+        return "wait_for_sources"
+    if source_ready == 0 and source_failed == source_total:
+        return "retry_source"
+    if plan_status == "active":
+        return "continue_plan"
+    return "create_plan"
 
 
 def _suffix(filename: str) -> str:
@@ -133,6 +153,109 @@ async def list_kbs(ctx: AuthContext = Depends(api_rate_limited)):
         if org_uuids:
             orgs = (await session.scalars(select(Org).where(Org.id.in_(org_uuids)))).all()
             org_names = {o.id: o.name for o in orgs}
+        kb_ids = [row.id for row in rows]
+        document_counts: dict[uuid.UUID, dict[str, int | datetime | None]] = {}
+        question_counts: dict[uuid.UUID, dict[str, int]] = {}
+        latest_plans: dict[uuid.UUID, Plan] = {}
+        if kb_ids:
+            for kb_id, status, count, latest_at in (
+                await session.execute(
+                    select(
+                        Document.kb_id,
+                        Document.status,
+                        func.count(Document.id),
+                        func.max(Document.updated_at),
+                    )
+                    .where(Document.kb_id.in_(kb_ids))
+                    .group_by(Document.kb_id, Document.status)
+                )
+            ).all():
+                bucket = document_counts.setdefault(
+                    kb_id,
+                    {"total": 0, "ready": 0, "processing": 0, "failed": 0, "latest_at": None},
+                )
+                bucket["total"] = int(bucket["total"] or 0) + int(count)
+                if status in _READY_DOCUMENT_STATUSES:
+                    bucket["ready"] = int(bucket["ready"] or 0) + int(count)
+                elif status == "failed":
+                    bucket["failed"] = int(bucket["failed"] or 0) + int(count)
+                else:
+                    bucket["processing"] = int(bucket["processing"] or 0) + int(count)
+                current_latest = bucket["latest_at"]
+                if latest_at is not None and (
+                    current_latest is None or latest_at > current_latest
+                ):
+                    bucket["latest_at"] = latest_at
+            for kb_id, verification_status, count in (
+                await session.execute(
+                    select(
+                        LearningResource.linked_kb_id,
+                        ResourceQuestion.verification_status,
+                        func.count(ResourceQuestion.id),
+                    )
+                    .join(ResourceQuestion, ResourceQuestion.resource_id == LearningResource.id)
+                    .where(
+                        LearningResource.owner_id == ctx.user_id,
+                        LearningResource.linked_kb_id.in_(kb_ids),
+                    )
+                    .group_by(
+                        LearningResource.linked_kb_id,
+                        ResourceQuestion.verification_status,
+                    )
+                )
+            ).all():
+                if kb_id is None:
+                    continue
+                bucket = question_counts.setdefault(kb_id, {"verified": 0, "pending": 0})
+                key = "verified" if verification_status == "verified" else "pending"
+                bucket[key] += int(count)
+            plan_rows = (
+                await session.scalars(
+                    select(Plan)
+                    .where(Plan.user_id == ctx.user_id, Plan.kb_id.in_(kb_ids))
+                    .order_by(Plan.created_at.desc())
+                )
+            ).all()
+            for plan in plan_rows:
+                if plan.kb_id is not None:
+                    latest_plans.setdefault(plan.kb_id, plan)
+
+        def summary_for(kb_id: uuid.UUID) -> KbSummary:
+            documents = document_counts.get(
+                kb_id,
+                {"total": 0, "ready": 0, "processing": 0, "failed": 0, "latest_at": None},
+            )
+            questions = question_counts.get(kb_id, {"verified": 0, "pending": 0})
+            plan = latest_plans.get(kb_id)
+            progress = plan_progress(plan.structure_json) if plan is not None else {"done": 0, "total": 0, "ratio": 0.0}
+            latest_at = documents["latest_at"]
+            if plan is not None and (latest_at is None or plan.created_at > latest_at):
+                latest_at = plan.created_at
+            total = int(documents["total"] or 0)
+            ready = int(documents["ready"] or 0)
+            processing = int(documents["processing"] or 0)
+            failed = int(documents["failed"] or 0)
+            return KbSummary(
+                source_total=total,
+                source_ready=ready,
+                source_processing=processing,
+                source_failed=failed,
+                verified_questions=questions["verified"],
+                pending_questions=questions["pending"],
+                plan_id=plan.id if plan is not None else None,
+                plan_status=plan.status if plan is not None else None,
+                plan_done_tasks=int(progress["done"]),
+                plan_total_tasks=int(progress["total"]),
+                plan_progress_ratio=float(progress["ratio"]),
+                last_activity_at=latest_at,
+                next_action=_course_next_action(
+                    source_total=total,
+                    source_ready=ready,
+                    source_processing=processing,
+                    source_failed=failed,
+                    plan_status=plan.status if plan is not None else None,
+                ),
+            )
         return [
             KbOut(
                 id=r.id, name=r.name, subject=r.subject,
@@ -142,6 +265,7 @@ async def list_kbs(ctx: AuthContext = Depends(api_rate_limited)):
                 org_name=org_names.get(r.tenant_id) if r.owner_type == "org" else None,
                 writable=r.owner_type == "user"
                 or str(r.tenant_id) in ctx.admin_org_ids,
+                summary=summary_for(r.id),
             )
             for r in rows
         ]

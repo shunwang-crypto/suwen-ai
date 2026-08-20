@@ -129,6 +129,8 @@ async def test_tutor_context_is_user_scoped_and_resolves_safe_identifiers(client
             user_id=owner_id,
             goal="掌握极限基础",
             budget_hours=1.5,
+            plan_mode="goal_only",
+            grounding_status="unreferenced",
             structure_json=structure,
         )
         quiz = Quiz(
@@ -242,6 +244,9 @@ async def test_plan_alive_and_error_book(client):
             user_id=uid,
             goal="两周掌握微积分基础",
             budget_hours=1.5,
+            kb_id=kb.id,
+            plan_mode="course_bound",
+            grounding_status="unreferenced",
             structure_json=_structure(),
         )
         session.add(plan)

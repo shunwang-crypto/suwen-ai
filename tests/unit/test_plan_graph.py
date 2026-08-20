@@ -67,7 +67,6 @@ async def fake_web_search(query: str) -> list[dict]:
 
 
 PARSE = {"subject": "高等数学", "key_topics": ["极限", "导数"], "level_hint": "零基础"}
-DIAGNOSE = {"diagnosis": {"极限": 0.3, "导数": 0.3}}
 GOOD_DRAFT = {
     "stages": [
         {
@@ -92,6 +91,7 @@ def base_input(**overrides) -> dict:
         "tenant_id": "t-1",
         "user_id": "u-1",
         "request_id": "r-1",
+        "plan_mode": "course_bound",
         "kb_id": "kb-1",
         "goal": "两周入门高等数学",
         "budget_hours_per_day": 1.0,
@@ -102,7 +102,7 @@ def base_input(**overrides) -> dict:
 
 
 def make_script(draft=GOOD_DRAFT) -> dict:
-    return {"plan_parse_goal": [PARSE], "plan_diagnose": [DIAGNOSE], "plan_draft": [draft]}
+    return {"plan_parse_goal": [PARSE], "plan_draft": [draft]}
 
 
 async def run_to_interrupt(script, *, retrieval=None, web=None, input_overrides=None):
@@ -137,17 +137,44 @@ async def test_flow_hits_interrupt_then_approve_confirms():
     assert payload["kind"] == "plan_confirm"
     assert payload["plan"]["stages"]
     assert state.get("plan_confirmed") is not True
-    # kb + web 资源都收集到了 (kb: 2 topic x top3; web: 每 topic 1 条)
+    # Course-bound plans are closed-world: only the selected KB may supply
+    # resources, even when a web search dependency is available.
     kb_items = [r for r in state["resources"] if r["type"] == "kb"]
     web_items = [r for r in state["resources"] if r["type"] == "web"]
     assert len(kb_items) == 6 and all(r["chunk_id"] and r["doc_id"] for r in kb_items)
-    assert len(web_items) == 2 and all(r["url"].startswith("https://") for r in web_items)
+    assert web_items == []
+    assert any(e.get("event") == "web_skipped_course_bound" for e in state["trace"])
     assert retrieval.queries == ["极限", "导数"]
 
     final = await graph.ainvoke(Command(resume={"approved": True}), config)
     assert final["plan_confirmed"] is True
     assert final["plan"]["stages"]
     assert "__interrupt__" not in final
+
+
+async def test_goal_only_plan_may_use_web_search_when_available():
+    gateway, _, _, state = await run_to_interrupt(
+        make_script(),
+        web=fake_web_search,
+        input_overrides={"kb_id": "", "plan_mode": "goal_only"},
+    )
+    web_items = [r for r in state["resources"] if r["type"] == "web"]
+    assert len(web_items) == 2
+    assert all(r["url"].startswith("https://") for r in web_items)
+    assert any(req.feature == "plan_draft" for req in gateway.requests)
+
+
+async def test_goal_only_plan_ignores_stale_kb_scope():
+    retrieval = FakeRetrieval()
+    _, _, _, state = await run_to_interrupt(
+        make_script(),
+        retrieval=retrieval,
+        web=fake_web_search,
+        input_overrides={"plan_mode": "goal_only", "kb_id": "stale-kb"},
+    )
+    assert retrieval.queries == []
+    assert all(resource["type"] == "web" for resource in state["resources"])
+    assert any(e.get("event") == "kb_skipped_goal_only" for e in state["trace"])
 
 
 async def test_reject_leaves_plan_unconfirmed():
@@ -431,10 +458,14 @@ async def test_no_retrieval_no_web_plan_still_generated_resources_pending():
     assert any(e.get("event") == "resources_pending" for e in state["trace"])
 
 
-async def test_external_diagnosis_skips_diagnose_llm_call():
+async def test_evidence_diagnosis_skips_diagnose_llm_call():
+    diagnosis = {
+        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
+        "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
+    }
     gateway, _, _, state = await run_to_interrupt(
-        make_script(), input_overrides={"diagnosis": {"极限": 0.6, "导数": 0.2}}
+        make_script(), input_overrides={"diagnosis": diagnosis}
     )
-    assert state["diagnosis"] == {"极限": 0.6, "导数": 0.2}
+    assert state["diagnosis"] == diagnosis
     assert all(req.feature != "plan_diagnose" for req in gateway.requests)
-    assert any(e.get("event") == "external_diagnosis_used" for e in state["trace"])
+    assert any(e.get("event") == "evidence_state_used" for e in state["trace"])

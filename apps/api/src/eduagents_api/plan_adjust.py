@@ -19,8 +19,13 @@ from typing import Any
 
 from eduagents_core.kc.types import normalize_kc_name
 from eduagents_core.logging import get_logger
-from eduagents_core.mastery.thresholds import REINFORCE_THRESHOLD, evidence_state, zone_label
-from sqlalchemy import select
+from eduagents_core.mastery.thresholds import (
+    REINFORCE_THRESHOLD,
+    VALID_MASTERY_EVIDENCE_TYPES,
+    evidence_state,
+    zone_label,
+)
+from sqlalchemy import func, select
 
 from .models import KnowledgeComponent, MasteryLog, MasteryRecord, Plan, PlanAdjustment
 
@@ -297,7 +302,7 @@ async def validate_plan_task_attribution(
     plan_id: uuid.UUID,
     task_id: str,
     source_type: str,
-) -> None:
+) -> dict[str, Any]:
     """Validate an attribution without mutating the plan.
 
     Both tenant and user ownership are checked even when RLS is enabled.  A
@@ -319,6 +324,17 @@ async def validate_plan_task_attribution(
     if task is None:
         raise PlanTaskAttributionError("PLAN_TASK_NOT_FOUND")
     _validate_completion_source(task, source_type)
+    if plan.plan_mode == "course_bound" and plan.kb_id is None:
+        raise PlanTaskAttributionError("PLAN_KB_UNAVAILABLE")
+    return {
+        "plan_id": str(plan.id),
+        "task_id": task_id,
+        "plan_mode": plan.plan_mode,
+        "kb_id": str(plan.kb_id) if plan.kb_id else None,
+        "evidence_policy": (
+            "calibration_only" if plan.plan_mode == "goal_only" else "mastery_eligible"
+        ),
+    }
 
 
 async def complete_plan_task(
@@ -434,27 +450,30 @@ def _day_number(structure: dict, stage_idx: int, day_idx: int) -> int:
     return int(value) if isinstance(value, int) else day_idx + 1
 
 
-async def _weak_kcs(session, user_id: uuid.UUID) -> list[tuple[str, str, float]]:
+async def _weak_kcs(
+    session, user_id: uuid.UUID, kb_id: uuid.UUID
+) -> list[tuple[str, str, float]]:
     """Only observed, below-threshold KC rows, ordered from weak to strong."""
-    from sqlalchemy import func
-
     rows = (
         await session.execute(
             select(
                 MasteryRecord.kc_id,
                 KnowledgeComponent.canonical_name,
                 MasteryRecord.p_mastery,
-                func.count(MasteryLog.id),
+                func.count(func.distinct(MasteryLog.evidence_id)),
             )
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
             .join(
                 MasteryLog,
                 (MasteryLog.user_id == MasteryRecord.user_id)
-                & (MasteryLog.kc_id == MasteryRecord.kc_id),
+                & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES)
+                & MasteryLog.evidence_id.is_not(None),
             )
             .where(
                 MasteryRecord.user_id == user_id,
                 MasteryRecord.p_mastery < REINFORCE_THRESHOLD,
+                KnowledgeComponent.kb_id == kb_id,
             )
             .group_by(MasteryRecord.kc_id, KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
             .order_by(MasteryRecord.p_mastery.asc())
@@ -496,8 +515,14 @@ async def adjust_plan(
 
     调用方负责事务 (session 由外部 tenant_session 提供)。
     """
+    if plan.plan_mode != "course_bound" or plan.kb_id is None:
+        return {
+            "inserted": [],
+            "reason": reason_prefix + "目标计划处于校准阶段，不读取其他课程的掌握度自动补强，计划无需调整。",
+            "adjustment_id": None,
+        }
     structure = plan.structure_json or {}
-    weak = await _weak_kcs(session, user_id)
+    weak = await _weak_kcs(session, user_id, plan.kb_id)
     covered = _existing_kc_keys(structure)
     candidates = [
         (kc_id, name, p) for kc_id, name, p in weak if normalize_kc_name(name) not in covered
@@ -588,7 +613,14 @@ async def adjust_plan(
     return {"inserted": inserted, "reason": reason, "adjustment_id": str(adjustment.id)}
 
 
-async def adjust_on_low_score(ctx, accuracy: float) -> dict | None:
+async def adjust_on_low_score(
+    ctx,
+    accuracy: float,
+    *,
+    quiz_kb_id: uuid.UUID | None,
+    attributed_plan_id: uuid.UUID | None,
+    evidence_policy: str,
+) -> dict | None:
     """低分测评 (正确率 < 0.6) 自动触发一次计划调整; 无活跃计划或异常时返回 None。
 
     本函数是 services.record_attempts 的尾部挂载点: 判分主流程已完成并提交,
@@ -596,10 +628,18 @@ async def adjust_on_low_score(ctx, accuracy: float) -> dict | None:
     """
     from .db import tenant_session
 
+    if evidence_policy != "mastery_eligible":
+        return None
     try:
         async with tenant_session(ctx.tenant_id) as session:
             plan = await active_plan(session, ctx.tenant_id, ctx.user_id)
-            if plan is None:
+            if (
+                plan is None
+                or plan.plan_mode != "course_bound"
+                or plan.kb_id is None
+                or quiz_kb_id != plan.kb_id
+                or (attributed_plan_id is not None and attributed_plan_id != plan.id)
+            ):
                 return None
             result = await adjust_plan(
                 session,

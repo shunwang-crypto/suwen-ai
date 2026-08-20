@@ -66,6 +66,7 @@ export function PlanTaskDrawer({
   const reviewHref = `/practice/session?mode=review&from=${focusFrom}${attribution}`;
   const resourceUrl = resource ? resourceHref(resource) : null;
   const action = task.action_type ?? "tutor";
+  const calibrationOnly = task.evidence_policy === "calibration_only";
 
   useEffect(() => {
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -133,6 +134,7 @@ export function PlanTaskDrawer({
         </div>
 
         <div className="mt-5 grid gap-4 text-body-sm text-ink-secondary">
+          {calibrationOnly && <p className="rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 leading-5 text-warning-800">这是校准练习：会记录本次活动和任务完成情况，但不会更新任何课程的正式掌握度。</p>}
           <section><h3 className="font-semibold text-ink">学习目标</h3><div className="mt-1 leading-5"><MathText text={task.objective || "完成本任务并能独立应用相关知识。"} /></div></section>
           <section><h3 className="font-semibold text-ink">建议步骤</h3><ol className="mt-1 list-decimal space-y-1 pl-5 leading-5">{(task.instructions?.length ? task.instructions : ["梳理关键概念", "完成练习并检查理解"]).map((item, index) => <li key={`${item}-${index}`}><MathText text={item} /></li>)}</ol></section>
           <section><h3 className="font-semibold text-ink">完成标准</h3><div className="mt-1 leading-5"><MathText text={task.completion_criteria || "能够独立完成任务并解释关键步骤。"} /></div></section>
@@ -149,7 +151,7 @@ export function PlanTaskDrawer({
             </p>
           )}
           {showRead && resourceUrl && <ActionLink href={resourceUrl} external={Boolean(resource?.url)}>阅读资料</ActionLink>}
-          {!readOnly && showPractice && <ActionLink href={quizHref}>开始针对性练习</ActionLink>}
+          {!readOnly && showPractice && <ActionLink href={quizHref}>{calibrationOnly ? "开始校准练习" : "开始针对性练习"}</ActionLink>}
           {!readOnly && showTutor && <ActionLink href={tutorHref}>进入分级辅导</ActionLink>}
           {!readOnly && showReview && <ActionLink href={reviewHref}>复习相关错题</ActionLink>}
           {!readOnly && showRead && planId && task.task_id && !locallyDone && <button type="button" disabled={completing} onClick={() => void completeReading()} className="inline-flex min-h-9 items-center justify-center rounded-[8px] bg-brand-600 px-3 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60">{completing ? "保存中…" : "我已阅读，标记完成"}</button>}

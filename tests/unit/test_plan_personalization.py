@@ -1,8 +1,8 @@
 """计划个性化 (P1-3) 与 tutor 画像注入 (P1-4) 单测: FakeGateway 脚本化, 无网络无库。
 
 覆盖三组验收:
-① 真实掌握度注入 (G1): diagnose 节点不再让 LLM 猜有真实记录的 KC, LLM 只兜底无记录主题,
-   且 LLM 输出不得覆盖真实 BKT 值;
+① 证据语义注入 (G1): 只有 observed KC 带定性掌握档，未知主题安排基线练习，
+   diagnose 节点绝不调用 LLM 猜概率;
 ② 先修 DAG 拓扑约束 (G2, F3-A2 口径): 先修边 -> 拓扑序注入 kc_order 后,
    修正后的计划中无任务先于其未掌握前置 KC;
 ③ tutor 画像注入 (G9): 四级 hint prompt 实收画像段, 开场关联薄弱 KC,
@@ -104,6 +104,7 @@ async def run_plan_to_interrupt(script: dict, input_overrides: dict | None = Non
         "tenant_id": "t-1",
         "user_id": "u-1",
         "request_id": "r-1",
+        "plan_mode": "goal_only",
         "kb_id": "",
         "goal": "两周入门高等数学",
         "budget_hours_per_day": 1.0,
@@ -114,39 +115,43 @@ async def run_plan_to_interrupt(script: dict, input_overrides: dict | None = Non
     return gateway, state
 
 
-async def test_diagnose_llm_only_backfills_kcs_without_records():
-    """有真实 BKT 记录的 KC ("极限") 不再进 LLM 摸底 prompt, LLM 只兜底无记录的 "导数";
-    即使 LLM 越权回传了有记录 KC 的估值, 也不得覆盖真实值。"""
+async def test_diagnose_marks_unknown_topics_for_baseline_without_llm_estimation():
+    """已有证据按档位保留；目标里的未知主题只进入基线清单。"""
     gateway, state = await run_plan_to_interrupt(
         {
             "plan_parse_goal": [PARSE],
-            # LLM 越权回传 "极限": 0.05 (真实值 0.72 不得被覆盖)
-            "plan_diagnose": [{"diagnosis": {"极限": 0.05, "导数": 0.4}}],
             "plan_draft": [DRAFT],
         },
-        input_overrides={"diagnosis": {"极限": 0.72}},
+        input_overrides={
+            "diagnosis": {
+                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"}
+            }
+        },
     )
-    diag_reqs = [r for r in gateway.requests if r.feature == "plan_diagnose"]
-    assert len(diag_reqs) == 1
-    prompt = diag_reqs[0].messages[0].content
-    assert "导数" in prompt  # 无记录主题仍走 LLM 保守摸底
-    assert "极限" not in prompt  # 有真实记录的 KC 不再让 LLM 猜
-    # 真实值保留, LLM 值只落在无记录主题上
-    assert state["diagnosis"] == {"极限": 0.72, "导数": 0.4}
+    assert all(r.feature != "plan_diagnose" for r in gateway.requests)
+    assert state["diagnosis"] == {
+        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"}
+    }
+    assert state["baseline_topics"] == ["导数"]
     events = [e for e in state["trace"] if e.get("node") == "diagnose"]
-    assert events[0]["event"] == "external_plus_conservative"
-    assert events[0]["known_count"] == 1 and events[0]["backfilled_count"] == 1
+    assert events[0]["event"] == "evidence_state_used"
+    assert events[0]["observed_count"] == 1 and events[0]["baseline_count"] == 1
 
 
 async def test_diagnose_full_external_coverage_skips_llm_entirely():
-    """真实掌握度覆盖全部主题: 完全不调 plan_diagnose LLM。"""
+    """全部主题都有充分证据时，不产生基线任务，也不调用诊断模型。"""
+    diagnosis = {
+        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
+        "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
+    }
     gateway, state = await run_plan_to_interrupt(
         {"plan_parse_goal": [PARSE], "plan_draft": [DRAFT]},
-        input_overrides={"diagnosis": {"极限": 0.72, "导数": 0.18}},
+        input_overrides={"diagnosis": diagnosis},
     )
     assert all(r.feature != "plan_diagnose" for r in gateway.requests)
-    assert state["diagnosis"] == {"极限": 0.72, "导数": 0.18}
-    assert any(e.get("event") == "external_diagnosis_used" for e in state["trace"])
+    assert state["diagnosis"] == diagnosis
+    assert state["baseline_topics"] == []
+    assert any(e.get("event") == "evidence_state_used" for e in state["trace"])
 
 
 # ---------------------------------------------------------------- ② 先修 DAG 拓扑约束 (G2)
@@ -168,12 +173,13 @@ def test_kc_order_from_edges_empty_without_edges():
     assert _kc_order_from_edges({"i1": "极限"}, [("i1", "i1"), ("i1", "ghost")]) == []
 
 
-def test_diagnosis_from_rows_kb_scope_with_fallback():
-    rows = [("极限", 0.2, "kb-a"), ("导数", 0.9, "kb-b")]
-    assert _diagnosis_from_rows(rows, "kb-a") == {"极限": 0.2}
-    assert _diagnosis_from_rows(rows, "") == {"极限": 0.2, "导数": 0.9}
-    # 绑库过滤后为空 -> 回退全量 (跨库学习者不因绑库丢真实掌握度)
-    assert _diagnosis_from_rows(rows, "kb-c") == {"极限": 0.2, "导数": 0.9}
+def test_diagnosis_from_rows_uses_distinct_evidence_state():
+    rows = [("极限", 0.2, 3), ("导数", 0.9, 2), ("积分", 0.3, 0)]
+    assert _diagnosis_from_rows(rows) == {
+        "极限": {"evidence_state": "observed", "mastery_band": "较弱"},
+        "导数": {"evidence_state": "estimated"},
+        "积分": {"evidence_state": "unobserved"},
+    }
 
 
 PARSE3 = {"subject": "高等数学", "key_topics": ["极限", "导数", "积分"], "level_hint": ""}
@@ -231,8 +237,10 @@ async def test_no_task_before_unmastered_prerequisite():
         {"plan_parse_goal": [PARSE3], "plan_draft": [TOPO_DRAFT]},
         input_overrides={
             "total_days": 3,
-            # 三个 KC 全部未掌握 (真实 BKT 低值) -> 前置约束必须生效
-            "diagnosis": {"极限": 0.2, "导数": 0.25, "积分": 0.1},
+            "diagnosis": {
+                name: {"evidence_state": "observed", "mastery_band": "较弱"}
+                for name in ("极限", "导数", "积分")
+            },
             "kc_order": kc_order,
         },
     )
@@ -365,10 +373,19 @@ def test_render_diagnosis_qualitative_no_decimals():
     """P2-7: DIAGNOSIS 出境只给定性档, 精确概率与小数一律不出现。"""
     from eduagents_core.graphs.plan_graph import _render_diagnosis
 
-    text = _render_diagnosis({"导数定义": 0.24, "泰勒公式": 0.92, "极值判定": 0.31}, ["导数"])
-    assert "导数定义: 较弱" in text
-    assert "极值判定: 待巩固" in text
-    assert "泰勒公式: 已掌握" in text
+    text = _render_diagnosis(
+        {
+            "导数定义": {"evidence_state": "observed", "mastery_band": "较弱"},
+            "泰勒公式": {"evidence_state": "observed", "mastery_band": "已掌握"},
+            "极值判定": {"evidence_state": "estimated"},
+        },
+        ["导数"],
+        ["级数"],
+    )
+    assert "导数定义: 较弱（真实作答证据充分）" in text
+    assert "极值判定: 证据不足，先安排短验证" in text
+    assert "泰勒公式: 已掌握（真实作答证据充分）" in text
+    assert "级数: 尚未验证，先安排基线练习" in text
     for decimal in ("0.24", "0.31", "0.92", "0."):
         assert decimal not in text
 
@@ -377,11 +394,14 @@ def test_render_diagnosis_relevance_first_and_capped():
     """目标相关条目排最前; 超过 20 条截断 (防跨学科全量膨胀 prompt)。"""
     from eduagents_core.graphs.plan_graph import _DIAGNOSIS_LIMIT, _render_diagnosis
 
-    diagnosis = {f"无关KC{i:02d}": 0.1 + i * 0.01 for i in range(25)}
-    diagnosis["导数定义"] = 0.9  # 相关但掌握度高: 仍须排最前
+    diagnosis = {
+        f"无关KC{i:02d}": {"evidence_state": "observed", "mastery_band": "待巩固"}
+        for i in range(25)
+    }
+    diagnosis["导数定义"] = {"evidence_state": "observed", "mastery_band": "已掌握"}
     lines = _render_diagnosis(diagnosis, ["导数"]).splitlines()
     assert len(lines) == _DIAGNOSIS_LIMIT
-    assert lines[0] == "- 导数定义: 已掌握"
+    assert lines[0] == "- 导数定义: 已掌握（真实作答证据充分）"
 
 
 def test_fallback_plan_ignores_unrelated_mastery():
@@ -391,7 +411,10 @@ def test_fallback_plan_ignores_unrelated_mastery():
     state = {
         "goal": "两周入门日语",
         "parsed_goal": {"key_topics": ["五十音", "基础语法"]},
-        "diagnosis": {"导数定义": 0.24, "泰勒公式": 0.92},
+        "diagnosis": {
+            "导数定义": {"evidence_state": "observed", "mastery_band": "较弱"},
+            "泰勒公式": {"evidence_state": "observed", "mastery_band": "已掌握"},
+        },
     }
     plan = _fallback_plan(state, total_days=4, budget_minutes=60)
     titles = [t["title"] for d in plan["stages"][0]["days"] for t in d["tasks"]]
@@ -406,7 +429,9 @@ def test_fallback_plan_keeps_related_mastery_topics():
     state = {
         "goal": "补齐微积分",
         "parsed_goal": {"key_topics": ["导数"]},
-        "diagnosis": {"导数定义": 0.24},
+        "diagnosis": {
+            "导数定义": {"evidence_state": "observed", "mastery_band": "较弱"}
+        },
     }
     plan = _fallback_plan(state, total_days=2, budget_minutes=60)
     titles = [t["title"] for d in plan["stages"][0]["days"] for t in d["tasks"]]
@@ -485,9 +510,14 @@ def test_fix_kc_order_unmatched_is_visible():
 
 
 def test_diagnosis_from_rows_conservative_on_name_collision():
-    """跨库同名 KC 取保守低值 (宁可多排复习, 不可乐观跳过)。"""
-    rows = [("导数定义", 0.3, "kb-a"), ("导数定义", 0.7, "kb-b")]
-    assert _diagnosis_from_rows(rows, "") == {"导数定义": 0.3}
+    """同库脏数据里的同名 KC 取更弱档；证据不足优先于乐观结论。"""
+    rows = [("导数定义", 0.7, 3), ("导数定义", 0.3, 3)]
+    assert _diagnosis_from_rows(rows) == {
+        "导数定义": {"evidence_state": "observed", "mastery_band": "待巩固"}
+    }
+    assert _diagnosis_from_rows([*rows, ("导数定义", 0.9, 1)]) == {
+        "导数定义": {"evidence_state": "estimated"}
+    }
 
 
 # ---------- ⑤ 目标技能 ∩ 定性薄弱点 ----------
@@ -561,7 +591,10 @@ async def test_skill_gaps_survive_diagnose_and_reach_draft_without_polluting_mas
     gateway, state = await run_plan_to_interrupt(
         {"plan_parse_goal": [parse], "plan_draft": [DRAFT]},
         input_overrides={
-            "diagnosis": {"极限": 0.7, "导数": 0.2},
+            "diagnosis": {
+                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
+                "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
+            },
             "weak_kcs": [
                 {"name": "导数", "zone": "较弱"},
                 {"name": "线性代数", "zone": "待巩固"},
@@ -570,7 +603,10 @@ async def test_skill_gaps_survive_diagnose_and_reach_draft_without_polluting_mas
         },
     )
 
-    assert state["diagnosis"] == {"极限": 0.7, "导数": 0.2}
+    assert state["diagnosis"] == {
+        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
+        "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
+    }
     assert state["skill_gaps"] == [
         {
             "skill": "导数",
@@ -592,7 +628,13 @@ async def test_skill_gaps_survive_diagnose_and_reach_draft_without_polluting_mas
 async def test_old_parse_output_falls_back_to_topics_and_empty_weakness_is_compatible():
     gateway, state = await run_plan_to_interrupt(
         {"plan_parse_goal": [PARSE], "plan_draft": [DRAFT]},
-        input_overrides={"diagnosis": {"极限": 0.7, "导数": 0.8}, "weak_kcs": []},
+        input_overrides={
+            "diagnosis": {
+                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
+                "导数": {"evidence_state": "observed", "mastery_band": "已掌握"},
+            },
+            "weak_kcs": [],
+        },
     )
 
     assert state["parsed_goal"]["skills"] == [
@@ -610,7 +652,7 @@ def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
     state = {
         "goal": "补齐微积分",
         "parsed_goal": {"key_topics": ["微积分"]},
-        "diagnosis": {"导数": 0.2},
+        "diagnosis": {"导数": {"evidence_state": "observed", "mastery_band": "较弱"}},
         "skill_gaps": [{"skill": "导数", "required_level": 3, "zone": "较弱"}],
     }
     before = dict(state["diagnosis"])
@@ -626,6 +668,7 @@ def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
 def test_plan_create_trims_optional_goal_context():
     body = PlanCreate(
         goal="  极限与导数  ",
+        plan_mode="goal_only",
         current_level="  会基本代数  ",
         target_outcome="  能独立完成基础题  ",
         success_criteria="  10 题正确 8 题  ",
@@ -636,12 +679,18 @@ def test_plan_create_trims_optional_goal_context():
     assert body.current_level == "会基本代数"
     assert body.target_outcome == "能独立完成基础题"
     assert body.success_criteria == "10 题正确 8 题"
-    assert PlanCreate(goal="导数", current_level="  ", budget_hours_per_day=1.0, total_days=2).current_level is None
+    assert PlanCreate(
+        goal="导数",
+        plan_mode="goal_only",
+        current_level="  ",
+        budget_hours_per_day=1.0,
+        total_days=2,
+    ).current_level is None
 
 
 def test_plan_create_requires_explicit_schedule_values():
     with pytest.raises(ValidationError):
-        PlanCreate(goal="导数", current_level="  ")
+        PlanCreate(goal="导数", plan_mode="goal_only", current_level="  ")
 
 
 async def test_explicit_goal_context_overrides_model_and_reaches_confirmation():
@@ -659,7 +708,6 @@ async def test_explicit_goal_context_overrides_model_and_reaches_confirmation():
     gateway, state = await run_plan_to_interrupt(
         {
             "plan_parse_goal": [parse],
-            "plan_diagnose": [{"diagnosis": {"导数": 0.3}}],
             "plan_draft": [DRAFT],
         },
         input_overrides={
@@ -709,7 +757,6 @@ async def test_vague_goal_keeps_missing_criteria_visible_without_fabrication():
     gateway, state = await run_plan_to_interrupt(
         {
             "plan_parse_goal": [parse],
-            "plan_diagnose": [{"diagnosis": {"数学": 0.3}}],
             "plan_draft": [DRAFT],
         },
         input_overrides={"goal": "学数学"},

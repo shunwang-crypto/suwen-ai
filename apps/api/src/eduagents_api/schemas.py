@@ -294,6 +294,22 @@ class KbCreate(BaseModel):
     subject: str = Field(default="general", max_length=64)
 
 
+class KbSummary(BaseModel):
+    source_total: int = 0
+    source_ready: int = 0
+    source_processing: int = 0
+    source_failed: int = 0
+    verified_questions: int = 0
+    pending_questions: int = 0
+    plan_id: uuid.UUID | None = None
+    plan_status: str | None = None
+    plan_done_tasks: int = 0
+    plan_total_tasks: int = 0
+    plan_progress_ratio: float = 0.0
+    last_activity_at: datetime | None = None
+    next_action: str = "upload_source"
+
+
 class KbOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -305,6 +321,7 @@ class KbOut(BaseModel):
     org_id: uuid.UUID | None = None
     org_name: str | None = None
     writable: bool = True
+    summary: KbSummary = Field(default_factory=KbSummary)
 
 
 # ---- 机构 (Wave3 企业后台共享知识库) ----

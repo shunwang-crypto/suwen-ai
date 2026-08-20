@@ -6,10 +6,9 @@
 // - 掌握度明细：「科目 → 章节」两级折叠树（组头=章均掌握度+薄弱计数，默认只展开含薄弱的章），
 //   名称/别名搜索 + 「只看薄弱」「只看到期」过滤 chip，行高压缩，动作收进桌面 hover /「…」菜单，
 //   窄屏两行卡片布局，遗忘快照缩成「3 天后 N%」徽章（P2-7 全文进 tooltip）。
-// - 最近掌握度变化：默认 10 条 +「展开更多」；×0.5/×0.3 权重徽章收进 hover tooltip（主观证据降权）；
+// - 最近掌握度变化：默认 10 条 +「展开更多」；非 1.0 权重徽章收进 hover tooltip；
 //   零变化行后端已滤，前端再兜底一次。
-// - 保留：「验证一下」→ /quiz?kc=..&n=3 重估（P2-6 可争辩画像）、「我已掌握」→ POST override、
-//  「AI 记住的你」记忆条目可见可删（P2-1）。
+// - 「AI 记住的你」记忆条目可见可删（P2-1）。
 
 import { useEffect, useState } from "react";
 
@@ -47,7 +46,8 @@ const STATE_LABELS: Record<string, string> = {
 const EVIDENCE_LABELS: Record<string, string> = {
   quiz_attempt: "练习作答",
   review: "复习作答",
-  explain_back: "受控理解验证",
+  assessment_answer: "核验作答",
+  appeal_regrade: "申诉重判",
 };
 
 const EVIDENCE_STRENGTH_LABELS = {
@@ -328,7 +328,7 @@ function MasteryRow({ item, weakThreshold }: {
             {evidenceStrengthLabel(item) && (
               <span
                 className="cursor-help"
-                title="证据强度表示有效练习、复习或用户确认的积累程度，不是统计置信概率"
+                title="证据强度表示有效练习、复习或核验作答的积累程度，不是统计置信概率"
               >
                 证据 {evidenceStrengthLabel(item)}
               </span>
@@ -467,8 +467,8 @@ export function CurrentLearningState() {
         <p className="text-body-sm font-medium text-ink-secondary">系统此刻如何认识你</p>
         <p className="mt-2 max-w-4xl text-[15px] leading-7 text-ink">
           {mastery.length === 0
-            ? "还没有足够的真实作答证据。完成第一次练习、复习或受控理解验证后，这里会逐步形成你的学习画像。"
-            : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实证据持续更新。</>}
+            ? "还没有足够的真实作答证据。完成第一次练习、复习或核验后的真实作答后，这里会逐步形成你的学习画像。"
+            : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}{strongest || weakest ? "。" : ""}画像会随新的真实证据持续更新。</>}
         </p>
         {changes[0] && <p className="mt-3 text-caption text-ink-muted">最近更新 {fmtDateTime(changes[0].at)} · {EVIDENCE_LABELS[changes[0].evidence_type] ?? changes[0].evidence_type}</p>}
       </section>
@@ -494,7 +494,7 @@ export function CurrentLearningState() {
         {mastery.length === 0 ? (
           <EmptyState
             title="还没有掌握度证据"
-            description="练习、复习或受控理解验证会形成可追溯的掌握度证据"
+            description="练习、复习或核验后的真实作答会形成可追溯的掌握度证据"
           />
         ) : (
           <div className="space-y-2.5">
@@ -639,7 +639,7 @@ export function CurrentLearningState() {
                       className="shrink-0 cursor-help rounded bg-slate-100 px-1.5 py-px text-caption text-slate-500"
                       title={
                         c.weight < 1
-                          ? `${EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type} · 证据权重 ×${c.weight}（主观/间接证据降权，系数直接暴露可审计）`
+                          ? `${EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type} · 证据权重 ×${c.weight}（不同证据来源按统一契约赋权）`
                           : EVIDENCE_LABELS[c.evidence_type] ?? c.evidence_type
                       }
                     >

@@ -2,6 +2,9 @@
 
 // ---- 学习计划（F3，对齐 routers/plans.py 与 plan_graph.py）----
 
+export type PlanMode = "course_bound" | "goal_only";
+export type PlanGroundingStatus = "kb_grounded" | "web_assisted" | "unreferenced";
+
 export interface PlanGoalAnalysis {
   summary: string;
   quality: "clear" | "partial" | "vague";
@@ -45,6 +48,9 @@ export interface PlanTask {
   lock_blockers?: PlanTaskLockBlocker[];
   /** "adjust" = 学情调整插入的补强任务 */
   source?: string;
+  /** 目标起步计划的练习只做校准，不更新正式掌握度。 */
+  evidence_policy?: "mastery_eligible" | "calibration_only";
+  concept_status?: "course_grounded" | "provisional";
 }
 
 export interface PlanTaskLockBlocker {
@@ -88,6 +94,8 @@ export interface PlanListItem {
   budget_hours: number;
   kb_id?: string | null;
   kb_name?: string | null;
+  plan_mode: PlanMode;
+  grounding_status: PlanGroundingStatus;
   structure: PlanStructure | null;
   created_at: string;
   status: "active" | "completed" | "archived";
@@ -148,6 +156,8 @@ export interface PlanDetail {
   budget_hours: number;
   kb_id: string | null;
   kb_name: string | null;
+  plan_mode: PlanMode;
+  grounding_status: PlanGroundingStatus;
   version: number;
   structure: PlanStructure;
   resources: PlanResource[];

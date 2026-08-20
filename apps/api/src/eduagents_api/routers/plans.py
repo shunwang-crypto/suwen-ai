@@ -8,7 +8,11 @@ from typing import Literal
 from eduagents_core.kc.dag import add_edge_safe, topological_order, validate_acyclic
 from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
-from eduagents_core.mastery.thresholds import evidence_state
+from eduagents_core.mastery.thresholds import (
+    VALID_MASTERY_EVIDENCE_TYPES,
+    evidence_state,
+    zone_label,
+)
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select
@@ -68,6 +72,7 @@ class PlanCreate(BaseModel):
     current_level: str | None = Field(default=None, max_length=200)
     target_outcome: str | None = Field(default=None, max_length=500)
     success_criteria: str | None = Field(default=None, max_length=500)
+    plan_mode: Literal["course_bound", "goal_only"]
     kb_id: uuid.UUID | None = None
     budget_hours_per_day: float = Field(..., gt=0, le=12)
     total_days: int = Field(..., ge=1, le=90)
@@ -86,6 +91,14 @@ class PlanCreate(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+    @model_validator(mode="after")
+    def validate_mode_scope(self) -> PlanCreate:
+        if self.plan_mode == "course_bound" and self.kb_id is None:
+            raise ValueError("course_bound 计划必须绑定课程资料")
+        if self.plan_mode == "goal_only" and self.kb_id is not None:
+            raise ValueError("goal_only 计划不能绑定课程资料")
+        return self
 
 
 class TaskToggle(BaseModel):
@@ -115,21 +128,23 @@ class TutorTurn(BaseModel):
         return self
 
 
-def _diagnosis_from_rows(rows: list[tuple[str, float, str]], kb_id: str) -> dict[str, float]:
-    """(kc_name, p_mastery, kb_id) 行 -> {kc_name: p_mastery}。
-
-    绑定 kb 时按库过滤; 过滤后为空则回退全量 (跨库学习者不该因绑库而丢真实掌握度,
-    与 profile_summary 的取材口径一致)。
-    """
-    scoped = [(name, p) for name, p, kb in rows if not kb_id or kb == kb_id]
-    if not scoped:
-        scoped = [(name, p) for name, p, _kb in rows]
-    # 跨库同名 KC 取保守低值 (掌握度存疑时宁可多排复习, 不可乐观跳过)
-    out: dict[str, float] = {}
-    for name, p in scoped:
-        value = round(float(p), 4)
-        if name not in out or value < out[name]:
-            out[name] = value
+def _diagnosis_from_rows(rows: list[tuple[str, float, int]]) -> dict[str, dict[str, str]]:
+    """Build qualitative, evidence-aware diagnosis strictly inside one KB."""
+    out: dict[str, dict[str, str]] = {}
+    for name, p, count in rows:
+        state = evidence_state(int(count))
+        item: dict[str, str] = {"evidence_state": state}
+        if state == "observed":
+            item["mastery_band"] = zone_label(float(p))
+        previous = out.get(name)
+        # Duplicate names in one KB resolve conservatively to the weaker band;
+        # evidence state is never inferred from the BKT prior.
+        if previous is None or (state != "observed" and previous.get("evidence_state") == "observed"):
+            out[name] = item
+        elif state == "observed" and previous.get("evidence_state") == "observed":
+            order = {"较弱": 0, "待巩固": 1, "接近掌握": 2, "已掌握": 3}
+            if order.get(item.get("mastery_band", ""), 4) < order.get(previous.get("mastery_band", ""), 4):
+                out[name] = item
     return out
 
 
@@ -366,7 +381,7 @@ def _primary_route(
     return route
 
 
-async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str, float], list[str]]:
+async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str, dict[str, str]], list[str]]:
     """计划个性化预查 (一次事务): 真实 BKT 掌握度 + 先修 DAG 拓扑序。
 
     - diagnosis: 该用户 mastery_records join KC 名 -> 注入 plan 图的 diagnosis 通道,
@@ -381,19 +396,31 @@ async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str,
                     KnowledgeComponent.canonical_name,
                     MasteryRecord.p_mastery,
                     KnowledgeComponent.kb_id,
+                    func.count(func.distinct(MasteryLog.evidence_id)),
                 )
                 .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
-                .where(MasteryRecord.user_id == ctx.user_id)
+                .outerjoin(
+                    MasteryLog,
+                    (MasteryLog.user_id == MasteryRecord.user_id)
+                    & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                    & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES)
+                    & MasteryLog.evidence_id.is_not(None),
+                )
+                .where(
+                    MasteryRecord.user_id == ctx.user_id,
+                    KnowledgeComponent.kb_id == uuid.UUID(kb_id),
+                )
+                .group_by(
+                    KnowledgeComponent.canonical_name,
+                    MasteryRecord.p_mastery,
+                    KnowledgeComponent.kb_id,
+                )
                 .order_by(MasteryRecord.p_mastery.asc())
             )
         ).all()
-        kc_query = select(KnowledgeComponent.id, KnowledgeComponent.canonical_name)
-        if kb_id:
-            kc_query = kc_query.where(KnowledgeComponent.kb_id == uuid.UUID(kb_id))
-        else:
-            kc_query = kc_query.join(
-                MasteryRecord, MasteryRecord.kc_id == KnowledgeComponent.id
-            ).where(MasteryRecord.user_id == ctx.user_id)
+        kc_query = select(KnowledgeComponent.id, KnowledgeComponent.canonical_name).where(
+            KnowledgeComponent.kb_id == uuid.UUID(kb_id)
+        )
         kc_rows = (
             await session.execute(kc_query.order_by(KnowledgeComponent.created_at.asc()))
         ).all()
@@ -410,7 +437,7 @@ async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str,
                 )
             ).all()
     diagnosis = _diagnosis_from_rows(
-        [(name, float(p), str(kb)) for name, p, kb in mastery_rows], kb_id
+        [(name, float(p), int(count)) for name, p, _kb, count in mastery_rows]
     )
     names_by_id = {str(kc_id): name for kc_id, name in kc_rows}
     kc_order = _kc_order_from_edges(names_by_id, [(str(f), str(t)) for f, t in edge_rows])
@@ -425,7 +452,7 @@ async def create_plan(
     runtime = getattr(request.app.state, "graphs", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
-    if body.kb_id is not None:
+    if body.plan_mode == "course_bound" and body.kb_id is not None:
         # The graph receives only a validated KB id.  This check is repeated
         # at finalize time because a KB can be deleted while the draft waits.
         async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
@@ -438,43 +465,44 @@ async def create_plan(
                 raise HTTPException(status_code=404, detail="KB_NOT_FOUND")
     local_id = str(uuid.uuid4())
     thread_id = runtime.thread_id("plan", str(ctx.user_id), local_id)
-    # 个性化预查失败一律降级为空 (图内 LLM 摸底兜底), 不让个性化故障拖垮规划主链路
-    diagnosis: dict[str, float] = {}
+    # 个性化预查失败降级为空；未知主题只安排基线练习，绝不让模型猜掌握度。
+    diagnosis: dict[str, dict[str, str]] = {}
     kc_order: list[str] = []
     profile = ProfileContext()
-    try:
-        diagnosis, kc_order = await _load_personalization(
-            ctx, str(body.kb_id) if body.kb_id else ""
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("plan_personalization_load_failed")
-    try:
-        profile = await build_profile_context(
-            ctx.tenant_id,
-            ctx.user_id,
-            [str(body.kb_id)] if body.kb_id else [],
-            redis=getattr(request.app.state, "redis", None),
-            role="plan",
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("plan_profile_summary_failed")
-    weak_kcs: list[dict[str, str]] = []
-    try:
-        weak_kcs = _qualitative_weak_kcs(
-            await weak_point_kcs(
+    if body.plan_mode == "course_bound":
+        try:
+            diagnosis, kc_order = await _load_personalization(ctx, str(body.kb_id))
+        except Exception:  # noqa: BLE001
+            log.exception("plan_personalization_load_failed")
+        try:
+            profile = await build_profile_context(
                 ctx.tenant_id,
                 ctx.user_id,
-                [str(body.kb_id)] if body.kb_id else [],
-                limit=_PLAN_WEAK_LIMIT,
+                [str(body.kb_id)],
+                redis=getattr(request.app.state, "redis", None),
+                role="plan",
             )
-        )
-    except Exception:  # noqa: BLE001
-        # 技能差距是可选个性化；读侧失败不阻断基础计划。
-        log.exception("plan_weak_kcs_load_failed")
+        except Exception:  # noqa: BLE001
+            log.exception("plan_profile_summary_failed")
+    weak_kcs: list[dict[str, str]] = []
+    if body.plan_mode == "course_bound":
+        try:
+            weak_kcs = _qualitative_weak_kcs(
+                await weak_point_kcs(
+                    ctx.tenant_id,
+                    ctx.user_id,
+                    [str(body.kb_id)],
+                    limit=_PLAN_WEAK_LIMIT,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            # 技能差距是可选个性化；读侧失败不阻断基础计划。
+            log.exception("plan_weak_kcs_load_failed")
     payload = {
         "tenant_id": str(ctx.tenant_id),
         "user_id": str(ctx.user_id),
         "request_id": getattr(request.state, "request_id", ""),
+        "plan_mode": body.plan_mode,
         "kb_id": str(body.kb_id) if body.kb_id else "",
         "goal": body.goal,
         "current_level": body.current_level or "",
@@ -482,7 +510,7 @@ async def create_plan(
         "success_criteria": body.success_criteria or "",
         "budget_hours_per_day": body.budget_hours_per_day,
         "total_days": body.total_days,
-        # 真实 BKT 掌握度注入 (G1): diagnose 节点只对无记录主题走 LLM 摸底
+        # 只注入证据状态和证据充分时的定性掌握档。
         "diagnosis": diagnosis,
         # 先修 DAG 拓扑序注入 (G2): draft_plan 的 _fix_kc_order 据此顺延违序任务
         "kc_order": kc_order,
@@ -494,11 +522,17 @@ async def create_plan(
 
 
 @router.get("")
-async def list_plans(ctx: AuthContext = Depends(api_rate_limited)):
+async def list_plans(
+    kb_id: uuid.UUID | None = None,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        query = select(Plan).where(Plan.user_id == ctx.user_id)
+        if kb_id is not None:
+            query = query.where(Plan.kb_id == kb_id)
         rows = (
             await session.scalars(
-                select(Plan).where(Plan.user_id == ctx.user_id).order_by(Plan.created_at.desc())
+                query.order_by(Plan.created_at.desc())
             )
         ).all()
         kb_ids = [row.kb_id for row in rows if row.kb_id is not None]
@@ -517,6 +551,8 @@ async def list_plans(ctx: AuthContext = Depends(api_rate_limited)):
                 "budget_hours": r.budget_hours,
                 "kb_id": str(r.kb_id) if r.kb_id else None,
                 "kb_name": kb_names.get(r.kb_id),
+                "plan_mode": r.plan_mode,
+                "grounding_status": r.grounding_status,
                 "structure": r.structure_json,
                 "created_at": r.created_at,
                 "status": r.status,
@@ -551,21 +587,28 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
     只查该用户已有掌握度记录的 KC 之间的 prerequisite 边: 没有掌握度记录的先修 KC
     不算阻塞, 所以也不必把整库 KC 拉进来。
     """
+    if plan.plan_mode != "course_bound" or plan.kb_id is None:
+        return {}
     mastery_rows = (
         await session.execute(
             select(
                 KnowledgeComponent.id,
                 KnowledgeComponent.canonical_name,
                 MasteryRecord.p_mastery,
-                func.count(MasteryLog.id),
+                func.count(func.distinct(MasteryLog.evidence_id)),
             )
             .join(KnowledgeComponent, KnowledgeComponent.id == MasteryRecord.kc_id)
             .outerjoin(
                 MasteryLog,
                 (MasteryLog.user_id == MasteryRecord.user_id)
-                & (MasteryLog.kc_id == MasteryRecord.kc_id),
+                & (MasteryLog.kc_id == MasteryRecord.kc_id)
+                & MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES)
+                & MasteryLog.evidence_id.is_not(None),
             )
-            .where(MasteryRecord.user_id == plan.user_id)
+            .where(
+                MasteryRecord.user_id == plan.user_id,
+                KnowledgeComponent.kb_id == plan.kb_id,
+            )
             .group_by(
                 KnowledgeComponent.id,
                 KnowledgeComponent.canonical_name,
@@ -613,7 +656,7 @@ async def _load_kc_dependency(
     session, plan: Plan, locks: dict[str, dict] | None = None
 ) -> dict:
     """Load real KC rows/edges and derive only the current plan's dependency closure."""
-    if plan.kb_id is None:
+    if plan.plan_mode != "course_bound" or plan.kb_id is None:
         return {"levels": [], "edges": [], "primary_route": []}
     kc_rows = (
         await session.execute(
@@ -678,6 +721,8 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
         "budget_hours": plan.budget_hours,
         "kb_id": str(plan.kb_id) if plan.kb_id else None,
         "kb_name": kb.name if kb else None,
+        "plan_mode": plan.plan_mode,
+        "grounding_status": plan.grounding_status,
         "version": plan.version,
         "structure": structure,
         "resources": list(resources.values()),

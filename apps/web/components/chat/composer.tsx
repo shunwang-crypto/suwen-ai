@@ -6,6 +6,7 @@
  */
 
 import type { ChangeEvent, RefObject } from "react";
+import { BookOpen, Globe2, SlidersHorizontal } from "lucide-react";
 
 import type { ChatAttachmentOut, KbOut } from "@/lib/types";
 import type { ChatMode } from "@/components/chat/chat-msg";
@@ -73,8 +74,24 @@ export function Composer(props: ComposerProps) {
     handleComposerKey,
     handleComposerPaste,
   } = props;
+  const scopedKbs = kbs.filter((kb) => kbIds.includes(kb.id));
+  const scopeText =
+    chatMode === "web" || chatMode === "research"
+      ? "网页搜索 · 不使用课程资料"
+      : scopedKbs.length === 0
+        ? "通用回答 · 未绑定课程资料"
+        : scopedKbs.length === 1
+          ? `基于：${scopedKbs[0].name} · ${scopedKbs[0].summary.source_ready} 份资料就绪`
+          : `基于：${scopedKbs.length} 个课程范围 · 联合检索`;
   return (
     <div className="shrink-0 bg-canvas px-4 pb-6 pt-3">
+      <div className="mx-auto mb-2 flex w-full max-w-[720px] items-center justify-between gap-3 border-y border-line bg-white px-3 py-2 text-caption">
+        <div className="flex min-w-0 items-center gap-2 text-ink-secondary">
+          {chatMode === "web" || chatMode === "research" ? <Globe2 className="h-3.5 w-3.5 shrink-0 text-brand-600" aria-hidden /> : scopedKbs.length > 0 ? <BookOpen className="h-3.5 w-3.5 shrink-0 text-brand-600" aria-hidden /> : <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 text-ink-muted" aria-hidden />}
+          <span className="truncate">{scopeText}</span>
+        </div>
+        <button type="button" onClick={() => setComposerPanel("scope")} disabled={streaming} className="shrink-0 text-caption font-medium text-brand-700 hover:text-brand-800 disabled:opacity-40">更改范围</button>
+      </div>
       <div
         className={`relative mx-auto flex w-full max-w-[720px] flex-col border border-line bg-white px-2 py-2 shadow-subtle transition-[border-color,border-radius] focus-within:border-line-strong ${
           attachments.length > 0 || kbIds.length > 0 || composerMultiline

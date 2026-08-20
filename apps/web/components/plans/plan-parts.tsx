@@ -12,7 +12,7 @@ import {EmptyState} from "@/components/common";
 import {type PlanTaskLocation} from "@/components/plans/plan-task-drawer";
 
 import { MathText } from "@/lib/katex";
-import type {GraphInterruptData, PlanDetail, PlanGoalAnalysis, PlanSkillGap, PlanStructure, PlanTask, PlanResource} from "@/lib/types";
+import type {GraphInterruptData, PlanDetail, PlanGoalAnalysis, PlanMode, PlanSkillGap, PlanStructure, PlanTask, PlanResource} from "@/lib/types";
 
 export type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 export const PENDING_PLAN_KEY = "suwen:pending-plan-draft";
@@ -26,6 +26,7 @@ export interface PendingPlanDraft {
     currentLevel: string;
     targetOutcome: string;
     successCriteria: string;
+    planMode: PlanMode;
     kbId: string;
     hours: number | null;
     totalDays: number | null;
@@ -363,6 +364,7 @@ export function PlanCalendar({
 export function PlanConfirmCard({
   plan,
   resources,
+  planMode,
   goalAnalysis,
   skillGaps,
   onConfirm,
@@ -370,6 +372,7 @@ export function PlanConfirmCard({
 }: {
   plan: PlanStructure;
   resources: PlanResource[];
+  planMode: PlanMode;
   goalAnalysis?: PlanGoalAnalysis;
   skillGaps?: PlanSkillGap[];
   onConfirm: (edited: PlanStructure) => void;
@@ -380,6 +383,7 @@ export function PlanConfirmCard({
     JSON.parse(JSON.stringify(plan)) as PlanStructure,
   );
   const [touched, setTouched] = useState(false);
+  const [showAllDays, setShowAllDays] = useState(false);
 
   const totalDays = draft.stages.reduce((s, st) => s + (st.days?.length ?? 0), 0);
   const totalTasks = draft.stages.reduce(
@@ -446,6 +450,20 @@ export function PlanConfirmCard({
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
         ，可直接修改任务标题与时长，确认后才会保存。
       </p>
+      <div className={`mt-3 rounded-xl border px-3 py-2.5 ${planMode === "course_bound" ? "border-success-200 bg-success-50" : "border-warning-200 bg-warning-50"}`}>
+        <p className={`text-body-sm font-semibold ${planMode === "course_bound" ? "text-success-800" : "text-warning-800"}`}>
+          {planMode === "course_bound" ? "课程资料计划" : "目标起步计划"}
+        </p>
+        <p className={`mt-1 text-caption leading-5 ${planMode === "course_bound" ? "text-success-700" : "text-warning-700"}`}>
+          {planMode === "course_bound"
+            ? resources.length > 0
+              ? "草案引用了所选课程中的真实资料，确认后练习可进入该课程的正式学习证据链。"
+              : "当前未检索到可引用资料，确认后仍会保留课程范围，但阅读任务会改为辅导或练习。"
+            : resources.some((item) => item.type === "web")
+              ? "草案可参考公开网页，但概念仍是临时的；练习只校准起点，不更新正式掌握度。"
+              : "草案没有资料来源；系统不会伪造阅读任务或引用，练习只校准起点。"}
+        </p>
+      </div>
 
       {goalAnalysis && (
         <section className="mt-4 rounded-xl border border-brand-100 bg-brand-50/40 p-3" aria-label="目标拆解">
@@ -516,7 +534,7 @@ export function PlanConfirmCard({
                 </span>
               </p>
               <ul className="mt-2 space-y-2">
-                {(stage.days ?? []).map((d, di) => (
+                {(stage.days ?? []).map((d, di) => !showAllDays && d.day > 3 ? null : (
                   <li key={d.day} className="rounded-lg bg-slate-50/70 p-2">
                     <p className="mb-1 text-body-sm font-medium text-slate-500">
                       第 {d.day} 天
@@ -611,6 +629,11 @@ export function PlanConfirmCard({
           );
         })}
       </ul>
+      {totalDays > 3 && (
+        <button type="button" aria-expanded={showAllDays} onClick={() => setShowAllDays((value) => !value)} className="mt-3 rounded-lg border border-line-strong bg-white px-3 py-2 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted">
+          {showAllDays ? "只看前 3 天" : `展开其余 ${totalDays - 3} 天`}
+        </button>
+      )}
 
       {resources.length > 0 && (
         <details className="mt-3 rounded-xl border border-indigo-100 bg-white p-3">

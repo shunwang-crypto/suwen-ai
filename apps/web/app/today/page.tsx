@@ -249,7 +249,7 @@ export default function TodayPage() {
 
       <ReviewCountStrip />
 
-      <p className="text-center text-caption text-ink-muted">阅读、普通对话和完成任务不会自动改变掌握度；真实作答与受控验证才会形成学习证据。</p>
+      <p className="text-center text-caption text-ink-muted">阅读、普通对话、反讲反馈和完成任务不会自动改变掌握度；练习、复习与核验后的真实作答才会形成掌握度证据。</p>
       <WeeklySummary />
     </div>
   );

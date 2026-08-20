@@ -1005,6 +1005,14 @@ class Plan(Base):
             "status IN ('active', 'completed', 'archived')",
             name="ck_plans_status",
         ),
+        CheckConstraint(
+            "plan_mode IN ('course_bound', 'goal_only')",
+            name="ck_plans_mode",
+        ),
+        CheckConstraint(
+            "grounding_status IN ('kb_grounded', 'web_assisted', 'unreferenced')",
+            name="ck_plans_grounding_status",
+        ),
         Index(
             "uq_plans_one_active_per_user",
             "tenant_id",
@@ -1023,6 +1031,14 @@ class Plan(Base):
         ForeignKey("knowledge_bases.id", name="fk_plans_kb_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # Persisted provenance: kb_id may later become NULL after a course is
+    # deleted, so it cannot by itself tell whether the plan began grounded.
+    plan_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )
+    grounding_status: Mapped[str] = mapped_column(
+        String(20), nullable=False
     )
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active", server_default="active"

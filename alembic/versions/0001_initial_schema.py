@@ -70,6 +70,10 @@ def upgrade() -> None:
     # 同理: chat_sessions.kind 由 0032 引入, 从零重放时必须先回退为"当时不存在",
     # 否则 0032 的 add_column 撞 already exists (整套集成测试与新库首次部署都会挂)。
     op.execute("ALTER TABLE chat_sessions DROP COLUMN IF EXISTS kind")
+    # plans 的来源语义由 0035 引入；当前 ORM 会提前建出这两列，必须回退后再
+    # 让增量迁移创建，否则从零重放会再次撞 already exists。
+    op.execute("ALTER TABLE plans DROP COLUMN IF EXISTS grounding_status")
+    op.execute("ALTER TABLE plans DROP COLUMN IF EXISTS plan_mode")
 
     # 应用角色: 非超级用户 (超级用户绕过 RLS, decisions.md D9)。
     # 本地开发默认密码为 'edu'；应用连接与 migration 连接仍使用不同角色。

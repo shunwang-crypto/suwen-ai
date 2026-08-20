@@ -121,6 +121,8 @@ async def _seed_learning_state(uid: uuid.UUID) -> str:
                 user_id=uid,
                 goal="期末高数 90 分",
                 budget_hours=1.0,
+                plan_mode="goal_only",
+                grounding_status="unreferenced",
                 structure_json={
                     "stages": [
                         {

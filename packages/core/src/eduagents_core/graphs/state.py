@@ -71,6 +71,8 @@ class QuizState(TypedDict, total=False):
     confirmation_mode: str  # auto | required
     plan_id: str  # safe plan attribution; never contains task/problem content
     task_id: str
+    evidence_policy: str  # mastery_eligible | calibration_only
+    plan_mode: str  # standalone | course_bound | goal_only; latter two describe plan scope
     kb_id: str
     topic: str
     num_questions: int
@@ -94,6 +96,7 @@ class PlanState(TypedDict, total=False):
     tenant_id: str
     user_id: str
     request_id: str
+    plan_mode: str  # course_bound | goal_only
     kb_id: str
     goal: str
     current_level: str  # 用户自报的当前基础；空串=未提供
@@ -101,7 +104,8 @@ class PlanState(TypedDict, total=False):
     success_criteria: str  # 用户自定的验收标准；空串=未提供
     budget_hours_per_day: float
     total_days: int
-    diagnosis: dict  # {kc_name: 掌握度初值} (M3 用自报+摸底简版)
+    diagnosis: dict  # {kc_name: {evidence_state, mastery_band?}}; never model-estimated
+    baseline_topics: list[str]  # 目标中尚未验证或证据不足的主题
     profile_summary: str  # 脱敏后的 plan 角色画像切片；只含定性标签和偏好
     profile_weak_points: list[str]
     resources: list[dict]  # 知识库分块 / 安全 web 资源 (确认后持久化为 PlanResource)

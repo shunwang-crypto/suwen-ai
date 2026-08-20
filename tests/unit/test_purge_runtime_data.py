@@ -12,6 +12,14 @@ def test_runtime_purge_keeps_schema_metadata_out_of_delete_set():
     assert {"users", "refresh_tokens", "feedback", "wallet_ledger"} <= set(RUNTIME_TABLES)
 
 
+def test_runtime_table_list_covers_current_orm_models():
+    from eduagents_api.models import Base
+
+    from scripts.purge_runtime_data import RUNTIME_TABLES
+
+    assert set(Base.metadata.tables) <= set(RUNTIME_TABLES)
+
+
 def test_local_object_audit_rejects_symlinks(tmp_path: Path):
     from scripts.purge_runtime_data import _local_objects
 

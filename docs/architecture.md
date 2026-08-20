@@ -96,8 +96,9 @@ flowchart LR
 
 掌握度只能由 `apply_mastery_evidence` 边界写入。当前有效证据仅包括真实 Quiz
 作答、到期 FSRS 复习、最终核验的 AssessmentAnswer 及其申诉纠正。阅读资料、
-普通对话、AI 解释、辅导小结、计划任务完成和未核验题目都不更新 BKT。
-对话反思和辅导小结只写 `LearnerInsight`，供用户查看和删除。
+普通对话、AI 解释、Explain-back 反讲反馈、辅导小结、计划任务完成和未核验题目都不更新
+BKT。Explain-back 只写 observation-only 反馈记录；对话反思和辅导小结只写
+`LearnerInsight`，供用户查看和删除。
 
 `evidence_state` 由有效 `MasteryLog` 的独立 `evidence_id` 数量派生，不从
 `p_mastery` 先验或历史 `confidence` 反推：0 次为 `unobserved`，1–2 次为
@@ -122,9 +123,10 @@ flowchart LR
 
 ## 前端信息架构
 
-侧栏主导航固定 5 项（`PRIMARY_NAV_ITEMS`）：今日 `/today`、对话 `/chat`、练习 `/practice`、
-课程 `/courses`、成长 `/growth`。学习计划 `/plans` 是聚合页，入口在账户菜单而不占主导航；
-机构 `/orgs` 按登录后一次 `/api/orgs` 结果条件显示，请求失败时 fail-open 保持显示。
+学生核心工作流固定为今日 `/today`、课程 `/courses`、练习 `/practice`、计划 `/plans` 和
+成长 `/growth`。桌面侧栏的 `PRIMARY_NAV_ITEMS` 另保留对话 `/chat` 作为随时可用的上下文
+学习工具；学习计划聚合页从账户菜单、今日和课程工作区进入。机构 `/orgs` 按登录后一次
+`/api/orgs` 结果条件显示，请求失败时 fail-open 保持显示。
 
 高亮由显式别名表 `NAV_HIGHLIGHT_ALIASES` 决定（`/tutor`→`/chat`、`/quiz`/`/reviews`→`/practice`、
 `/materials`→`/courses`），不使用通配前缀推断，避免一个新路由静默改变高亮。
@@ -138,13 +140,15 @@ flowchart LR
 学习计划详情里的「知识点学习路径」有两个等价视图：默认的**依赖图**把后端 `kc_dependency`
 的拓扑层画成列、把后端给出的先修边画成连线（前端只做布局，不推断依赖关系，也只画两端
 节点都在渲染集合里的边）；「列表」视图逐层列出同样的节点，窄屏与逐条阅读时更好用。
-图只覆盖当前计划的目标 KC 及其递归先修闭包；全库知识图需要新的后端端点并按章节聚合，
-尚未提供。
+计划图只覆盖当前计划的目标 KC 及其递归先修闭包。全库知识图由
+`GET /api/kb/{id}/kc-graph` 提供，并在课程工作区「知识图」tab 按章节聚合展示；两者复用真实
+先修边，但计划图不会为了补全课程视图而扩大任务范围。
 
 专注会话 `/practice/session?mode=review|quiz&from=<站内路径>` 全屏无侧栏，`from` 经
 `safeInternalPath` 校验，站外地址回落到站内默认返回目标。
 
-被合并的旧路由全部保留重定向且原样转发 query，任何时刻不产生 404：
+以下历史路由当前仅作为迁移期重定向存在，不是产品入口；新代码、文档和测试不得继续生成
+这些链接：
 
 | 旧路由 | 目标 |
 |---|---|

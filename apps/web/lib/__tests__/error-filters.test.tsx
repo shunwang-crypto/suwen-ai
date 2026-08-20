@@ -8,10 +8,25 @@ import type { KbOut } from "@/lib/types";
 const KB_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const KB_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const KB_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const SUMMARY = {
+  source_total: 0,
+  source_ready: 0,
+  source_processing: 0,
+  source_failed: 0,
+  verified_questions: 0,
+  pending_questions: 0,
+  plan_id: null,
+  plan_status: null,
+  plan_done_tasks: 0,
+  plan_total_tasks: 0,
+  plan_progress_ratio: 0,
+  last_activity_at: null,
+  next_action: "upload_source" as const,
+};
 
 const kbs: KbOut[] = [
-  { id: KB_A, name: "数学", subject: "数学", kb_version: 1, created_at: "", owner_type: "user", org_id: null, org_name: null, writable: true },
-  { id: KB_B, name: "物理", subject: "物理", kb_version: 1, created_at: "", owner_type: "user", org_id: null, org_name: null, writable: true },
+  { id: KB_A, name: "数学", subject: "数学", kb_version: 1, created_at: "", owner_type: "user", org_id: null, org_name: null, writable: true, summary: SUMMARY },
+  { id: KB_B, name: "物理", subject: "物理", kb_version: 1, created_at: "", owner_type: "user", org_id: null, org_name: null, writable: true, summary: SUMMARY },
 ];
 
 function FilterHarness() {

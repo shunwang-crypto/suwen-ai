@@ -1270,20 +1270,22 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                   还没有练习记录
                 </p>
               ) : (
-                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <ul className="divide-y divide-line">
                   {quizzes.map((qz) => (
                     <li key={qz.id}>
                       <button
                         type="button"
                         disabled={quizLoading}
                         onClick={() => void openQuiz(qz.id)}
-                        className="w-full rounded-[10px] border border-line bg-[#fafaf9] px-4 py-3 text-left text-body-sm text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50/40 disabled:opacity-50"
+                        className="w-full px-1 py-3 text-left text-body-sm text-ink-secondary transition-colors hover:bg-surface-muted/60 disabled:opacity-50"
                       >
-                        <span className="block truncate font-medium">
-                          <MathText text={qz.title || "未命名练习"} singleLine />
-                        </span>
-                        <span className="block text-caption text-slate-400">
-                          {fmtDateTime(qz.created_at)}
+                        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="min-w-40 flex-1 truncate font-medium text-ink"><MathText text={qz.title || "未命名练习"} singleLine /></span>
+                          <span className="shrink-0 text-caption text-slate-400">{fmtDateTime(qz.created_at)}</span>
+                          <span className="shrink-0 text-caption text-ink-muted">{qz.question_count ?? "—"} 题 · {qz.kc_count ?? "—"} 个知识点</span>
+                          <span className="shrink-0 text-caption font-medium text-ink-secondary">{qz.score == null ? "未作答" : `正确率 ${Math.round(qz.score * 100)}%`}</span>
+                          {qz.evidence_policy === "calibration_only" && <span className="rounded-full bg-warning-50 px-1.5 py-0.5 text-caption font-medium text-warning-700">校准练习</span>}
+                          {(qz.error_count ?? 0) > 0 && <span className="rounded-full bg-danger-50 px-1.5 py-0.5 text-caption font-medium text-danger-700">错题 {qz.error_count}</span>}
                         </span>
                       </button>
                     </li>

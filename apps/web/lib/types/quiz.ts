@@ -20,6 +20,15 @@ export interface QuizListItem {
   title: string;
   status: string;
   created_at: string;
+  kb_id?: string | null;
+  question_count?: number;
+  attempt_count?: number;
+  score?: number | null;
+  error_count?: number;
+  error_question_ids?: string[];
+  kc_count?: number;
+  evidence_policy?: "mastery_eligible" | "calibration_only" | string;
+  plan_mode?: "course_bound" | "goal_only" | "standalone" | string;
 }
 
 export interface QuizQuestion {
@@ -130,6 +139,7 @@ export interface GraphInterruptData {
   resources?: PlanResource[];
   goal_analysis?: PlanGoalAnalysis;
   skill_gaps?: PlanSkillGap[];
+  plan_mode?: "course_bound" | "goal_only";
   [key: string]: unknown;
 }
 

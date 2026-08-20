@@ -26,13 +26,11 @@ from ..gateway.base import ChatMessage, ChatRequest, Tier
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与全仓共用 json_utils.parse_json_object
 from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
-from ..mastery.thresholds import zone_label
 from .state import GraphDeps, PlanState
 
 # 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
-_DEFAULT_MASTERY = 0.3  # 无证据时的保守掌握度初值
 _DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
 _DAY_MAX_RATIO = 1.15  # 上限 = 1.15 * 预算
 _TOPIC_LIMIT = 5  # gather_resources 逐 topic 检索的 topic 上限
@@ -67,16 +65,49 @@ def _topic_related(name: str, topics: list[str]) -> bool:
     return False
 
 
-def _render_diagnosis(diagnosis: dict, key_topics: list[str]) -> str:
-    """掌握度出境渲染 (P2-7 脱敏): 只给定性档, 精确概率仅供图内确定性逻辑使用。
-
-    目标相关条目优先、其余按掌握度升序, 截断到 _DIAGNOSIS_LIMIT 防 prompt 膨胀。
-    """
-    entries = sorted(
-        diagnosis.items(),
-        key=lambda kv: (not _topic_related(kv[0], key_topics), kv[1], kv[0]),
-    )[:_DIAGNOSIS_LIMIT]
-    return "\n".join(f"- {name}: {zone_label(p)}" for name, p in entries) or "(无摸底数据)"
+def _render_diagnosis(
+    diagnosis: dict, key_topics: list[str], baseline_topics: list[str] | None = None
+) -> str:
+    """Render verified evidence semantics without model-estimated probabilities."""
+    zone_rank = {"较弱": 0, "待巩固": 1, "接近掌握": 2, "已掌握": 3}
+    entries: list[tuple[str, str, str | None]] = []
+    for name, raw in diagnosis.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(raw, dict):
+            continue
+        state = raw.get("evidence_state")
+        band = raw.get("mastery_band")
+        if state == "observed" and band in zone_rank:
+            entries.append((name.strip(), "observed", str(band)))
+        elif state in {"estimated", "unobserved"}:
+            entries.append((name.strip(), str(state), None))
+    entries.sort(
+        key=lambda item: (
+            not _topic_related(item[0], key_topics),
+            0 if item[1] != "observed" else 1,
+            zone_rank.get(item[2] or "", 4),
+            item[0],
+        )
+    )
+    lines: list[str] = []
+    seen: set[str] = set()
+    for name, state, band in entries[:_DIAGNOSIS_LIMIT]:
+        normalized = normalize_kc_name(name)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        if state == "observed" and band:
+            lines.append(f"- {name}: {band}（真实作答证据充分）")
+        else:
+            lines.append(f"- {name}: 证据不足，先安排短验证")
+    for topic in baseline_topics or []:
+        if len(lines) >= _DIAGNOSIS_LIMIT or not isinstance(topic, str) or not topic.strip():
+            continue
+        normalized = normalize_kc_name(topic)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        lines.append(f"- {topic.strip()}: 尚未验证，先安排基线练习")
+    return "\n".join(lines) or "(暂无真实学习证据，先安排基线任务)"
 
 
 class PlanGraphState(PlanState, total=False):
@@ -99,6 +130,7 @@ class PlanGraphState(PlanState, total=False):
     skill_gaps: list[dict]
     # 可操作的目标拆解；只保留用户提供或从目标中忠实提取的文本。
     goal_analysis: dict
+    baseline_topics: list[str]
 
 
 def _load_prompt(filename: str) -> str:
@@ -577,7 +609,12 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
     if key_topics:
         # 目标主题优先, 掌握度记录只取与目标相关的 KC 补充 (防跨学科记录污染降级计划)
         related = [k for k in diagnosis if _topic_related(k, key_topics)]
-        topics = list(dict.fromkeys([*gap_topics, *key_topics, *related]))
+        baseline = [
+            topic
+            for topic in (state.get("baseline_topics") or [])
+            if isinstance(topic, str) and topic.strip()
+        ]
+        topics = list(dict.fromkeys([*gap_topics, *key_topics, *baseline, *related]))
     else:
         topics = gap_topics or [state.get("goal") or "自主学习"]
     days = []
@@ -597,7 +634,7 @@ def _fallback_plan(state: dict, total_days: int, budget_minutes: float) -> dict:
                         ],
                         "completion_criteria": f"能不看资料解释{topic}，并独立完成一道基础题",
                         "minutes": max(int(round(budget_minutes)), 1),
-                        "kc_names": [topic] if topic in diagnosis else [],
+                        "kc_names": [topic],
                         "resource_ref": None,
                         "action_type": "practice" if not state.get("kb_id") else "mixed",
                         "practice_count": 3,
@@ -730,6 +767,12 @@ def _fix_resource_refs(plan: dict, n_resources: int, fixes: list[dict]) -> None:
                     }
                 )
                 next_resource += 1
+            elif not n_resources and task["action_type"] == "read":
+                task["action_type"] = "tutor"
+                task["resource_ref"] = None
+                fixes.append(
+                    {"fix": "unreferenced_read_replaced", "task": task["title"]}
+                )
 
 
 def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> None:
@@ -865,61 +908,46 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         }
 
     async def diagnose(state: PlanGraphState) -> dict:
-        # 外部注入的真实掌握度优先 (BKT, 由 routers/plans.py 预查 mastery_records 注入):
-        # LLM 摸底只对没有真实记录的主题兜底, 且不得覆盖真实值 (掌握度只许 BKT+确定性规则)。
-        existing: dict[str, float] = {}
-        for key, value in (state.get("diagnosis") or {}).items():
-            if isinstance(key, str) and key.strip() and isinstance(value, int | float):
-                existing[key.strip()] = min(max(float(value), 0.0), 1.0)
-        known_keys = {normalize_kc_name(name) for name in existing}
+        # Only verified evidence may supply a mastery band. Unobserved topics
+        # are scheduled for a baseline check; the planner never asks an LLM to
+        # invent a probability for them.
+        raw_diagnosis = state.get("diagnosis") or {}
+        existing: dict[str, dict[str, str]] = {}
+        for key, value in raw_diagnosis.items():
+            if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+                continue
+            evidence = value.get("evidence_state")
+            band = value.get("mastery_band")
+            if evidence not in {"unobserved", "estimated", "observed"}:
+                continue
+            item = {"evidence_state": str(evidence)}
+            if evidence == "observed" and band in {"较弱", "待巩固", "接近掌握", "已掌握"}:
+                item["mastery_band"] = str(band)
+            existing[key.strip()] = item
+        observed_keys = {
+            normalize_kc_name(name)
+            for name, item in existing.items()
+            if item.get("evidence_state") == "observed"
+        }
         parsed = state.get("parsed_goal") or {}
         topics = parsed.get("key_topics") or []
-        missing = [t for t in topics if normalize_kc_name(t) not in known_keys]
-        if existing and not missing:
-            # 真实掌握度已覆盖全部主题, 完全不调 LLM
-            return {
-                "diagnosis": existing,
-                "trace": [
-                    {
-                        "node": "diagnose",
-                        "event": "external_diagnosis_used",
-                        "kc_count": len(existing),
-                    }
-                ],
-            }
-        if not missing:
-            return {
-                "diagnosis": existing,
-                "trace": [{"node": "diagnose", "event": "no_topics"}],
-            }
-        prompt = (
-            _load_prompt("plan_diagnose.md")
-            .replace("{{KEY_TOPICS}}", "\n".join(f"- {t}" for t in missing))
-            .replace("{{LEVEL_HINT}}", parsed.get("level_hint") or "(未提供)")
-        )
-        data = await _chat_json(
-            deps, state, feature="plan_diagnose", prompt=prompt, tier=Tier.plan, temperature=0.0
-        )
-        raw = data.get("diagnosis") if isinstance(data, dict) else None
-        llm_est: dict[str, float] = {}
-        if isinstance(raw, dict):
-            for key, value in raw.items():
-                if isinstance(key, str) and isinstance(value, int | float):
-                    llm_est[normalize_kc_name(key)] = min(max(float(value), 0.0), 1.0)
-        diagnosis = dict(existing)
-        for topic in missing:
-            # 保守兜底: LLM 漏掉 (或解析失败) 的主题一律取 0.3
-            diagnosis[topic] = llm_est.get(normalize_kc_name(topic), _DEFAULT_MASTERY)
-        event = "external_plus_conservative" if existing else "conservative_initialized"
+        baseline = [
+            topic
+            for topic in topics
+            if isinstance(topic, str)
+            and topic.strip()
+            and normalize_kc_name(topic) not in observed_keys
+        ]
         return {
-            "diagnosis": diagnosis,
+            "diagnosis": existing,
+            "baseline_topics": baseline,
             "trace": [
                 {
                     "node": "diagnose",
-                    "event": event,
-                    "kc_count": len(diagnosis),
-                    "known_count": len(existing),
-                    "backfilled_count": len(missing),
+                    "event": "evidence_state_used",
+                    "kc_count": len(existing),
+                    "observed_count": len(observed_keys),
+                    "baseline_count": len(baseline),
                 }
             ],
         }
@@ -930,7 +958,8 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         resources: list[dict] = []
         trace: list[dict] = []
         kb_id = state.get("kb_id", "")
-        if kb_id and deps.retrieval is not None:
+        plan_mode = state.get("plan_mode") or ("course_bound" if kb_id else "goal_only")
+        if plan_mode == "course_bound" and kb_id and deps.retrieval is not None:
             seen_chunks: set[str] = set()
             for topic in topics:
                 try:
@@ -958,7 +987,26 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                             "chunk_id": chunk.chunk_id,
                         }
                     )
-        if deps.web_search is not None:
+        if plan_mode == "goal_only" and kb_id:
+            trace.append(
+                {
+                    "node": "gather_resources",
+                    "event": "kb_skipped_goal_only",
+                }
+            )
+        # A course-bound plan is grounded exclusively in the selected KB.
+        # Keep this guard in the graph as well as in finalize_plan: a graph
+        # checkpoint can outlive a UI selection and must never acquire web
+        # resources by falling through to the generic search path.
+        if plan_mode == "course_bound":
+            if deps.web_search is not None:
+                trace.append(
+                    {
+                        "node": "gather_resources",
+                        "event": "web_skipped_course_bound",
+                    }
+                )
+        elif plan_mode == "goal_only" and deps.web_search is not None:
             seen_urls: set[str] = set()
             for topic in topics:
                 try:
@@ -985,6 +1033,14 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                             "url": url,
                         }
                     )
+        elif plan_mode not in {"course_bound", "goal_only"}:
+            trace.append(
+                {
+                    "node": "gather_resources",
+                    "event": "web_skipped_invalid_plan_mode",
+                    "plan_mode": str(plan_mode),
+                }
+            )
         # 知识库与 web 均不可用: 资源标"待补充", 计划仍生成
         event = "gathered" if resources else "resources_pending"
         trace.append({"node": "gather_resources", "event": event, "count": len(resources)})
@@ -1014,7 +1070,14 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{SUBJECT}}", parsed.get("subject") or "(未知)")
             # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
             # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
-            .replace("{{DIAGNOSIS}}", _render_diagnosis(diagnosis, parsed.get("key_topics") or []))
+            .replace(
+                "{{DIAGNOSIS}}",
+                _render_diagnosis(
+                    diagnosis,
+                    parsed.get("key_topics") or [],
+                    state.get("baseline_topics") or [],
+                ),
+            )
             .replace("{{SKILL_GAPS}}", _render_skill_gaps(state.get("skill_gaps")))
             .replace("{{PROFILE}}", (state.get("profile_summary") or "(无额外画像)"))
             .replace("{{RESOURCES}}", resources_block)
@@ -1058,6 +1121,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
                 "resources": state.get("resources") or [],
                 "goal_analysis": state.get("goal_analysis") or {},
                 "skill_gaps": state.get("skill_gaps") or [],
+                "plan_mode": state.get("plan_mode") or "goal_only",
             }
         )
         approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)

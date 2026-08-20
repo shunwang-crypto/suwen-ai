@@ -45,6 +45,13 @@ _SHORT_ANSWER_WEIGHT = 0.5  # §5.6: 主观题证据 0.5 权重进 BKT (写死)
 _SHORT_PASS_SCORE = 0.6
 _MIN_KC_MATCH_LEN = 2  # 归一化后过短的 KC 名不参与子串匹配 (防单字误伤)
 
+# Quiz provenance is separate from Plan.plan_mode.  A quiz without a plan
+# attribution can still be mastery-eligible (for example, a learner's
+# ordinary practice against already observed KC records), but it is not a
+# goal-only calibration activity merely because it has no KB foreign key.
+QUIZ_PLAN_MODE_STANDALONE = "standalone"
+_QUIZ_PLAN_MODES = {"course_bound", "goal_only", QUIZ_PLAN_MODE_STANDALONE}
+
 
 @dataclass(frozen=True)
 class KcReadiness:
@@ -562,6 +569,39 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
     if not isinstance(questions, list) or not questions:
         raise ValueError("QUIZ_FINALIZE_EMPTY")
     kb_id = state.get("kb_id") or None
+    evidence_policy = state.get("evidence_policy") or "mastery_eligible"
+    if evidence_policy not in {"mastery_eligible", "calibration_only"}:
+        raise QuizKCError("INVALID_EVIDENCE_POLICY")
+    raw_plan_mode = state.get("plan_mode")
+    has_plan_attribution = bool(state.get("plan_id") and state.get("task_id"))
+    if (
+        isinstance(raw_plan_mode, str)
+        and raw_plan_mode not in _QUIZ_PLAN_MODES
+    ):
+        raise QuizKCError("INVALID_QUIZ_PROVENANCE")
+    plan_mode = (
+        raw_plan_mode
+        if isinstance(raw_plan_mode, str) and raw_plan_mode in _QUIZ_PLAN_MODES
+        else (
+            "goal_only"
+            if has_plan_attribution and evidence_policy == "calibration_only"
+            else ("course_bound" if kb_id else QUIZ_PLAN_MODE_STANDALONE)
+        )
+    )
+    # Calibration is a property of an attributed goal-only plan task, never a
+    # fallback inferred from a missing KB.  Reject inconsistent graph state
+    # before any question or quiz row is written.
+    if plan_mode == "goal_only":
+        if not has_plan_attribution or evidence_policy != "calibration_only":
+            raise QuizKCError("INVALID_QUIZ_PROVENANCE")
+        # A caller may still have carried the course KB through a stale
+        # checkpoint.  Goal-only attribution owns the scope, so discard it.
+        kb_id = None
+    elif plan_mode == "course_bound":
+        if kb_id is None or evidence_policy != "mastery_eligible":
+            raise QuizKCError("INVALID_QUIZ_PROVENANCE")
+    elif evidence_policy != "mastery_eligible" or kb_id is not None:
+        raise QuizKCError("INVALID_QUIZ_PROVENANCE")
     gateway_mode = state.get("gateway_mode")
     if not isinstance(gateway_mode, str) or not gateway_mode:
         from eduagents_core.config import get_settings
@@ -590,14 +630,16 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
         for question in questions:
             if not isinstance(question, dict):
                 raise QuizKCError("QUIZ_KC_REQUIRED")
-            kc_ids = await _resolve_kc_ids(
-                session,
-                kb_id,
-                question.get("kc_names", []),
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                org_ids=ctx.org_ids,
-            )
+            kc_ids = []
+            if evidence_policy == "mastery_eligible":
+                kc_ids = await _resolve_kc_ids(
+                    session,
+                    kb_id,
+                    question.get("kc_names", []),
+                    user_id=ctx.user_id,
+                    tenant_id=ctx.tenant_id,
+                    org_ids=ctx.org_ids,
+                )
             if readiness is not None and readiness.status == "ready":
                 if not kc_ids or not set(kc_ids) <= eligible:
                     raise QuizKCError("QUIZ_KC_REQUIRED")
@@ -615,6 +657,8 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
             resolved_questions.append((question, kc_ids))
 
         blueprint = dict(state.get("blueprint") or {})
+        blueprint["_evidence_policy"] = evidence_policy
+        blueprint["_plan_mode"] = plan_mode
         if state.get("plan_id") and state.get("task_id"):
             blueprint["_plan_task_attribution"] = {
                 "plan_id": str(state["plan_id"]),
@@ -679,10 +723,17 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
         raise HTTPException(status_code=400, detail="INVALID_PLAN_ID") from None
 
     raw_kb_id = state.get("kb_id") or ""
+    plan_mode = state.get("plan_mode")
+    if plan_mode not in {"course_bound", "goal_only"}:
+        raise HTTPException(status_code=400, detail="INVALID_PLAN_MODE")
     try:
         kb_id = uuid.UUID(str(raw_kb_id)) if raw_kb_id else None
     except ValueError:
         raise HTTPException(status_code=400, detail="INVALID_KB_ID") from None
+    if plan_mode == "course_bound" and kb_id is None:
+        raise HTTPException(status_code=400, detail="KB_REQUIRED")
+    if plan_mode == "goal_only" and kb_id is not None:
+        raise HTTPException(status_code=400, detail="GOAL_ONLY_KB_FORBIDDEN")
 
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         # Two confirmation requests may arrive from separate tabs. Serialize
@@ -753,7 +804,18 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
                     doc_id=doc_id,
                     chunk_id=chunk_id,
                 )
-            elif source_type == "web" and is_safe_public_url(raw.get("url")):
+            elif source_type == "web":
+                # Course-bound plans are an explicit closed-world scope.  Do
+                # not silently downgrade or persist a web result supplied by
+                # an edited plan/checkpoint; reject it before the transaction
+                # can create any PlanResource rows.
+                if plan_mode == "course_bound":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="COURSE_BOUND_WEB_RESOURCE_FORBIDDEN",
+                    )
+                if not is_safe_public_url(raw.get("url")):
+                    continue
                 row = PlanResource(
                     id=uuid.uuid4(),
                     tenant_id=ctx.tenant_id,
@@ -793,6 +855,27 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
                         and ref in resource_ids
                         else None
                     )
+                    if task.get("resource_id") is None and task.get("action_type") == "read":
+                        task["action_type"] = "tutor"
+                    task["evidence_policy"] = (
+                        "calibration_only" if plan_mode == "goal_only" else "mastery_eligible"
+                    )
+                    task["concept_status"] = (
+                        "provisional" if plan_mode == "goal_only" else "course_grounded"
+                    )
+
+        has_kb_resource = any(row.source_type == "kb_chunk" for row in resource_objects)
+        has_web_resource = any(row.source_type == "web" for row in resource_objects)
+        if plan_mode == "course_bound" and has_web_resource:
+            # Defensive second check in case another source type is added to
+            # the parser without receiving the closed-world guard above.
+            raise HTTPException(status_code=400, detail="COURSE_BOUND_WEB_RESOURCE_FORBIDDEN")
+        if plan_mode == "course_bound" and has_kb_resource:
+            grounding_status = "kb_grounded"
+        elif plan_mode == "goal_only" and has_web_resource:
+            grounding_status = "web_assisted"
+        else:
+            grounding_status = "unreferenced"
 
         plan = Plan(
             id=plan_id,
@@ -801,6 +884,8 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
             goal=str(state.get("goal") or "")[:2000],
             budget_hours=float(state.get("budget_hours_per_day") or 0),
             kb_id=kb_id,
+            plan_mode=plan_mode,
+            grounding_status=grounding_status,
             status="active",
             structure_json=structure,
         )
@@ -839,6 +924,8 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
             "plan_id": local_id,
             "plan": structure,
             "kb_id": str(kb_id) if kb_id else None,
+            "plan_mode": plan_mode,
+            "grounding_status": grounding_status,
             "resources": [_plan_resource_public(row) for row in resource_objects],
         }
 
@@ -1129,6 +1216,9 @@ async def _validated_quiz_kc_snapshots(
 
     from eduagents_core.config import get_settings
 
+    evidence_policy = (quiz.blueprint_json or {}).get("_evidence_policy", "mastery_eligible")
+    if evidence_policy == "calibration_only":
+        return {str(question.id): [] for question in questions}
     readiness = None
     if quiz.kb_id is not None:
         readiness = await quiz_kc_readiness(
@@ -1205,6 +1295,36 @@ async def record_attempts(
                 await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
             ).all()
         }
+        blueprint = quiz.blueprint_json or {}
+        evidence_policy = blueprint.get("_evidence_policy", "mastery_eligible")
+        raw_plan_mode = blueprint.get("_plan_mode")
+        has_plan_attribution = bool(
+            isinstance(blueprint.get("_plan_task_attribution"), dict)
+            and blueprint["_plan_task_attribution"].get("plan_id")
+            and blueprint["_plan_task_attribution"].get("task_id")
+        )
+        plan_mode = (
+            raw_plan_mode
+            if isinstance(raw_plan_mode, str) and raw_plan_mode in _QUIZ_PLAN_MODES
+            else (
+                "goal_only"
+                if has_plan_attribution and evidence_policy == "calibration_only"
+                else ("course_bound" if quiz.kb_id else QUIZ_PLAN_MODE_STANDALONE)
+            )
+        )
+        attribution = blueprint.get("_plan_task_attribution")
+        if isinstance(raw_plan_mode, str) and raw_plan_mode not in _QUIZ_PLAN_MODES:
+            raise HTTPException(status_code=409, detail="INVALID_QUIZ_PROVENANCE")
+        if evidence_policy not in {"mastery_eligible", "calibration_only"}:
+            raise HTTPException(status_code=409, detail="INVALID_QUIZ_PROVENANCE")
+        if plan_mode == "goal_only":
+            if not has_plan_attribution or evidence_policy != "calibration_only":
+                raise HTTPException(status_code=409, detail="INVALID_QUIZ_PROVENANCE")
+        elif plan_mode == "course_bound":
+            if quiz.kb_id is None or evidence_policy != "mastery_eligible":
+                raise HTTPException(status_code=409, detail="INVALID_QUIZ_PROVENANCE")
+        elif evidence_policy != "mastery_eligible" or quiz.kb_id is not None:
+            raise HTTPException(status_code=409, detail="INVALID_QUIZ_PROVENANCE")
         kc_snapshots = await _validated_quiz_kc_snapshots(
             session, ctx, quiz, list(questions.values())
         )
@@ -1292,15 +1412,17 @@ async def record_attempts(
             # The same normalized snapshot feeds ErrorItem, LearningEvent,
             # MasteryRecord and MasteryLog in this transaction.
             kc_ids = kc_snapshots[str(q.id)]
-            changes = await apply_mastery_evidence(
-                session,
-                ctx,
-                kc_ids,
-                correct,
-                weight,
-                attempt.id,
-                now_dt=business_now,
-            )
+            changes = []
+            if evidence_policy == "mastery_eligible":
+                changes = await apply_mastery_evidence(
+                    session,
+                    ctx,
+                    kc_ids,
+                    correct,
+                    weight,
+                    attempt.id,
+                    now_dt=business_now,
+                )
             await write_learning_event(
                 session,
                 tenant_id=ctx.tenant_id,
@@ -1352,7 +1474,6 @@ async def record_attempts(
                     "mastery_changes": changes,
                 }
             )
-        attribution = (quiz.blueprint_json or {}).get("_plan_task_attribution")
         if isinstance(attribution, dict) and len(results) == len(questions) and questions:
             from .plan_adjust import PlanTaskAttributionError, complete_plan_task
 
@@ -1383,12 +1504,25 @@ async def record_attempts(
 
     plan_adjustment = None
     accuracy = (n_correct / total) if total else 1.0
+    attributed_plan_id = None
+    if isinstance(attribution, dict):
+        try:
+            attributed_plan_id = uuid.UUID(str(attribution.get("plan_id") or ""))
+        except ValueError:
+            attributed_plan_id = None
     if total and accuracy < LOW_SCORE_THRESHOLD:
-        plan_adjustment = await adjust_on_low_score(ctx, accuracy)
+        plan_adjustment = await adjust_on_low_score(
+            ctx,
+            accuracy,
+            quiz_kb_id=quiz.kb_id,
+            attributed_plan_id=attributed_plan_id,
+            evidence_policy=evidence_policy,
+        )
     return {
         "total": total,
         "correct": n_correct,
         "results": results,
         "plan_adjustment": plan_adjustment,  # 新增键, 老调用方忽略即可
         "plan_task_completion": plan_task_completion,
+        "evidence_policy": evidence_policy,
     }

@@ -162,7 +162,13 @@ async def test_account_deletion_wipes_all_tables(client):
             )
         )
         s.add(ErrorItem(tenant_id=uid, user_id=uid, question_id=q.id))
-        plan = Plan(tenant_id=uid, user_id=uid, goal="g")
+        plan = Plan(
+            tenant_id=uid,
+            user_id=uid,
+            goal="g",
+            plan_mode="goal_only",
+            grounding_status="unreferenced",
+        )
         s.add(plan)
         await s.flush()
         s.add(PlanAdjustment(tenant_id=uid, plan_id=plan.id, reason="r"))

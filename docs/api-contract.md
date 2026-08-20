@@ -139,7 +139,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/kb | {name, subject} 建库 |
-| GET | /api/kb | 库列表 |
+| GET | /api/kb | 课程列表；每项带 `summary`：资料就绪/处理中/失败数、题目核验数、最近计划进度、最近活动时间与确定性 `next_action` |
 | DELETE | /api/kb/{id} | 删库 + 异步物理清理（向量/对象） |
 | POST | /api/kb/{id}/documents | multipart 上传；后缀白名单+魔数+配额三重校验；同哈希幂等；入 ARQ 摄取队列 |
 | GET | /api/kb/{id}/documents | 文档列表（含两阶段状态机 status/error_msg） |
@@ -230,18 +230,18 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
 | POST | /api/quiz | {topic, kb_id?, num_questions, difficulty_mix, from_weak_points?, plan_id?, task_id?, confirmation_mode?} → SSE：Blueprint → interrupt(blueprint_confirm)；归因只接受本人计划的 practice/mixed 任务 |
 | GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason_code/reason_params/question_count/difficulty_mix`，不返回题干或掌握度小数 |
 | POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_id?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
-| GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；`blueprint.kind=error_import` 的导入卷不返回 |
-| POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。响应执行客观本地/简答 LLM 判分、错题自动入本、BKT 与 mastery_log；正确率<0.6 时附 `plan_adjustment`；导入卷不可作答 |
+| GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；列表同时返回题数、有效作答数、正确率、错题数/ID、KC 数、`evidence_policy` 与 `plan_mode`（`course_bound`/`goal_only`/`standalone`），供练习历史按行扫描；`blueprint.kind=error_import` 的导入卷不返回 |
+| POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。课程资料练习写 BKT/mastery_log；目标起步计划的 `calibration_only` 练习保留作答、错题和空 KC 学习事件，但**绝不写正式 KC 或掌握度**。正确率<0.6 时仅同课程的正式练习可附 `plan_adjustment`；导入卷不可作答 |
 | GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
 | POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
-| POST | /api/plans | `{goal, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认，服务端不再静默补默认值；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案和资源。服务端重新校验 KB 访问、任务结构与资源引用 |
-| GET | /api/plans | 计划列表，含 `kb_id/kb_name/status`；`status` 为 `active/completed/archived`，每个用户最多一个 active 计划 |
-| GET | /api/plans/{id} | 本人计划详情（历史计划可读）：含 `status/kb_id/kb_name/resources`；`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带服务端生成且不随结构调整变化的 UUID `task_id`、`objective/instructions/completion_criteria/action_type/resource/resource_id/status`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 UUID 集合 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges,primary_route}`。`kc_dependency` 只包含当前计划任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_ids/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_ids`，不含 `p_mastery`/`confidence`；`primary_route` 是到「最深的计划任务 KC」的关键路径（确定性：终点取 depth 最大者、回退时每步取支撑链最长的前驱，并列按稳定库序），**只走真实先修边，相邻两点必有边**，无任务 KC 时为空数组；空图返回空 `levels/edges/primary_route`，不写回计划结构。另附 `provisional_concepts`（0034）：计划任务里没有正式 KC 承接的临时概念（`{name,status}`，按计划里首次出现序），只用于说明这份计划打算覆盖什么，**不参与掌握度/证据/依赖图** |
+| POST | /api/plans | `{goal, plan_mode, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`plan_mode` 必须显式为 `course_bound`（必须带 `kb_id`）或 `goal_only`（禁止带 `kb_id`），不再从空值猜模式。课程计划只读取所选 KB 的资料、KC、先修和掌握度，**不调用或接受网页资源**；目标起步计划不读取任何课程画像，只安排基线校准，并可使用安全公开网页作为辅助资料。`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案、资源与 `plan_mode`。服务端重新校验 KB 访问、任务结构与资源引用 |
+| GET | /api/plans | 计划列表，可选 `kb_id` 精确过滤；含 `kb_id/kb_name/plan_mode/grounding_status/status`；`status` 为 `active/completed/archived`，每个用户最多一个 active 计划 |
+| GET | /api/plans/{id} | 本人计划详情（历史计划可读）：含 `status/kb_id/kb_name/plan_mode/grounding_status/resources`；`plan_mode=goal_only` 的任务标 `evidence_policy=calibration_only` 与 `concept_status=provisional`，不产生 KC 依赖图或学情自动补强。`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带服务端生成且不随结构调整变化的 UUID `task_id`、`objective/instructions/completion_criteria/action_type/resource/resource_id/status`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 UUID 集合 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges,primary_route}`。`kc_dependency` 只包含课程资料计划的当前任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_ids/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_ids`，不含 `p_mastery`/`confidence`；`primary_route` 是到「最深的计划任务 KC」的关键路径（确定性：终点取 depth 最大者、回退时每步取支撑链最长的前驱，并列按稳定库序），**只走真实先修边，相邻两点必有边**，无任务 KC 时为空数组；空图返回空 `levels/edges/primary_route`，不写回计划结构。另附 `provisional_concepts`（0034）：计划任务里没有正式 KC 承接的临时概念（`{name,status}`，按计划里首次出现序），只用于说明这份计划打算覆盖什么，**不参与掌握度/证据/依赖图** |
 | GET | /api/plans/{id}/tasks/{task_id}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_id`；任务文字不进入 URL，非法或他人任务统一 404 |
 | POST | /api/plans/{id}/tasks/{task_id}/toggle | `{status: pending|done|skipped}` 显式更新任务状态；状态内嵌 `structure_json`，不另建列 |
 | POST | /api/plans/{id}/tasks/{task_id}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
 | POST | /api/plans/{id}/archive | 放弃唯一 active 计划并置为 archived；completed/archived 计划只读，不可隐式恢复 |
-| POST | /api/plans/{id}/adjust | 依学情调整：p_mastery<0.4 且计划未覆盖的 KC → 最近未完成日插带目标、步骤、完成标准、`action_type=practice` 的「补强: {KC}」任务 → `{inserted, reason}` |
+| POST | /api/plans/{id}/adjust | 仅课程资料计划可依学情调整；候选必须来自同一 KB、`evidence_state=observed` 且低于补强阈值，并且尚未被计划覆盖。目标起步计划返回空调整，不读取其他课程掌握度 |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
 | POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
 | GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_id`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |

@@ -596,14 +596,17 @@ async def recommend_practice(
             "count": task.get("practice_count") or 5,
             "kc_names": list(task.get("kc_names") or []),
             "day_no": day_no,
+            "plan_mode": plan.plan_mode,
         }
         if kb:
             by_name = {str(name).strip(): kid for kid, name in zip(kb.get("kc_ids", []), kb.get("kc_names", []), strict=False)}
             task_context["kc_ids"] = [by_name[name] for name in task_context["kc_names"] if name in by_name]
-        else:
+        elif plan.plan_mode == "course_bound":
             # A plan cannot silently cross a readiness barrier.  Let the
             # normal weak/cold/upload branch explain the current state.
             task_context = None
+        else:
+            task_context["kc_ids"] = []
 
     weak_points = await _load_weak_points(
         session, tenant_id, user_id, ready_for_decision

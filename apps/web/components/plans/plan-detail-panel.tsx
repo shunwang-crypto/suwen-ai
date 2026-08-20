@@ -5,6 +5,7 @@
 // /plans 聚合壳与 /courses/[kbId] 计划 tab 渲染同一份，交互逻辑单处维护。
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import {
@@ -172,11 +173,21 @@ export function PlanDetailPanel({
       <Card
         title={<span className="block max-w-100 truncate">{goal}</span>}
         extra={
-          <span className="text-caption text-slate-400">
-            {status === "active" ? "进行中 · " : status === "completed" ? "已完成 · " : "已归档 · "}每日 {budgetHours} 小时
+          <span className="flex flex-wrap items-center justify-end gap-1.5 text-caption text-slate-400">
+            {view && <span className={`rounded-full px-2 py-0.5 font-medium ${view.plan_mode === "course_bound" ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{view.plan_mode === "course_bound" ? "课程资料计划" : "目标起步计划"}</span>}
+            <span>{status === "active" ? "进行中 · " : status === "completed" ? "已完成 · " : "已归档 · "}每日 {budgetHours} 小时</span>
           </span>
         }
       >
+        {view?.plan_mode === "goal_only" && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 px-3.5 py-3">
+            <div>
+              <p className="text-body-sm font-semibold text-warning-800">这是一份目标起步计划</p>
+              <p className="mt-1 text-caption leading-5 text-warning-700">当前概念和练习用于校准起点，不进入正式知识图谱，也不更新课程掌握度。上传资料后可新建一份课程资料计划。</p>
+            </div>
+            <Link href="/courses" className="rounded-lg border border-warning-300 bg-white px-3 py-2 text-body-sm font-medium text-warning-800 hover:bg-warning-100">上传资料后校准计划</Link>
+          </div>
+        )}
         {/* 计划头部：任务粒度进度（分段式，每阶段一段）+ 学情调整入口 */}
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <div className="min-w-40 flex-1">
@@ -238,9 +249,9 @@ export function PlanDetailPanel({
           </div>
           <button
             type="button"
-            disabled={!view || view.status !== "active" || adjusting}
+            disabled={!view || view.status !== "active" || adjusting || view.plan_mode !== "course_bound"}
             onClick={() => void runAdjust()}
-            title="按当前掌握度（p<0.4 的知识点）在最近未完成日插入补强任务"
+            title={view?.plan_mode === "goal_only" ? "目标起步计划不读取其他课程掌握度自动调整" : "按当前课程的真实学习证据插入补强任务"}
             className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {adjusting && <Spinner className="h-3.5 w-3.5" />}

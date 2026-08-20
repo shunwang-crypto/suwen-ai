@@ -6,15 +6,15 @@
 // 「根据学情调整计划」插入补强任务并高亮、调整历史时间线。
 
 import {
+  Suspense,
   useCallback,
   useEffect,
   useRef,
   useState,
-  useSyncExternalStore,
   type FormEvent,
 } from "react";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   Card,
@@ -27,7 +27,7 @@ import {
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
 import { PlanDetailPanel } from "@/components/plans/plan-detail-panel";
-import { ApiError, apiJson } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
   PLAN_GOAL_EXAMPLES,
@@ -36,20 +36,19 @@ import {
   planGoalReadiness,
 } from "@/lib/plan-goal";
 import { streamSse } from "@/lib/sse";
-import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanListItem, PlanStructure} from "@/lib/types";
+import type {ErrorEventData, GraphDoneData, GraphInterruptData, GraphTraceData, KbOut, NodeUpdateData, PlanListItem, PlanMode, PlanStructure} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 import * as Parts from "@/components/plans/plan-parts";
 
-export default function PlansPage() {
+function PlansView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
   const userId = user?.id ?? "anonymous";
-  const search = useSyncExternalStore(
-    Parts.emptySubscribe,
-    () => window.location.search,
-    () => "",
-  );
-  const requestedPlanId = new URLSearchParams(search).get("id");
+  const requestedPlanId = searchParams.get("id");
+  const requestedMode = searchParams.get("mode");
+  const requestedCreate = searchParams.get("create");
+  const requestedKbId = searchParams.get("kb");
   const [plans, setPlans] = useState<PlanListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanListItem | null>(null);
@@ -59,7 +58,10 @@ export default function PlansPage() {
   const [currentLevel, setCurrentLevel] = useState("");
   const [targetOutcome, setTargetOutcome] = useState("");
   const [successCriteria, setSuccessCriteria] = useState("");
-  const [kbId, setKbId] = useState("");
+  const [planMode, setPlanMode] = useState<PlanMode>(
+    requestedMode === "course_bound" ? "course_bound" : "goal_only",
+  );
+  const [kbId, setKbId] = useState(requestedKbId ?? "");
   const [hours, setHours] = useState<number | null>(null);
   const [totalDays, setTotalDays] = useState<number | null>(null);
   const [deadline, setDeadline] = useState("");
@@ -73,26 +75,14 @@ export default function PlansPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 首个 setState 在 await 之后（effect 内不允许同步 setState）
-  const loadPlans = useCallback(async (): Promise<PlanListItem[]> => {
-    try {
-      const list = await apiJson<PlanListItem[]>("/api/plans");
-      setPlans(list);
-      setListError(null);
-      return list;
-    } catch (err) {
-      setPlans((prev) => prev ?? []);
-      setListError(err instanceof ApiError ? err.message : "计划列表加载失败");
-      return [];
-    }
-  }, []);
-
-  // A5 收敛: 首屏计划列表收敛为 useApiResource; kbs 派生; 本地草稿恢复独立为挂载 effect
+  // 计划列表只有一个请求入口；reload 会使旧响应失效（latest-wins）。
   const plansListRes = useApiResource<PlanListItem[]>("/api/plans", {
     errorMessage: "计划列表加载失败",
   });
+  const reloadPlans = plansListRes.reload;
   const kbListRes = useApiResource<KbOut[]>("/api/kb");
   const kbs = kbListRes.data ?? [];
+  const preferredPlanIdRef = useRef<string | null>(null);
 
   /* eslint-disable react-hooks/set-state-in-effect -- 外部资源到达/失败 → 选中项/错误横幅的单向同步, 无纯派生替代 */
   useEffect(() => {
@@ -104,11 +94,18 @@ export default function PlansPage() {
     const requested = requestedPlanId
       ? (list.find((plan) => plan.id === requestedPlanId) ?? null)
       : null;
-    if (requested?.kb_id) {
+    if (requested?.kb_id && requested.plan_mode === "course_bound") {
       router.replace(`/courses/${requested.kb_id}?tab=plan`);
       return;
     }
-    setSelected(requested ?? list[0] ?? null);
+    setSelected((current) => {
+      const preferredId = preferredPlanIdRef.current;
+      const preferred = preferredId
+        ? (list.find((plan) => plan.id === preferredId) ?? null)
+        : null;
+      if (preferred) preferredPlanIdRef.current = null;
+      return requested ?? preferred ?? list.find((plan) => plan.id === current?.id) ?? list[0] ?? null;
+    });
   }, [plansListRes.data, requestedPlanId, router]);
 
   useEffect(() => {
@@ -116,24 +113,30 @@ export default function PlansPage() {
     if (plansListRes.error) setPlans((prev) => prev ?? []);
   }, [plansListRes.error]);
 
-  // 唯一知识库时回填表单默认值（有本地草稿则不抢）
+  // URL entry points are explicit: Today/onboarding can open the goal-only
+  // flow without requiring a hidden course selection.
   useEffect(() => {
-    const availableKbs = kbListRes.data ?? [];
-    if (!Parts.readPendingPlan(userId) && availableKbs.length === 1) {
-      setKbId(availableKbs[0].id);
+    if (requestedMode === "course_bound" || requestedMode === "goal_only") {
+      setPlanMode(requestedMode);
     }
-  }, [kbListRes.data, userId]);
+    if (requestedMode === "course_bound" && requestedKbId) {
+      setKbId(requestedKbId);
+    }
+    if (requestedCreate === "1") setShowCreate(true);
+  }, [requestedCreate, requestedKbId, requestedMode]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // 恢复本地待确认/生成中的计划草稿（含中断确认态）
   /* eslint-disable react-hooks/set-state-in-effect -- localStorage 草稿 → 表单/阶段的单向恢复, 无纯派生替代 */
   useEffect(() => {
+    if (requestedCreate === "1" && (requestedMode || requestedKbId)) return;
     const pending = Parts.readPendingPlan(userId);
     if (!pending) return;
     setGoal(pending.form.goal);
     setCurrentLevel(pending.form.currentLevel ?? "");
     setTargetOutcome(pending.form.targetOutcome ?? "");
     setSuccessCriteria(pending.form.successCriteria ?? "");
+    setPlanMode(pending.form.planMode ?? "goal_only");
     setKbId(pending.form.kbId);
     setHours(pending.form.hours);
     setTotalDays(pending.form.totalDays);
@@ -147,7 +150,7 @@ export default function PlansPage() {
           ? "resuming"
           : "await_confirm",
     );
-  }, [userId]);
+  }, [requestedCreate, requestedKbId, requestedMode, userId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -156,7 +159,7 @@ export default function PlansPage() {
       const pending = Parts.readPendingPlan(userId);
       if (!pending) {
         setPhase("idle");
-        void loadPlans();
+        reloadPlans();
         return;
       }
       if (pending.status === "await_confirm" && pending.interrupt) {
@@ -165,7 +168,7 @@ export default function PlansPage() {
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [phase, loadPlans, userId]);
+  }, [phase, reloadPlans, userId]);
 
   /** 切换选中计划：有 kb 的计划点击直达课程计划 tab；全局计划留在本页看详情。 */
   const selectPlan = (plan: PlanListItem | null) => {
@@ -210,6 +213,7 @@ export default function PlansPage() {
                     currentLevel,
                     targetOutcome,
                     successCriteria,
+                    planMode,
                     kbId,
                     hours,
                     totalDays,
@@ -227,11 +231,8 @@ export default function PlansPage() {
               setInterruptData(null);
               if (planId) {
                 setNotice(null);
-                void loadPlans().then((list) => {
-                  setSelected(
-                    list.find((p) => p.id === planId) ?? list[0] ?? null,
-                  );
-                });
+                preferredPlanIdRef.current = planId;
+                reloadPlans();
               } else {
                 setNotice("已取消，计划未保存。");
               }
@@ -282,11 +283,12 @@ export default function PlansPage() {
       goal,
       hours,
       kbId,
-      loadPlans,
+      reloadPlans,
       successCriteria,
       targetOutcome,
       totalDays,
       userId,
+      planMode,
     ],
   );
 
@@ -306,10 +308,11 @@ export default function PlansPage() {
       setFlowError("请先确认截止日期/周期，以及每天可投入时间；系统不会替你猜默认值。");
       return;
     }
-    if (kbs.length > 1 && !kbId) {
+    if (planMode === "course_bound" && !kbId) {
       setFlowError("请先选择这次计划使用的知识库范围。");
       return;
     }
+    const effectiveKbId = planMode === "course_bound" ? kbId : "";
     setHours(selectedHours);
     setTotalDays(selectedTotalDays);
     Parts.clearPendingPlan(userId);
@@ -321,7 +324,8 @@ export default function PlansPage() {
         currentLevel: currentLevel.trim(),
         targetOutcome: targetOutcome.trim(),
         successCriteria: successCriteria.trim(),
-        kbId,
+        planMode,
+        kbId: effectiveKbId,
         hours: selectedHours,
         totalDays: selectedTotalDays,
       },
@@ -337,7 +341,8 @@ export default function PlansPage() {
       current_level: currentLevel.trim() || undefined,
       target_outcome: targetOutcome.trim(),
       success_criteria: successCriteria.trim(),
-      kb_id: kbId || undefined,
+      plan_mode: planMode,
+      kb_id: effectiveKbId || undefined,
       budget_hours_per_day: selectedHours,
       total_days: selectedTotalDays,
     });
@@ -351,6 +356,7 @@ export default function PlansPage() {
       currentLevel,
       targetOutcome,
       successCriteria,
+      planMode,
       kbId,
       hours,
       totalDays,
@@ -378,7 +384,7 @@ export default function PlansPage() {
   const scheduleReady =
     (planIntent.dailyHours ?? hours) != null &&
     Boolean(confirmedDeadline || confirmedTotalDays);
-  const scopeReady = kbs.length <= 1 || Boolean(kbId);
+  const scopeReady = planMode === "goal_only" || Boolean(kbId);
 
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-5 sm:px-7 lg:px-8 lg:py-6">
@@ -441,6 +447,29 @@ export default function PlansPage() {
                   ))}
                 </div>
               </div>
+              <fieldset className="rounded-xl border border-line bg-white p-3">
+                <legend className="px-1 text-body-sm font-semibold text-ink">计划来源</legend>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    aria-pressed={planMode === "course_bound"}
+                    onClick={() => setPlanMode("course_bound")}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors ${planMode === "course_bound" ? "border-brand-400 bg-brand-50 text-brand-700" : "border-line-strong text-ink-secondary hover:border-brand-300"}`}
+                  >
+                    <span className="block text-body-sm font-semibold">基于课程资料</span>
+                    <span className="mt-0.5 block text-caption text-ink-muted">任务、练习和掌握度都限定在选定课程内</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={planMode === "goal_only"}
+                    onClick={() => { setPlanMode("goal_only"); setKbId(""); }}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors ${planMode === "goal_only" ? "border-brand-400 bg-brand-50 text-brand-700" : "border-line-strong text-ink-secondary hover:border-brand-300"}`}
+                  >
+                    <span className="block text-body-sm font-semibold">暂不绑定资料</span>
+                    <span className="mt-0.5 block text-caption text-ink-muted">先做目标拆解和基线练习，不更新正式掌握度</span>
+                  </button>
+                </div>
+              </fieldset>
               <label className="block">
                 <span className="mb-1 block text-caption font-medium text-slate-500">
                   一句话目标 <span className="text-rose-500">*</span>
@@ -484,13 +513,13 @@ export default function PlansPage() {
                 </div>
                 {confirmedDeadline && <p className="mt-2 text-body-sm text-success-700">已确认截止日期：{confirmedDeadline}</p>}
               </div>
-              {kbs.length > 1 && !kbId && (
+              {planMode === "course_bound" && (
                 <div className="rounded-xl border border-brand-100 bg-brand-50/40 p-3" aria-label="选择学习范围">
                   <p className="text-body-sm font-medium text-ink">这次计划学习哪一份资料？</p>
                   <p className="mt-1 text-caption text-ink-muted">请选择一次范围，其他背景和成果仍可稍后补充。</p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {kbs.map((kb) => (
-                      <button type="button" key={kb.id} onClick={() => setKbId(kb.id)} className="rounded-full border border-brand-200 bg-white px-3 py-1.5 text-body-sm font-medium text-brand-700 hover:border-brand-400">
+                      <button type="button" key={kb.id} aria-pressed={kbId === kb.id} onClick={() => setKbId(kb.id)} className={`rounded-full border px-3 py-1.5 text-body-sm font-medium ${kbId === kb.id ? "border-brand-500 bg-brand-600 text-white" : "border-brand-200 bg-white text-brand-700 hover:border-brand-400"}`}>
                         {kb.name}
                       </button>
                     ))}
@@ -610,7 +639,7 @@ export default function PlansPage() {
           <Card title="我的计划">
             {listError && (
               <div className="mb-2">
-                <ErrorBanner message={listError} onRetry={() => void loadPlans()} />
+                <ErrorBanner message={listError} onRetry={reloadPlans} />
               </div>
             )}
             {plans === null ? (
@@ -634,7 +663,11 @@ export default function PlansPage() {
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
                       <span className="block text-caption font-normal text-slate-400">
-                        {p.status === "active" ? "进行中 · " : p.status === "completed" ? "已完成 · " : "已归档 · "}每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <span>{p.status === "active" ? "进行中" : p.status === "completed" ? "已完成" : "已归档"}</span>
+                          <span className={`rounded-full px-1.5 py-0.5 ${p.plan_mode === "course_bound" ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{p.plan_mode === "course_bound" ? "课程资料" : "目标起步"}</span>
+                          <span>· 每日 {p.budget_hours} 小时 · {fmtDateTime(p.created_at)}</span>
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -654,6 +687,7 @@ export default function PlansPage() {
             <Parts.PlanConfirmCard
               plan={interruptData.plan}
               resources={interruptData.resources ?? []}
+              planMode={interruptData.plan_mode === "course_bound" ? "course_bound" : planMode}
               goalAnalysis={interruptData.goal_analysis}
               skillGaps={interruptData.skill_gaps}
               onConfirm={(edited) => resume(true, edited)}
@@ -672,7 +706,7 @@ export default function PlansPage() {
               goal={selected.goal}
               status={selected.status}
               budgetHours={selected.budget_hours}
-              onChanged={loadPlans}
+              onChanged={reloadPlans}
             />
           ) : (
             phase === "idle" &&
@@ -687,5 +721,13 @@ export default function PlansPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PlansPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto w-full max-w-[1180px] px-5 py-6" />}>
+      <PlansView />
+    </Suspense>
   );
 }
