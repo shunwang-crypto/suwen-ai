@@ -264,7 +264,7 @@ async def _load_snapshots(
             row, kc_name = insight_row
             insight = {"kc_name": kc_name or "", "kind": row.kind, "text": row.text}
 
-        plan_row = await active_plan(session, uuid.UUID(str(ctx.user_id)))
+        plan_row = await active_plan(session, uuid.UUID(str(ctx.tenant_id)), uuid.UUID(str(ctx.user_id)))
         plan = (
             plan_today_snapshot(
                 plan_row.goal,

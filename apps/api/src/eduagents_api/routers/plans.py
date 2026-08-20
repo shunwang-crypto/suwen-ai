@@ -840,7 +840,7 @@ async def tutor_entrypoints(request: Request, ctx: AuthContext = Depends(api_rat
     """Return safe IDs for context-aware Tutor entry cards."""
     now_dt = await timectl.now(request.app.state.redis)
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
-        plan = await active_plan(session, ctx.user_id)
+        plan = await active_plan(session, uuid.UUID(str(ctx.tenant_id)), uuid.UUID(str(ctx.user_id)))
         today_task = None
         if plan is not None:
             snapshot = plan_schedule_snapshot(

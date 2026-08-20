@@ -467,11 +467,11 @@ async def _weak_kcs(session, user_id: uuid.UUID) -> list[tuple[str, str, float]]
     ]
 
 
-async def active_plan(session, user_id: uuid.UUID) -> Plan | None:
+async def active_plan(session, tenant_id: uuid.UUID, user_id: uuid.UUID) -> Plan | None:
     """Return the explicitly active plan; creation time is not a lifecycle rule."""
     return await session.scalar(
         select(Plan).where(
-            Plan.tenant_id == user_id,
+            Plan.tenant_id == tenant_id,
             Plan.user_id == user_id,
             Plan.status == "active",
         )
@@ -598,7 +598,7 @@ async def adjust_on_low_score(ctx, accuracy: float) -> dict | None:
 
     try:
         async with tenant_session(ctx.tenant_id) as session:
-            plan = await active_plan(session, ctx.user_id)
+            plan = await active_plan(session, ctx.tenant_id, ctx.user_id)
             if plan is None:
                 return None
             result = await adjust_plan(
