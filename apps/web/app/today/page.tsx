@@ -187,7 +187,10 @@ export default function TodayPage() {
           <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">从你的资料开始</p>
           <h2 className="mt-3 text-[24px] font-semibold tracking-[-0.035em] text-ink">先建立一个学习空间</h2>
           <p className="mx-auto mt-2 max-w-lg text-[13px] leading-6 text-ink-secondary">上传教材、讲义、试卷或作业后，苏问才能基于真实资料安排学习。</p>
-          <Link href="/courses" className="mt-6 inline-flex h-10 items-center rounded-[8px] bg-ink px-5 text-[13px] font-semibold text-white">创建第一门课程</Link>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+            <Link href="/courses" className="inline-flex h-10 items-center rounded-[8px] bg-ink px-5 text-[13px] font-semibold text-white">上传资料开始</Link>
+            <Link href="/plans?create=1&mode=goal_only" className="inline-flex h-10 items-center rounded-[8px] border border-line-strong bg-white px-5 text-[13px] font-semibold text-ink-secondary">暂时没有资料，先制定计划</Link>
+          </div>
         </section>
       </div>
     );
@@ -240,7 +243,9 @@ export default function TodayPage() {
         )}
       </section>
 
-      <TodayPlanSection />
+      {/* The primary next-action owns the current plan task. Rendering the full
+          task list here as well would create a duplicate CTA for plan_task. */}
+      {primary.type !== "plan_task" && <TodayPlanSection />}
 
       <ReviewCountStrip />
 
