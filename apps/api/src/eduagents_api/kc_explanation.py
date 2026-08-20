@@ -13,7 +13,8 @@
 
 1. **每个 block 必须引用学生本人资料里的真实 chunk**。``source_refs`` 只能是本次
    传入的候选 chunk id；引用不到就丢弃该 block —— 讲解不许脱离资料凭空生成。
-2. **diagram 必须结构可用**。nodes/edges 非空、id 唯一、边两端存在、无自环、无环。
+2. **diagram 必须结构可用**。nodes 非空、id 唯一；edges **允许为空**（单节点概念图
+   本身不算错），但只要有边就必须两端存在、无自环、无环。
    一个"看起来对其实错"的图比没有图更糟；这里只做最小结构校验，不做题型专项校验。
 3. **不出练习题**。讲解模块不生成题目/选项/答案/判分（练习有独立模块与证据口径）。
 
@@ -86,6 +87,8 @@ def _validate_diagram(data: dict[str, Any]) -> dict[str, Any]:
     raw_edges = data.get("edges")
     if not isinstance(raw_nodes, list) or not raw_nodes:
         raise BlockIssue("diagram 缺少 nodes")
+    # edges 允许为空数组: 只有节点的概念图不算结构错误, 不因风格问题丢内容。
+    # 但只要给了边, 就必须过引用/自环/环三道校验。
     if not isinstance(raw_edges, list):
         raise BlockIssue("diagram 的 edges 必须是数组")
     nodes: list[dict[str, str]] = []

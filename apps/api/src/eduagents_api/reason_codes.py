@@ -7,11 +7,23 @@ profile_summary 各写一遍, 改一处就漂一处; 而且散文一旦写进掌
 稳定键与展示文案分离的理由同 ``mastery.thresholds`` 的 ``mastery_band`` /
 ``zone_label``: 改一次文案不得静默改掉行为。
 
-过渡期契约:
+**覆盖范围**（说准确, 免得日后误以为已经全量收口）:
 
-- 后端新产出 = ``reason_code`` + ``reason_params``;
-- ``reason`` 散文字段**暂时保留**, 仅供尚未升级的旧客户端, 新前端代码禁止读取;
-- 禁止为新的码补写散文 (守卫见 ``tests/unit/test_reason_codes.py``)。
+- ``routers/next_actions`` 五种 kind —— 已接入;
+- ``practice_recommendation`` 九个分支 —— 已接入（同时仍写兼容散文, 见下）;
+- ``profile_summary.weak_point_kcs`` / ``difficulty_rationale`` 逐 KC 理由 —— 已接入;
+- ``plan_adjust`` 的计划调整理由 —— **未接入**, 且当前不打算接入（理由见文末）。
+
+一句话口径: 稳定码覆盖**学习推荐与难度解释**, 不含**计划调整审计理由**。
+
+过渡期契约（现状就是"双写", 不是"只给码"）:
+
+- 后端新产出 ``reason_code`` + ``reason_params``;
+- ``reason`` 散文字段**由后端继续生成**, 作为尚未升级旧客户端的兼容字段 ——
+  它不是已删除字段, 也不是"已经没人写"的字段;
+- 新前端代码只消费 ``reason_code`` / ``reason_params``, 禁止读 ``reason``;
+- **禁止新增散文产出点**（守卫见 ``tests/unit/test_reason_codes.py`` 的
+  ``PROSE_ALLOWLIST``）—— 约束的是"不再变多", 不是"已经归零"。
 
 脱敏是结构性的, 不靠正则事后查:
 

@@ -148,7 +148,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | GET | /api/kb/{id}/documents/{doc}/chunks | 分块预览器（text/页码/heading_path/向量化状态） |
 | POST | /api/kb/{id}/debug/retrieve | 检索调试面板：dense/sparse 命中、融合重排、置信度全透明 |
 | GET | /api/kb/{id}/kc-graph | 课程知识图（Learning Map full 模式，只读派生，不落新表）：该库全部存活 KC + 全部 `prerequisite` 边 + 按章聚合 + 本人证据档。节点带 `kc_id/kc_name/chapter/evidence_state/evidence_state_label/band`；**`band` 定性档只在 `evidence_state=observed` 时给出**（未观测/估计中不叙述成薄弱或已掌握），全程不出 `p_mastery`/百分比。章序按 `chapter_sort_key`，节点序 `(created_at, id)`（确定性可重复，同批 enrich 内不等于插入序）；被 `superseded_by_id` 归并的 KC 及其边不出境；他人库 404 |
-| GET · POST | /api/kb/{id}/kc/{kc}/explanation | 按知识点的结构化讲解（0033）。block 只允许 `concept/worked_example/misconception/diagram`，**每块必须引用本人资料里的真实 chunk**（`source_refs` 只能取自本次候选片段，编造 id 的块被丢弃；一块都不剩则 502 `EXPLANATION_UNAVAILABLE`，不写库、不清空已有内容）；`diagram` 过最小结构校验（节点非空、边两端存在、无自环、无环）。按 `(kb, kc, 掌握档)` 缓存；掌握档取 `mastery_band`，证据不足（evidence_state≠observed）一律按 `unobserved` 讲。`generator_version` 或 `context_hash` 不匹配 → 返回 `stale=true` 与 `stale_reason`（teaching_contract_changed / material_changed），**内容仍然返回**（过期不等于清空）。该 KC 在资料里没有对应片段 → 409 `NO_SOURCE_MATERIAL`（不生成无出处内容）。讲解不含题目/选项/答案/判分 |
+| GET · POST | /api/kb/{id}/kc/{kc}/explanation | 按知识点的结构化讲解（0033）。block 只允许 `concept/worked_example/misconception/diagram`，**每块必须引用本人资料里的真实 chunk**（`source_refs` 只能取自本次候选片段，编造 id 的块被丢弃；一块都不剩则 502 `EXPLANATION_UNAVAILABLE`，不写库、不清空已有内容）；`diagram` 过最小结构校验（节点非空、id 唯一；**edges 允许为空** —— 单节点概念图不算错，有边时两端必须存在、无自环、无环）。按 `(kb, kc, 掌握档)` 缓存；掌握档取 `mastery_band`，证据不足（evidence_state≠observed）一律按 `unobserved` 讲。`generator_version` 或 `context_hash` 不匹配 → 返回 `stale=true` 与 `stale_reason`（teaching_contract_changed / material_changed），**内容仍然返回**（过期不等于清空）。该 KC 在资料里没有对应片段 → 409 `NO_SOURCE_MATERIAL`（不生成无出处内容）。讲解不含题目/选项/答案/判分 |
 
 `/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
 
@@ -209,8 +209,9 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   今日页唯一决策源（确定性聚合，零 LLM）。**推荐理由走稳定码**：`reason_code` 是后端
   `ReasonCode` 枚举值（snake_case），`reason_params` 只含计数（int）、定性档位枚举词与
   有界展示字符串——参数是逐码闭合白名单且拒绝 float，掌握度小数在类型上无处落脚
-  （P2-7）。展示文案的唯一出处是前端 `lib/reason-text.ts`。`reason` 散文是**过渡字段**，
-  仅供未升级的旧客户端，新客户端只读 `reason_code`/`reason_params`。同一套码同时用于
+  （P2-7）。展示文案的唯一出处是前端 `lib/reason-text.ts`。`reason` 散文是**过渡兼容字段**：
+  后端**仍继续生成**它（现状是双写，不是「只给码」），供未升级的旧客户端；新客户端只读
+  `reason_code`/`reason_params`，守卫测试禁止新增散文产出点（约束「不再变多」，而非「已归零」）。同一套码同时用于
   `/api/practice/next` 与出题蓝图的逐 KC 理由（`difficulty_reasons[].reason_code`）。
   例外：`/api/plans/{id}/adjust` 与 `adjustments` 的 `reason` 仍是中文散文——它是落库的
   审计事实，历史行无法反解为码。

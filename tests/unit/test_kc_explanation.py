@@ -205,3 +205,14 @@ def test_stale_when_teaching_contract_or_material_changes():
     assert is_stale(EXPLANATION_GENERATOR_VERSION, current, current) is False
     assert is_stale("kc-explanation-v0", current, current) is True
     assert is_stale(EXPLANATION_GENERATOR_VERSION, "old-hash", current) is True
+
+
+def test_diagram_with_no_edges_is_allowed_by_design():
+    """edges 允许为空：只有节点的概念图不算结构错误。
+
+    这条是**刻意钉住的产品决定**（评审定稿），不是漏校验 —— 若将来改成强制非空，
+    必须同时改 kc_explanation 模块 docstring 与本测试。
+    """
+    block = validate_block(_diagram([{"id": "a", "label": "甲"}], []), SOURCES)
+    assert block["data"]["nodes"] == [{"id": "a", "label": "甲"}]
+    assert block["data"]["edges"] == []
