@@ -44,12 +44,12 @@ export function CitationsPanel({
           strokeWidth="1.6"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="h-8 w-8 text-slate-300"
+          className="h-8 w-8 text-ink-muted"
           aria-hidden
         >
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6M9 13h6M9 17h6" />
         </svg>
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-ink-muted">
           暂无引用。使用知识库或网页搜索后，
           <br />
           回答的依据会展示在这里。
@@ -102,10 +102,10 @@ export function CitationsPanel({
                 onOpenContext?.(c);
               }
             }}
-            className={`fx-msg-in block w-full border-t border-slate-200 py-4 text-left first:border-t-0 ${
+            className={`fx-msg-in block w-full border-t border-line py-4 text-left first:border-t-0 ${
               active
                 ? "bg-brand-50/60"
-                : "bg-white hover:bg-slate-50"
+                : "bg-white hover:bg-surface-muted"
             }`}
           >
             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
@@ -114,7 +114,7 @@ export function CitationsPanel({
               >
                 [{c.idx}]
               </span>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
                 {c.doc_name || "未知文档"}
               </span>
               {c.source_type === "web" && (
@@ -175,14 +175,14 @@ export function CitationsPanel({
               )}
             </div>
             {(c.heading_path || c.page !== null) && (
-              <p className="mb-1 truncate text-xs text-slate-400">
+              <p className="mb-1 truncate text-xs text-ink-muted">
                 {c.heading_path}
                 {c.heading_path && c.page != null && " · "}
                 {c.page != null && `第 ${c.page} 页`}
               </p>
             )}
             {c.highlight && (
-              <p className="line-clamp-4 text-xs leading-relaxed text-slate-600">
+              <p className="line-clamp-4 text-xs leading-relaxed text-ink-secondary">
                 <MathText text={c.highlight} />
               </p>
             )}

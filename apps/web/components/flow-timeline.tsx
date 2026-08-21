@@ -73,8 +73,8 @@ function ExtraFields({
     <dl className="mt-1 space-y-0.5">
       {extras.map(([k, v]) => (
         <div key={k} className="flex gap-1.5 text-xs">
-          <dt className="shrink-0 font-medium text-slate-400">{k}</dt>
-          <dd className="min-w-0 break-all font-mono text-slate-500">
+          <dt className="shrink-0 font-medium text-ink-muted">{k}</dt>
+          <dd className="min-w-0 break-all font-mono text-ink-muted">
             {formatValue(v)}
           </dd>
         </div>
@@ -95,11 +95,11 @@ function FlowRow({ item }: { item: FlowItem }) {
           }`}
         />
         <div className="min-w-0 flex-1">
-          <p className="text-xs text-slate-600">
-            <span className="font-medium text-slate-800">
+          <p className="text-xs text-ink-secondary">
+            <span className="font-medium text-ink">
               {NODE_LABELS[node] ?? node}
             </span>
-            <span className="ml-1.5 font-mono text-slate-400">{node}</span>
+            <span className="ml-1.5 font-mono text-ink-muted">{node}</span>
             <span className={`ml-1.5 ${failed ? "text-red-600" : "text-emerald-600"}`}>
               {failed ? "失败" : "已完成"}
             </span>
@@ -115,8 +115,8 @@ function FlowRow({ item }: { item: FlowItem }) {
     <li className="flex items-start gap-2.5">
       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full border border-indigo-400 bg-white" />
       <div className="min-w-0 flex-1">
-        <p className="text-xs text-slate-600">
-          <span className="font-medium text-slate-800">
+        <p className="text-xs text-ink-secondary">
+          <span className="font-medium text-ink">
             {NODE_LABELS[node] ?? (node || "过程")}
           </span>
           {event && (
@@ -157,7 +157,7 @@ export function FlowTimeline({
   }`;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50/80">
+    <div className="overflow-hidden rounded-lg border border-line bg-surface-muted/80">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -179,9 +179,9 @@ export function FlowTimeline({
             <path d="M20 6 9 17l-5-5" />
           </svg>
         )}
-        <span className="min-w-0 flex-1 truncate text-xs text-slate-600">
+        <span className="min-w-0 flex-1 truncate text-xs text-ink-secondary">
           过程时间线（{items.length}）
-          <span className="ml-1.5 text-slate-400">{summary}</span>
+          <span className="ml-1.5 text-ink-muted">{summary}</span>
         </span>
         <svg
           viewBox="0 0 24 24"
@@ -190,7 +190,7 @@ export function FlowTimeline({
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+          className={`h-3.5 w-3.5 shrink-0 text-ink-muted transition-transform ${
             open ? "rotate-180" : ""
           }`}
           aria-hidden
@@ -199,7 +199,7 @@ export function FlowTimeline({
         </svg>
       </button>
       {open && (
-        <ul className="space-y-2 border-t border-slate-200 px-3 py-2">
+        <ul className="space-y-2 border-t border-line px-3 py-2">
           {items.map((item, i) => (
             <FlowRow key={i} item={item} />
           ))}

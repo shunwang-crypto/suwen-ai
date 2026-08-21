@@ -235,12 +235,15 @@ export function TaskStatusControls({
  *  渲染同一份，checkbox/跳过/锁徽章/补强高亮/预计分钟全部沿用。 */
 export function PlanTodayCard({
   structure,
+  currentDayNumber,
   onStatus,
   onTaskOpen,
   pendingKeys,
   highlightKeys,
 }: {
   structure: PlanStructure;
+  /** 真实日历日号（schedule.current_day）；给定则优先于"首个待办日"启发式，落后时不再把旧日冒充今日。 */
+  currentDayNumber?: number;
   onStatus?: (taskId: string, status: PlanTaskStatus) => void;
   onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
   pendingKeys?: Set<string>;
@@ -249,10 +252,13 @@ export function PlanTodayCard({
   const days = flattenDays(structure);
   if (days.length === 0) return null;
   const firstPendingIndex = days.findIndex((day) => day.tasks.some(taskIsPending));
-  const currentIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
+  const heuristicIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
+  const calendarIndex =
+    currentDayNumber != null ? days.findIndex((day) => day.day === currentDayNumber) : -1;
+  const currentIndex = calendarIndex >= 0 ? calendarIndex : heuristicIndex;
   const currentDay = days[currentIndex] ?? days[0];
   return (
-    <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+    <section className="overflow-hidden rounded-overlay border border-line bg-white">
       <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
       <ul className="divide-y divide-line">
         {currentDay.tasks.map((task, index) => {
@@ -270,12 +276,15 @@ export function PlanTodayCard({
 
 export function PlanCalendar({
   structure,
+  currentDayNumber,
   onStatus,
   onTaskOpen,
   pendingKeys,
   highlightKeys,
 }: {
   structure: PlanStructure;
+  /** 真实日历日号（schedule.current_day）；给定则优先于"首个待办日"启发式。 */
+  currentDayNumber?: number;
   onStatus?: (taskId: string, status: PlanTaskStatus) => void;
   onTaskOpen?: (location: Omit<PlanTaskLocation, "planKbId">) => void;
   pendingKeys?: Set<string>;
@@ -287,22 +296,25 @@ export function PlanCalendar({
     return <EmptyState title="该计划暂无日程" illustration="map" />;
   }
   const firstPendingIndex = days.findIndex((day) => day.tasks.some(taskIsPending));
-  const currentIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
+  const heuristicIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
+  const calendarIndex =
+    currentDayNumber != null ? days.findIndex((day) => day.day === currentDayNumber) : -1;
+  const currentIndex = calendarIndex >= 0 ? calendarIndex : heuristicIndex;
   const currentDay = days[currentIndex] ?? days[0];
   const upcoming = days.slice(currentIndex, currentIndex + 7);
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
-        <PlanTodayCard structure={structure} onStatus={onStatus} onTaskOpen={onTaskOpen} pendingKeys={pendingKeys} highlightKeys={highlightKeys} />
+        <PlanTodayCard structure={structure} currentDayNumber={currentDayNumber} onStatus={onStatus} onTaskOpen={onTaskOpen} pendingKeys={pendingKeys} highlightKeys={highlightKeys} />
 
-        <section className="overflow-hidden rounded-[12px] border border-line bg-white">
+        <section className="overflow-hidden rounded-overlay border border-line bg-white">
         <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-body-sm font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
         <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-caption font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-body-sm font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-caption text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-caption ${handled === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : day.day === currentDay.day ? `${done}/${day.tasks.length - skipped} 进行中` : "待开始"}</span></li>; })}</ol>
         </section>
       </div>
 
       {showFull && (
-        <section className="rounded-[12px] border border-line bg-surface-muted/40 p-4" aria-label="完整学习计划">
+        <section className="rounded-overlay border border-line bg-surface-muted/40 p-4" aria-label="完整学习计划">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-[13px] font-semibold text-ink">完整计划</h3>
@@ -325,7 +337,7 @@ export function PlanCalendar({
                     {(stage.days ?? []).map((day) => {
                       const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0);
                       return (
-                        <article key={day.day} className={`overflow-hidden rounded-[10px] border bg-white ${day.day === currentDay.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
+                        <article key={day.day} className={`overflow-hidden rounded-control border bg-white ${day.day === currentDay.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
                           <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-body-sm text-ink">第 {day.day} 天</strong><span className="text-caption text-ink-muted">{totalMinutes} 分钟</span></header>
                           <ul className="divide-y divide-line/70">
                             {day.tasks.map((task, taskIndex) => {
@@ -439,13 +451,13 @@ export function PlanConfirmCard({
     });
 
   const iconBtn =
-    "rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-body-sm text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
+    "rounded-lg border border-line bg-white px-1.5 py-0.5 text-body-sm text-ink-muted transition-colors hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-30";
 
   return (
-    <div className="rounded-[14px] border border-line bg-white p-5">
+    <div className="rounded-overlay border border-line bg-white p-5">
       <p className="text-caption font-medium text-brand-700">草案确认</p>
       <h3 className="mt-2 text-[22px] font-semibold tracking-[-0.03em] text-ink">{totalDays} 天学习计划</h3>
-      <p className="mt-0.5 text-caption text-slate-500">
+      <p className="mt-0.5 text-caption text-ink-muted">
         共 {draft.stages.length} 个阶段 / {totalDays} 天 / {totalTasks} 个任务
         {resources.length > 0 && ` · 关联 ${resources.length} 条学习资源`}
         ，可直接修改任务标题与时长，确认后才会保存。
@@ -526,17 +538,17 @@ export function PlanConfirmCard({
           );
           return (
             <li key={si} className="rounded-xl border border-indigo-100 bg-white p-3">
-              <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-slate-800">
+              <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
                 <span className={`h-2 w-2 rounded-full ${color.bar}`} />
                 {stage.name}
-                <span className="text-caption font-normal text-slate-400">
+                <span className="text-caption font-normal text-ink-muted">
                   {stage.days?.length ?? 0} 天 · 约 {Math.round(minutes / 60)} 小时
                 </span>
               </p>
               <ul className="mt-2 space-y-2">
                 {(stage.days ?? []).map((d, di) => !showAllDays && d.day > 3 ? null : (
-                  <li key={d.day} className="rounded-lg bg-slate-50/70 p-2">
-                    <p className="mb-1 text-body-sm font-medium text-slate-500">
+                  <li key={d.day} className="rounded-lg bg-surface-muted/70 p-2">
+                    <p className="mb-1 text-body-sm font-medium text-ink-muted">
                       第 {d.day} 天
                     </p>
                     {d.tasks.length === 0 ? (
@@ -563,7 +575,7 @@ export function PlanConfirmCard({
                                 className={`min-w-0 flex-1 rounded-lg border px-2 py-1 text-caption outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
                                   titleBad
                                     ? "border-rose-300 bg-rose-50"
-                                    : "border-slate-200 focus:border-indigo-300"
+                                    : "border-line focus:border-indigo-300"
                                 }`}
                               />
                               <input
@@ -582,10 +594,10 @@ export function PlanConfirmCard({
                                 className={`w-16 shrink-0 rounded-lg border px-1.5 py-1 text-right text-caption outline-none transition-colors focus:ring-2 focus:ring-indigo-100 ${
                                   minutesBad
                                     ? "border-rose-300 bg-rose-50"
-                                    : "border-slate-200 focus:border-indigo-300"
+                                    : "border-line focus:border-indigo-300"
                                 }`}
                               />
-                              <span className="shrink-0 text-body-sm text-slate-400">分钟</span>
+                              <span className="shrink-0 text-body-sm text-ink-muted">分钟</span>
                               <span className="flex shrink-0 items-center gap-1">
                                 <button
                                   type="button"
@@ -612,7 +624,7 @@ export function PlanConfirmCard({
                                   onClick={() => removeTask(si, di, ti)}
                                   title="删除该任务"
                                   aria-label="删除"
-                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-body-sm text-slate-400 transition-colors hover:border-rose-300 hover:text-rose-600"
+                                  className="rounded-lg border border-line bg-white px-1.5 py-0.5 text-body-sm text-ink-muted transition-colors hover:border-rose-300 hover:text-rose-600"
                                 >
                                   删除
                                 </button>
@@ -637,13 +649,13 @@ export function PlanConfirmCard({
 
       {resources.length > 0 && (
         <details className="mt-3 rounded-xl border border-indigo-100 bg-white p-3">
-          <summary className="cursor-pointer text-body-sm font-medium text-slate-600">
+          <summary className="cursor-pointer text-body-sm font-medium text-ink-secondary">
             学习资源（{resources.length}）
           </summary>
           <ul className="mt-1.5 space-y-0.5">
             {resources.map((r, i) => (
-              <li key={i} className="truncate text-caption text-slate-500">
-                <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-caption text-slate-500">
+              <li key={i} className="truncate text-caption text-ink-muted">
+                <span className="mr-1 rounded bg-surface-muted px-1 py-0.5 text-caption text-ink-muted">
                   {r.type === "kb" ? "知识库" : "网页"}
                 </span>
                 <MathText text={r.title} />
@@ -661,7 +673,7 @@ export function PlanConfirmCard({
         </p>
       )}
       {touched && !invalid && !emptied && (
-        <p className="mt-2 text-body-sm text-slate-400">
+        <p className="mt-2 text-body-sm text-ink-muted">
           已修改草案；保存时服务端会重新校验总时长与先修顺序，并以校验后的版本为准。
         </p>
       )}
@@ -670,7 +682,7 @@ export function PlanConfirmCard({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted"
+          className="rounded-control border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary hover:bg-surface-muted"
         >
           返回修改目标
         </button>
@@ -678,7 +690,7 @@ export function PlanConfirmCard({
           type="button"
           disabled={invalid || emptied}
           onClick={() => onConfirm(draft)}
-          className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {touched ? "确认并保存修改后的计划" : "确认并保存计划"}
         </button>

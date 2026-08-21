@@ -121,7 +121,7 @@ async def seed_history(user, kb_id: str, *, gateway_mode: str = "live") -> None:
     错题/BKT/审计流水全部由产品代码产生, 非手插结果行。"""
     from eduagents_api.db import tenant_session
     from eduagents_api.deps import AuthContext
-    from eduagents_api.models import Attempt, KnowledgeComponent, MasteryRecord, Question, Quiz
+    from eduagents_api.models import Attempt, KcEdge, KnowledgeComponent, MasteryRecord, Question, Quiz
     from eduagents_api.services import record_attempts
     from sqlalchemy import select
 
@@ -282,6 +282,35 @@ async def seed_history(user, kb_id: str, *, gateway_mode: str = "live") -> None:
             )
         if question_kc_ids - existing_mastery_ids:
             await session.flush()
+
+        # 依赖图 demo 需真实先修边: 否则 /plans 知识点依赖图在 stub/演示下无边可画,
+        # /growth 薄弱点的"源于前置未掌握"归因(reports 沿 kc_edges 回溯)也无从触发。
+        # 泰勒公式是麦克劳林公式(x0=0 特例)与拉格朗日余项(其余项形式)的先修。
+        kc_by_name = {
+            row.canonical_name: row.id
+            for row in (
+                await session.scalars(
+                    select(KnowledgeComponent).where(
+                        KnowledgeComponent.kb_id == uuid.UUID(kb_id),
+                        KnowledgeComponent.canonical_name.in_(
+                            ["泰勒公式", "拉格朗日余项", "麦克劳林公式"]
+                        ),
+                    )
+                )
+            ).all()
+        }
+        for from_name, to_name in [("泰勒公式", "麦克劳林公式"), ("泰勒公式", "拉格朗日余项")]:
+            from_id = kc_by_name.get(from_name)
+            to_id = kc_by_name.get(to_name)
+            if from_id is None or to_id is None:
+                continue
+            edge_exists = await session.scalar(
+                select(KcEdge).where(KcEdge.from_kc == from_id, KcEdge.to_kc == to_id)
+            )
+            if edge_exists is None:
+                session.add(KcEdge(tenant_id=user.id, from_kc=from_id, to_kc=to_id))
+        await session.flush()
+
         pending_questions = [
             question for question in questions if question.id not in attempted_question_ids
         ]

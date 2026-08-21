@@ -33,9 +33,9 @@ export function WeakPointCard({
 }) {
   const mastery = wp.p_mastery ?? 0;
   return (
-    <li className="rounded-2xl border border-slate-200 bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
+    <li className="rounded-2xl border border-line bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800" title={wp.name}>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink" title={wp.name}>
           {wp.name}
         </span>
         <span
@@ -50,7 +50,7 @@ export function WeakPointCard({
         >
           {isRedline ? "红线" : "待巩固"}
         </span>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-caption text-slate-600">
+        <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-caption text-ink-secondary">
           掌握度 {fmtPct(mastery)}
         </span>
         {wp.error_count > 0 && (
@@ -59,7 +59,7 @@ export function WeakPointCard({
           </span>
         )}
       </div>
-      <div className="mt-2 h-2 rounded-full bg-slate-100">
+      <div className="mt-2 h-2 rounded-full bg-surface-muted">
         <div
           className={`h-full rounded-full ${isRedline ? "bg-rose-500" : "bg-amber-500"}`}
           style={{ width: `${Math.max(mastery * 100, 2)}%` }}
@@ -75,7 +75,7 @@ export function WeakPointCard({
         </Link>
       </div>
       {wp.possible_root_cause.length > 0 && (
-        <div className="mt-2.5 space-y-2 border-t border-dashed border-slate-200 pt-2.5">
+        <div className="mt-2.5 space-y-2 border-t border-dashed border-line pt-2.5">
           {wp.possible_root_cause.map((rc) => (
             <div key={rc.kc_id}>
               {/* 归因可视链条：前置 KC → 当前 KC 箭头卡片 */}
@@ -98,7 +98,7 @@ export function WeakPointCard({
                   strokeWidth="2.2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-4 w-4 shrink-0 text-slate-300"
+                  className="h-4 w-4 shrink-0 text-ink-muted"
                   aria-hidden
                 >
                   <path d="M5 12h14m-6-6 6 6-6 6" />
@@ -115,7 +115,7 @@ export function WeakPointCard({
                   </span>
                 </span>
               </div>
-              <p className="mt-1 text-caption text-slate-500">
+              <p className="mt-1 text-caption text-ink-muted">
                 可能源于《{rc.name}》未掌握（{rc.p_mastery == null ? "未知" : fmtPct(rc.p_mastery)}），建议先补前置
               </p>
             </div>

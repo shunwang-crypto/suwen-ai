@@ -125,13 +125,13 @@ export function StatTiles({
   ];
 
   return (
-    <div className="grid grid-cols-2 overflow-hidden rounded-[14px] border border-line bg-white lg:grid-cols-4">
+    <div className="grid grid-cols-2 overflow-hidden rounded-overlay border border-line bg-white lg:grid-cols-4">
       {tiles.map((t) => (
         <div
           key={t.key}
           className="border-r border-line bg-white px-4 py-3 last:border-r-0"
         >
-          <p className="text-caption text-slate-500">{t.label}</p>
+          <p className="text-caption text-ink-muted">{t.label}</p>
           <p className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-ink">
             {t.value}
           </p>

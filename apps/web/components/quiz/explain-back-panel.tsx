@@ -44,7 +44,7 @@ export function ExplainBackPanel({
       <summary className="cursor-pointer text-body-sm font-medium text-brand-700">
         用自己的话反讲一次
       </summary>
-      <div className="mt-2 rounded-[9px] bg-white/75 p-3">
+      <div className="mt-2 rounded-control bg-white/75 p-3">
         <label className="block text-body-sm font-medium text-ink-secondary">
           不看解析，写下你对关键概念或解题步骤的解释
           <textarea
@@ -53,7 +53,7 @@ export function ExplainBackPanel({
             maxLength={3000}
             rows={3}
             disabled={submitting}
-            className="mt-1.5 w-full resize-y rounded-[8px] border border-line-strong bg-white px-3 py-2 text-body-sm leading-5 text-ink outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:opacity-60"
+            className="mt-1.5 w-full resize-y rounded-control border border-line-strong bg-white px-3 py-2 text-body-sm leading-5 text-ink outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:opacity-60"
             placeholder="例如：为什么这里可以使用这个公式？关键条件是什么？"
           />
         </label>
@@ -65,7 +65,7 @@ export function ExplainBackPanel({
             type="button"
             disabled={!studentText.trim() || submitting}
             onClick={() => void submit()}
-            className="rounded-[7px] bg-brand-600 px-3 py-1.5 text-body-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-control bg-brand-600 px-3 py-1.5 text-body-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? "分析中…" : result ? "重新获取反馈" : "获取表达反馈"}
           </button>
@@ -73,7 +73,7 @@ export function ExplainBackPanel({
         {error && <p role="alert" className="mt-2 text-body-sm text-danger-600">{error}</p>}
         {result && (
           <div
-            className="mt-3 space-y-2 rounded-[8px] border border-line bg-[#fafaf9] p-3 text-body-sm leading-5 text-ink-secondary"
+            className="mt-3 space-y-2 rounded-control border border-line bg-canvas p-3 text-body-sm leading-5 text-ink-secondary"
             aria-live="polite"
           >
             <div className="flex flex-wrap items-center gap-2">

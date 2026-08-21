@@ -56,13 +56,13 @@ function Particles() {
 function ProductMock() {
   return (
     <div className="fx-bob relative mx-auto w-full max-w-md md:rotate-2">
-      <div className="rounded-2xl border border-slate-200/80 bg-white/90 shadow-[0_24px_60px_-16px_rgba(79,70,229,0.28)] backdrop-blur">
+      <div className="rounded-2xl border border-line/80 bg-white/90 shadow-[0_24px_60px_-16px_rgba(79,70,229,0.28)] backdrop-blur">
         {/* 窗口头 */}
-        <div className="flex items-center gap-1.5 border-b border-slate-100 px-4 py-2.5">
+        <div className="flex items-center gap-1.5 border-b border-line px-4 py-2.5">
           <span className="h-2.5 w-2.5 rounded-full bg-rose-300" />
           <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
-          <span className="ml-2 truncate text-xs text-slate-400">
+          <span className="ml-2 truncate text-xs text-ink-muted">
             苏问 · 可溯源学习辅导
           </span>
         </div>
@@ -74,7 +74,7 @@ function ProductMock() {
             </div>
           </div>
           {/* 过程时间线 chip */}
-          <div className="flex items-center gap-1.5 text-caption text-slate-500">
+          <div className="flex items-center gap-1.5 text-caption text-ink-muted">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -91,7 +91,7 @@ function ProductMock() {
           </div>
           {/* AI 气泡（含引用角标） */}
           <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3.5 py-2 text-xs leading-relaxed text-slate-700 shadow-sm">
+            <div className="rounded-2xl rounded-bl-md border border-line bg-white px-3.5 py-2 text-xs leading-relaxed text-ink-secondary shadow-sm">
               贝叶斯定理描述了在已知相关证据时，如何更新事件的概率
               <span className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-indigo-100 px-1 text-caption font-semibold text-indigo-700">
                 1
@@ -100,20 +100,20 @@ function ProductMock() {
             </div>
           </div>
           {/* 引用卡（假数据） */}
-          <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80 p-2.5 pl-3.5">
+          <div className="relative overflow-hidden rounded-xl border border-line bg-surface-muted/80 p-2.5 pl-3.5">
             <span className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-indigo-500 to-sky-400" />
             <div className="flex items-center gap-1.5">
               <span className="flex h-4 min-w-4 items-center justify-center rounded bg-indigo-600 px-1 text-caption font-semibold text-white">
                 1
               </span>
-              <span className="truncate text-body-sm font-medium text-slate-700">
+              <span className="truncate text-body-sm font-medium text-ink-secondary">
                 概率论讲义.pdf
               </span>
-              <span className="ml-auto shrink-0 text-caption text-slate-400">
+              <span className="ml-auto shrink-0 text-caption text-ink-muted">
                 第 12 页
               </span>
             </div>
-            <p className="mt-1 line-clamp-2 border-l-2 border-indigo-200 pl-2 text-caption leading-relaxed text-slate-500">
+            <p className="mt-1 line-clamp-2 border-l-2 border-indigo-200 pl-2 text-caption leading-relaxed text-ink-muted">
               条件概率公式 P(A|B) = P(AB)/P(B)，结合全概率公式即可推出贝叶斯定理……
             </p>
           </div>
@@ -169,7 +169,7 @@ export function Hero() {
         <div className="flex items-center gap-2">
           <Link
             href="/login"
-            className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-white/70 hover:text-slate-900"
+            className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-white/70 hover:text-ink"
           >
             登录
           </Link>
@@ -189,14 +189,14 @@ export function Hero() {
             <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
             可验证学习者状态引擎 · VLSE
           </p>
-          <h1 className="mt-4 text-4xl font-bold leading-tight tracking-tight text-slate-900 md:text-5xl">
+          <h1 className="mt-4 text-4xl font-bold leading-tight tracking-tight text-ink md:text-5xl">
             懂你学到哪里的
             <br />
             <span className="bg-gradient-to-r from-indigo-600 via-violet-500 to-sky-500 bg-clip-text text-transparent">
               AI 学习伙伴
             </span>
           </h1>
-          <p className="mt-4 max-w-lg text-base leading-relaxed text-slate-600 md:text-lg">
+          <p className="mt-4 max-w-lg text-base leading-relaxed text-ink-secondary md:text-lg">
             可验证的学习者状态引擎：每个回答有出处，每次进步有记录。
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-3">
@@ -208,7 +208,7 @@ export function Hero() {
             </Link>
             <Link
               href="/login"
-              className="rounded-xl border border-slate-300 bg-white/80 px-6 py-3 text-sm font-semibold text-slate-700 backdrop-blur transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-700"
+              className="rounded-xl border border-line-strong bg-white/80 px-6 py-3 text-sm font-semibold text-ink-secondary backdrop-blur transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-700"
             >
               登录体验
             </Link>

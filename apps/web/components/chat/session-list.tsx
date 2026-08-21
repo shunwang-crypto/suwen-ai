@@ -275,11 +275,11 @@ export function SessionList({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
         {loading ? (
-          <p className="px-3 py-2 text-sm text-slate-400">加载中…</p>
+          <p className="px-3 py-2 text-sm text-ink-muted">加载中…</p>
         ) : sessions.length === 0 ? (
-          <p className="px-3 py-2 text-sm text-slate-400">暂无会话</p>
+          <p className="px-3 py-2 text-sm text-ink-muted">暂无会话</p>
         ) : orderedSessions.length === 0 ? (
-          <p className="px-3 py-4 text-center text-xs text-slate-400">没有找到相关对话</p>
+          <p className="px-3 py-4 text-center text-xs text-ink-muted">没有找到相关对话</p>
         ) : (
           <ul className="space-y-0.5">
             {orderedSessions.map((s, index) => {
@@ -291,12 +291,12 @@ export function SessionList({
               return (
                 <Fragment key={s.id}>
                   {index === 0 && pinned && (
-                    <li className="px-1.5 pb-0.5 pt-1 text-caption font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-1 text-caption font-normal text-ink-muted">
                       置顶
                     </li>
                   )}
                   {!pinned && (index === 0 || previousPinned) && (
-                    <li className="px-1.5 pb-0.5 pt-2 text-caption font-normal text-slate-400">
+                    <li className="px-1.5 pb-0.5 pt-2 text-caption font-normal text-ink-muted">
                       最近 7 天
                     </li>
                   )}
@@ -309,7 +309,7 @@ export function SessionList({
                         onBlur={() => void commitRename(s.id)}
                         onKeyDown={(e) => handleKey(e, s.id)}
                         maxLength={255}
-                        className="h-9 w-full rounded-lg border border-line-strong bg-white px-2.5 text-xs text-slate-900 outline-none"
+                        className="h-9 w-full rounded-lg border border-line-strong bg-white px-2.5 text-xs text-ink outline-none"
                       />
                     ) : (
                       <>
@@ -330,7 +330,7 @@ export function SessionList({
                               strokeWidth="1.8"
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                              className="h-3.5 w-3.5 shrink-0 text-ink-muted"
                               aria-label="已置顶"
                             >
                               <path d="M12 17v5M5 3h14M7 3l1 7-3 4h14l-3-4 1-7" />
@@ -373,7 +373,7 @@ export function SessionList({
                             aria-label={`打开“${s.title || "未命名会话"}”的操作菜单`}
                             data-session-menu-root
                             onClick={(event) => openMenu(event, s.id)}
-                            className="rounded-control p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                            className="rounded-control p-1 text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
                           >
                             <svg
                               viewBox="0 0 24 24"
@@ -397,7 +397,7 @@ export function SessionList({
         )}
       </div>
 
-      <p className="shrink-0 border-t border-slate-200 px-3 py-2 text-caption text-slate-400">
+      <p className="shrink-0 border-t border-line px-3 py-2 text-caption text-ink-muted">
         共 {sessions.length} 个对话 · 自动保存
       </p>
 
@@ -409,13 +409,13 @@ export function SessionList({
             role="menu"
             aria-label="会话操作"
             style={{ top: menu.top, left: menu.left }}
-            className="fixed z-[70] w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10"
+            className="fixed z-[70] w-44 rounded-xl border border-line bg-white p-1.5 shadow-xl shadow-ink/10"
           >
             <button
               type="button"
               role="menuitem"
               onClick={() => togglePinned(menuSession.id)}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-ink-secondary hover:bg-surface-muted"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -435,7 +435,7 @@ export function SessionList({
               type="button"
               role="menuitem"
               onClick={() => beginRename(menuSession)}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-ink-secondary hover:bg-surface-muted"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -490,7 +490,7 @@ export function SessionList({
               role="dialog"
               aria-modal="true"
               aria-labelledby="delete-session-title"
-              className="relative w-full max-w-[460px] rounded-[16px] border border-line bg-white p-6 shadow-floating"
+              className="relative w-full max-w-[460px] rounded-card border border-line bg-white p-6 shadow-floating"
             >
               <h2 id="delete-session-title" className="text-[20px] font-semibold text-ink">
                 删除对话？

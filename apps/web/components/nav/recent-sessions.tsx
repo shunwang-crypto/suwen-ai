@@ -69,7 +69,7 @@ export function RecentSessions({ onNavigate }: { onNavigate?: () => void }) {
                 href={`/chat?session=${session.id}`}
                 onClick={onNavigate}
                 title={session.title || "未命名会话"}
-                className="flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-[13px] text-ink-secondary transition-colors hover:bg-[#f4f3f0] hover:text-ink"
+                className="flex h-8 items-center gap-2 rounded-control px-2.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-muted hover:text-ink"
               >
                 <span className="flex min-w-0 flex-1 items-center gap-1">
                   <span className="min-w-0 truncate">
@@ -96,7 +96,7 @@ export function RecentSessions({ onNavigate }: { onNavigate?: () => void }) {
       <Link
         href="/chat"
         onClick={onNavigate}
-        className="mt-1 block rounded-[6px] px-2.5 py-1 text-caption text-ink-muted transition-colors hover:text-ink-secondary"
+        className="mt-1 block rounded-control px-2.5 py-1 text-caption text-ink-muted transition-colors hover:text-ink-secondary"
       >
         查看全部 →
       </Link>

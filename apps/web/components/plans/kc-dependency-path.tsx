@@ -88,7 +88,7 @@ export function KcDependencyPath({ dependency, onTaskOpen }: KcDependencyPathPro
         </div>
         <div className="flex items-center gap-2">
           <span className="text-caption text-ink-muted">共 {levels.length} 层</span>
-          <div role="group" aria-label="依赖视图切换" className="flex overflow-hidden rounded-[7px] border border-line">
+          <div role="group" aria-label="依赖视图切换" className="flex overflow-hidden rounded-control border border-line">
             {(["graph", "list"] as const).map((value) => (
               <button
                 key={value}

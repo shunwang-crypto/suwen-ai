@@ -86,7 +86,7 @@ export function ProgressRing({
       </svg>
       {showValue && (
         <span
-          className="absolute inset-0 flex items-center justify-center font-mono font-semibold text-slate-700"
+          className="absolute inset-0 flex items-center justify-center font-mono font-semibold text-ink-secondary"
           style={{ fontSize: Math.max(10, size * 0.24) }}
         >
           {Math.round(clamped * 100)}

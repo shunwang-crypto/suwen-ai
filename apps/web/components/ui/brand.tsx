@@ -19,7 +19,7 @@ export function BrandMark({
   const mark = (
     <span
       aria-hidden
-      className="flex shrink-0 items-center justify-center bg-[#1e1e1c] font-semibold text-white shadow-subtle ring-1 ring-white/15"
+      className="flex shrink-0 items-center justify-center bg-brand-600 font-semibold text-white shadow-subtle ring-1 ring-white/15"
       style={{ width: size, height: size, borderRadius: Math.max(7, Math.round(size * 0.27)), fontSize: Math.round(size * 0.5) }}
     >
       苏

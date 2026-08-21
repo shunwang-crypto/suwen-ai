@@ -101,7 +101,7 @@ function DiagramBlock({ data }: { data: NonNullable<ExplanationBlock["data"]> })
         {nodes.map((node) => (
           <li
             key={node.id}
-            className="rounded-[7px] border border-line bg-white px-2 py-1 text-caption text-ink"
+            className="rounded-control border border-line bg-white px-2 py-1 text-caption text-ink"
           >
             {node.label}
           </li>
@@ -168,7 +168,7 @@ export function KcExplanationPanel({ kbId, kcId }: { kbId: string; kcId: string 
           type="button"
           onClick={generate}
           disabled={generating}
-          className="rounded-[7px] border border-line bg-white px-3 py-1.5 text-caption font-medium text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-60"
+          className="rounded-control border border-line bg-white px-3 py-1.5 text-caption font-medium text-ink-secondary transition-colors hover:bg-surface-muted disabled:opacity-60"
         >
           {generating ? "生成中…" : data?.available ? "重新生成" : "生成讲解"}
         </button>
@@ -181,7 +181,7 @@ export function KcExplanationPanel({ kbId, kcId }: { kbId: string; kcId: string 
       )}
 
       {data?.stale && (
-        <p className="mt-2 rounded-[7px] border border-warning-200 bg-warning-50 px-3 py-2 text-caption text-warning-700">
+        <p className="mt-2 rounded-control border border-warning-200 bg-warning-50 px-3 py-2 text-caption text-warning-700">
           {STALE_LABELS[data.stale_reason ?? ""] ?? "这份讲解已过期"}
           ，内容仍可阅读；需要最新版本请点「重新生成」。
         </p>

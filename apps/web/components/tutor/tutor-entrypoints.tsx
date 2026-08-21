@@ -25,7 +25,7 @@ export function TutorEntrypoints({
   const errorIds = data?.errors.status === "ready" ? data.errors.error_ids : [];
   return (
     <section className="mt-3 grid gap-2 sm:grid-cols-3" aria-label="辅导入口">
-      <div className="rounded-[9px] border border-brand-200 bg-brand-50 px-3 py-3 text-left">
+      <div className="rounded-control border border-brand-200 bg-brand-50 px-3 py-3 text-left">
         {todayReady ? (
           <Link href={tutorTaskHref(todayReady)} aria-label="继续今天的任务" className="block hover:text-brand-800">
             <span className="block text-[13px] font-semibold text-brand-800">继续今天的任务</span>
@@ -40,7 +40,7 @@ export function TutorEntrypoints({
           </>
         )}
       </div>
-      <div className="rounded-[9px] border border-line-strong bg-white px-3 py-3 text-left">
+      <div className="rounded-control border border-line-strong bg-white px-3 py-3 text-left">
         <span className="block text-[13px] font-semibold text-ink">挑一道我的错题</span>
         {errorIds.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -64,7 +64,7 @@ export function TutorEntrypoints({
         type="button"
         aria-label="粘贴或上传新题目"
         onClick={onChooseNew}
-        className="rounded-[9px] border border-line-strong bg-white px-3 py-3 text-left hover:border-brand-300"
+        className="rounded-control border border-line-strong bg-white px-3 py-3 text-left hover:border-brand-300"
       >
         <span className="block text-[13px] font-semibold text-ink">粘贴或上传新题目</span>
         <span className="mt-1 block text-body-sm leading-5 text-ink-muted">支持文字、图片、PDF 和 Office 文件</span>

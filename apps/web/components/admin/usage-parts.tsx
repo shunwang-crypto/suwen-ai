@@ -17,12 +17,12 @@ export function fmtInt(v: number): string {
 /** 大数卡片。 */
 export function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+    <div className="rounded-2xl border border-line bg-white p-4">
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight text-ink">
         {value}
       </p>
-      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+      {sub && <p className="mt-0.5 text-xs text-ink-muted">{sub}</p>}
     </div>
   );
 }
@@ -34,7 +34,7 @@ export function BarRows({
   rows: { key: string; label: string; value: number; detail: string }[];
 }) {
   if (rows.length === 0) {
-    return <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>;
+    return <p className="py-3 text-center text-xs text-ink-muted">暂无数据</p>;
   }
   const max = Math.max(...rows.map((r) => r.value), 1e-9);
   return (
@@ -42,12 +42,12 @@ export function BarRows({
       {rows.map((r) => (
         <li key={r.key} className="text-xs">
           <div className="mb-1 flex items-baseline justify-between gap-2">
-            <span className="min-w-0 truncate font-mono text-slate-600" title={r.label}>
+            <span className="min-w-0 truncate font-mono text-ink-secondary" title={r.label}>
               {r.label}
             </span>
-            <span className="shrink-0 text-slate-500">{r.detail}</span>
+            <span className="shrink-0 text-ink-muted">{r.detail}</span>
           </div>
-          <div className="h-3.5 rounded-full bg-slate-100">
+          <div className="h-3.5 rounded-full bg-surface-muted">
             <div
               className="h-full rounded-full bg-indigo-500"
               style={{ width: `${Math.max((r.value / max) * 100, 2)}%` }}
@@ -63,7 +63,7 @@ export function BarRows({
 /** 日趋势折线（纯 SVG polyline，成本单轴）。 */
 export function DailyTrend({ daily }: { daily: AdminUsageResponse["daily"] }) {
   if (daily.length === 0) {
-    return <p className="py-3 text-center text-xs text-slate-400">窗口内暂无调用</p>;
+    return <p className="py-3 text-center text-xs text-ink-muted">窗口内暂无调用</p>;
   }
   const w = 640;
   const h = 180;

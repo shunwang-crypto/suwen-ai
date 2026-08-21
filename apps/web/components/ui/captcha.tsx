@@ -25,7 +25,7 @@ interface CaptchaOut {
 }
 
 const DEFAULT_INPUT_CLS =
-  "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+  "w-full rounded-control border border-line-strong/80 bg-white/90 px-3.5 py-2.5 text-sm text-ink outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-ink-muted focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
 
 export function CaptchaField({
   value,
@@ -86,7 +86,7 @@ export function CaptchaField({
 
   return (
     <div className={className}>
-      <span className="mb-1.5 block text-sm font-medium text-slate-700">
+      <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
         验证码
       </span>
       <div className="flex items-stretch gap-2">
@@ -106,11 +106,11 @@ export function CaptchaField({
           onClick={refresh}
           disabled={loading || disabled}
           title="看不清？点击换一张"
-          className="relative h-[42px] w-28 shrink-0 overflow-hidden rounded-control border border-slate-300/80 bg-white/90 transition-colors hover:border-brand-300 disabled:cursor-not-allowed"
+          className="relative h-[42px] w-28 shrink-0 overflow-hidden rounded-control border border-line-strong/80 bg-white/90 transition-colors hover:border-brand-300 disabled:cursor-not-allowed"
         >
           {loading ? (
             <span
-              className="absolute inset-0 animate-pulse bg-slate-200/70"
+              className="absolute inset-0 animate-pulse bg-surface-muted/70"
               aria-hidden
             />
           ) : image ? (
@@ -121,7 +121,7 @@ export function CaptchaField({
               className="h-full w-full object-cover"
             />
           ) : (
-            <span className="flex h-full w-full items-center justify-center px-1 text-center text-xs leading-tight text-slate-400">
+            <span className="flex h-full w-full items-center justify-center px-1 text-center text-xs leading-tight text-ink-muted">
               {failed ?? "点击加载"}
             </span>
           )}
@@ -131,7 +131,7 @@ export function CaptchaField({
           onClick={refresh}
           disabled={loading || disabled}
           aria-label="刷新验证码"
-          className="flex h-[42px] w-10 shrink-0 items-center justify-center rounded-control border border-slate-300/80 bg-white/90 text-slate-400 transition-colors hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex h-[42px] w-10 shrink-0 items-center justify-center rounded-control border border-line-strong/80 bg-white/90 text-ink-muted transition-colors hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <svg
             viewBox="0 0 24 24"

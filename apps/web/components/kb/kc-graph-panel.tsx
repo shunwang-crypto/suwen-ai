@@ -14,6 +14,7 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 
 import { ErrorBanner } from "@/components/common";
 import { KcExplanationPanel } from "@/components/kb/kc-explanation-panel";
@@ -48,9 +49,20 @@ export function KcGraphPanel({ kbId }: { kbId: string }) {
   if (error) return <ErrorBanner message={error} />;
   if (!data || data.kc_count === 0) {
     return (
-      <p className="text-body-sm text-ink-muted">
-        这门课还没有知识点。上传资料并完成解析后，系统会从真实章节建立知识点与先修关系。
-      </p>
+      <div className="space-y-2 text-body-sm text-ink-muted">
+        <p>
+          这门课还没有知识点。上传资料并完成解析后，系统会自动进行「知识增强」，从真实章节建立知识点与先修关系。
+        </p>
+        <p>
+          如果已上传资料这里却仍为空，多半是知识增强尚未完成或失败——到「资料」查看文档状态，必要时点「重新增强」重试。
+        </p>
+        <Link
+          href={`/courses/${kbId}`}
+          className="inline-flex items-center gap-1 rounded-control border border-line-strong bg-white px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-surface-muted"
+        >
+          去「资料」查看文档状态 →
+        </Link>
+      </div>
     );
   }
 

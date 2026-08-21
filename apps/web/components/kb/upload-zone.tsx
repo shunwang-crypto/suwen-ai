@@ -103,7 +103,7 @@ function FileTab({
       className={`relative flex flex-col items-center gap-2 overflow-hidden rounded-2xl border-2 border-dashed px-4 py-8 text-center transition-colors ${
         dragOver
           ? "border-indigo-400 bg-indigo-50/60"
-          : "border-slate-300 bg-white hover:border-indigo-300"
+          : "border-line-strong bg-white hover:border-indigo-300"
       }`}
     >
       <FxStyles />
@@ -136,7 +136,7 @@ function FileTab({
           </svg>
         )}
       </span>
-      <p className="text-sm text-slate-600">
+      <p className="text-sm text-ink-secondary">
         {uploading ? (
           "正在上传…"
         ) : (
@@ -152,7 +152,7 @@ function FileTab({
           </>
         )}
       </p>
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-ink-muted">
         支持 {ALLOWED_SUFFIXES.join(" / ")}，单文件不超过 {MAX_UPLOAD_MB}MB，
         上传后自动解析、切块并向量化
       </p>
@@ -192,7 +192,7 @@ function UrlTab({
   return (
     <form
       onSubmit={submit}
-      className="flex flex-col gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-6"
+      className="flex flex-col gap-2 rounded-2xl border-2 border-dashed border-line-strong bg-white px-4 py-6"
     >
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
@@ -202,7 +202,7 @@ function UrlTab({
           disabled={importing}
           maxLength={2048}
           placeholder="粘贴网页链接，如 https://example.com/article"
-          className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+          className="min-w-0 flex-1 rounded-lg border border-line-strong px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-surface-muted"
         />
         <button
           type="submit"
@@ -215,7 +215,7 @@ function UrlTab({
           {importing ? "抓取中…" : "导入"}
         </button>
       </div>
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-ink-muted">
         自动抽取网页正文转为 Markdown 后入库；仅支持 http/https 公网地址，内网与本机地址会被拒绝
       </p>
     </form>
@@ -301,7 +301,7 @@ export function UploadZone({
   return (
     <div className="space-y-2">
       {onImportUrl && (
-        <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+        <div className="flex gap-1 rounded-xl bg-surface-muted p-1">
           {tabs.map((t) => (
             <button
               key={t.key}
@@ -311,7 +311,7 @@ export function UploadZone({
               className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                 tab === t.key
                   ? "bg-white text-indigo-700 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
+                  : "text-ink-muted hover:text-ink-secondary"
               }`}
             >
               {t.label}
@@ -327,10 +327,10 @@ export function UploadZone({
           {progress && (
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-3 py-2">
               <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
-                <span className="min-w-0 truncate text-slate-600">
+                <span className="min-w-0 truncate text-ink-secondary">
                   {progress.filename}
                   {progress.total > 1 && (
-                    <span className="text-slate-400">
+                    <span className="text-ink-muted">
                       （{progress.index}/{progress.total}）
                     </span>
                   )}

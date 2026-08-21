@@ -203,7 +203,7 @@ function AggRadarChart({
           );
         })}
       </svg>
-      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-slate-400">
+      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-ink-muted">
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
@@ -215,7 +215,7 @@ function AggRadarChart({
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
-            className="inline-block h-2.5 w-2.5 rounded-sm border border-slate-300"
+            className="inline-block h-2.5 w-2.5 rounded-sm border border-line-strong"
           />
           网格环 25 / 50 / 75 / 100%
         </span>
@@ -248,16 +248,16 @@ function AxisBars({
             className={`flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-colors ${
               active
                 ? "border-indigo-300 bg-indigo-50/60"
-                : "border-transparent hover:border-slate-200 hover:bg-slate-50"
+                : "border-transparent hover:border-line hover:bg-surface-muted"
             }`}
           >
             <span
-              className="w-24 shrink-0 truncate text-xs font-medium text-slate-700 sm:w-32"
+              className="w-24 shrink-0 truncate text-xs font-medium text-ink-secondary sm:w-32"
               title={a.label}
             >
               {a.label}
             </span>
-            <span className="h-3.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-100">
+            <span className="h-3.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-muted">
               <span
                 className="block h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none"
                 style={{
@@ -266,7 +266,7 @@ function AxisBars({
                 }}
               />
             </span>
-            <span className="w-10 shrink-0 text-right font-mono text-xs text-slate-600">
+            <span className="w-10 shrink-0 text-right font-mono text-xs text-ink-secondary">
               {fmtPct(a.mean)}
             </span>
             {a.weakCount > 0 && (
@@ -277,7 +277,7 @@ function AxisBars({
           </button>
         );
       })}
-      <p className="pt-1 text-center text-body-sm text-slate-400">
+      <p className="pt-1 text-center text-body-sm text-ink-muted">
         聚合轴不足 {MIN_RADAR_AXES} 个，已降级为条形图（避免无形状的少轴雷达）
       </p>
     </div>
@@ -290,14 +290,14 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
   return (
     <div className="edu-fade-up mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-xs font-semibold text-slate-700" title={axis.label}>
+        <p className="min-w-0 truncate text-xs font-semibold text-ink-secondary" title={axis.label}>
           {axis.label} · 均 {fmtPct(axis.mean)} · {axis.kcs.length} 个知识点
           {axis.weakCount > 0 ? ` · 薄弱 ${axis.weakCount}` : ""}
         </p>
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 rounded-lg px-1.5 py-0.5 text-xs text-slate-400 hover:bg-white hover:text-slate-600"
+          className="shrink-0 rounded-lg px-1.5 py-0.5 text-xs text-ink-muted hover:bg-white hover:text-ink-secondary"
         >
           收起
         </button>
@@ -308,11 +308,11 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
             <Link
               href={`/practice/session?mode=quiz&from=${encodeURIComponent("/growth")}&kc=${encodeURIComponent(k.name)}&n=3`}
               title={`${k.name}：做 3 道该知识点的题，判分结果作为真实证据重估掌握度`}
-              className="w-32 shrink-0 truncate font-medium text-slate-700 hover:text-indigo-700 hover:underline sm:w-40"
+              className="w-32 shrink-0 truncate font-medium text-ink-secondary hover:text-indigo-700 hover:underline sm:w-40"
             >
               {k.name}
             </Link>
-            <span className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white ring-1 ring-inset ring-slate-200/70">
+            <span className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white ring-1 ring-inset ring-line/70">
               <span
                 className="block h-full rounded-full"
                 style={{
@@ -321,7 +321,7 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
                 }}
               />
             </span>
-            <span className="w-9 shrink-0 text-right font-mono text-slate-600">
+            <span className="w-9 shrink-0 text-right font-mono text-ink-secondary">
               {k.p_mastery == null ? "—" : fmtPct(k.p_mastery)}
             </span>
             <span className="w-7 shrink-0 text-right text-body-sm font-medium text-amber-600">
@@ -350,7 +350,7 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
       <Card
         title="掌握度雷达"
         extra={
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-ink-muted">
             {Math.min(items.length, RADAR_MAX_DIMS)} / {items.length} 个知识点
           </span>
         }
@@ -393,14 +393,14 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
     `rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
       active
         ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
-        : "border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+        : "border-line bg-white text-ink-secondary hover:border-indigo-300 hover:text-indigo-700"
     }`;
 
   return (
     <Card
       title="掌握度雷达"
       extra={
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-ink-muted">
           {activeTab === ALL_TAB
             ? `${axes.length} 个库`
             : `${shownAxes.length}${axes.length > shownAxes.length ? ` / ${axes.length}` : ""} 章`}
@@ -441,7 +441,7 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
         ) : (
           <>
             <AggRadarChart axes={shownAxes} selected={drill} onSelect={toggleDrill} />
-            <p className="text-center text-body-sm text-slate-400">
+            <p className="text-center text-body-sm text-ink-muted">
               {axes.length > shownAxes.length ? `仅显示前 ${RADAR_MAX_DIMS} 章 · ` : ""}
               点击任意轴可下钻查看该{activeTab === ALL_TAB ? "库" : "章"}的知识点
             </p>

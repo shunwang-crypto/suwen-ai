@@ -67,7 +67,7 @@ export function FeedbackAdminSection() {
     <Card
       title="用户反馈"
       extra={
-        <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+        <div className="flex items-center gap-1 rounded-xl bg-surface-muted p-1">
           {FEEDBACK_FILTERS.map(([key, label]) => (
             <button
               key={key}
@@ -78,7 +78,7 @@ export function FeedbackAdminSection() {
               className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                 statusFilter === key
                   ? "bg-white text-indigo-700 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
+                  : "text-ink-muted hover:text-ink-secondary"
               }`}
             >
               {label}
@@ -103,7 +103,7 @@ export function FeedbackAdminSection() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-160 text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-100 text-xs text-slate-400">
+              <tr className="border-b border-line text-xs text-ink-muted">
                 <th className="py-1.5 pr-2 font-medium">时间</th>
                 <th className="py-1.5 pr-2 font-medium">用户</th>
                 <th className="py-1.5 pr-2 font-medium">分类</th>
@@ -115,21 +115,21 @@ export function FeedbackAdminSection() {
             </thead>
             <tbody>
               {data.items.map((it) => (
-                <tr key={it.id} className="border-b border-slate-50 align-top">
-                  <td className="whitespace-nowrap py-2 pr-2 text-xs text-slate-500">
+                <tr key={it.id} className="border-b border-line align-top">
+                  <td className="whitespace-nowrap py-2 pr-2 text-xs text-ink-muted">
                     {fmtDateTime(it.created_at)}
                   </td>
-                  <td className="max-w-40 truncate py-2 pr-2 text-xs text-slate-600">
+                  <td className="max-w-40 truncate py-2 pr-2 text-xs text-ink-secondary">
                     {it.email ?? it.user_id ?? "—"}
                   </td>
-                  <td className="whitespace-nowrap py-2 pr-2 text-xs text-slate-600">
+                  <td className="whitespace-nowrap py-2 pr-2 text-xs text-ink-secondary">
                     {FEEDBACK_CATEGORY_LABELS[it.category as FeedbackCategory] ??
                       it.category}
                   </td>
-                  <td className="max-w-80 py-2 pr-2 text-xs leading-relaxed text-slate-700">
+                  <td className="max-w-80 py-2 pr-2 text-xs leading-relaxed text-ink-secondary">
                     {it.content}
                   </td>
-                  <td className="max-w-52 py-2 pr-2 font-mono text-caption text-slate-400">
+                  <td className="max-w-52 py-2 pr-2 font-mono text-caption text-ink-muted">
                     <span className="block truncate" title={it.page_url}>
                       {it.page_url || "—"}
                     </span>
@@ -141,7 +141,7 @@ export function FeedbackAdminSection() {
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                         it.status === "closed"
-                          ? "bg-slate-100 text-slate-500"
+                          ? "bg-surface-muted text-ink-muted"
                           : "bg-amber-50 text-amber-700"
                       }`}
                     >
@@ -154,7 +154,7 @@ export function FeedbackAdminSection() {
                         type="button"
                         disabled={busyId === it.id}
                         onClick={() => void setStatus(it, "closed")}
-                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                        className="rounded-lg border border-line-strong px-2.5 py-1 text-xs font-medium text-ink-secondary hover:bg-surface-muted disabled:opacity-50"
                       >
                         {busyId === it.id ? "关闭中…" : "关闭"}
                       </button>
@@ -163,7 +163,7 @@ export function FeedbackAdminSection() {
                         type="button"
                         disabled={busyId === it.id}
                         onClick={() => void setStatus(it, "open")}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-50 disabled:opacity-50"
+                        className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-muted disabled:opacity-50"
                       >
                         重开
                       </button>

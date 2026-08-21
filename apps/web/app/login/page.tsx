@@ -90,7 +90,7 @@ export default function LoginPage() {
   };
 
   const inputCls =
-    "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+    "w-full rounded-control border border-line-strong/80 bg-white/90 px-3.5 py-2.5 text-sm text-ink outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-ink-muted focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
@@ -102,17 +102,17 @@ export default function LoginPage() {
         <div className="w-full max-w-md animate-fade-up">
           <div className="mb-8 flex flex-col items-center gap-2">
             <BrandMark size={48} />
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
               登录苏问
             </h1>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-ink-muted">
               多智能体驱动的个性化学习平台
             </p>
           </div>
 
           <form
             onSubmit={handleSubmit}
-            className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-slate-900/5"
+            className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-line-strong/5"
             noValidate
           >
             {error && (
@@ -125,7 +125,7 @@ export default function LoginPage() {
             )}
 
             <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+              <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 邮箱
               </span>
               <input
@@ -141,7 +141,7 @@ export default function LoginPage() {
             </label>
 
             <div className="mb-2">
-              <label htmlFor="login-password" className="mb-1.5 block text-sm font-medium text-slate-700">
+              <label htmlFor="login-password" className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 密码
               </label>
               <PasswordInput
@@ -157,7 +157,7 @@ export default function LoginPage() {
             </div>
 
             <div className="mb-4 flex items-center justify-between gap-3">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-500">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
                 <input
                   type="checkbox"
                   checked={rememberEmail}
@@ -168,13 +168,13 @@ export default function LoginPage() {
                       window.localStorage.removeItem(REMEMBERED_EMAIL_KEY);
                     }
                   }}
-                  className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                  className="h-3.5 w-3.5 rounded border-line-strong accent-brand-600"
                 />
                 记住账号
               </label>
               <Link
                 href="/forgot"
-                className="text-xs font-medium text-slate-400 transition-colors hover:text-brand-600"
+                className="text-xs font-medium text-ink-muted transition-colors hover:text-brand-600"
               >
                 忘记密码？
               </Link>
@@ -200,7 +200,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-slate-500">
+          <p className="mt-6 text-center text-sm text-ink-muted">
             还没有账号？
             <Link
               href="/register"

@@ -59,7 +59,7 @@ export default function ForgotPage() {
   };
 
   const inputCls =
-    "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+    "w-full rounded-control border border-line-strong/80 bg-white/90 px-3.5 py-2.5 text-sm text-ink outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-ink-muted focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
@@ -71,16 +71,16 @@ export default function ForgotPage() {
         <div className="w-full max-w-md animate-fade-up">
           <div className="mb-8 flex flex-col items-center gap-2">
             <BrandMark size={48} />
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
               找回密码
             </h1>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-ink-muted">
               输入注册邮箱，我们会发送重置链接
             </p>
           </div>
 
           {submitted ? (
-            <div className="glass animate-fade-up rounded-card border border-white/70 p-6 text-center shadow-floating ring-1 ring-slate-900/5">
+            <div className="glass animate-fade-up rounded-card border border-white/70 p-6 text-center shadow-floating ring-1 ring-line-strong/5">
               <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-success-50 text-success-600">
                 <svg
                   viewBox="0 0 24 24"
@@ -96,10 +96,10 @@ export default function ForgotPage() {
                   <path d="m4 7 8 6 8-6" />
                 </svg>
               </span>
-              <p className="text-sm font-semibold text-slate-800">
+              <p className="text-sm font-semibold text-ink">
                 若该邮箱已注册，重置链接已发送
               </p>
-              <p className="mt-1.5 text-xs text-slate-500">
+              <p className="mt-1.5 text-xs text-ink-muted">
                 请查收 {email} 的收件箱（含垃圾邮件），链接短期内有效。
               </p>
               <Link
@@ -112,7 +112,7 @@ export default function ForgotPage() {
           ) : (
             <form
               onSubmit={handleSubmit}
-              className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-slate-900/5"
+              className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-line-strong/5"
               noValidate
             >
               {error && (
@@ -125,7 +125,7 @@ export default function ForgotPage() {
               )}
 
               <label className="mb-4 block">
-                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
                   邮箱
                 </span>
                 <input
@@ -158,7 +158,7 @@ export default function ForgotPage() {
             </form>
           )}
 
-          <p className="mt-6 text-center text-sm text-slate-500">
+          <p className="mt-6 text-center text-sm text-ink-muted">
             想起密码了？
             <Link
               href="/login"

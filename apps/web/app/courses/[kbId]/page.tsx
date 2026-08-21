@@ -91,7 +91,7 @@ function CoursePlanTab({ kbId }: { kbId: string }) {
         description="到「学习计划」页填写目标，选择这门课作为范围即可生成。"
         illustration="map"
       >
-        <Link href={`/plans?create=1&mode=course_bound&kb=${encodeURIComponent(kbId)}`} className="mt-2 inline-flex h-9 items-center rounded-[8px] bg-ink px-4 text-[13px] font-semibold text-white">
+        <Link href={`/plans?create=1&mode=course_bound&kb=${encodeURIComponent(kbId)}`} className="mt-2 inline-flex h-9 items-center rounded-control bg-ink px-4 text-[13px] font-semibold text-white">
           去制定学习计划
         </Link>
       </EmptyState>
@@ -180,14 +180,14 @@ function CourseWorkspaceView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Link href={`/plans?create=1&mode=course_bound&kb=${encodeURIComponent(kbId)}`} className="h-9 rounded-[8px] border border-line-strong bg-white px-4 text-body-sm font-medium leading-9 text-ink-secondary hover:border-brand-300 hover:text-brand-700">制定计划</Link>
-          <Link href={`/chat?new=1&kb=${encodeURIComponent(kbId)}`} className="h-9 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium leading-9 text-white hover:bg-brand-800">问这门课</Link>
+          <Link href={`/plans?create=1&mode=course_bound&kb=${encodeURIComponent(kbId)}`} className="h-9 rounded-control border border-line-strong bg-white px-4 text-body-sm font-medium leading-9 text-ink-secondary hover:border-brand-300 hover:text-brand-700">制定计划</Link>
+          <Link href={`/chat?new=1&kb=${encodeURIComponent(kbId)}`} className="h-9 rounded-control bg-brand-600 px-4 text-body-sm font-medium leading-9 text-white hover:bg-brand-800">问这门课</Link>
         </div>
       </header>
 
       {summary && (
         <section className="grid gap-3 border-b border-line pb-4 md:grid-cols-3" aria-label="课程状态">
-          <div className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-surface-muted text-ink-secondary"><FileStack className="h-4 w-4" aria-hidden /></span><div><p className="text-caption text-ink-muted">资料状态</p><p className="mt-0.5 text-body-sm font-medium text-ink">{sourceStatus}</p></div></div>
+          <div className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-control bg-surface-muted text-ink-secondary"><FileStack className="h-4 w-4" aria-hidden /></span><div><p className="text-caption text-ink-muted">资料状态</p><p className="mt-0.5 text-body-sm font-medium text-ink">{sourceStatus}</p></div></div>
           <div className="flex items-center gap-3">{summary.source_failed > 0 ? <TriangleAlert className="h-5 w-5 text-danger-600" aria-hidden /> : summary.source_processing > 0 ? <Clock3 className="h-5 w-5 text-warning-600" aria-hidden /> : <CheckCircle2 className="h-5 w-5 text-success-600" aria-hidden />}<div><p className="text-caption text-ink-muted">题目核验</p><p className="mt-0.5 text-body-sm font-medium text-ink">{summary.verified_questions} 道已核验{summary.pending_questions > 0 ? ` · ${summary.pending_questions} 道待核验` : ""}</p></div></div>
           <div><p className="text-caption text-ink-muted">学习计划</p><div className="mt-1 flex items-center gap-3"><span className="text-body-sm font-medium text-ink">{summary.plan_status === "active" ? `${summary.plan_done_tasks}/${summary.plan_total_tasks} 个任务` : summary.plan_status === "completed" ? "已完成" : "尚未制定"}</span><span className="h-1.5 min-w-20 flex-1 overflow-hidden rounded-full bg-surface-muted"><span className="block h-full rounded-full bg-brand-600" style={{ width: `${Math.round(summary.plan_progress_ratio * 100)}%` }} /></span></div></div>
         </section>
@@ -202,7 +202,7 @@ function CourseWorkspaceView() {
               href={key === "materials" ? `/courses/${kbId}` : `/courses/${kbId}?tab=${key}`}
               role="tab"
               aria-current={active ? "page" : undefined}
-              className={`rounded-[8px] px-4 py-2 text-body-sm font-medium transition-colors ${
+              className={`rounded-control px-4 py-2 text-body-sm font-medium transition-colors ${
                 active ? "bg-ink text-white" : "text-ink-secondary hover:bg-white"
               }`}
             >

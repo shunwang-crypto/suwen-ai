@@ -20,7 +20,7 @@ export function ChatToolbar({
   onOpenCitations: () => void;
 }) {
   return (
-    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-[#fafaf9] px-5">
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-canvas px-5">
       {historyCollapsed && (
         <button
           type="button"
@@ -38,7 +38,7 @@ export function ChatToolbar({
       <button
         type="button"
         onClick={onOpenSessions}
-        className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 md:hidden"
+        className="rounded-lg p-1.5 text-ink-muted hover:bg-surface-muted md:hidden"
         aria-label="打开会话列表"
       >
         <svg
@@ -65,7 +65,7 @@ export function ChatToolbar({
         <button
           type="button"
           onClick={onOpenCitations}
-          className="relative rounded-control p-1.5 text-slate-500 hover:bg-slate-100 xl:hidden"
+          className="relative rounded-control p-1.5 text-ink-muted hover:bg-surface-muted xl:hidden"
           aria-label="打开引用面板"
         >
           <svg

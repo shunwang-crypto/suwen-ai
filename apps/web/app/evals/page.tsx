@@ -184,8 +184,8 @@ export default function EvalsPage() {
       {/* 操作条 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">评估看板</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h2 className="text-base font-semibold text-ink">评估看板</h2>
+          <p className="mt-0.5 text-xs text-ink-muted">
             展示的都是明确环境生成的评测产物，不做任何数字美化；没有新产物时不显示旧数字。
           </p>
         </div>
@@ -195,7 +195,7 @@ export default function EvalsPage() {
             type="button"
             disabled={importing}
             onClick={() => void doImport()}
-            className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl border border-line-strong bg-white px-3.5 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
           >
             {importing && <Spinner />}
             导入评估产物
@@ -225,50 +225,50 @@ export default function EvalsPage() {
           <div className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">
+                <span className="mb-1 block text-xs text-ink-muted">
                   kb_id（必填，被评估的知识库 UUID）
                 </span>
                 <input
                   value={kbId}
                   onChange={(e) => setKbId(e.target.value)}
                   placeholder="粘贴知识库 UUID"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:font-sans placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-xl border border-line-strong px-3 py-2 font-mono text-sm text-ink outline-none placeholder:font-sans placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">
+                <span className="mb-1 block text-xs text-ink-muted">
                   黄金集路径（相对仓库根）
                 </span>
                 <input
                   value={golden}
                   onChange={(e) => setGolden(e.target.value)}
                   placeholder={Parts.DEFAULT_GOLDEN}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:font-sans placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-xl border border-line-strong px-3 py-2 font-mono text-sm text-ink outline-none placeholder:font-sans placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">
+                <span className="mb-1 block text-xs text-ink-muted">
                   tenant_id（可选，跨租户评估时填）
                 </span>
                 <input
                   value={tenantId}
                   onChange={(e) => setTenantId(e.target.value)}
                   placeholder="留空则用当前租户"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:font-sans placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-xl border border-line-strong px-3 py-2 font-mono text-sm text-ink outline-none placeholder:font-sans placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">本次跑分标签</span>
+                <span className="mb-1 block text-xs text-ink-muted">本次跑分标签</span>
                 <input
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="手动重跑"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
             </div>
             <div className="flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-2 text-xs text-slate-600">
+              <label className="flex items-center gap-2 text-xs text-ink-secondary">
                 <input
                   type="checkbox"
                   checked={noSparse}
@@ -277,7 +277,7 @@ export default function EvalsPage() {
                 />
                 关闭稀疏检索（消融 BM25）
               </label>
-              <label className="flex items-center gap-2 text-xs text-slate-600">
+              <label className="flex items-center gap-2 text-xs text-ink-secondary">
                 <input
                   type="checkbox"
                   checked={noRerank}
@@ -298,7 +298,7 @@ export default function EvalsPage() {
                 </button>
               </div>
             </div>
-            <p className="text-body-sm text-slate-400">
+            <p className="text-body-sm text-ink-muted">
               发起后每 {Parts.POLL_INTERVAL_MS / 1000}s 轮询一次任务状态（最多{" "}
               {Parts.POLL_MAX_TICKS} 次），完成后自动刷新列表。
               消融开关会写进报告的 report_config，用于做 A/B 对比。
@@ -311,7 +311,7 @@ export default function EvalsPage() {
       <Card
         title="历史跑分"
         extra={
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-ink-muted">
             {runs ? `${runs.length} 次` : "—"} · 点击行查看详情
           </span>
         }
@@ -327,7 +327,7 @@ export default function EvalsPage() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-200 text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                <tr className="border-b border-line text-xs text-ink-muted">
                   <th className="py-2 pr-2 font-medium">对比</th>
                   <th className="py-2 pr-2 font-medium">时间</th>
                   <th className="py-2 pr-2 font-medium">类型</th>
@@ -344,8 +344,8 @@ export default function EvalsPage() {
                     <tr
                       key={r.id}
                       onClick={() => setDetailId(active ? null : r.id)}
-                      className={`cursor-pointer border-b border-slate-50 align-top transition-colors ${
-                        active ? "bg-indigo-50/60" : "hover:bg-slate-50"
+                      className={`cursor-pointer border-b border-line align-top transition-colors ${
+                        active ? "bg-indigo-50/60" : "hover:bg-surface-muted"
                       }`}
                     >
                       <td className="py-2.5 pr-2" onClick={(e) => e.stopPropagation()}>
@@ -363,7 +363,7 @@ export default function EvalsPage() {
                                 className={`h-6 w-6 rounded-md border text-xs font-semibold transition-colors ${
                                   picked
                                     ? "border-indigo-600 bg-indigo-600 text-white"
-                                    : "border-slate-300 bg-white text-slate-400 hover:bg-slate-100"
+                                    : "border-line-strong bg-white text-ink-muted hover:bg-surface-muted"
                                 }`}
                               >
                                 {slot}
@@ -372,35 +372,35 @@ export default function EvalsPage() {
                           })}
                         </div>
                       </td>
-                      <td className="py-2.5 pr-2 text-xs whitespace-nowrap text-slate-600">
+                      <td className="py-2.5 pr-2 text-xs whitespace-nowrap text-ink-secondary">
                         {fmtDateTime(r.at)}
                       </td>
                       <td className="py-2.5 pr-2">
                         <Parts.KindBadge />
                       </td>
                       <td className="py-2.5 pr-2">
-                        <span className="text-sm font-medium text-slate-800">
+                        <span className="text-sm font-medium text-ink">
                           {r.label}
                         </span>
                         <span
-                          className="ml-1.5 font-mono text-body-sm text-slate-400"
+                          className="ml-1.5 font-mono text-body-sm text-ink-muted"
                           title={r.source}
                         >
                           {r.source}
                         </span>
                       </td>
-                      <td className="py-2.5 pr-2 font-mono text-xs whitespace-nowrap text-slate-500">
+                      <td className="py-2.5 pr-2 font-mono text-xs whitespace-nowrap text-ink-muted">
                         {r.golden_set_version ?? "—"}
                       </td>
                       <td className="py-2.5 pr-2">
                         {r.summary.length === 0 ? (
-                          <span className="text-xs text-slate-400">—</span>
+                          <span className="text-xs text-ink-muted">—</span>
                         ) : (
                           <span className="flex flex-wrap gap-1">
                             {r.summary.map((s) => (
                               <span
                                 key={s.key}
-                                className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-body-sm text-slate-700"
+                                className="rounded-md bg-surface-muted px-1.5 py-0.5 font-mono text-body-sm text-ink-secondary"
                                 title={`${s.key} = ${s.value}`}
                               >
                                 {s.key} {s.display}
@@ -409,7 +409,7 @@ export default function EvalsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 text-body-sm text-slate-400">
+                      <td className="py-2.5 text-body-sm text-ink-muted">
                         {r.data_basis ?? "—"}
                         {r.corpus_version ? (
                           <>
@@ -426,7 +426,7 @@ export default function EvalsPage() {
           </div>
         )}
         {(pickA || pickB) && (
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-ink-muted">
             已选 A：
             <span className="font-mono">
               {pickA ? pickA.slice(0, 8) : "（未选）"}
@@ -442,7 +442,7 @@ export default function EvalsPage() {
                 setPickA(null);
                 setPickB(null);
               }}
-              className="ml-3 rounded-md border border-slate-300 px-2 py-0.5 text-body-sm text-slate-600 hover:bg-slate-100"
+              className="ml-3 rounded-md border border-line-strong px-2 py-0.5 text-body-sm text-ink-secondary hover:bg-surface-muted"
             >
               清空选择
             </button>

@@ -687,6 +687,20 @@ async def _load_kc_dependency(
     )
 
 
+async def _kb_kc_normalized_names(session, kb_id) -> set[str]:
+    """本库全部正式 KC 的归一化名字集合 (临时概念锚定比对用)。"""
+    names = (
+        await session.scalars(
+            select(KnowledgeComponent.canonical_name).where(
+                KnowledgeComponent.kb_id == kb_id
+            )
+        )
+    ).all()
+    known = {normalize_kc_name(name) for name in names if isinstance(name, str)}
+    known.discard("")
+    return known
+
+
 async def _plan_detail(session, plan: Plan, today) -> dict:
     resource_rows = (
         await session.scalars(
@@ -701,16 +715,26 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
     kc_dependency = await _load_kc_dependency(session, plan, locks)
     # 0034: 计划里没有正式 KC 承接的临时概念。只出给界面做"这份计划打算覆盖什么"
     # 的说明, 不参与掌握度/依赖图 —— 它们本来就没有 KC 外键 (见 plan_concepts)。
+    provisional_rows = (
+        await session.scalars(
+            select(PlanConcept)
+            .where(PlanConcept.plan_id == plan.id, PlanConcept.status == "provisional")
+            .order_by(PlanConcept.ordinal.asc(), PlanConcept.id.asc())
+        )
+    ).all()
     provisional_concepts = [
-        {"name": row.display_name, "status": row.status}
-        for row in (
-            await session.scalars(
-                select(PlanConcept)
-                .where(PlanConcept.plan_id == plan.id, PlanConcept.status == "provisional")
-                .order_by(PlanConcept.ordinal.asc(), PlanConcept.id.asc())
-            )
-        ).all()
+        {"name": row.display_name, "status": row.status} for row in provisional_rows
     ]
+    # 0035 (T1-1c): 资料事后增强出同名真实 KC 后, 这些临时概念已能"锚定"成正式知识点。
+    # 依赖图/解锁 GET 时按名动态判定 (见 _load_kc_dependency/_load_task_locks) 早已反映真实,
+    # 唯独此快照仍标临时。如实数出"现在已能锚定"的条数, 供界面提示计划可更新并给出重新锚定
+    # 入口 (真正 promote 落库在 POST /{plan_id}/re-anchor)。
+    anchorable_concepts = 0
+    if provisional_rows and plan.plan_mode == "course_bound" and plan.kb_id is not None:
+        known = await _kb_kc_normalized_names(session, plan.kb_id)
+        anchorable_concepts = sum(
+            1 for row in provisional_rows if row.normalized_name in known
+        )
     structure = enrich_structure(plan.structure_json, resources, locks)
     schedule = plan_schedule_snapshot(
         plan.created_at.astimezone(CN_TZ).date(), plan.structure_json, today
@@ -730,6 +754,7 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
         "progress": plan_progress(plan.structure_json),
         "kc_dependency": kc_dependency,
         "provisional_concepts": provisional_concepts,
+        "anchorable_concepts": anchorable_concepts,
         "created_at": plan.created_at,
         "status": plan.status,
     }
@@ -815,6 +840,41 @@ async def archive_plan(
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         plan.status = "archived"
         return {"id": str(plan.id), "status": plan.status}
+
+
+@router.post("/{plan_id}/re-anchor")
+async def re_anchor_plan(
+    plan_id: uuid.UUID,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """把已能匹配本库正式 KC 的临时概念锚定为 promoted (T1-1c)。
+
+    资料事后增强出同名真实 KC 后, 计划任务的依赖图/解锁在 GET 时已按名自动反映;
+    唯独 provisional_concepts 快照仍显示为临时。这里按 normalize_kc_name 取交集, 命中的
+    PlanConcept 从 provisional 升为 promoted —— 不加 kc_id 外键、不进掌握度/BKT 路径, 仅让
+    其从"临时概念"里消失。grounding_status 是创建期依资料来源算定的事实, 不在此重算。
+    """
+    async with tenant_session(ctx.tenant_id) as session:
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status != "active":
+            raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
+        if plan.plan_mode != "course_bound" or plan.kb_id is None:
+            return {"promoted": 0}
+        known = await _kb_kc_normalized_names(session, plan.kb_id)
+        rows = (
+            await session.scalars(
+                select(PlanConcept).where(
+                    PlanConcept.plan_id == plan.id,
+                    PlanConcept.status == "provisional",
+                )
+            )
+        ).all()
+        promoted = 0
+        for row in rows:
+            if row.normalized_name in known:
+                row.status = "promoted"
+                promoted += 1
+        return {"promoted": promoted}
 
 
 @router.post("/{plan_id}/tasks/{task_id}/complete")

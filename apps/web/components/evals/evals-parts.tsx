@@ -55,7 +55,7 @@ export function KindBadge() {
 /** 数据口径脚注：评分加分项，每张卡片底部固定出现。 */
 export function BasisNote({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-3 border-t border-slate-100 pt-2 text-body-sm leading-relaxed text-slate-400">
+    <p className="mt-3 border-t border-line pt-2 text-body-sm leading-relaxed text-ink-muted">
       数据口径：{children}
     </p>
   );
@@ -71,12 +71,12 @@ export function MetricTile({
   sub?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-0.5 font-mono text-xl font-semibold tracking-tight text-slate-900">
+    <div className="rounded-xl border border-line bg-white px-3 py-2.5">
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="mt-0.5 font-mono text-xl font-semibold tracking-tight text-ink">
         {value}
       </p>
-      {sub && <p className="mt-0.5 text-body-sm text-slate-400">{sub}</p>}
+      {sub && <p className="mt-0.5 text-body-sm text-ink-muted">{sub}</p>}
     </div>
   );
 }
@@ -114,7 +114,7 @@ export function JobPill({ job }: { job: EvalJobInfo }) {
       ? { text: "评估完成", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" }
       : job.status === "in_progress"
         ? { text: "评估进行中", cls: "bg-indigo-100 text-indigo-700 border-indigo-200" }
-        : { text: "排队中", cls: "bg-slate-100 text-slate-600 border-slate-200" };
+        : { text: "排队中", cls: "bg-surface-muted text-ink-secondary border-line" };
   const running = !failed && job.status !== "complete";
   return (
     <span
@@ -139,7 +139,7 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
 
   if (rows.length === 0 || series.length === 0) {
     return (
-      <p className="py-4 text-center text-xs text-slate-400">
+      <p className="py-4 text-center text-xs text-ink-muted">
         该报告未提供按 category 的分桶指标
       </p>
     );
@@ -151,7 +151,7 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
 
   return (
     <div className="space-y-2.5">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
         {series.map((s) => (
           <span key={s.key} className="flex items-center gap-1.5">
             <span
@@ -162,7 +162,7 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
             {s.label}
           </span>
         ))}
-        <span className="ml-auto text-slate-400">柱长 = 指标值（0 → 1，越长越好）</span>
+        <span className="ml-auto text-ink-muted">柱长 = 指标值（0 → 1，越长越好）</span>
       </div>
 
       {rows.map((r) => {
@@ -171,12 +171,12 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
           <div
             key={r.category}
             className={`rounded-xl border px-3 py-2.5 ${
-              weak ? "border-amber-300 bg-amber-50/50" : "border-slate-200 bg-white"
+              weak ? "border-amber-300 bg-amber-50/50" : "border-line bg-white"
             }`}
           >
             <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-700">{r.category}</span>
-              <span className="flex items-center gap-2 text-body-sm text-slate-400">
+              <span className="text-xs font-semibold text-ink-secondary">{r.category}</span>
+              <span className="flex items-center gap-2 text-body-sm text-ink-muted">
                 {weak && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">
                     最弱分桶 · 优先补语料
@@ -190,10 +190,10 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
                 const v = r[s.key];
                 return (
                   <div key={s.key} className="flex items-center gap-2">
-                    <span className="w-12 shrink-0 font-mono text-body-sm text-slate-500">
+                    <span className="w-12 shrink-0 font-mono text-body-sm text-ink-muted">
                       {s.label}
                     </span>
-                    <div className="h-3 min-w-0 flex-1 rounded-full bg-slate-100">
+                    <div className="h-3 min-w-0 flex-1 rounded-full bg-surface-muted">
                       {typeof v === "number" && (
                         <div
                           className="h-full rounded-full"
@@ -205,7 +205,7 @@ export function CategoryBars({ rows }: { rows: RetrievalCategoryRow[] }) {
                         />
                       )}
                     </div>
-                    <span className="w-14 shrink-0 text-right font-mono text-body-sm text-slate-700">
+                    <span className="w-14 shrink-0 text-right font-mono text-body-sm text-ink-secondary">
                       {fmtNum(v)}
                     </span>
                   </div>
@@ -224,20 +224,20 @@ export function RefusalBlock({ refusal }: { refusal: RetrievalRefusal }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className="font-mono text-2xl font-semibold text-slate-900">
+        <span className="font-mono text-2xl font-semibold text-ink">
           {fmtNum(refusal.rate, 4)}
         </span>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-ink-muted">
           拒答正确 {refusal.correct} / {refusal.total} 题（该拒答的题确实低于置信阈值）
         </span>
       </div>
       {rows.length === 0 ? (
-        <p className="text-xs text-slate-400">该报告未提供逐题拒答明细。</p>
+        <p className="text-xs text-ink-muted">该报告未提供逐题拒答明细。</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-160 text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-100 text-xs text-slate-400">
+              <tr className="border-b border-line text-xs text-ink-muted">
                 <th className="py-1.5 font-medium">qid</th>
                 <th className="py-1.5 font-medium">问题</th>
                 <th className="py-1.5 text-right font-medium">召回块</th>
@@ -250,24 +250,24 @@ export function RefusalBlock({ refusal }: { refusal: RetrievalRefusal }) {
               {rows.map((r) => (
                 <tr
                   key={r.qid}
-                  className={`border-b border-slate-50 ${r.ok ? "" : "bg-red-50/60"}`}
+                  className={`border-b border-line ${r.ok ? "" : "bg-red-50/60"}`}
                 >
-                  <td className="py-1.5 pr-2 font-mono text-xs text-slate-500">{r.qid}</td>
-                  <td className="max-w-80 py-1.5 pr-2 text-xs text-slate-700">
+                  <td className="py-1.5 pr-2 font-mono text-xs text-ink-muted">{r.qid}</td>
+                  <td className="max-w-80 py-1.5 pr-2 text-xs text-ink-secondary">
                     <MathText text={r.question} />
                   </td>
-                  <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
+                  <td className="py-1.5 pr-2 text-right font-mono text-xs text-ink-secondary">
                     {r.n_chunks}
                   </td>
                   <td
                     className={`py-1.5 pr-2 text-right font-mono text-xs ${
-                      r.ok ? "text-slate-600" : "font-semibold text-red-700"
+                      r.ok ? "text-ink-secondary" : "font-semibold text-red-700"
                     }`}
                   >
                     {fmtNum(r.top1_score)}
                   </td>
                   <td
-                    className="max-w-60 truncate py-1.5 pr-2 text-xs text-slate-500"
+                    className="max-w-60 truncate py-1.5 pr-2 text-xs text-ink-muted"
                     title={r.top1_heading ?? ""}
                   >
                     {r.top1_heading || "—"}
@@ -325,7 +325,7 @@ export function RetrievalDetail({
       <Card
         title="整体检索指标"
         extra={
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-ink-muted">
             {metrics.n_questions != null ? `${metrics.n_questions} 问` : "—"}
             {metrics.n_answerable != null ? ` · 可答 ${metrics.n_answerable}` : ""}
             {metrics.n_refusal != null ? ` · 应拒答 ${metrics.n_refusal}` : ""}
@@ -333,7 +333,7 @@ export function RetrievalDetail({
         }
       >
         {tiles.length === 0 ? (
-          <p className="py-3 text-center text-xs text-slate-400">
+          <p className="py-3 text-center text-xs text-ink-muted">
             该报告未提供 headline 指标
           </p>
         ) : (
@@ -344,9 +344,9 @@ export function RetrievalDetail({
           </div>
         )}
         {metrics.confident && (
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-ink-muted">
             高置信命中{" "}
-            <span className="font-mono font-semibold text-slate-800">
+            <span className="font-mono font-semibold text-ink">
               {metrics.confident.n} / {metrics.confident.total}
             </span>
             （top1 分数越过 confidence_threshold{" "}
@@ -359,7 +359,7 @@ export function RetrievalDetail({
             {Object.entries(cfg).map(([k, v]) => (
               <span
                 key={k}
-                className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-body-sm text-slate-600"
+                className="rounded-md bg-surface-muted px-2 py-0.5 font-mono text-body-sm text-ink-secondary"
               >
                 {k}={String(v)}
               </span>
@@ -378,7 +378,7 @@ export function RetrievalDetail({
         {metrics.refusal ? (
           <RefusalBlock refusal={metrics.refusal} />
         ) : (
-          <p className="py-4 text-center text-xs text-slate-400">
+          <p className="py-4 text-center text-xs text-ink-muted">
             该报告未包含拒答子集
           </p>
         )}
@@ -405,9 +405,9 @@ export function RunDetailPanel({ id }: { id: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <KindBadge />
-        <h3 className="text-sm font-semibold text-slate-900">{detail.label}</h3>
-        <span className="font-mono text-xs text-slate-400">{detail.source}</span>
-        <span className="ml-auto text-xs text-slate-400">{fmtDateTime(detail.at)}</span>
+        <h3 className="text-sm font-semibold text-ink">{detail.label}</h3>
+        <span className="font-mono text-xs text-ink-muted">{detail.source}</span>
+        <span className="ml-auto text-xs text-ink-muted">{fmtDateTime(detail.at)}</span>
       </div>
       <RetrievalDetail detail={detail} metrics={detail.metrics} />
     </div>
@@ -438,13 +438,13 @@ export function CompareSection({ leftId, rightId }: { leftId: string; rightId: s
                 ["B（对照）", data.right],
               ] as const
             ).map(([tag, side]) => (
-              <div key={tag} className="rounded-xl border border-slate-200 px-3 py-2">
-                <p className="text-xs text-slate-400">{tag}</p>
-                <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-800">
+              <div key={tag} className="rounded-xl border border-line px-3 py-2">
+                <p className="text-xs text-ink-muted">{tag}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
                   <KindBadge />
                   {side.label}
                 </p>
-                <p className="mt-0.5 font-mono text-body-sm text-slate-400">
+                <p className="mt-0.5 font-mono text-body-sm text-ink-muted">
                   {fmtDateTime(side.at)} · {side.source}
                 </p>
               </div>
@@ -452,12 +452,12 @@ export function CompareSection({ leftId, rightId }: { leftId: string; rightId: s
           </div>
 
           {data.deltas.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">没有可比较的同名指标</p>
+            <p className="py-3 text-center text-xs text-ink-muted">没有可比较的同名指标</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-120 text-left text-sm">
                 <thead>
-                  <tr className="border-b border-slate-100 text-xs text-slate-400">
+                  <tr className="border-b border-line text-xs text-ink-muted">
                     <th className="py-1.5 font-medium">指标</th>
                     <th className="py-1.5 text-right font-medium">A</th>
                     <th className="py-1.5 text-right font-medium">B</th>
@@ -470,19 +470,19 @@ export function CompareSection({ leftId, rightId }: { leftId: string; rightId: s
                     const up = d.delta > 0;
                     const flat = d.delta === 0;
                     const cls = flat
-                      ? "text-slate-400"
+                      ? "text-ink-muted"
                       : up
                         ? "text-emerald-700"
                         : "text-red-700";
                     return (
-                      <tr key={d.metric} className="border-b border-slate-50">
-                        <td className="py-1.5 pr-2 font-mono text-xs text-slate-700">
+                      <tr key={d.metric} className="border-b border-line">
+                        <td className="py-1.5 pr-2 font-mono text-xs text-ink-secondary">
                           {d.metric}
                         </td>
-                        <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
+                        <td className="py-1.5 pr-2 text-right font-mono text-xs text-ink-secondary">
                           {fmtNum(d.left)}
                         </td>
-                        <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-600">
+                        <td className="py-1.5 pr-2 text-right font-mono text-xs text-ink-secondary">
                           {fmtNum(d.right)}
                         </td>
                         <td
@@ -506,21 +506,21 @@ export function CompareSection({ leftId, rightId }: { leftId: string; rightId: s
 
           {(data.left_only.length > 0 || data.right_only.length > 0) && (
             <div className="grid gap-2 text-xs sm:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 px-3 py-2">
-                <p className="mb-1 text-slate-400">仅 A 有（{data.left_only.length}）</p>
-                <p className="font-mono break-words text-slate-600">
+              <div className="rounded-xl border border-line px-3 py-2">
+                <p className="mb-1 text-ink-muted">仅 A 有（{data.left_only.length}）</p>
+                <p className="font-mono break-words text-ink-secondary">
                   {data.left_only.length > 0 ? data.left_only.join("、") : "—"}
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-200 px-3 py-2">
-                <p className="mb-1 text-slate-400">仅 B 有（{data.right_only.length}）</p>
-                <p className="font-mono break-words text-slate-600">
+              <div className="rounded-xl border border-line px-3 py-2">
+                <p className="mb-1 text-ink-muted">仅 B 有（{data.right_only.length}）</p>
+                <p className="font-mono break-words text-ink-secondary">
                   {data.right_only.length > 0 ? data.right_only.join("、") : "—"}
                 </p>
               </div>
             </div>
           )}
-          <p className="text-body-sm text-slate-400">
+          <p className="text-body-sm text-ink-muted">
             Δ 与相对变化按 B−A 计算；绿色 ↑ 表示 B 更高，红色 ↓ 表示 B 更低。
             hit、MRR 和 nDCG 均为越高越好。
           </p>
@@ -533,7 +533,7 @@ export function CompareSection({ leftId, rightId }: { leftId: string; rightId: s
 export function NoAccess() {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-8 py-12 text-center">
+      <div className="w-full max-w-md rounded-2xl border border-line bg-white px-8 py-12 text-center">
         <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500">
           <svg
             viewBox="0 0 24 24"
@@ -548,8 +548,8 @@ export function NoAccess() {
             <path d="M12 15v2m-6 4h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2Zm10-10V7a4 4 0 0 0-8 0v4h8Z" />
           </svg>
         </span>
-        <h2 className="text-lg font-semibold text-slate-900">没有访问权限</h2>
-        <p className="mt-1 text-sm text-slate-500">
+        <h2 className="text-lg font-semibold text-ink">没有访问权限</h2>
+        <p className="mt-1 text-sm text-ink-muted">
           评估看板仅对管理员开放，请使用管理员账号登录。
         </p>
       </div>

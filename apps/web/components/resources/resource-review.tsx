@@ -28,7 +28,7 @@ const DIFFICULTIES: Array<[string, string]> = [
   ["mid", "中等"],
   ["hard", "困难"],
 ];
-const fieldClass = "mt-1 w-full rounded-[8px] border border-line-strong bg-white px-3 py-2 text-body-sm leading-5 text-ink outline-none transition-colors focus:border-brand-500 disabled:bg-surface-muted disabled:text-ink-muted";
+const fieldClass = "mt-1 w-full rounded-control border border-line-strong bg-white px-3 py-2 text-body-sm leading-5 text-ink outline-none transition-colors focus:border-brand-500 disabled:bg-surface-muted disabled:text-ink-muted";
 
 type QuestionDraft = {
   question_no: string;
@@ -201,7 +201,7 @@ function QuestionList({
       {questions.map((question, index) => {
         const selected = selectedErrors.has(question.id);
         return (
-          <div key={question.id} className={`rounded-[9px] border transition-colors ${currentId === question.id ? "border-ink bg-[#f6f5f2]" : "border-transparent hover:border-line hover:bg-[#fafaf9]"}`}>
+          <div key={question.id} className={`rounded-control border transition-colors ${currentId === question.id ? "border-ink bg-surface-muted" : "border-transparent hover:border-line hover:bg-canvas"}`}>
             <button type="button" onClick={() => onSelect(question.id)} className="flex w-full items-start gap-2.5 px-2.5 py-2.5 text-left">
               <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-caption font-semibold ${currentId === question.id ? "bg-ink text-white" : "bg-surface-muted text-ink-muted"}`}>{question.question_no || index + 1}</span>
               <span className="min-w-0 flex-1">
@@ -244,10 +244,10 @@ function MathSourceField({
   return (
     <div className="mt-4">
       <p className="text-caption font-medium text-ink-secondary">{label} {required && <em className="not-italic text-danger-600">*</em>}</p>
-      <div className="mt-1 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-body-sm leading-6 text-ink">
+      <div className="mt-1 rounded-control border border-line bg-canvas px-3 py-2.5 text-body-sm leading-6 text-ink">
         {markdown ? <ModelMarkdown text={value || `（尚未填写${label}）`} /> : <MathText text={value || `（尚未填写${label}）`} />}
       </div>
-      <details open={open} className="mt-1.5 rounded-[7px] border border-line bg-white">
+      <details open={open} className="mt-1.5 rounded-control border border-line bg-white">
         <summary className="cursor-pointer px-2.5 py-1.5 text-body-sm text-ink-muted">编辑{label}/公式源码</summary>
         <textarea
           aria-label={label}
@@ -596,24 +596,24 @@ export function ResourceReview({
           <p className="mt-1 text-body-sm text-ink-secondary">{resource.subject || "通用"} · {resource.source_filename ?? "手动创建"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select value={linkedKbId} onChange={(event) => void updateLinkedKb(event.target.value)} disabled={kbBusy} aria-label="关联知识库" className="h-8 max-w-[220px] rounded-[7px] border border-line-strong bg-white px-2 text-body-sm text-ink-secondary disabled:opacity-50"><option value="">不关联知识库</option>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select>
+          <select value={linkedKbId} onChange={(event) => void updateLinkedKb(event.target.value)} disabled={kbBusy} aria-label="关联知识库" className="h-8 max-w-[220px] rounded-control border border-line-strong bg-white px-2 text-body-sm text-ink-secondary disabled:opacity-50"><option value="">不关联知识库</option>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select>
           {!linkedKbId && <span className="max-w-[210px] text-caption leading-4 text-warning-700">未关联知识库：错题仍可进入 FSRS，知识点掌握度归类可能不完整。</span>}
-          <button type="button" onClick={onStartAssessment} disabled={verifiedCount === 0} className="rounded-[8px] border border-line-strong bg-white px-3.5 py-2 text-body-sm font-medium text-ink-secondary hover:border-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">作答与错题记录</button>
-          {eligibleCount > 0 && <button type="button" onClick={() => void confirmEligible()} disabled={busy !== null} className="rounded-[8px] border border-brand-200 bg-brand-50 px-3.5 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">{busy === "confirm-eligible" ? "确认中…" : `确认无误（${eligibleCount}）`}</button>}
-          <button type="button" onClick={() => void confirmErrors()} disabled={busy !== null || questions.length === 0} className="rounded-[8px] bg-ink px-3.5 py-2 text-body-sm font-medium text-white disabled:opacity-40">{busy === "confirm" ? "正在保存…" : selectedCount > 0 ? `确认并加入 ${selectedCount} 道错题` : "保存校对进度"}</button>
+          <button type="button" onClick={onStartAssessment} disabled={verifiedCount === 0} className="rounded-control border border-line-strong bg-white px-3.5 py-2 text-body-sm font-medium text-ink-secondary hover:border-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">作答与错题记录</button>
+          {eligibleCount > 0 && <button type="button" onClick={() => void confirmEligible()} disabled={busy !== null} className="rounded-control border border-brand-200 bg-brand-50 px-3.5 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">{busy === "confirm-eligible" ? "确认中…" : `确认无误（${eligibleCount}）`}</button>}
+          <button type="button" onClick={() => void confirmErrors()} disabled={busy !== null || questions.length === 0} className="rounded-control bg-ink px-3.5 py-2 text-body-sm font-medium text-white disabled:opacity-40">{busy === "confirm" ? "正在保存…" : selectedCount > 0 ? `确认并加入 ${selectedCount} 道错题` : "保存校对进度"}</button>
         </div>
       </header>
 
       <ResourceExtractionSteps resource={resource} />
 
-      {message && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-body-sm text-ink-secondary">{message}</div>}
-      {pdfSummary.isPdf && <div className="rounded-[9px] border border-line bg-white px-3.5 py-2.5 text-caption leading-5 text-ink-secondary">
+      {message && <div className="rounded-control border border-line bg-white px-3.5 py-2.5 text-body-sm text-ink-secondary">{message}</div>}
+      {pdfSummary.isPdf && <div className="rounded-control border border-line bg-white px-3.5 py-2.5 text-caption leading-5 text-ink-secondary">
         <div className="flex flex-wrap gap-x-4 gap-y-1"><span>PDF 共 {pdfSummary.totalPages} 页</span><span>已成功解析 {pdfSummary.successfulPages}/{pdfSummary.totalPages} 页</span><span>识别到 {pdfSummary.recognizedQuestions} 题</span><span>待校对 {pdfSummary.pendingQuestions} 题 / 已核验 {pdfSummary.verifiedQuestions} 题</span>{failedPages.length > 0 && <span className="font-medium text-danger-700">失败页：{failedPages.join("、")}</span>}</div>
         {(pdfSummary.questionsByPage.length > 0 || pdfSummary.pagesWithoutQuestions.length > 0) && <div className="mt-1 text-ink-muted">{pdfSummary.questionsByPage.map(({ page, count }) => `第 ${page} 页 ${count} 题`).join(" · ")}{pdfSummary.pagesWithoutQuestions.length > 0 && `${pdfSummary.questionsByPage.length > 0 ? " · " : ""}${pdfSummary.pagesWithoutQuestions.map((page) => `第 ${page} 页未识别到题目`).join(" · ")}`}</div>}
       </div>}
 
       {(resource.status === "failed" || failedPages.length > 0) && (
-        <div className={`flex flex-wrap items-center justify-between gap-2 rounded-[9px] border px-3 py-2 ${resource.status === "failed" ? "border-danger-200 bg-danger-50 text-danger-700" : "border-warning-200 bg-warning-50 text-warning-700"}`}>
+        <div className={`flex flex-wrap items-center justify-between gap-2 rounded-control border px-3 py-2 ${resource.status === "failed" ? "border-danger-200 bg-danger-50 text-danger-700" : "border-warning-200 bg-warning-50 text-warning-700"}`}>
           <span className="text-body-sm leading-5">{failedPages.length > 0 ? "部分页面未识别" : "识别失败，原文件已保留"}{failedPages.length > 0 && ` · 失败页：${failedPages.join("、")}`}{questions.length > 0 && " · 已保留成功题目"}</span>
           <div className="flex flex-wrap gap-1.5 text-caption">
             {resource.source_url && <button type="button" onClick={() => void retryExtraction()} disabled={busy !== null} className="border border-current bg-white px-2 py-1 disabled:opacity-40">{busy === "extract" ? "提交中…" : failedPages.length > 0 ? `重新识别第 ${failedPages.join("、")} 页` : "重新识别"}</button>}
@@ -623,31 +623,31 @@ export function ResourceReview({
         </div>
       )}
 
-      <div className="flex w-fit rounded-[8px] border border-line bg-white p-1 lg:hidden">
-        <button type="button" onClick={() => setMobilePane("source")} className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mobilePane === "source" ? "bg-ink text-white" : "text-ink-secondary"}`}>原件预览</button>
-        <button type="button" onClick={() => setMobilePane("questions")} className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mobilePane === "questions" ? "bg-ink text-white" : "text-ink-secondary"}`}>题目校对</button>
+      <div className="flex w-fit rounded-control border border-line bg-white p-1 lg:hidden">
+        <button type="button" onClick={() => setMobilePane("source")} className={`rounded-control px-3 py-1.5 text-body-sm font-medium ${mobilePane === "source" ? "bg-ink text-white" : "text-ink-secondary"}`}>原件预览</button>
+        <button type="button" onClick={() => setMobilePane("questions")} className={`rounded-control px-3 py-1.5 text-body-sm font-medium ${mobilePane === "questions" ? "bg-ink text-white" : "text-ink-secondary"}`}>题目校对</button>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.4fr)]">
         <div className={mobilePane === "source" ? "block" : "hidden lg:block"}><SourcePreview resource={resource} /></div>
         <section className={mobilePane === "questions" ? "space-y-4" : "hidden lg:block lg:space-y-4"}>
           <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <aside className="rounded-[12px] border border-line bg-white p-3">
+            <aside className="rounded-overlay border border-line bg-white p-3">
               <div className="flex items-center justify-between gap-2 border-b border-line pb-3">
                 <div><h2 className="text-body-sm font-semibold text-ink">题目列表</h2><p className="mt-0.5 text-caption text-ink-muted">显式选择错题</p></div>
-                <button type="button" onClick={() => setShowManual((value) => !value)} className="rounded-[7px] border border-line-strong px-2 py-1 text-body-sm text-ink-secondary hover:text-ink">+ 添加题目</button>
+                <button type="button" onClick={() => setShowManual((value) => !value)} className="rounded-control border border-line-strong px-2 py-1 text-body-sm text-ink-secondary hover:text-ink">+ 添加题目</button>
               </div>
               <div className="mt-3 max-h-[62dvh] overflow-y-auto"><QuestionList questions={questions} currentId={currentId} selectedErrors={selectedErrors} onSelect={selectQuestion} onToggleError={(id, checked) => setSelectedErrors((previous) => { const next = new Set(previous); if (checked) next.add(id); else next.delete(id); return next; })} /></div>
               {showManual && (
                 <form onSubmit={addManualQuestion} className="mt-3 space-y-2 border-t border-line pt-3">
                   <textarea value={manualStem} onChange={(event) => setManualStem(event.target.value)} rows={3} placeholder="输入新题干" className={`${fieldClass} resize-y`} />
                   <select value={manualType} onChange={(event) => setManualType(event.target.value)} className={fieldClass}><option value="short">简答题</option><option value="single">单选题</option><option value="multi">多选题</option><option value="blank">填空题</option></select>
-                  <button type="submit" disabled={busy === "manual" || !manualStem.trim()} className="w-full rounded-[7px] bg-ink px-3 py-2 text-body-sm font-medium text-white disabled:opacity-40">添加待校对题</button>
+                  <button type="submit" disabled={busy === "manual" || !manualStem.trim()} className="w-full rounded-control bg-ink px-3 py-2 text-body-sm font-medium text-white disabled:opacity-40">添加待校对题</button>
                 </form>
               )}
             </aside>
 
-            <div className="min-w-0 rounded-[12px] border border-line bg-white p-4 sm:p-5">
+            <div className="min-w-0 rounded-overlay border border-line bg-white p-4 sm:p-5">
               {!current || !draft ? (
                 <div className="flex min-h-64 items-center justify-center text-body-sm text-ink-muted">暂时没有题目。可以从左侧添加手动题目。</div>
               ) : (
@@ -655,22 +655,22 @@ export function ResourceReview({
                   <div className="flex flex-wrap items-start justify-between gap-2 border-b border-line pb-3">
                     <div><div className="flex flex-wrap items-center gap-2"><span className="text-body-sm font-semibold text-ink">第 {current.question_no || current.ordinal + 1} 题</span><QuestionStatus status={current.verification_status} /><span className="text-caption text-ink-muted">{typeLabel(current.type)}</span></div><p className="mt-1 text-caption text-ink-muted">整题兼容置信度：{draft.extraction_confidence || "未提供"}</p>{!current.eligibility?.eligible && <p className="mt-1 text-caption text-warning-700">为什么需要确认：{(current.eligibility?.reasons ?? []).slice(0, 2).map(eligibilityReasonLabel).join("；")}</p>}</div>
                     <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => void saveQuestion()} disabled={busy !== null || !dirty} className="rounded-[7px] border border-line-strong px-3 py-1.5 text-body-sm font-medium text-ink-secondary disabled:opacity-40">{busy === "save" ? "保存中…" : "保存修改"}</button>
-                      {current.verification_status === "pending" && <><button type="button" onClick={requestRejectQuestion} disabled={busy !== null} className="rounded-[7px] border border-danger-200 px-3 py-1.5 text-body-sm text-danger-700 disabled:opacity-40">拒绝</button><button type="button" onClick={() => void verifyQuestion()} disabled={busy !== null || !draft.stem.trim() || !draft.answer.trim()} className="rounded-[7px] bg-ink px-3 py-1.5 text-body-sm font-medium text-white disabled:opacity-40">{busy === "verify" ? "核验中…" : "核验题目"}</button></>}
+                      <button type="button" onClick={() => void saveQuestion()} disabled={busy !== null || !dirty} className="rounded-control border border-line-strong px-3 py-1.5 text-body-sm font-medium text-ink-secondary disabled:opacity-40">{busy === "save" ? "保存中…" : "保存修改"}</button>
+                      {current.verification_status === "pending" && <><button type="button" onClick={requestRejectQuestion} disabled={busy !== null} className="rounded-control border border-danger-200 px-3 py-1.5 text-body-sm text-danger-700 disabled:opacity-40">拒绝</button><button type="button" onClick={() => void verifyQuestion()} disabled={busy !== null || !draft.stem.trim() || !draft.answer.trim()} className="rounded-control bg-ink px-3 py-1.5 text-body-sm font-medium text-white disabled:opacity-40">{busy === "verify" ? "核验中…" : "核验题目"}</button></>}
                     </div>
                   </div>
 
                   <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                    {fieldIsHighConfidence(current, "question_no") ? <div><span className="text-body-sm font-medium text-ink-secondary">题号</span><p className="mt-1 rounded-[8px] bg-surface-muted px-3 py-2 text-[13px] text-ink">{draft.question_no || "—"}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">题号</span><input value={draft.question_no} onChange={(event) => updateDraft("question_no", event.target.value)} className={fieldClass} /></label>}
-                    {fieldIsHighConfidence(current, "page_no") ? <div><span className="text-body-sm font-medium text-ink-secondary">页码</span><p className="mt-1 rounded-[8px] bg-surface-muted px-3 py-2 text-[13px] text-ink">{draft.page_no || "—"}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">页码</span><input type="number" min={1} value={draft.page_no} onChange={(event) => updateDraft("page_no", event.target.value)} className={fieldClass} /></label>}
-                    {fieldIsHighConfidence(current, "type") ? <div><span className="text-body-sm font-medium text-ink-secondary">题型</span><p className="mt-1 rounded-[8px] bg-surface-muted px-3 py-2 text-[13px] text-ink">{typeLabel(draft.type)}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">题型</span><select disabled={semanticLocked || answerHidden} value={draft.type} onChange={(event) => updateDraft("type", event.target.value)} className={fieldClass}>{QUESTION_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
+                    {fieldIsHighConfidence(current, "question_no") ? <div><span className="text-body-sm font-medium text-ink-secondary">题号</span><p className="mt-1 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink">{draft.question_no || "—"}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">题号</span><input value={draft.question_no} onChange={(event) => updateDraft("question_no", event.target.value)} className={fieldClass} /></label>}
+                    {fieldIsHighConfidence(current, "page_no") ? <div><span className="text-body-sm font-medium text-ink-secondary">页码</span><p className="mt-1 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink">{draft.page_no || "—"}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">页码</span><input type="number" min={1} value={draft.page_no} onChange={(event) => updateDraft("page_no", event.target.value)} className={fieldClass} /></label>}
+                    {fieldIsHighConfidence(current, "type") ? <div><span className="text-body-sm font-medium text-ink-secondary">题型</span><p className="mt-1 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink">{typeLabel(draft.type)}</p></div> : <label><span className="text-body-sm font-medium text-ink-secondary">题型</span><select disabled={semanticLocked || answerHidden} value={draft.type} onChange={(event) => updateDraft("type", event.target.value)} className={fieldClass}>{QUESTION_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
                   </div>
                   <MathSourceField label="题干" value={draft.stem} required open={fieldNeedsReview(current, "stem")} onChange={(value) => updateDraft("stem", value)} rows={5} />
-                  {(draft.type === "single" || draft.type === "multi") && <div className="mt-4"><p className="text-body-sm font-medium text-ink-secondary">选项（每行一个）</p><div className="mt-1 space-y-1 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-body-sm leading-6 text-ink">{draft.options.length > 0 ? draft.options.map((option, index) => <div key={index} className="flex gap-2"><span className="text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div>) : <span className="text-ink-muted">（暂无选项）</span>}</div><details open={fieldNeedsReview(current, "options")} className="mt-1.5 rounded-[7px] border border-line bg-white"><summary className="cursor-pointer px-2.5 py-1.5 text-body-sm text-ink-muted">编辑选项/公式源码</summary><textarea aria-label="选项（每行一个）" disabled={semanticLocked || answerHidden} rows={4} value={draft.options.join("\n")} onChange={(event) => updateDraft("options", event.target.value.split("\n"))} className={`${fieldClass} mt-0 resize-y rounded-t-none`} /></details></div>}
+                  {(draft.type === "single" || draft.type === "multi") && <div className="mt-4"><p className="text-body-sm font-medium text-ink-secondary">选项（每行一个）</p><div className="mt-1 space-y-1 rounded-control border border-line bg-canvas px-3 py-2.5 text-body-sm leading-6 text-ink">{draft.options.length > 0 ? draft.options.map((option, index) => <div key={index} className="flex gap-2"><span className="text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div>) : <span className="text-ink-muted">（暂无选项）</span>}</div><details open={fieldNeedsReview(current, "options")} className="mt-1.5 rounded-control border border-line bg-white"><summary className="cursor-pointer px-2.5 py-1.5 text-body-sm text-ink-muted">编辑选项/公式源码</summary><textarea aria-label="选项（每行一个）" disabled={semanticLocked || answerHidden} rows={4} value={draft.options.join("\n")} onChange={(event) => updateDraft("options", event.target.value.split("\n"))} className={`${fieldClass} mt-0 resize-y rounded-t-none`} /></details></div>}
                   <div className="mt-4 grid gap-4 sm:grid-cols-2"><label><span className="text-caption font-medium text-ink-secondary">学生原答案</span><textarea aria-label="学生原答案" rows={3} value={draft.detected_student_answer} onChange={(event) => updateDraft("detected_student_answer", event.target.value)} className={`${fieldClass} resize-y`} /></label><MathSourceField label="参考答案" value={draft.detected_reference_answer} open={fieldNeedsReview(current, "answer")} disabled={semanticLocked || answerHidden} onChange={(value) => { updateDraft("detected_reference_answer", value); updateDraft("answer", value); }} rows={3} /></div>
-                  <details open={fieldNeedsReview(current, "kc_names") || fieldNeedsReview(current, "difficulty") || fieldNeedsReview(current, "points") || fieldNeedsReview(current, "explanation")} className="mt-4 rounded-[9px] border border-line bg-white"><summary className="cursor-pointer px-3 py-2 text-body-sm font-medium text-ink-secondary">修正识别（知识点、难度、分值、解析）</summary><div className="px-3 pb-3"><div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_160px]"><label><span className="text-body-sm font-medium text-ink-secondary">知识点（最多 3 个）</span><input disabled={semanticLocked || answerHidden} value={draft.kc_names.join("，")} onChange={(event) => updateDraft("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：二次函数，最值" className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">分值</span><input type="number" min={0} step="0.5" value={draft.points} onChange={(event) => updateDraft("points", event.target.value)} className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">难度</span><select value={draft.difficulty} onChange={(event) => updateDraft("difficulty", event.target.value)} className={fieldClass}>{DIFFICULTIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><MathSourceField label="解析" value={draft.explanation} markdown onChange={(value) => updateDraft("explanation", value)} open={fieldNeedsReview(current, "explanation")} /></div></details>
-                  <div className="mt-4 rounded-[9px] bg-surface-muted px-3 py-2.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">核验规则：</span>只有点击“核验题目”后，题目才能进入真实作答；是否属于错题必须单独勾选。待校对和已拒绝题不会影响学习数据。{semanticLocked && <span className="mt-1 block text-warning-700">这道题已经产生 FSRS 或掌握度证据，题型、选项、参考答案和知识点已锁定。</span>}{answerHidden && <span className="mt-1 block text-warning-700">当前存在未完成作答记录，参考答案暂时隐藏；请先完成或关闭该草稿记录。</span>}</div>
-                  {current.verification_status === "verified" && <div className={`mt-3 flex items-center gap-2 rounded-[8px] px-3 py-2 text-body-sm ${selectedErrors.has(current.id) ? "bg-warning-50 text-warning-700" : "bg-success-50 text-success-700"}`}><input type="checkbox" checked={selectedErrors.has(current.id)} onChange={(event) => setSelectedErrors((previous) => { const next = new Set(previous); if (event.target.checked) next.add(current.id); else next.delete(current.id); return next; })} className="h-3.5 w-3.5 accent-brand-700" />{selectedErrors.has(current.id) ? "已选择：这是一道错题" : "这道题暂不加入错题本"}</div>}
+                  <details open={fieldNeedsReview(current, "kc_names") || fieldNeedsReview(current, "difficulty") || fieldNeedsReview(current, "points") || fieldNeedsReview(current, "explanation")} className="mt-4 rounded-control border border-line bg-white"><summary className="cursor-pointer px-3 py-2 text-body-sm font-medium text-ink-secondary">修正识别（知识点、难度、分值、解析）</summary><div className="px-3 pb-3"><div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_160px]"><label><span className="text-body-sm font-medium text-ink-secondary">知识点（最多 3 个）</span><input disabled={semanticLocked || answerHidden} value={draft.kc_names.join("，")} onChange={(event) => updateDraft("kc_names", event.target.value.split(/[,，]/))} placeholder="例如：二次函数，最值" className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">分值</span><input type="number" min={0} step="0.5" value={draft.points} onChange={(event) => updateDraft("points", event.target.value)} className={fieldClass} /></label><label><span className="text-body-sm font-medium text-ink-secondary">难度</span><select value={draft.difficulty} onChange={(event) => updateDraft("difficulty", event.target.value)} className={fieldClass}>{DIFFICULTIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><MathSourceField label="解析" value={draft.explanation} markdown onChange={(value) => updateDraft("explanation", value)} open={fieldNeedsReview(current, "explanation")} /></div></details>
+                  <div className="mt-4 rounded-control bg-surface-muted px-3 py-2.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">核验规则：</span>只有点击“核验题目”后，题目才能进入真实作答；是否属于错题必须单独勾选。待校对和已拒绝题不会影响学习数据。{semanticLocked && <span className="mt-1 block text-warning-700">这道题已经产生 FSRS 或掌握度证据，题型、选项、参考答案和知识点已锁定。</span>}{answerHidden && <span className="mt-1 block text-warning-700">当前存在未完成作答记录，参考答案暂时隐藏；请先完成或关闭该草稿记录。</span>}</div>
+                  {current.verification_status === "verified" && <div className={`mt-3 flex items-center gap-2 rounded-control px-3 py-2 text-body-sm ${selectedErrors.has(current.id) ? "bg-warning-50 text-warning-700" : "bg-success-50 text-success-700"}`}><input type="checkbox" checked={selectedErrors.has(current.id)} onChange={(event) => setSelectedErrors((previous) => { const next = new Set(previous); if (event.target.checked) next.add(current.id); else next.delete(current.id); return next; })} className="h-3.5 w-3.5 accent-brand-700" />{selectedErrors.has(current.id) ? "已选择：这是一道错题" : "这道题暂不加入错题本"}</div>}
                 </>
               )}
             </div>

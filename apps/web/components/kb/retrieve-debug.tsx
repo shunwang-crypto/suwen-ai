@@ -24,9 +24,9 @@ const SOURCE_LABELS: Record<string, string> = {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-slate-50 px-3 py-2">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="text-sm font-semibold text-slate-800">{value}</p>
+    <div className="rounded-xl bg-surface-muted px-3 py-2">
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="text-sm font-semibold text-ink">{value}</p>
     </div>
   );
 }
@@ -35,14 +35,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 function RankChange({ prev, next }: { prev: number | null; next: number }) {
   if (prev === null) {
     return (
-      <span className="rounded bg-slate-100 px-1 py-0.5 text-caption font-medium text-slate-500">
+      <span className="rounded bg-surface-muted px-1 py-0.5 text-caption font-medium text-ink-muted">
         新
       </span>
     );
   }
   const delta = prev - next;
   if (delta === 0) {
-    return <span className="px-0.5 font-mono text-caption text-slate-400">＝</span>;
+    return <span className="px-0.5 font-mono text-caption text-ink-muted">＝</span>;
   }
   return (
     <span
@@ -76,14 +76,14 @@ function StageColumn({
   accent: string;
 }) {
   return (
-    <div className="flex min-w-0 flex-col rounded-xl border border-slate-200 bg-white">
-      <div className="border-b border-slate-100 px-3 py-2">
+    <div className="flex min-w-0 flex-col rounded-xl border border-line bg-white">
+      <div className="border-b border-line px-3 py-2">
         <p className={`text-xs font-semibold ${accent}`}>{title}</p>
-        <p className="text-caption text-slate-400">{scoreLabel}</p>
+        <p className="text-caption text-ink-muted">{scoreLabel}</p>
       </div>
       <div className="min-h-24 flex-1 space-y-1.5 p-2">
         {entries.length === 0 ? (
-          <p className="py-4 text-center text-body-sm text-slate-400">
+          <p className="py-4 text-center text-body-sm text-ink-muted">
             {disabledNote ?? "无召回结果"}
           </p>
         ) : (
@@ -92,21 +92,21 @@ function StageColumn({
             return (
               <div
                 key={e.chunk_id}
-                className="rounded-lg bg-slate-50 px-2 py-1.5"
+                className="rounded-lg bg-surface-muted px-2 py-1.5"
                 title={meta ? `${meta.heading_path}\n${meta.text}` : e.chunk_id}
               >
                 <div className="flex items-center gap-1.5">
-                  <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded bg-slate-200/80 font-mono text-caption text-slate-600">
+                  <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded bg-surface-muted/80 font-mono text-caption text-ink-secondary">
                     {i + 1}
                   </span>
                   {prevRank && (
                     <RankChange prev={prevRank.get(e.chunk_id) ?? null} next={i + 1} />
                   )}
-                  <span className="ml-auto shrink-0 font-mono text-caption text-slate-500">
+                  <span className="ml-auto shrink-0 font-mono text-caption text-ink-muted">
                     {e.score != null ? e.score.toFixed(4) : "—"}
                   </span>
                 </div>
-                <div className="mt-1 line-clamp-2 text-body-sm leading-snug text-slate-600">
+                <div className="mt-1 line-clamp-2 text-body-sm leading-snug text-ink-secondary">
                   <MathText text={meta?.text || e.chunk_id.slice(0, 8)} />
                 </div>
               </div>
@@ -202,7 +202,7 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
           onChange={(e) => setQuery(e.target.value)}
           maxLength={2000}
           placeholder="输入检索 query，观察 dense/sparse 召回与重排全过程"
-          className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3.5 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="min-w-0 flex-1 rounded-xl border border-line-strong px-3.5 py-2 text-sm text-ink outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
         />
         <button
           type="submit"
@@ -228,7 +228,7 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
                 result.confident ? "bg-emerald-50" : "bg-amber-50"
               }`}
             >
-              <p className="text-xs text-slate-400">置信度</p>
+              <p className="text-xs text-ink-muted">置信度</p>
               <p
                 className={`text-sm font-semibold ${
                   result.confident ? "text-emerald-700" : "text-amber-700"
@@ -241,7 +241,7 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
 
           {result.stages && result.stages.dense.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-xs font-semibold text-slate-500">
+              <p className="text-xs font-semibold text-ink-muted">
                 四阶段命中对比（↑↓ 为相对上一阶段的名次变化）
               </p>
               <StagesView stages={result.stages} />
@@ -258,16 +258,16 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
               {result.chunks.map((c, i) => (
                 <li
                   key={c.chunk_id}
-                  className="rounded-xl border border-slate-200 bg-white p-3"
+                  className="rounded-xl border border-line bg-white p-3"
                 >
                   <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-                    <span className="rounded bg-slate-200/80 px-1.5 py-0.5 font-mono text-slate-500">
+                    <span className="rounded bg-surface-muted/80 px-1.5 py-0.5 font-mono text-ink-muted">
                       {i + 1}
                     </span>
                     <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-600">
                       {SOURCE_LABELS[c.source] ?? c.source}
                     </span>
-                    <span className="font-mono text-slate-500">
+                    <span className="font-mono text-ink-muted">
                       score {c.score.toFixed(4)}
                     </span>
                     {c.rerank_score != null && (
@@ -276,17 +276,17 @@ export function RetrieveDebug({ kbId }: { kbId: string }) {
                       </span>
                     )}
                     {c.heading_path && (
-                      <span className="max-w-56 truncate text-slate-400">
+                      <span className="max-w-56 truncate text-ink-muted">
                         {c.heading_path}
                       </span>
                     )}
                     {c.page_start != null && (
-                      <span className="text-slate-400">P{c.page_start}</span>
+                      <span className="text-ink-muted">P{c.page_start}</span>
                     )}
                   </div>
                   <MathText
                     text={c.text}
-                    className="text-xs leading-relaxed text-slate-700"
+                    className="text-xs leading-relaxed text-ink-secondary"
                   />
                 </li>
               ))}

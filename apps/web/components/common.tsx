@@ -77,7 +77,7 @@ export function Skeleton({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={`animate-pulse rounded-lg bg-slate-200/70 ${className ?? "h-4 w-full"}`}
+      className={`animate-pulse rounded-lg bg-surface-muted/70 ${className ?? "h-4 w-full"}`}
     />
   );
 }
@@ -109,11 +109,11 @@ export function SkeletonPage() {
         <Skeleton className="h-3 w-64 max-w-full" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="space-y-3 rounded-2xl border border-line bg-white p-4">
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-48 w-full rounded-xl" />
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="rounded-2xl border border-line bg-white p-4">
           <Skeleton className="mb-3 h-4 w-24" />
           <SkeletonList rows={5} />
         </div>
@@ -251,7 +251,7 @@ export function Spinner({ className }: { className?: string }) {
 /** 整块区域加载态。 */
 export function LoadingState({ text = "加载中…" }: { text?: string }) {
   return (
-    <div className="flex flex-col items-center gap-3 py-16 text-slate-400">
+    <div className="flex flex-col items-center gap-3 py-16 text-ink-muted">
       <Spinner className="h-8 w-8" />
       <span className="text-sm">{text}</span>
     </div>
@@ -330,8 +330,8 @@ export function EmptyState({
           </svg>
         </span>
       )}
-      <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-      {description && <p className="text-xs text-slate-500">{description}</p>}
+      <h3 className="text-sm font-semibold text-ink">{title}</h3>
+      {description && <p className="text-xs text-ink-muted">{description}</p>}
       {children}
     </div>
   );

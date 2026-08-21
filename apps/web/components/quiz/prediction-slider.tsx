@@ -21,7 +21,7 @@ export function PredictionSlider({
 }) {
   const selected = value != null;
   return (
-    <fieldset className="mt-3 rounded-[9px] border border-dashed border-brand-200 bg-brand-50/35 px-3 py-2.5">
+    <fieldset className="mt-3 rounded-control border border-dashed border-brand-200 bg-brand-50/35 px-3 py-2.5">
       <legend className="text-body-sm font-medium text-ink-secondary">
         作答前，你觉得自己有多大把握？
       </legend>

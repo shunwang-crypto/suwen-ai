@@ -25,7 +25,7 @@ function MixInput({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-caption text-slate-500">{label}</span>
+      <span className="text-caption text-ink-muted">{label}</span>
       <input
         type="number"
         min={0}
@@ -34,7 +34,7 @@ function MixInput({
         onChange={(e) =>
           onChange(Math.max(0, Math.min(20, Math.trunc(Number(e.target.value) || 0))))
         }
-        className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+        className="w-full rounded-lg border border-line-strong px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
       />
     </label>
   );
@@ -82,24 +82,24 @@ export function QuizForm({
   return (
     <form onSubmit={submit} className="space-y-3">
       <label className="block">
-        <span className="mb-1 block text-caption font-medium text-slate-500">练习主题</span>
+        <span className="mb-1 block text-caption font-medium text-ink-muted">练习主题</span>
         <input
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
           maxLength={255}
           placeholder="如：泰勒展开、二次函数图像性质"
-          className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="w-full rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
         />
       </label>
 
       <label className="block">
-        <span className="mb-1 block text-caption font-medium text-slate-500">
+        <span className="mb-1 block text-caption font-medium text-ink-muted">
           绑定知识库（可选，出题将取材于库内文档）
         </span>
         <select
           value={kbId}
           onChange={(e) => setKbId(e.target.value)}
-          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="w-full rounded-xl border border-line-strong bg-white px-3 py-2 text-sm text-ink-secondary outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
         >
           <option value="">不绑定（通用出题）</option>
           {kbs.map((kb) => (
@@ -111,7 +111,7 @@ export function QuizForm({
       </label>
 
       <div>
-        <span className="mb-1 block text-caption font-medium text-slate-500">
+        <span className="mb-1 block text-caption font-medium text-ink-muted">
           难度配比（题数 = 三档之和，共 {total} 题，上限 20）
         </span>
         <div className="grid grid-cols-3 gap-2">
@@ -123,7 +123,7 @@ export function QuizForm({
           <p className="mt-1 text-body-sm text-red-600">总题数不能超过 20</p>
         )}
         {total === 0 && (
-          <p className="mt-1 text-body-sm text-slate-400">至少需要 1 题</p>
+          <p className="mt-1 text-body-sm text-ink-muted">至少需要 1 题</p>
         )}
       </div>
 

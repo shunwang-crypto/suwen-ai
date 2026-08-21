@@ -120,7 +120,7 @@ export function Composer(props: ComposerProps) {
         {(attachments.length > 0 || kbIds.length > 0) && (
           <div className="flex flex-wrap gap-1.5 px-2 pb-2 pt-1">
             {kbIds.length > 0 && (
-              <span className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary">
+              <span className="inline-flex max-w-64 items-center gap-1.5 rounded-control border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary">
                 <button
                   type="button"
                   onClick={() => setComposerPanel("scope")}
@@ -142,7 +142,7 @@ export function Composer(props: ComposerProps) {
             {attachments.map((attachment) => (
               <span
                 key={attachment.id}
-                className="inline-flex max-w-64 items-center gap-1.5 rounded-[7px] border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary"
+                className="inline-flex max-w-64 items-center gap-1.5 rounded-control border border-line bg-surface-muted px-2 py-1 text-body-sm text-ink-secondary"
               >
                 <span aria-hidden>
                   {attachment.kind === "image" ? "图片" : "文件"}
@@ -176,7 +176,7 @@ export function Composer(props: ComposerProps) {
               aria-expanded={composerPanel === "menu"}
             >
               {uploadingAttachment ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-line-strong border-t-ink-secondary" />
               ) : (
                 "+"
               )}
@@ -193,7 +193,7 @@ export function Composer(props: ComposerProps) {
             maxLength={8000}
             placeholder={streaming ? "正在生成回答…" : "给苏问发消息"}
             disabled={streaming}
-            className="chat-composer-input my-2 min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus-visible:outline-none disabled:text-slate-400"
+            className="chat-composer-input my-2 min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-ink outline-none placeholder:text-ink-muted focus-visible:outline-none disabled:text-ink-muted"
           />
 
           <div className="relative mb-0.5 shrink-0">
@@ -221,9 +221,9 @@ export function Composer(props: ComposerProps) {
               onClick={stop}
               title="停止生成"
               aria-label="停止生成"
-              className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 text-slate-600 transition-colors hover:bg-slate-100"
+              className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line-strong text-ink-secondary transition-colors hover:bg-surface-muted"
             >
-              <span className="h-2.5 w-2.5 rounded-sm bg-slate-500" />
+              <span className="h-2.5 w-2.5 rounded-sm bg-surface-muted" />
             </button>
           ) : (
             <button
@@ -378,7 +378,7 @@ export function Composer(props: ComposerProps) {
                                   if (chatMode === "research") setChatMode("think");
                                 }
                               }}
-                              className="h-3.5 w-3.5 accent-slate-900"
+                              className="h-3.5 w-3.5 accent-ink"
                             />
                             <span className="min-w-0 flex-1 truncate">{kb.name}</span>
                           </label>

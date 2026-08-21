@@ -50,11 +50,11 @@ export function RetrievalTestSection() {
 
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1 block text-xs text-slate-500">选择可见知识库</span>
+            <span className="mb-1 block text-xs text-ink-muted">选择可见知识库</span>
             <select
               value={selectedId}
               onChange={(e) => setSelectedId(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="w-full rounded-xl border border-line-strong bg-white px-3 py-2 text-sm text-ink outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             >
               {(kbs ?? []).length === 0 && <option value="">（暂无可见知识库）</option>}
               {(kbs ?? []).map((kb) => (
@@ -65,14 +65,14 @@ export function RetrievalTestSection() {
             </select>
           </label>
           <label className="block">
-            <span className="mb-1 block text-xs text-slate-500">
+            <span className="mb-1 block text-xs text-ink-muted">
               或直接输入 kb_id（优先生效）
             </span>
             <input
               value={manualId}
               onChange={(e) => setManualId(e.target.value)}
               placeholder="粘贴任意知识库 UUID"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:font-sans placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="w-full rounded-xl border border-line-strong px-3 py-2 font-mono text-sm text-ink outline-none placeholder:font-sans placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             />
           </label>
         </div>

@@ -52,7 +52,7 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-body-sm transition-colors ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-control border px-3 py-2.5 text-body-sm transition-colors ${
                 checked
                   ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
                   : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
@@ -93,7 +93,7 @@ export function QuestionAnswer({
           return (
             <label
               key={i}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-body-sm transition-colors ${
+              className={`flex cursor-pointer items-start gap-2.5 rounded-control border px-3 py-2.5 text-body-sm transition-colors ${
                 checked
                   ? "border-brand-400 bg-brand-50 text-brand-900 ring-1 ring-inset ring-brand-100"
                   : "border-line bg-white text-ink-secondary hover:border-brand-200 hover:bg-brand-50/30"
@@ -124,7 +124,7 @@ export function QuestionAnswer({
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         placeholder="填写答案"
-        className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+        className="w-full rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-surface-muted"
       />
     );
   }
@@ -138,7 +138,7 @@ export function QuestionAnswer({
       rows={3}
       maxLength={8000}
       placeholder="写下你的解答（简答题由 AI 对照参考答案评分）"
-      className="w-full resize-y rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+      className="w-full resize-y rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-surface-muted"
     />
   );
 }

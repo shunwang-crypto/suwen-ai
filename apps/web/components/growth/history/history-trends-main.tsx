@@ -222,7 +222,7 @@ export function HistoryTrends() {
             type="button"
             onClick={reload}
             disabled={loading || diagnosisLoading}
-            className="rounded-[8px] bg-brand-600 px-3.5 py-1.5 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-control bg-brand-600 px-3.5 py-1.5 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading || diagnosisLoading ? "更新中…" : "刷新报告"}
           </button>
@@ -232,7 +232,7 @@ export function HistoryTrends() {
       {/* 知识库切换 tab：全部=全站聚合；选中某库时后端按 ?kb_id= 下发章节聚合轴 */}
       {kbs.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="按知识库查看报告">
-          <span className="mr-0.5 text-caption text-slate-500">范围：</span>
+          <span className="mr-0.5 text-caption text-ink-muted">范围：</span>
           {[{ id: "", name: "全部", subject: "" }, ...kbs].map((kb) => {
             const active = kbId === kb.id;
             return (
@@ -246,7 +246,7 @@ export function HistoryTrends() {
                 className={`rounded-full border px-3 py-1 text-caption font-medium transition-colors ${
                   active
                     ? "border-indigo-600 bg-indigo-600 text-white"
-                    : "border-slate-300 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                    : "border-line-strong bg-white text-ink-secondary hover:border-indigo-300 hover:text-indigo-600"
                 }`}
               >
                 {kb.name}
@@ -288,7 +288,7 @@ export function HistoryTrends() {
             <Card
               title="掌握度雷达"
               extra={
-                <span className="text-caption text-slate-400">
+                <span className="text-caption text-ink-muted">
                   {isChapterAxes
                     ? `章节聚合 · ${radarAxes.length} 轴`
                     : `按证据活动量 Top ${Math.min(radarAxes.length, RADAR_MAX_DIMS)}`}
@@ -309,13 +309,13 @@ export function HistoryTrends() {
             title="薄弱知识点"
             className="order-4"
             extra={
-              <span className="text-caption text-slate-400">
+              <span className="text-caption text-ink-muted">
                 红线 &lt;{redPct}% · 待巩固 &lt;{consolidatePct}% · 附归因下钻
               </span>
             }
           >
             {weakPoints.length === 0 ? (
-              <p className="py-3 text-center text-caption text-slate-400">
+              <p className="py-3 text-center text-caption text-ink-muted">
                 暂无薄弱点，继续保持
               </p>
             ) : (
@@ -333,7 +333,7 @@ export function HistoryTrends() {
                             {g.key || "未分科"}
                           </span>
                         )}
-                        <span className="text-caption text-slate-500">
+                        <span className="text-caption text-ink-muted">
                           红线{" "}
                           <b className="font-semibold text-rose-600">{g.red}</b> 个 ·
                           待巩固{" "}
@@ -364,7 +364,7 @@ export function HistoryTrends() {
                                 [groupKey]: !expanded,
                               }))
                             }
-                            className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-caption font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                            className="rounded-lg border border-line-strong bg-white px-3 py-1 text-caption font-medium text-ink-secondary hover:border-indigo-300 hover:text-indigo-600"
                           >
                             {expanded
                               ? "收起"
@@ -419,7 +419,7 @@ export function HistoryTrends() {
               </div>
             </div>
           ) : (
-            <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-caption text-slate-500">
+            <p className="rounded-xl bg-surface-muted px-3.5 py-3 text-caption text-ink-muted">
               {narrative_note ?? "暂无诊断"}
               {report.report_status === "unavailable" &&
                 "：当前网关模式下不生成诊断文本，以上聚合数据均来自真实作答记录。"}

@@ -22,8 +22,8 @@ export default function Home() {
 
   if (status === "authed") {
     return (
-      <div className="flex h-dvh items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center gap-3 text-slate-400">
+      <div className="flex h-dvh items-center justify-center bg-surface-muted">
+        <div className="flex flex-col items-center gap-3 text-ink-muted">
           <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
           <span className="text-sm">正在进入今日学习…</span>
         </div>
@@ -32,7 +32,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-dvh bg-slate-50">
+    <main className="min-h-dvh bg-surface-muted">
       {/* 无 JS（SEO 快照/爬虫渲染）时滚动入场不触发，直接全部可见 */}
       <noscript>
         <style>{`.fx-reveal{opacity:1;transform:none}`}</style>

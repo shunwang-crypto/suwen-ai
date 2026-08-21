@@ -20,7 +20,7 @@ export function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
   const hasData = trend.some((t) => t.attempts > 0);
   if (!hasData) {
     return (
-      <p className="py-6 text-center text-caption text-slate-400">
+      <p className="py-6 text-center text-caption text-ink-muted">
         近 30 天暂无作答记录，完成练习后这里会出现趋势
       </p>
     );
@@ -59,7 +59,7 @@ export function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
     <div className="overflow-x-auto">
       <div className="min-w-120">
         {/* 上联：答题数（单系列，标题即图例） */}
-        <p className="mb-1 flex items-center gap-1.5 text-caption text-slate-500">
+        <p className="mb-1 flex items-center gap-1.5 text-caption text-ink-muted">
           <span className="h-2 w-2 rounded-full bg-indigo-500" aria-hidden />
           每日答题数
         </p>
@@ -108,7 +108,7 @@ export function TrendChart({ trend }: { trend: ReportTrendPoint[] }) {
         </svg>
 
         {/* 下联：正确率（固定 0–100%） */}
-        <p className="mb-1 mt-2 flex items-center gap-1.5 text-caption text-slate-500">
+        <p className="mb-1 mt-2 flex items-center gap-1.5 text-caption text-ink-muted">
           <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
           每日正确率（无作答日断线）
         </p>

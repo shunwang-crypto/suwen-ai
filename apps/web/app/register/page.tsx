@@ -160,7 +160,7 @@ export default function RegisterPage() {
   };
 
   const inputCls =
-    "w-full rounded-control border border-slate-300/80 bg-white/90 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
+    "w-full rounded-control border border-line-strong/80 bg-white/90 px-3.5 py-2.5 text-sm text-ink outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-ink-muted focus:border-brand-500 focus:shadow-card focus:ring-4 focus:ring-brand-500/10";
 
   if (registrationMode === null || registrationMode === "closed") {
     return (
@@ -169,10 +169,10 @@ export default function RegisterPage() {
         <div className="flex items-center justify-center bg-aurora px-4 py-10">
           <div className="w-full max-w-md text-center">
             <BrandMark size={48} />
-            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-ink">
               {registrationMode === null ? "正在检查注册状态" : "当前暂未开放注册"}
             </h1>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-ink-muted">
               {registrationMode === null
                 ? "请稍候…"
                 : "如需注册，请等待管理员发出邀请。"}
@@ -199,17 +199,17 @@ export default function RegisterPage() {
         <div className="w-full max-w-md animate-fade-up">
           <div className="mb-8 flex flex-col items-center gap-2">
             <BrandMark size={48} />
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
               注册苏问
             </h1>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-ink-muted">
               创建账号，开始你的个性化学习
             </p>
           </div>
 
           <form
             onSubmit={handleSubmit}
-            className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-slate-900/5"
+            className="glass rounded-card border border-white/70 p-6 shadow-floating ring-1 ring-line-strong/5"
             noValidate
           >
             {error && (
@@ -222,7 +222,7 @@ export default function RegisterPage() {
             )}
 
             <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+              <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 姓名或昵称
               </span>
               <input
@@ -238,7 +238,7 @@ export default function RegisterPage() {
             </label>
 
             <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+              <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 邮箱
               </span>
               <input
@@ -276,7 +276,7 @@ export default function RegisterPage() {
                   {sendingCode ? "发送中…" : cooldown > 0 ? `${cooldown}s 后重发` : "发送验证码"}
                 </button>
               </div>
-              <p className="mt-1 text-xs text-slate-500">验证码 10 分钟内有效；请先完成图形验证码。</p>
+              <p className="mt-1 text-xs text-ink-muted">验证码 10 分钟内有效；请先完成图形验证码。</p>
             </div>
 
             {showCaptcha && (
@@ -292,7 +292,7 @@ export default function RegisterPage() {
 
             {registrationMode === "invite" && (
               <label className="mb-4 block">
-                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                <span className="mb-1.5 block text-sm font-medium text-ink-secondary">
                   邀请码
                 </span>
                 <input
@@ -305,14 +305,14 @@ export default function RegisterPage() {
                   className={inputCls}
                   required
                 />
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-xs text-ink-muted">
                   邀请码只能使用一次，请勿公开分享。
                 </p>
               </label>
             )}
 
             <div className="mb-4">
-              <label htmlFor="register-password" className="mb-1.5 block text-sm font-medium text-slate-700">
+              <label htmlFor="register-password" className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 密码
               </label>
               <PasswordInput
@@ -328,7 +328,7 @@ export default function RegisterPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="register-password-confirm" className="mb-1.5 block text-sm font-medium text-slate-700">
+              <label htmlFor="register-password-confirm" className="mb-1.5 block text-sm font-medium text-ink-secondary">
                 确认密码
               </label>
               <PasswordInput
@@ -343,12 +343,12 @@ export default function RegisterPage() {
               />
             </div>
 
-            <label className="mb-6 flex items-start gap-2 text-xs leading-5 text-slate-600">
+            <label className="mb-6 flex items-start gap-2 text-xs leading-5 text-ink-secondary">
               <input
                 type="checkbox"
                 checked={acceptedPolicies}
                 onChange={(e) => setAcceptedPolicies(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                className="mt-1 h-4 w-4 rounded border-line-strong text-brand-600 focus:ring-brand-500"
               />
               <span>
                 我已阅读并同意 <Link href="/terms" className="text-brand-600 hover:underline">用户协议</Link>
@@ -365,7 +365,7 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-slate-500">
+          <p className="mt-6 text-center text-sm text-ink-muted">
             已有账号？
             <Link
               href="/login"

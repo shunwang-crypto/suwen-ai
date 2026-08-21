@@ -97,7 +97,7 @@ export function PracticeSteps({ current }: { current: number }) {
         const active = step === current;
         return (
           <li key={label} className="flex items-center gap-2">
-            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-caption font-semibold ${done ? "bg-success-50 text-success-600" : active ? "bg-brand-600 text-white" : "bg-[#efede9] text-ink-muted"}`}>{done ? "✓" : step}</span>
+            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-caption font-semibold ${done ? "bg-success-50 text-success-600" : active ? "bg-brand-600 text-white" : "bg-brand-50 text-ink-muted"}`}>{done ? "✓" : step}</span>
             <span className={active ? "font-semibold text-ink" : done ? "text-success-600" : "text-ink-muted"}>{label}</span>
             {index < labels.length - 1 && <span className="h-px w-7 bg-line sm:w-12" aria-hidden />}
           </li>

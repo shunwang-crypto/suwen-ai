@@ -533,6 +533,40 @@ async def reindex_document(
     return {"status": "queued"}
 
 
+@router.post("/{kb_id}/documents/{doc_id}/re-enrich", status_code=202)
+async def re_enrich_document(
+    kb_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    """重新触发知识增强 (T0-1).
+
+    增强失败时文档会回落到 ready/partial_ready 并带 error_msg——仍可检索, 但知识点
+    与依赖图没生成。这里只清空 error_msg 后重新入队 enrich_document, **不重置 status、
+    不删分块、不 bump 版本**: enrich_document 内部会自行把状态置 enriching→enriched
+    (失败再回落 ready 并写 error_msg)。与 reindex(全量重摄取)是两回事。
+    """
+    kb = await _resolve_kb(ctx, kb_id)
+    _require_kb_write(ctx, kb)
+    owner_id = kb.tenant_id
+    async with tenant_session(owner_id) as session:
+        doc = await session.get(Document, doc_id)
+        if doc is None or doc.kb_id != kb_id:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        if doc.status == "enriching":
+            # 已在增强队列中, 避免重复入队
+            return {"status": "already_running"}
+        if doc.status not in ("ready", "partial_ready", "enriched"):
+            # 摄取尚未完成 (pending/parsing/…) 或摄取失败 (failed): 还不能增强
+            raise HTTPException(status_code=409, detail="DOC_NOT_READY")
+        doc.error_msg = None
+    await request.app.state.arq.enqueue_job(
+        "enrich_document", str(owner_id), str(doc_id), None, str(ctx.user_id)
+    )
+    return {"status": "queued"}
+
+
 @router.post("/{kb_id}/debug/retrieve")
 async def debug_retrieve(
     kb_id: uuid.UUID,

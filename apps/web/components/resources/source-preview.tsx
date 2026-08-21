@@ -61,14 +61,14 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
 
   if (!resource.source_url) {
     return (
-      <div className="flex min-h-64 items-center justify-center rounded-[12px] border border-dashed border-line-strong bg-[#fafaf9] px-5 text-center text-body-sm text-ink-muted">
+      <div className="flex min-h-64 items-center justify-center rounded-overlay border border-dashed border-line-strong bg-canvas px-5 text-center text-body-sm text-ink-muted">
         这是手动创建的资料，还没有原始文件。你可以直接在右侧添加题目。
       </div>
     );
   }
 
   return (
-    <section className="rounded-[12px] border border-line bg-white p-3 sm:p-4">
+    <section className="rounded-overlay border border-line bg-white p-3 sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-caption font-medium uppercase tracking-[0.08em] text-ink-muted">原始来源</p>
@@ -80,7 +80,7 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
             download={filename}
             target={image || pdf ? "_blank" : undefined}
             rel={image || pdf ? "noreferrer" : undefined}
-            className="shrink-0 rounded-[7px] border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
+            className="shrink-0 rounded-control border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
           >
             {image || pdf ? "打开原文件" : "下载原文件"}
           </a>
@@ -88,22 +88,22 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
       </div>
 
       {loading && (
-        <div className="mt-3 flex min-h-64 items-center justify-center rounded-[9px] bg-surface-muted text-body-sm text-ink-muted">
+        <div className="mt-3 flex min-h-64 items-center justify-center rounded-control bg-surface-muted text-body-sm text-ink-muted">
           正在加载来源预览…
         </div>
       )}
       {error && !loading && (
-        <p className="mt-3 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">{error}</p>
+        <p className="mt-3 rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">{error}</p>
       )}
       {!loading && objectUrl && image && (
-        <div className="mt-3 flex min-h-64 items-center justify-center overflow-hidden rounded-[9px] bg-[#fafaf9] p-2">
+        <div className="mt-3 flex min-h-64 items-center justify-center overflow-hidden rounded-control bg-canvas p-2">
           <Image
             src={objectUrl}
             alt={filename}
             width={1200}
             height={900}
             unoptimized
-            className="max-h-[58dvh] w-full rounded-[6px] object-contain"
+            className="max-h-[58dvh] w-full rounded-control object-contain"
           />
         </div>
       )}
@@ -111,11 +111,11 @@ export function SourcePreview({ resource }: { resource: LearningResourceOut }) {
         <iframe
           title={`${filename} PDF 预览`}
           src={objectUrl}
-          className="mt-3 h-[58dvh] min-h-64 w-full rounded-[9px] border border-line bg-[#fafaf9]"
+          className="mt-3 h-[58dvh] min-h-64 w-full rounded-control border border-line bg-canvas"
         />
       )}
       {!loading && objectUrl && !image && !pdf && (
-        <div className="mt-3 flex min-h-64 flex-col items-center justify-center rounded-[9px] border border-dashed border-line-strong bg-[#fafaf9] px-5 text-center">
+        <div className="mt-3 flex min-h-64 flex-col items-center justify-center rounded-control border border-dashed border-line-strong bg-canvas px-5 text-center">
           <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-50 text-[13px] font-semibold text-brand-700">
             {extensionOf(filename).replace(".", "").toUpperCase() || "FILE"}
           </span>

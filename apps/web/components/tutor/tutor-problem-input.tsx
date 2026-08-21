@@ -295,7 +295,7 @@ export function TutorProblemInput({
 
   return (
     <div
-      className={`mt-3 rounded-[9px] border ${dragging ? "border-brand-400 bg-brand-50" : "border-line-strong bg-[#fafaf9]"}`}
+      className={`mt-3 rounded-control border ${dragging ? "border-brand-400 bg-brand-50" : "border-line-strong bg-canvas"}`}
       onDragEnter={(event) => { event.preventDefault(); if (!locked) setDragging(true); }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
@@ -336,7 +336,7 @@ export function TutorProblemInput({
         <div className="px-3 py-2.5">
           <p className="text-caption font-medium text-ink-muted">题目预览</p>
           <MathText text={stem || "（尚未填写题干）"} className="mt-1 block text-[13px] leading-6 text-ink" />
-          <details className="mt-2 rounded-[7px] border border-line bg-white" open={sourceEditing} onToggle={(event) => setSourceEditing(event.currentTarget.open)}>
+          <details className="mt-2 rounded-control border border-line bg-white" open={sourceEditing} onToggle={(event) => setSourceEditing(event.currentTarget.open)}>
             <summary className="cursor-pointer px-2.5 py-1.5 text-caption text-ink-muted">编辑识别文本/公式源码</summary>
             <textarea
               aria-label="题目题干"
@@ -344,7 +344,7 @@ export function TutorProblemInput({
               onChange={(event) => setStem(event.target.value)}
               rows={4}
               maxLength={12000}
-              className="w-full resize-y rounded-b-[7px] border-0 border-t border-line bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none"
+              className="w-full resize-y rounded-b-control border-0 border-t border-line bg-transparent px-3 py-2.5 text-[13px] leading-6 text-ink outline-none"
             />
           </details>
         </div>
@@ -405,7 +405,7 @@ export function TutorProblemInput({
       )}
       {draft?.warnings.map((warning) => <p key={warning} className="mx-3 mb-2 text-caption text-warning-700">{WARNING_LABEL[warning] ?? "部分内容需要人工检查，请对照原文件校对。"}</p>)}
       {draft?.status === "failed" && (
-        <div className="mx-3 mb-2 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">
+        <div className="mx-3 mb-2 rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">
           <p>暂时无法识别该文件，原文件已经保留。</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button type="button" disabled={busy} onClick={() => void recognize()} className="border border-danger-300 bg-white px-2.5 py-1.5">重新识别</button>
@@ -430,13 +430,13 @@ export function TutorProblemInput({
 
       {reviewOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onMouseDown={(event) => { if (event.currentTarget === event.target) setReviewOpen(false); }}>
-          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="tutor-review-title" className="max-h-[92vh] w-full overflow-y-auto bg-white p-5 shadow-xl sm:max-w-2xl sm:rounded-[8px]">
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="tutor-review-title" className="max-h-[92vh] w-full overflow-y-auto bg-white p-5 shadow-xl sm:max-w-2xl sm:rounded-control">
             <div className="flex items-center justify-between gap-4">
               <h2 id="tutor-review-title" className="text-sm font-semibold text-ink">校对并选择本次辅导题目</h2>
               <button ref={closeRef} type="button" onClick={() => setReviewOpen(false)} className="h-8 w-8 text-lg text-ink-secondary" aria-label="关闭校对">×</button>
             </div>
             {isPdf && draft?.status !== "confirmed" && (
-              <fieldset className="mt-4 rounded-[8px] border border-line bg-surface-muted p-3">
+              <fieldset className="mt-4 rounded-control border border-line bg-surface-muted p-3">
                 <legend className="px-1 text-body-sm font-medium text-ink-secondary">选择本次识别页</legend>
                 <div className="mt-2 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
                   {pages.map((page) => (
@@ -450,7 +450,7 @@ export function TutorProblemInput({
               </fieldset>
             )}
             {draft && isPdf && (
-              <p className="mt-4 rounded-[8px] bg-surface-muted px-3 py-2 text-caption text-ink-secondary">
+              <p className="mt-4 rounded-control bg-surface-muted px-3 py-2 text-caption text-ink-secondary">
                 PDF 共 {draft.attachment?.page_count ?? 0} 页 · 本次选择 {selectedPages.length} 页 · 已识别 {draft.questions.length} 道题
               </p>
             )}
@@ -467,9 +467,9 @@ export function TutorProblemInput({
                 </div>
               </fieldset>
             )}
-            <div className="mt-4 rounded-[8px] border border-line bg-[#fafaf9] px-3 py-2.5 text-body-sm leading-6 text-ink"><p className="text-caption font-medium text-ink-muted">题目预览</p><MathText text={stem || "（尚未填写题干）"} className="mt-1 block" /></div>
-            <details className="mt-1.5 rounded-[7px] border border-line"><summary className="cursor-pointer px-2.5 py-1.5 text-caption text-ink-muted">编辑题干/公式源码</summary><textarea aria-label="题干" value={stem} onChange={(event) => setStem(event.target.value)} rows={5} maxLength={12000} className="mt-0 w-full resize-y border-0 border-t border-line p-3 text-sm font-normal leading-6 text-ink outline-none focus:border-brand-400" /></details>
-            <fieldset className="mt-4"><legend className="text-body-sm font-medium text-ink-secondary">选项</legend><div className="mt-2 space-y-2">{options.map((option, index) => <div key={index} className="rounded-[7px] border border-line bg-[#fafaf9] px-3 py-2 text-sm"><div className="flex gap-2"><span className="w-5 text-caption text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div><details className="mt-1"><summary className="cursor-pointer text-caption text-ink-muted">编辑选项/公式源码</summary><div className="mt-1 flex gap-2"><input aria-label={`选项 ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setOptions((current) => current.map((value, item) => item === index ? event.target.value : value))} maxLength={1000} className="min-w-0 flex-1 border border-line-strong px-3 py-2 text-sm" /><button type="button" onClick={() => setOptions((current) => current.filter((_, item) => item !== index))} className="h-9 w-9 text-danger-600" aria-label={`删除选项 ${String.fromCharCode(65 + index)}`}>×</button></div></details></div>)}</div>{options.length < 8 && <button type="button" onClick={() => setOptions((current) => [...current, ""])} className="mt-2 border border-line-strong px-3 py-1.5 text-body-sm text-ink-secondary">添加选项</button>}</fieldset>
+            <div className="mt-4 rounded-control border border-line bg-canvas px-3 py-2.5 text-body-sm leading-6 text-ink"><p className="text-caption font-medium text-ink-muted">题目预览</p><MathText text={stem || "（尚未填写题干）"} className="mt-1 block" /></div>
+            <details className="mt-1.5 rounded-control border border-line"><summary className="cursor-pointer px-2.5 py-1.5 text-caption text-ink-muted">编辑题干/公式源码</summary><textarea aria-label="题干" value={stem} onChange={(event) => setStem(event.target.value)} rows={5} maxLength={12000} className="mt-0 w-full resize-y border-0 border-t border-line p-3 text-sm font-normal leading-6 text-ink outline-none focus:border-brand-400" /></details>
+            <fieldset className="mt-4"><legend className="text-body-sm font-medium text-ink-secondary">选项</legend><div className="mt-2 space-y-2">{options.map((option, index) => <div key={index} className="rounded-control border border-line bg-canvas px-3 py-2 text-sm"><div className="flex gap-2"><span className="w-5 text-caption text-ink-muted">{String.fromCharCode(65 + index)}.</span><MathText text={option || "（空选项）"} /></div><details className="mt-1"><summary className="cursor-pointer text-caption text-ink-muted">编辑选项/公式源码</summary><div className="mt-1 flex gap-2"><input aria-label={`选项 ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setOptions((current) => current.map((value, item) => item === index ? event.target.value : value))} maxLength={1000} className="min-w-0 flex-1 border border-line-strong px-3 py-2 text-sm" /><button type="button" onClick={() => setOptions((current) => current.filter((_, item) => item !== index))} className="h-9 w-9 text-danger-600" aria-label={`删除选项 ${String.fromCharCode(65 + index)}`}>×</button></div></details></div>)}</div>{options.length < 8 && <button type="button" onClick={() => setOptions((current) => [...current, ""])} className="mt-2 border border-line-strong px-3 py-1.5 text-body-sm text-ink-secondary">添加选项</button>}</fieldset>
             <label className="mt-4 block text-body-sm font-medium text-ink-secondary">已知条件<textarea value={knownConditions} onChange={(event) => setKnownConditions(event.target.value)} rows={2} maxLength={8000} className="mt-2 w-full resize-y border border-line-strong p-3 text-sm font-normal" /></label>
             <label className="mt-4 block text-body-sm font-medium text-ink-secondary">你当前的思路或卡点<textarea value={currentThought} onChange={(event) => setCurrentThought(event.target.value)} rows={3} maxLength={8000} className="mt-2 w-full resize-y border border-line-strong p-3 text-sm font-normal" /></label>
             <div className="mt-5 flex justify-end gap-2 border-t border-line pt-4"><button type="button" onClick={() => setReviewOpen(false)} className="border border-line-strong px-4 py-2 text-body-sm text-ink-secondary">返回修改</button><button type="button" disabled={busy || !stem.trim()} onClick={() => void confirm()} className="bg-brand-600 px-4 py-2 text-body-sm font-medium text-white disabled:opacity-40">确认并开始辅导</button></div>

@@ -83,7 +83,7 @@ export default function AdminPage() {
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
       {/* 分区切换：运营与成本 / 检索命中测试 */}
-      <div className="flex w-fit items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+      <div className="flex w-fit items-center gap-1 rounded-xl border border-line bg-white p-1">
         {(
           [
             ["ops", "运营与成本"],
@@ -101,7 +101,7 @@ export default function AdminPage() {
             className={`rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors ${
               tab === key
                 ? "bg-indigo-600 text-white"
-                : "text-slate-600 hover:bg-slate-100"
+                : "text-ink-secondary hover:bg-surface-muted"
             }`}
           >
             {label}
@@ -122,8 +122,8 @@ export default function AdminPage() {
       {tab === "ops" && (
         <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-semibold text-slate-900">运营与成本</h2>
-        <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+        <h2 className="text-base font-semibold text-ink">运营与成本</h2>
+        <div className="flex items-center gap-1 rounded-xl border border-line bg-white p-1">
           {DAY_OPTIONS.map((d) => (
             <button
               key={d}
@@ -132,7 +132,7 @@ export default function AdminPage() {
               className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                 days === d
                   ? "bg-indigo-600 text-white"
-                  : "text-slate-600 hover:bg-slate-100"
+                  : "text-ink-secondary hover:bg-surface-muted"
               }`}
             >
               近 {d} 天
@@ -148,10 +148,10 @@ export default function AdminPage() {
       <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-slate-900">
+            <h3 className="text-sm font-semibold text-ink">
               虚拟时钟（time-travel）
             </h3>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-0.5 text-xs text-ink-muted">
               当前偏移{" "}
               <span className="font-mono font-semibold text-violet-700">
                 {timeTravel ? `+${timeTravel.offset_days.toFixed(2)} 天` : "—"}
@@ -263,12 +263,12 @@ export default function AdminPage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Card title="Top 用户（按成本，ID 已脱敏）">
               {usage.top_users.length === 0 ? (
-                <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+                <p className="py-3 text-center text-xs text-ink-muted">暂无数据</p>
               ) : (
                 <div className="overflow-x-auto">
                 <table className="w-full min-w-72 text-left text-sm">
                   <thead>
-                    <tr className="border-b border-slate-100 text-xs text-slate-400">
+                    <tr className="border-b border-line text-xs text-ink-muted">
                       <th className="py-1.5 font-medium">用户</th>
                       <th className="py-1.5 text-right font-medium">调用次数</th>
                       <th className="py-1.5 text-right font-medium">成本</th>
@@ -276,14 +276,14 @@ export default function AdminPage() {
                   </thead>
                   <tbody>
                     {usage.top_users.map((u) => (
-                      <tr key={u.user} className="border-b border-slate-50">
-                        <td className="py-1.5 font-mono text-xs text-slate-600">
+                      <tr key={u.user} className="border-b border-line">
+                        <td className="py-1.5 font-mono text-xs text-ink-secondary">
                           {u.user}…
                         </td>
-                        <td className="py-1.5 text-right text-slate-600">
+                        <td className="py-1.5 text-right text-ink-secondary">
                           {fmtInt(u.calls)}
                         </td>
-                        <td className="py-1.5 text-right font-mono text-slate-700">
+                        <td className="py-1.5 text-right font-mono text-ink-secondary">
                           {fmtCny(u.cost_cny)}
                         </td>
                       </tr>
@@ -296,12 +296,12 @@ export default function AdminPage() {
 
             <Card title="延迟分位 · 按功能">
               {!latency || latency.by_feature.length === 0 ? (
-                <p className="py-3 text-center text-xs text-slate-400">暂无数据</p>
+                <p className="py-3 text-center text-xs text-ink-muted">暂无数据</p>
               ) : (
                 <div className="overflow-x-auto">
                 <table className="w-full min-w-80 text-left text-sm">
                   <thead>
-                    <tr className="border-b border-slate-100 text-xs text-slate-400">
+                    <tr className="border-b border-line text-xs text-ink-muted">
                       <th className="py-1.5 font-medium">功能</th>
                       <th className="py-1.5 text-right font-medium">调用次数</th>
                       <th className="py-1.5 text-right font-medium">p50 (ms)</th>
@@ -310,17 +310,17 @@ export default function AdminPage() {
                   </thead>
                   <tbody>
                     {latency.by_feature.map((f) => (
-                      <tr key={f.feature} className="border-b border-slate-50">
-                        <td className="py-1.5 font-mono text-xs text-slate-600">
+                      <tr key={f.feature} className="border-b border-line">
+                        <td className="py-1.5 font-mono text-xs text-ink-secondary">
                           {f.feature}
                         </td>
-                        <td className="py-1.5 text-right text-slate-600">
+                        <td className="py-1.5 text-right text-ink-secondary">
                           {fmtInt(f.calls)}
                         </td>
-                        <td className="py-1.5 text-right font-mono text-slate-700">
+                        <td className="py-1.5 text-right font-mono text-ink-secondary">
                           {f.p50_ms != null ? f.p50_ms.toFixed(0) : "—"}
                         </td>
-                        <td className="py-1.5 text-right font-mono text-slate-700">
+                        <td className="py-1.5 text-right font-mono text-ink-secondary">
                           {f.p95_ms != null ? f.p95_ms.toFixed(0) : "—"}
                         </td>
                       </tr>

@@ -89,10 +89,10 @@ export function RecentCourses({
               href={`/courses/${kb.id}`}
               onClick={onNavigate}
               title={kb.name}
-              className={`flex h-7 items-center gap-2 truncate rounded-[7px] py-1 pl-8 pr-2.5 text-[12.5px] transition-colors ${
+              className={`flex h-7 items-center gap-2 truncate rounded-control py-1 pl-8 pr-2.5 text-[12.5px] transition-colors ${
                 active
-                  ? "bg-[#eeedea] font-medium text-ink"
-                  : "text-ink-muted hover:bg-[#f4f3f0] hover:text-ink-secondary"
+                  ? "bg-brand-50 font-medium text-ink"
+                  : "text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
               }`}
             >
               <span className="truncate">{kb.name}</span>

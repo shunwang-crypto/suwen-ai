@@ -50,7 +50,7 @@ export function AppealEntry({ questionId }: { questionId: string }) {
         ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
         : result.status === "pending_manual_review"
           ? "border-amber-200 bg-amber-50/70 text-amber-800"
-          : "border-slate-200 bg-slate-50 text-slate-600";
+          : "border-line bg-surface-muted text-ink-secondary";
     return (
       <div className={`mt-2 rounded-xl border px-3 py-2 text-xs ${tone}`}>
         <p className="font-medium">
@@ -98,7 +98,7 @@ export function AppealEntry({ questionId }: { questionId: string }) {
         rows={2}
         maxLength={2000}
         placeholder="说明你认为评分有误的理由（如：参考答案的哪一点我其实答到了）…"
-        className="w-full resize-none rounded-xl border border-slate-300 px-3 py-2 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+        className="w-full resize-none rounded-xl border border-line-strong px-3 py-2 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
       />
       {error && <p className="text-xs text-red-600">{error}</p>}
       <div className="flex justify-end gap-2">
@@ -106,7 +106,7 @@ export function AppealEntry({ questionId }: { questionId: string }) {
           type="button"
           disabled={busy}
           onClick={() => setOpen(false)}
-          className="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+          className="rounded-lg border border-line-strong px-3 py-1 text-xs text-ink-muted hover:bg-surface-muted disabled:opacity-50"
         >
           取消
         </button>

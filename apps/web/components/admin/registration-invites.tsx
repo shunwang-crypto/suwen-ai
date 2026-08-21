@@ -110,36 +110,36 @@ export function RegistrationInvitesSection() {
       <Card title="创建邀请码">
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block">
-            <span className="mb-1 block text-xs text-slate-500">数量</span>
+            <span className="mb-1 block text-xs text-ink-muted">数量</span>
             <input
               type="number"
               min={1}
               max={100}
               value={count}
               onChange={(e) => setCount(Math.min(100, Math.max(1, Number(e.target.value))))}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-xs text-slate-500">每枚可使用次数</span>
+            <span className="mb-1 block text-xs text-ink-muted">每枚可使用次数</span>
             <input
               type="number"
               min={1}
               max={100}
               value={maxUses}
               onChange={(e) => setMaxUses(Math.min(100, Math.max(1, Number(e.target.value))))}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-xs text-slate-500">有效期（天，0 为不过期）</span>
+            <span className="mb-1 block text-xs text-ink-muted">有效期（天，0 为不过期）</span>
             <input
               type="number"
               min={0}
               max={365}
               value={expiresInDays}
               onChange={(e) => setExpiresInDays(Math.min(365, Math.max(0, Number(e.target.value))))}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm"
             />
           </label>
         </div>
@@ -161,7 +161,7 @@ export function RegistrationInvitesSection() {
             {busy ? "生成中…" : `批量生成 ${count} 枚`}
           </button>
         </div>
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-ink-muted">
           邀请码只在创建成功后的本次结果中显示一次，列表不会提供恢复或查看原文的入口。
         </p>
       </Card>
@@ -212,7 +212,7 @@ export function RegistrationInvitesSection() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-160 text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                <tr className="border-b border-line text-xs text-ink-muted">
                   <th className="py-1.5 pr-2 font-medium">状态</th>
                   <th className="py-1.5 pr-2 font-medium">创建时间</th>
                   <th className="py-1.5 pr-2 font-medium">有效期</th>
@@ -223,16 +223,16 @@ export function RegistrationInvitesSection() {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id} className="border-b border-slate-50">
+                  <tr key={item.id} className="border-b border-line">
                     <td className="py-2 pr-2">
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-ink-secondary">
                         {INVITE_STATUS_LABEL[item.status]}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap py-2 pr-2 text-xs text-slate-500">{fmtDateTime(item.created_at)}</td>
-                    <td className="whitespace-nowrap py-2 pr-2 text-xs text-slate-500">{item.expires_at ? fmtDateTime(item.expires_at) : "不过期"}</td>
-                    <td className="py-2 pr-2 text-xs text-slate-600">{item.used_count} / {item.max_uses}</td>
-                    <td className="py-2 pr-2 text-xs text-slate-600">{item.used_by_email ?? "—"}</td>
+                    <td className="whitespace-nowrap py-2 pr-2 text-xs text-ink-muted">{fmtDateTime(item.created_at)}</td>
+                    <td className="whitespace-nowrap py-2 pr-2 text-xs text-ink-muted">{item.expires_at ? fmtDateTime(item.expires_at) : "不过期"}</td>
+                    <td className="py-2 pr-2 text-xs text-ink-secondary">{item.used_count} / {item.max_uses}</td>
+                    <td className="py-2 pr-2 text-xs text-ink-secondary">{item.used_by_email ?? "—"}</td>
                     <td className="py-2 text-right">
                       {item.status === "active" && (
                         <button type="button" disabled={busy} onClick={() => void revoke(item)} className="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">撤销</button>

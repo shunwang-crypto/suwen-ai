@@ -27,7 +27,7 @@ function ChevronIcon({ open }: { open: boolean }) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+      className={`h-4 w-4 shrink-0 text-ink-muted transition-transform ${
         open ? "rotate-90" : ""
       }`}
       aria-hidden
@@ -122,13 +122,13 @@ export function StudyGuidePanel({
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
       {!guide ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
-          <p className="text-sm text-slate-600">
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line bg-surface-muted px-4 py-6 text-center">
+          <p className="text-sm text-ink-secondary">
             {generating
               ? "正在生成学习指南…（后台任务，完成后自动出现）"
               : "还没有学习指南"}
           </p>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-ink-muted">
             指南包含学习大纲、术语表与推荐提问，帮你决定从哪读起
           </p>
           {writable && (
@@ -147,7 +147,7 @@ export function StudyGuidePanel({
         <>
           {/* 大纲：可折叠，每项带 KC 标签 */}
           <section>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
               学习大纲
             </h3>
             <ul className="space-y-1.5">
@@ -156,26 +156,26 @@ export function StudyGuidePanel({
                 return (
                   <li
                     key={`${item.title}-${idx}`}
-                    className="overflow-hidden rounded-xl border border-slate-200 shadow-[0_2px_10px_-4px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
+                    className="overflow-hidden rounded-xl border border-line shadow-[0_2px_10px_-4px_rgba(79,70,229,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.18)] motion-reduce:hover:translate-y-0"
                   >
                     <button
                       type="button"
                       onClick={() => setOpenIdx(open ? -1 : idx)}
                       aria-expanded={open}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-muted"
                     >
                       <ChevronIcon open={open} />
                       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-body-sm font-semibold text-indigo-600">
                         {idx + 1}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
                         <MathText text={item.title} singleLine />
                       </span>
                     </button>
                     {open && (
-                      <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5">
+                      <div className="space-y-2 border-t border-line bg-surface-muted/60 px-3 py-2.5">
                         {item.summary && (
-                          <div className="text-xs leading-relaxed text-slate-600">
+                          <div className="text-xs leading-relaxed text-ink-secondary">
                             <MathText text={item.summary} />
                           </div>
                         )}
@@ -202,17 +202,17 @@ export function StudyGuidePanel({
           {/* 术语表（两栏卡片化） */}
           {guide.glossary.length > 0 && (
             <section>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
                 术语表
               </h3>
               <dl className="grid gap-2 sm:grid-cols-2">
                 {guide.glossary.map((g) => (
                   <div
                     key={g.term}
-                    className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-white hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.16)] motion-reduce:hover:translate-y-0"
+                    className="rounded-xl border border-line bg-surface-muted/60 px-3 py-2 transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-white hover:shadow-[0_6px_16px_-4px_rgba(79,70,229,0.16)] motion-reduce:hover:translate-y-0"
                   >
-                    <dt className="text-sm font-medium text-slate-800"><MathText text={g.term} /></dt>
-                    <dd className="mt-0.5 text-xs leading-relaxed text-slate-500">
+                    <dt className="text-sm font-medium text-ink"><MathText text={g.term} /></dt>
+                    <dd className="mt-0.5 text-xs leading-relaxed text-ink-muted">
                       <MathText text={g.definition} />
                     </dd>
                   </div>
@@ -224,7 +224,7 @@ export function StudyGuidePanel({
           {/* 推荐问题 chips：点击跳对话页并自动发问（?kb=&q=） */}
           {guide.suggested_questions.length > 0 && (
             <section>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
                 从这些问题开始
               </h3>
               <div className="flex flex-wrap gap-1.5">
@@ -242,14 +242,14 @@ export function StudyGuidePanel({
             </section>
           )}
 
-          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3 text-body-sm text-slate-400">
+          <div className="flex items-center justify-between gap-2 border-t border-line pt-3 text-body-sm text-ink-muted">
             <span>生成于 {fmtDateTime(guide.generated_at)} · 基于 {guide.doc_count} 篇文档</span>
             {writable && (
               <button
                 type="button"
                 onClick={() => void rebuild()}
                 disabled={generating}
-                className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 font-medium text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                className="flex items-center gap-1 rounded-lg border border-line px-2 py-1 font-medium text-ink-muted hover:bg-surface-muted disabled:opacity-50"
               >
                 {generating && <Spinner className="h-3 w-3" />}
                 重新生成

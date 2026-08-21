@@ -40,7 +40,7 @@ const TUTOR_SESSION_KEY = "suwen:active-tutor-session";
 const HINT_LEVELS = ["引导提问", "方向提示", "关键步骤", "完整解答"];
 
 const HINT_BADGE_STYLES = [
-  "bg-slate-100 text-slate-600",
+  "bg-surface-muted text-ink-secondary",
   "bg-indigo-50 text-indigo-700",
   "bg-amber-50 text-amber-700",
   "bg-red-50 text-red-700",
@@ -141,7 +141,7 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
               <span
                 aria-hidden
                 className={`absolute left-[11px] top-7 h-[calc(100%-1.5rem)] w-0.5 rounded-full transition-colors duration-300 ${
-                  passed ? "bg-indigo-300" : "bg-slate-200"
+                  passed ? "bg-indigo-300" : "bg-surface-muted"
                 }`}
               />
             )}
@@ -151,7 +151,7 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
                   ? "scale-110 bg-indigo-600 text-white shadow-[0_2px_10px_-2px_rgba(79,70,229,0.6)] ring-4 ring-indigo-100 motion-reduce:scale-100"
                   : passed
                     ? "bg-indigo-100 text-indigo-600"
-                    : "bg-slate-100 text-slate-400"
+                    : "bg-surface-muted text-ink-muted"
               }`}
             >
               {passed ? (
@@ -176,13 +176,13 @@ function HintLadder({ level, active }: { level: number; active: boolean }) {
                 current
                   ? "bg-indigo-50 font-semibold text-indigo-700"
                   : reached
-                    ? "text-slate-600"
-                    : "text-slate-400"
+                    ? "text-ink-secondary"
+                    : "text-ink-muted"
               }`}
             >
               {label}
               {i === 3 && (
-                <span className="ml-auto text-caption text-slate-400">仅此层给答案</span>
+                <span className="ml-auto text-caption text-ink-muted">仅此层给答案</span>
               )}
             </span>
           </li>
@@ -246,15 +246,15 @@ function ReviewCard({
 
       <div className="space-y-3 p-4 text-sm">
         <div>
-          <p className="mb-1 text-caption font-semibold text-slate-500">
+          <p className="mb-1 text-caption font-semibold text-ink-muted">
             本次暴露的误解
           </p>
           {summary.misconceptions.length === 0 ? (
-            <p className="text-caption text-slate-400">本次未发现明显误解</p>
+            <p className="text-caption text-ink-muted">本次未发现明显误解</p>
           ) : (
             <ul className="space-y-1">
               {summary.misconceptions.map((m, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-slate-700">
+                <li key={i} className="flex items-start gap-1.5 text-ink-secondary">
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                   <MathText text={m} className="text-sm" />
                 </li>
@@ -264,13 +264,13 @@ function ReviewCard({
         </div>
 
         <div>
-          <p className="mb-1 text-caption font-semibold text-slate-500">复习建议</p>
+          <p className="mb-1 text-caption font-semibold text-ink-muted">复习建议</p>
           {summary.review_suggestions.length === 0 ? (
-            <p className="text-caption text-slate-400">暂无</p>
+            <p className="text-caption text-ink-muted">暂无</p>
           ) : (
             <ul className="space-y-1">
               {summary.review_suggestions.map((s, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-slate-700">
+                <li key={i} className="flex items-start gap-1.5 text-ink-secondary">
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
                   <MathText text={s} className="text-sm" />
                 </li>
@@ -281,7 +281,7 @@ function ReviewCard({
 
         {changes.length > 0 && (
           <div>
-            <p className="mb-1 text-caption font-semibold text-slate-500">
+            <p className="mb-1 text-caption font-semibold text-ink-muted">
               掌握度变化（辅导小结已写入画像）
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -303,7 +303,7 @@ function ReviewCard({
         </button>
         <Link
           href="/reviews"
-          className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+          className="rounded-xl border border-line bg-white px-3.5 py-2 text-sm font-medium text-ink-secondary hover:border-indigo-300 hover:text-indigo-700"
         >
           去复习错题
         </Link>
@@ -655,14 +655,14 @@ export function TutorWorkspace({
 
   return (
     <div className="mx-auto w-full max-w-[1080px] space-y-5 px-5 py-5 sm:px-7 lg:px-8">
-      <section className="relative overflow-hidden rounded-[12px] border border-line bg-white px-5 py-4">
+      <section className="relative overflow-hidden rounded-overlay border border-line bg-white px-5 py-4">
         <span className="absolute inset-y-0 left-0 w-[3px] bg-brand-600" aria-hidden />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-caption"><span className="font-semibold text-brand-700">题目</span><span className="rounded-full bg-danger-50 px-1.5 py-0.5 font-medium text-danger-600">必填</span><span className="text-ink-muted">根据题目建立本次辅导上下文</span></div>
-          {(started || (draftId && threadId)) && <button type="button" onClick={reset} className="rounded-[7px] border border-line px-2.5 py-1 text-body-sm text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
+          {(started || (draftId && threadId)) && <button type="button" onClick={reset} className="rounded-control border border-line px-2.5 py-1 text-body-sm text-ink-secondary hover:border-brand-200 hover:text-brand-700">换题</button>}
         </div>
         {sourceKbId && (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-caption text-brand-700">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-brand-100 bg-brand-50 px-3 py-2 text-caption text-brand-700">
             <span>
               来自知识库：{sourceKb?.name ?? "正在确认资料范围…"}。分级辅导围绕具体题目逐层引导，不会把资料库名称当成题目内容。
             </span>
@@ -705,43 +705,43 @@ export function TutorWorkspace({
         <main ref={listRef} className="min-w-0 space-y-3">
           {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
           {messages.map((message, index) => message.role === "user" ? (
-            <article key={index} className="ml-10 overflow-hidden rounded-[10px] border border-line bg-white">
+            <article key={index} className="ml-10 overflow-hidden rounded-control border border-line bg-white">
               <div className="px-4 py-3"><p className="text-caption font-medium text-ink-muted">你的第 {Math.floor(index / 2) + 1} 步</p><div className="mt-2 text-[13px] leading-6 text-ink"><MathText text={message.content} /></div></div>
               {stuckType && index === messages.length - 2 && <div className="border-t border-warning-100 bg-warning-50 px-4 py-2.5"><div className="flex items-center gap-2 text-caption"><span className="font-semibold text-warning-700">↩ 建议调整</span><span className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700">卡点 · {STUCK_LABELS[stuckType] ?? stuckType}</span></div></div>}
             </article>
           ) : (
             <div key={index} className="flex items-start gap-3 py-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-600 text-body-sm font-semibold text-white">E</span>
-              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-caption font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-[10px] border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><ModelMarkdown text={message.content} /></div></div>
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-brand-600 text-body-sm font-semibold text-white">E</span>
+              <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-caption font-semibold uppercase tracking-[0.05em] text-brand-700">AI 老师</p>{message.hintLevel != null && <HintBadge level={message.hintLevel} />}</div><div className="mt-2 rounded-control border border-[#c7cef5] bg-[#f6f7ff] px-4 py-3 text-[13px] leading-6 text-[#1e1b4b]"><ModelMarkdown text={message.content} /></div></div>
             </div>
           ))}
 
           {sending && <div className="ml-10 flex items-center gap-2 py-2 text-body-sm text-ink-muted"><Spinner className="h-3.5 w-3.5" />老师正在整理下一步提示…</div>}
 
           {!ended && !sending && hintLevel === 3 && started && (
-            <div className="ml-10 rounded-[10px] border border-warning-200 bg-warning-50 p-3 text-body-sm text-warning-700"><p>完整解答已经展开。确认理解后，系统会把本次真实卡点写入复盘。</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void send(FINISH_PHRASE)} className="rounded-[7px] bg-brand-600 px-3 py-1.5 font-medium text-white">我已理解，生成复盘</button><button type="button" onClick={reset} className="rounded-[7px] border border-line-strong bg-white px-3 py-1.5">换一道题</button></div></div>
+            <div className="ml-10 rounded-control border border-warning-200 bg-warning-50 p-3 text-body-sm text-warning-700"><p>完整解答已经展开。确认理解后，系统会把本次真实卡点写入复盘。</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void send(FINISH_PHRASE)} className="rounded-control bg-brand-600 px-3 py-1.5 font-medium text-white">我已理解，生成复盘</button><button type="button" onClick={reset} className="rounded-control border border-line-strong bg-white px-3 py-1.5">换一道题</button></div></div>
           )}
 
           {ended && summary && <ReviewCard summary={summary} changes={masteryChanges} onReset={reset} />}
 
           {!ended && Boolean(draftId && threadId) && (
-            <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-[12px] border border-line bg-white p-3 shadow-subtle sm:ml-10">
+            <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="ml-0 rounded-overlay border border-line bg-white p-3 shadow-subtle sm:ml-10">
               <div className="mb-2 flex items-center gap-1.5 px-1 text-caption"><span className="font-semibold text-ink-secondary">你的思路</span>{!started && <span className="text-ink-muted">选填</span>}</div>
               <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(); } }} rows={3} maxLength={4000} disabled={!effectiveProblem.trim() || sending} placeholder={effectiveProblem.trim() ? started ? "写下你的下一步判断、计算或疑问……" : "可以先写下思路或卡点，也可以直接开始解题……" : "请先在上方输入题目"} className="w-full resize-none border-0 bg-transparent px-1 text-[13px] leading-6 text-ink outline-none placeholder:text-ink-muted disabled:cursor-not-allowed" />
-              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-body-sm text-ink-muted sm:block">Ctrl / ⌘ + Enter {started ? "继续" : "开始"}</span><span className="flex-1" /><button type="button" disabled={!effectiveProblem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要提示</button><button type="submit" disabled={!effectiveProblem.trim() || (started && !input.trim()) || sending} className="flex items-center gap-1.5 rounded-[7px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}{started ? "继续解题" : "开始解题"}</button></div>
+              <div className="mt-2 flex items-center gap-2 border-t border-line pt-2.5"><span className="hidden text-body-sm text-ink-muted sm:block">Ctrl / ⌘ + Enter {started ? "继续" : "开始"}</span><span className="flex-1" /><button type="button" disabled={!effectiveProblem.trim() || sending} onClick={() => void send(HINT_PHRASE)} className="rounded-control border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要提示</button><button type="submit" disabled={!effectiveProblem.trim() || (started && !input.trim()) || sending} className="flex items-center gap-1.5 rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white disabled:opacity-40">{sending && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}{started ? "继续解题" : "开始解题"}</button></div>
             </form>
           )}
         </main>
 
-        {started && <aside className="rounded-[12px] border border-line bg-white p-4 lg:sticky lg:top-5">
+        {started && <aside className="rounded-overlay border border-line bg-white p-4 lg:sticky lg:top-5">
           <div className="flex items-center justify-between"><h2 className="text-body-sm font-semibold text-ink">提示支持</h2><span className="text-caption text-ink-muted">卡了再用</span></div>
-          <button type="button" aria-expanded={hintsExpanded} onClick={() => setHintsExpanded((value) => !value)} className="mt-4 flex w-full items-center justify-between rounded-[8px] border border-brand-100 bg-brand-50 px-3 py-2 text-left text-body-sm font-medium text-brand-700">
+          <button type="button" aria-expanded={hintsExpanded} onClick={() => setHintsExpanded((value) => !value)} className="mt-4 flex w-full items-center justify-between rounded-control border border-brand-100 bg-brand-50 px-3 py-2 text-left text-body-sm font-medium text-brand-700">
             <span>当前提示：第 {hintLevel + 1} 层 · {HINT_LEVELS[Math.min(hintLevel, HINT_LEVELS.length - 1)]}</span>
             <span aria-hidden>{hintsExpanded ? "收起" : "展开"}</span>
           </button>
           {hintsExpanded && <div className="mt-3"><HintLadder level={hintLevel} active={started} /></div>}
-          <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-[7px] border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
-          {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-[7px] border border-success-200 bg-success-50 px-3 py-2 text-body-sm font-medium text-success-700">我认为已解出，进入理解确认</button>}
+          <button type="button" disabled={!effectiveProblem.trim() || sending || ended} onClick={() => void send(HINT_PHRASE)} className="mt-4 w-full rounded-control border border-brand-100 bg-brand-50 px-3 py-2 text-body-sm font-medium text-brand-700 disabled:opacity-40">需要更具体的提示：关键步骤</button>
+          {hintLevel === 3 && !ended && <button type="button" onClick={() => void send(FINISH_PHRASE)} className="mt-2 w-full rounded-control border border-success-200 bg-success-50 px-3 py-2 text-body-sm font-medium text-success-700">我认为已解出，进入理解确认</button>}
           <p className="mt-3 text-caption leading-5 text-ink-muted">提示会根据你的回答逐层加深，尽量帮助你自己找到下一步，而不是直接给出答案。</p>
         </aside>}
       </div>

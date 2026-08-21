@@ -33,15 +33,32 @@ import {
 } from "@/components/plans/plan-task-drawer";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import { toast } from "@/lib/toast";
 import type {
   PlanAdjustResult,
   PlanAdjustmentItem,
   PlanDetail,
+  PlanMode,
   PlanToggleResult,
 } from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 
 type DrawerLocation = PlanTaskLocation;
+
+/**
+ * 「重新生成」预填载荷（T1-1b）：把一份计划的目标与参数回填到 /plans 新建表单，
+ * 交由既有创建流（POST /api/plans，finalize 会自动归档当前 active）重跑一遍。
+ */
+export interface PlanRegeneratePrefill {
+  goal: string;
+  planMode: PlanMode;
+  kbId: string | null;
+  hours: number;
+  totalDays: number;
+  targetOutcome: string;
+  successCriteria: string;
+  currentLevel: string;
+}
 
 export function PlanDetailPanel({
   planId,
@@ -49,6 +66,7 @@ export function PlanDetailPanel({
   status,
   budgetHours,
   onChanged,
+  onRegenerate,
 }: {
   planId: string;
   goal: string;
@@ -56,6 +74,11 @@ export function PlanDetailPanel({
   budgetHours: number;
   /** 计划列表刷新回调（任务完成/调整后可让外层同步进度摘要） */
   onChanged?: () => void;
+  /**
+   * 「重新生成」回调：仅 /plans 聚合壳提供（那里有创建表单）；/courses 计划 tab 不传 → 按钮不渲染。
+   * 只负责回填，真正重生成复用 POST /api/plans 创建流。
+   */
+  onRegenerate?: (prefill: PlanRegeneratePrefill) => void;
 }) {
   const [detailKey, setDetailKey] = useState(0);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
@@ -64,6 +87,8 @@ export function PlanDetailPanel({
   const [adjusting, setAdjusting] = useState(false);
   const [adjustResult, setAdjustResult] = useState<PlanAdjustResult | null>(null);
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
+  const [archiving, setArchiving] = useState(false);
+  const [reAnchoring, setReAnchoring] = useState(false);
 
   const detailRes = useApiResource<PlanDetail>(`/api/plans/${planId}`, {
     errorMessage: "计划详情加载失败",
@@ -146,6 +171,73 @@ export function PlanDetailPanel({
     }
   };
 
+  /** 归档计划（软删，只读留存）；仅 active 可归档，走后端 archive 端点。 */
+  const archivePlan = async () => {
+    if (!detail || detail.status !== "active" || archiving) return;
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("归档后这份计划会变成只读，不能再勾选任务或调整。确定归档吗？")
+    ) {
+      return;
+    }
+    setArchiving(true);
+    setTaskBanner(null);
+    try {
+      await apiJson(`/api/plans/${detail.id}/archive`, { method: "POST", body: {} });
+      toast.success("计划已归档");
+      onChanged?.();
+      setDetailKey((k) => k + 1);
+    } catch (err) {
+      setTaskBanner(err instanceof ApiError ? err.message : "归档失败，请重试");
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  /** 把已能匹配本库正式 KC 的临时概念锚定为正式知识点（T1-1c，走后端 re-anchor）。 */
+  const reAnchor = async () => {
+    if (!detail || detail.status !== "active" || reAnchoring) return;
+    setReAnchoring(true);
+    setTaskBanner(null);
+    try {
+      const res = await apiJson<{ promoted: number }>(
+        `/api/plans/${detail.id}/re-anchor`,
+        { method: "POST", body: {} },
+      );
+      if (res.promoted > 0) {
+        toast.success(`已把 ${res.promoted} 个临时概念锚定为正式知识点`);
+      } else {
+        toast.info("暂时没有可锚定的概念，去资料里补充或增强后再试");
+      }
+      onChanged?.();
+      setDetailKey((k) => k + 1);
+    } catch (err) {
+      setTaskBanner(err instanceof ApiError ? err.message : "重新锚定失败，请重试");
+    } finally {
+      setReAnchoring(false);
+    }
+  };
+
+  /** 「重新生成」：用本计划参数回填新建表单，交给外层创建流（复用 POST /api/plans）。 */
+  const handleRegenerate = () => {
+    if (!detail || !onRegenerate) return;
+    const totalDays = detail.structure.stages.reduce(
+      (sum, stage) => sum + (stage.days?.length ?? 0),
+      0,
+    );
+    const ga = detail.structure.goal_analysis;
+    onRegenerate({
+      goal: detail.goal,
+      planMode: detail.plan_mode,
+      kbId: detail.kb_id,
+      hours: detail.budget_hours,
+      totalDays,
+      targetOutcome: ga?.outcomes?.join("；") ?? "",
+      successCriteria: ga?.success_criteria?.join("；") ?? "",
+      currentLevel: "",
+    });
+  };
+
   const openDependencyTask = (taskId: string) => {
     if (!detail) return;
     for (const stage of detail.structure.stages) {
@@ -168,12 +260,37 @@ export function PlanDetailPanel({
 
   const view = detail;
 
+  // 逾期概览（T1-2）：只统计仍待办的逾期任务，避免把已完成的旧任务误报为"逾期"。
+  // 后端 schedule.overdue_tasks 仅按日期分桶（day < current_day），不看任务状态，故此处再过滤。
+  const overdueInfo = (() => {
+    if (!view || view.status !== "active" || !view.schedule) return null;
+    const overdueIds = view.schedule.overdue_tasks ?? [];
+    if (overdueIds.length === 0) return null;
+    const currentDay = view.schedule.current_day ?? 0;
+    const dayByTask = new Map<string, number>();
+    const statusByTask = new Map<string, PlanTaskStatus>();
+    for (const flatDay of flattenDays(view.structure)) {
+      for (const task of flatDay.tasks) {
+        dayByTask.set(task.task_id, flatDay.day);
+        statusByTask.set(task.task_id, normalizedTaskStatus(task));
+      }
+    }
+    const pending = overdueIds.filter((id) => statusByTask.get(id) === "pending");
+    if (pending.length === 0) return null;
+    let maxBehind = 0;
+    for (const id of pending) {
+      const day = dayByTask.get(id);
+      if (day != null && currentDay - day > maxBehind) maxBehind = currentDay - day;
+    }
+    return { count: pending.length, maxBehind };
+  })();
+
   return (
     <>
       <Card
         title={<span className="block max-w-100 truncate">{goal}</span>}
         extra={
-          <span className="flex flex-wrap items-center justify-end gap-1.5 text-caption text-slate-400">
+          <span className="flex flex-wrap items-center justify-end gap-1.5 text-caption text-ink-muted">
             {view && <span className={`rounded-full px-2 py-0.5 font-medium ${view.plan_mode === "course_bound" ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{view.plan_mode === "course_bound" ? "课程资料计划" : "目标起步计划"}</span>}
             <span>{status === "active" ? "进行中 · " : status === "completed" ? "已完成 · " : "已归档 · "}每日 {budgetHours} 小时</span>
           </span>
@@ -188,16 +305,60 @@ export function PlanDetailPanel({
             <Link href="/courses" className="rounded-lg border border-warning-300 bg-white px-3 py-2 text-body-sm font-medium text-warning-800 hover:bg-warning-100">上传资料后校准计划</Link>
           </div>
         )}
+        {view?.status === "completed" && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3">
+            <div>
+              <p className="text-body-sm font-semibold text-emerald-800">这份计划已完成 🎉</p>
+              <p className="mt-1 text-caption leading-5 text-emerald-700">
+                去成长档案看看掌握度的变化，或用它作模板再开一份新计划继续精进。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/growth"
+                className="rounded-control border border-emerald-300 bg-white px-3 py-2 text-body-sm font-medium text-emerald-800 hover:bg-emerald-100"
+              >
+                查看成长档案
+              </Link>
+              {onRegenerate && (
+                <button
+                  type="button"
+                  onClick={handleRegenerate}
+                  className="rounded-control border border-emerald-300 bg-white px-3 py-2 text-body-sm font-medium text-emerald-800 hover:bg-emerald-100"
+                >
+                  用它作模板新建
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {overdueInfo && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3">
+            <div className="min-w-0">
+              <p className="text-body-sm font-semibold text-amber-800">
+                有 {overdueInfo.count} 个任务已逾期
+              </p>
+              <p className="mt-1 text-caption leading-5 text-amber-700">
+                {overdueInfo.maxBehind > 0
+                  ? `最早的一个已过去 ${overdueInfo.maxBehind} 天。`
+                  : "已到计划安排的日期。"}
+                {view?.plan_mode === "course_bound"
+                  ? "可点「根据学情调整计划」按最新学情补强，或直接从今天的任务继续。"
+                  : "从今天的任务继续即可，节奏可在新建计划时调整。"}
+              </p>
+            </div>
+          </div>
+        )}
         {/* 计划头部：任务粒度进度（分段式，每阶段一段）+ 学情调整入口 */}
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <div className="min-w-40 flex-1">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-caption font-medium text-slate-500">
+              <span className="text-caption font-medium text-ink-muted">
                 已完成 {view?.progress.done ?? 0} / {view?.progress.total ?? 0} 个任务
                 {(view?.progress.skipped ?? 0) > 0 &&
                   ` · 跳过 ${view?.progress.skipped ?? 0} 个`}
               </span>
-              <span className="font-mono text-caption text-slate-500">
+              <span className="font-mono text-caption text-ink-muted">
                 {fmtPct(view?.progress.effective_ratio ?? view?.progress.ratio ?? 0)}
               </span>
             </div>
@@ -216,7 +377,7 @@ export function PlanDetailPanel({
                   return (
                     <div
                       key={si}
-                      className="h-full min-w-2 bg-slate-100"
+                      className="h-full min-w-2 bg-surface-muted"
                       style={{ flexGrow: Math.max(tasks.length, 1) }}
                       title={`${stage.name}：完成 ${doneCount} 个，跳过 ${skippedCount} 个`}
                     >
@@ -237,7 +398,7 @@ export function PlanDetailPanel({
                 })}
               </div>
             ) : (
-              <div className="mt-1 h-2 rounded-full bg-slate-100">
+              <div className="mt-1 h-2 rounded-full bg-surface-muted">
                 <div
                   className="h-full rounded-full bg-indigo-500 transition-all duration-300"
                   style={{
@@ -257,6 +418,28 @@ export function PlanDetailPanel({
             {adjusting && <Spinner className="h-3.5 w-3.5" />}
             {adjusting ? "正在调整…" : "根据学情调整计划"}
           </button>
+          {onRegenerate && view && (
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              title="用这份计划的目标和参数预填新建表单，重新生成一份（旧计划会自动归档留存）"
+              className="flex items-center gap-1.5 rounded-xl border border-brand-200 bg-brand-50 px-3.5 py-2 text-sm font-medium text-brand-700 hover:bg-brand-100"
+            >
+              重新生成
+            </button>
+          )}
+          {view?.status === "active" && (
+            <button
+              type="button"
+              disabled={archiving}
+              onClick={() => void archivePlan()}
+              title="归档后计划变为只读，可在计划列表按「已归档」查看"
+              className="flex items-center gap-1.5 rounded-xl border border-line-strong bg-white px-3.5 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {archiving && <Spinner className="h-3.5 w-3.5" />}
+              {archiving ? "归档中…" : "归档计划"}
+            </button>
+          )}
         </div>
 
         {adjustResult && (
@@ -264,10 +447,10 @@ export function PlanDetailPanel({
             className={`mb-3 rounded-xl border px-3.5 py-2.5 text-sm ${
               adjustResult.inserted.length > 0
                 ? "border-amber-300 bg-amber-50"
-                : "border-slate-200 bg-slate-50"
+                : "border-line bg-surface-muted"
             }`}
           >
-            <div className="flex items-start justify-between gap-2 text-slate-700">
+            <div className="flex items-start justify-between gap-2 text-ink-secondary">
               <div className="min-w-0"><ModelMarkdown text={adjustResult.reason} /></div>
               <button
                 type="button"
@@ -275,7 +458,7 @@ export function PlanDetailPanel({
                   setAdjustResult(null);
                   setHighlightKeys(new Set());
                 }}
-                className="shrink-0 text-slate-400 hover:text-slate-600"
+                className="shrink-0 text-ink-muted hover:text-ink-secondary"
                 aria-label="关闭调整结果"
               >
                 ✕
@@ -291,9 +474,9 @@ export function PlanDetailPanel({
                     <span className="rounded bg-amber-500 px-1.5 py-0.5 font-medium text-white">
                       第 {t.day} 天
                     </span>
-                    <span className="font-medium text-slate-700"><MathText text={t.title} /></span>
-                    <span className="text-slate-400">{t.minutes} 分钟</span>
-                    <span className="text-slate-400">
+                    <span className="font-medium text-ink-secondary"><MathText text={t.title} /></span>
+                    <span className="text-ink-muted">{t.minutes} 分钟</span>
+                    <span className="text-ink-muted">
                       当前掌握度 {fmtPct(t.p_mastery)}
                     </span>
                   </li>
@@ -368,6 +551,29 @@ export function PlanDetailPanel({
                 </li>
               ))}
             </ul>
+            {view.status === "active" && (view.anchorable_concepts ?? 0) > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <p className="min-w-0 text-caption leading-5 text-emerald-700">
+                  资料已更新：其中 {view.anchorable_concepts} 个概念现在能匹配到本库正式知识点，锚定后即纳入依赖图与掌握度。
+                </p>
+                <button
+                  type="button"
+                  disabled={reAnchoring}
+                  onClick={() => void reAnchor()}
+                  className="shrink-0 rounded-control border border-emerald-300 bg-white px-3 py-1.5 text-caption font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {reAnchoring ? "锚定中…" : "重新锚定"}
+                </button>
+              </div>
+            )}
+            {view.kb_id && (
+              <Link
+                href={`/courses/${view.kb_id}`}
+                className="mt-3 inline-flex items-center gap-1 rounded-control border border-line-strong bg-white px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-surface-muted"
+              >
+                去补充或增强资料 →
+              </Link>
+            )}
           </section>
         ) : null}
 
@@ -384,6 +590,7 @@ export function PlanDetailPanel({
           <PlanCalendar
             key={view.id}
             structure={view.structure}
+            currentDayNumber={view.schedule?.current_day}
             onStatus={view.status === "active" ? (taskId, next) => void updateTaskStatus(taskId, next) : undefined}
             onTaskOpen={(location) => setOpenTask({ ...location, planId: view.id, planKbId: view.kb_id, readOnly: view.status !== "active" })}
             pendingKeys={pendingKeys}
@@ -411,17 +618,17 @@ export function PlanDetailPanel({
       <Card
         title="调整历史"
         extra={
-          <span className="text-caption text-slate-400">
+          <span className="text-caption text-ink-muted">
             共 {adjustments.length} 次
           </span>
         }
       >
         {adjustments.length === 0 ? (
-          <p className="py-3 text-center text-caption text-slate-400">
+          <p className="py-3 text-center text-caption text-ink-muted">
             还没有调整记录；低分测评或点击「根据学情调整计划」都会在这里留痕
           </p>
         ) : (
-          <ol className="ml-1.5 space-y-4 border-l-2 border-slate-100 pl-5">
+          <ol className="ml-1.5 space-y-4 border-l-2 border-line pl-5">
             {adjustments.map((a) => {
               const auto = a.trigger === "low_score_attempt";
               return (
@@ -449,9 +656,9 @@ export function PlanDetailPanel({
                       )}
                     </svg>
                   </span>
-                  <div className="rounded-xl bg-slate-50/80 px-3 py-2.5 transition-colors hover:bg-slate-50">
+                  <div className="rounded-xl bg-surface-muted/80 px-3 py-2.5 transition-colors hover:bg-surface-muted">
                     <p className="flex flex-wrap items-center gap-2">
-                      <span className="text-caption text-slate-400">
+                      <span className="text-caption text-ink-muted">
                         {fmtDateTime(a.at)}
                       </span>
                       <span
@@ -467,7 +674,7 @@ export function PlanDetailPanel({
                         插入 {a.inserted.length} 个任务
                       </span>
                     </p>
-                    <div className="mt-1 text-sm leading-relaxed text-slate-700">
+                    <div className="mt-1 text-sm leading-relaxed text-ink-secondary">
                       <ModelMarkdown text={a.reason} />
                     </div>
                   </div>

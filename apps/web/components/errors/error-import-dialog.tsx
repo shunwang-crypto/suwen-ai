@@ -56,7 +56,7 @@ const EMPTY_FORM: DraftForm = {
 };
 
 const fieldClass =
-  "w-full rounded-[8px] border border-line-strong bg-white px-3 py-2 text-body-sm text-ink outline-none placeholder:text-ink-muted focus:border-ink-muted";
+  "w-full rounded-control border border-line-strong bg-white px-3 py-2 text-body-sm text-ink outline-none placeholder:text-ink-muted focus:border-ink-muted";
 
 function fromItem(item: ErrorItemOut): DraftForm {
   const sourceKb = item.question?.source_meta?.kb_id;
@@ -288,11 +288,11 @@ export function ErrorImportDialog({
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#1c1917]/40"
+        className="absolute inset-0 bg-ink/40"
         onClick={() => void closeDialog()}
         aria-label="关闭错题录入"
       />
-      <section className="relative flex max-h-[calc(100dvh-32px)] w-full max-w-[720px] flex-col overflow-hidden rounded-[12px] border border-line bg-canvas shadow-floating">
+      <section className="relative flex max-h-[calc(100dvh-32px)] w-full max-w-[720px] flex-col overflow-hidden rounded-overlay border border-line bg-canvas shadow-floating">
         <header className="flex items-start justify-between border-b border-line bg-white px-5 py-4">
           <div>
             <h2 className="text-[17px] font-semibold text-ink">
@@ -306,7 +306,7 @@ export function ErrorImportDialog({
             type="button"
             onClick={() => void closeDialog()}
             disabled={saving || uploading}
-            className="rounded-[7px] p-2 text-ink-muted hover:bg-surface-muted disabled:opacity-40"
+            className="rounded-control p-2 text-ink-muted hover:bg-surface-muted disabled:opacity-40"
             aria-label="关闭"
           >
             ✕
@@ -316,24 +316,24 @@ export function ErrorImportDialog({
         <form id="error-import-form" onSubmit={submit} className="min-h-0 flex-1 overflow-y-auto p-5">
           {!editItem && (
             <div className="mb-5">
-              <div className="mb-3 flex w-fit rounded-[8px] border border-line bg-white p-1">
+              <div className="mb-3 flex w-fit rounded-control border border-line bg-white p-1">
                 <button
                   type="button"
                   onClick={() => setMode("upload")}
-                  className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mode === "upload" ? "bg-ink text-white" : "text-ink-secondary"}`}
+                  className={`rounded-control px-3 py-1.5 text-body-sm font-medium ${mode === "upload" ? "bg-ink text-white" : "text-ink-secondary"}`}
                 >
                   拍照或上传
                 </button>
                 <button
                   type="button"
                   onClick={() => void switchToManual()}
-                  className={`rounded-[6px] px-3 py-1.5 text-body-sm font-medium ${mode === "manual" ? "bg-ink text-white" : "text-ink-secondary"}`}
+                  className={`rounded-control px-3 py-1.5 text-body-sm font-medium ${mode === "manual" ? "bg-ink text-white" : "text-ink-secondary"}`}
                 >
                   手动录入
                 </button>
               </div>
               {mode === "upload" && (
-                <div className="rounded-[10px] border border-dashed border-line-strong bg-white p-4">
+                <div className="rounded-control border border-dashed border-line-strong bg-white p-4">
                   <input
                     ref={fileRef}
                     type="file"
@@ -357,14 +357,14 @@ export function ErrorImportDialog({
                       type="button"
                       disabled={uploading}
                       onClick={() => fileRef.current?.click()}
-                      className="flex h-9 items-center gap-2 rounded-[8px] bg-ink px-4 text-body-sm font-medium text-white disabled:opacity-40"
+                      className="flex h-9 items-center gap-2 rounded-control bg-ink px-4 text-body-sm font-medium text-white disabled:opacity-40"
                     >
                       {uploading && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
                       {uploading ? "正在识别" : imported ? "重新选择" : "选择文件"}
                     </button>
                   </div>
                   {imported?.recognition_warning && (
-                    <p className="mt-3 rounded-[7px] bg-warning-50 px-3 py-2 text-caption text-warning-700">
+                    <p className="mt-3 rounded-control bg-warning-50 px-3 py-2 text-caption text-warning-700">
                       {imported.recognition_warning}
                     </p>
                   )}
@@ -374,13 +374,13 @@ export function ErrorImportDialog({
           )}
 
           {error && (
-            <div className="mb-4 rounded-[8px] border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">
+            <div className="mb-4 rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-body-sm text-danger-700">
               {error}
             </div>
           )}
 
           {currentSourceImportId && (
-            <section className="mb-5 rounded-[10px] border border-line bg-white p-4">
+            <section className="mb-5 rounded-control border border-line bg-white p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-caption font-semibold text-ink-muted">原始来源（仅本人可读）</p>
@@ -392,7 +392,7 @@ export function ErrorImportDialog({
                     target="_blank"
                     rel="noreferrer"
                     download={currentSourceType === "document" && !/\.pdf$/i.test(currentSourceFilename ?? "")}
-                    className="rounded-[7px] border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary"
+                    className="rounded-control border border-line-strong px-3 py-1.5 text-caption font-medium text-ink-secondary"
                   >
                     {currentSourceType === "image" || /\.pdf$/i.test(currentSourceFilename ?? "")
                       ? "打开来源"
@@ -408,14 +408,14 @@ export function ErrorImportDialog({
                   width={640}
                   height={360}
                   unoptimized
-                  className="mt-3 max-h-72 w-full rounded-[8px] border border-line object-contain"
+                  className="mt-3 max-h-72 w-full rounded-control border border-line object-contain"
                 />
               )}
               {!sourceLoading && sourceUrl && currentSourceType === "document" && /\.pdf$/i.test(currentSourceFilename ?? "") && (
                 <iframe
                   title="错题原始 PDF"
                   src={sourceUrl}
-                  className="mt-3 h-72 w-full rounded-[8px] border border-line"
+                  className="mt-3 h-72 w-full rounded-control border border-line"
                 />
               )}
               {!sourceLoading && !sourceUrl && (
@@ -425,7 +425,7 @@ export function ErrorImportDialog({
           )}
 
           {semanticsLocked && (
-            <p className="mb-4 rounded-[8px] border border-warning-200 bg-warning-50 px-3 py-2 text-caption leading-4 text-warning-700">
+            <p className="mb-4 rounded-control border border-warning-200 bg-warning-50 px-3 py-2 text-caption leading-4 text-warning-700">
               这道题已经复习过，题型、选项、正确答案和知识点已锁定；题干说明、解析和错因仍可修正。
             </p>
           )}
@@ -503,7 +503,7 @@ export function ErrorImportDialog({
             </label>
           </div>
 
-          <label className="mt-5 flex items-start gap-3 rounded-[9px] border border-line bg-white p-3">
+          <label className="mt-5 flex items-start gap-3 rounded-control border border-line bg-white p-3">
             <input
               type="checkbox"
               checked={form.answer_verified}
@@ -523,8 +523,8 @@ export function ErrorImportDialog({
         <footer className="flex items-center justify-between gap-3 border-t border-line bg-white px-5 py-4">
           <p className="text-caption text-ink-muted">上传文件不会自动加入知识库。</p>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void closeDialog()} disabled={saving || uploading} className="h-9 rounded-[8px] border border-line-strong px-4 text-body-sm font-medium text-ink-secondary disabled:opacity-40">取消</button>
-            <button type="submit" form="error-import-form" disabled={saving || uploading} className="flex h-9 items-center gap-2 rounded-[8px] bg-brand-600 px-4 text-body-sm font-medium text-white disabled:opacity-40">
+            <button type="button" onClick={() => void closeDialog()} disabled={saving || uploading} className="h-9 rounded-control border border-line-strong px-4 text-body-sm font-medium text-ink-secondary disabled:opacity-40">取消</button>
+            <button type="submit" form="error-import-form" disabled={saving || uploading} className="flex h-9 items-center gap-2 rounded-control bg-brand-600 px-4 text-body-sm font-medium text-white disabled:opacity-40">
               {saving && <Spinner className="h-3.5 w-3.5 border-white/40 border-t-white" />}
               {saving ? "保存中" : form.answer_verified ? "确认并加入复习" : "保存为待核验"}
             </button>

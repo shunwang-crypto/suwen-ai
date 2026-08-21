@@ -51,13 +51,13 @@ const STEPS = [
 
 export function Flow() {
   return (
-    <section className="border-y border-slate-200/70 bg-white/60">
+    <section className="border-y border-line/70 bg-white/60">
       <div className="mx-auto w-full max-w-6xl px-5 py-16 md:py-20">
         <Reveal>
-          <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
+          <h2 className="text-center text-2xl font-bold tracking-tight text-ink md:text-3xl">
             VLSE 学习状态闭环
           </h2>
-          <p className="mx-auto mt-2 max-w-xl text-center text-sm text-slate-500 md:text-base">
+          <p className="mx-auto mt-2 max-w-xl text-center text-sm text-ink-muted md:text-base">
             四步把「学过」变成「掌握」，每一步都留下可验证的状态。
           </p>
         </Reveal>
@@ -113,10 +113,10 @@ export function Flow() {
                       </span>
                     </span>
                     <div className="min-w-0 pt-1 md:pt-0">
-                      <h3 className="text-base font-semibold text-slate-900">
+                      <h3 className="text-base font-semibold text-ink">
                         {s.title}
                       </h3>
-                      <p className="mt-1 text-sm leading-relaxed text-slate-500">
+                      <p className="mt-1 text-sm leading-relaxed text-ink-muted">
                         {s.desc}
                       </p>
                     </div>

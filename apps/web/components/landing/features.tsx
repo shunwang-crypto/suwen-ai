@@ -137,24 +137,24 @@ export function Features() {
   return (
     <section className="mx-auto w-full max-w-6xl px-5 py-16 md:py-20">
       <Reveal>
-        <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
+        <h2 className="text-center text-2xl font-bold tracking-tight text-ink md:text-3xl">
           学习闭环的三块基石
         </h2>
-        <p className="mx-auto mt-2 max-w-xl text-center text-sm text-slate-500 md:text-base">
+        <p className="mx-auto mt-2 max-w-xl text-center text-sm text-ink-muted md:text-base">
           从「答案可信」到「练习对路」再到「记忆不丢」，全程可验证。
         </p>
       </Reveal>
       <div className="mt-10 grid gap-5 md:grid-cols-3">
         {FEATURES.map((f, i) => (
           <Reveal key={f.title} delay={i * 120}>
-            <div className="group h-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-600/10">
+            <div className="group h-full rounded-2xl border border-line bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-600/10">
               <div className="transition-transform duration-300 group-hover:-translate-y-0.5">
                 {f.icon}
               </div>
-              <h3 className="mt-4 text-lg font-semibold text-slate-900">
+              <h3 className="mt-4 text-lg font-semibold text-ink">
                 {f.title}
               </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-500">
+              <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
                 {f.desc}
               </p>
             </div>

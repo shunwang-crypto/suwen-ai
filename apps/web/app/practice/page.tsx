@@ -40,7 +40,7 @@ function PracticeView() {
               href={key === "quiz" ? "/practice" : `/practice?tab=${key}`}
               role="tab"
               aria-current={active ? "page" : undefined}
-              className={`rounded-[8px] px-4 py-2 text-body-sm font-medium transition-colors ${
+              className={`rounded-control px-4 py-2 text-body-sm font-medium transition-colors ${
                 active
                   ? "bg-ink text-white"
                   : "text-ink-secondary hover:bg-white"

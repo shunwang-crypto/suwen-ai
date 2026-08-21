@@ -10,10 +10,12 @@ interface StatusMeta {
   label: string;
   className: string;
   active?: boolean;
+  /** 徽章 tooltip：解释这个状态对用户意味着什么（尤其区分「可检索」与「已增强」）。 */
+  hint?: string;
 }
 
 const STATUS_META: Record<string, StatusMeta> = {
-  pending: { label: "等待处理", className: "bg-slate-100 text-slate-600", active: true },
+  pending: { label: "等待处理", className: "bg-surface-muted text-ink-secondary", active: true },
   parsing: { label: "正在提取文本", className: "bg-indigo-50 text-indigo-600", active: true },
   recognizing: {
     label: "正在识别扫描页面",
@@ -22,11 +24,32 @@ const STATUS_META: Record<string, StatusMeta> = {
   },
   chunking: { label: "正在分块", className: "bg-indigo-50 text-indigo-600", active: true },
   embedding: { label: "正在建立索引", className: "bg-indigo-50 text-indigo-600", active: true },
-  ready: { label: "已完成", className: "bg-emerald-50 text-emerald-700" },
-  partial_ready: { label: "部分页面失败", className: "bg-amber-50 text-amber-700" },
-  enriching: { label: "知识增强中", className: "bg-violet-50 text-violet-600", active: true },
-  enriched: { label: "已增强", className: "bg-emerald-100 text-emerald-800" },
-  failed: { label: "失败", className: "bg-red-50 text-red-700" },
+  ready: {
+    label: "可检索",
+    className: "bg-emerald-50 text-emerald-700",
+    hint: "文档已索引、可被检索与引用；知识点与依赖图尚未生成",
+  },
+  partial_ready: {
+    label: "部分页面失败",
+    className: "bg-amber-50 text-amber-700",
+    hint: "部分页面未能识别，其余内容已可检索",
+  },
+  enriching: {
+    label: "知识增强中",
+    className: "bg-violet-50 text-violet-600",
+    active: true,
+    hint: "正在从文档生成知识点与依赖关系",
+  },
+  enriched: {
+    label: "已增强",
+    className: "bg-emerald-100 text-emerald-800",
+    hint: "已生成知识点与依赖图，可进入学习图谱",
+  },
+  failed: {
+    label: "失败",
+    className: "bg-red-50 text-red-700",
+    hint: "处理失败，可尝试重建索引",
+  },
 };
 
 /** 处于处理中状态（需要继续轮询）的判断。 */
@@ -37,13 +60,14 @@ export function isDocActive(status: string): boolean {
 export function DocStatusBadge({ status }: { status: string }) {
   const meta = STATUS_META[status] ?? {
     label: status,
-    className: "bg-slate-100 text-slate-600",
+    className: "bg-surface-muted text-ink-secondary",
   };
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}
       role="status"
       aria-label={meta.label}
+      title={meta.hint ?? meta.label}
     >
       <FxStyles />
       {/* 8px 状态圆点：处理中呼吸动画（reduced-motion 静态），终态常亮 */}
@@ -84,7 +108,7 @@ export function IngestSteps({ status }: { status: string }) {
               ? "bg-emerald-400"
               : i === step
                 ? "edu-breathe bg-indigo-500"
-                : "bg-slate-200"
+                : "bg-surface-muted"
           }`}
         />
       ))}
@@ -97,6 +121,7 @@ export function DocumentTable({
   busyDocId,
   onPreview,
   onReindex,
+  onReEnrich,
   onDelete,
   readOnly = false,
 }: {
@@ -104,6 +129,8 @@ export function DocumentTable({
   busyDocId: string | null;
   onPreview: (doc: DocumentOut) => void;
   onReindex: (doc: DocumentOut) => void;
+  /** 重新触发知识增强（生成知识点/依赖图）；只读视图或未提供时不显示该按钮。 */
+  onReEnrich?: (doc: DocumentOut) => void;
   onDelete: (doc: DocumentOut) => void;
   /** 机构库 member 只读视图：隐藏重建索引/删除 */
   readOnly?: boolean;
@@ -112,7 +139,7 @@ export function DocumentTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-130 text-left text-sm">
         <thead>
-          <tr className="border-b border-slate-200 text-xs text-slate-400">
+          <tr className="border-b border-line text-xs text-ink-muted">
             <th className="py-2 pr-3 font-medium">文件名</th>
             <th className="py-2 pr-3 font-medium">大小</th>
             <th className="py-2 pr-3 font-medium">状态</th>
@@ -129,10 +156,10 @@ export function DocumentTable({
             return (
               <tr
                 key={doc.id}
-                className="border-b border-slate-100 align-top transition-colors hover:bg-indigo-50/40"
+                className="border-b border-line align-top transition-colors hover:bg-indigo-50/40"
               >
                 <td className="max-w-60 py-2.5 pr-3">
-                  <p className="flex items-center gap-1.5 font-medium text-slate-800">
+                  <p className="flex items-center gap-1.5 font-medium text-ink">
                     <span className="min-w-0 truncate" title={doc.filename}>
                       {doc.filename}
                     </span>
@@ -155,7 +182,7 @@ export function DocumentTable({
                       </span>
                     )}
                   </p>
-                  {doc.error_msg && (doc.status === "failed" || failedPages.length > 0) && (
+                  {doc.error_msg && (
                     <p
                       className={`mt-0.5 break-words text-xs ${doc.status === "failed" ? "text-red-600" : "text-amber-700"}`}
                     >
@@ -163,7 +190,7 @@ export function DocumentTable({
                     </p>
                   )}
                 </td>
-                <td className="whitespace-nowrap py-2.5 pr-3 text-slate-500">
+                <td className="whitespace-nowrap py-2.5 pr-3 text-ink-muted">
                   {fmtBytes(doc.size_bytes)}
                 </td>
                 <td className="whitespace-nowrap py-2.5 pr-3">
@@ -176,7 +203,7 @@ export function DocumentTable({
                   />
                   <IngestSteps status={doc.status} />
                 </td>
-                <td className="whitespace-nowrap py-2.5 pr-3 text-xs text-slate-400">
+                <td className="whitespace-nowrap py-2.5 pr-3 text-xs text-ink-muted">
                   {fmtDateTime(doc.updated_at)}
                 </td>
                 <td className="whitespace-nowrap py-2.5">
@@ -194,10 +221,26 @@ export function DocumentTable({
                           type="button"
                           disabled={busy || isDocActive(doc.status)}
                           onClick={() => onReindex(doc)}
-                          className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="rounded-lg px-2 py-1 text-xs font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           重建索引
                         </button>
+                        {onReEnrich &&
+                          ["ready", "partial_ready", "enriched"].includes(doc.status) && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => onReEnrich(doc)}
+                              className="rounded-lg px-2 py-1 text-xs font-medium text-violet-600 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              title={
+                                doc.error_msg
+                                  ? "上次知识增强失败，点此重新生成知识点与依赖图"
+                                  : "重新生成知识点与依赖图"
+                              }
+                            >
+                              重新增强
+                            </button>
+                          )}
                         <button
                           type="button"
                           disabled={busy}

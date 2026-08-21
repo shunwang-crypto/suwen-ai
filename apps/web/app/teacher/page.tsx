@@ -169,7 +169,7 @@ function buildPrintHtml(data: TeacherExportPrint): string {
 function NoAccess() {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-8 py-12 text-center">
+      <div className="w-full max-w-md rounded-2xl border border-line bg-white px-8 py-12 text-center">
         <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500">
           <svg
             viewBox="0 0 24 24"
@@ -184,8 +184,8 @@ function NoAccess() {
             <path d="M12 15v2m-6 4h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2Zm10-10V7a4 4 0 0 0-8 0v4h8Z" />
           </svg>
         </span>
-        <h2 className="text-lg font-semibold text-slate-900">没有访问权限</h2>
-        <p className="mt-1 text-sm text-slate-500">
+        <h2 className="text-lg font-semibold text-ink">没有访问权限</h2>
+        <p className="mt-1 text-sm text-ink-muted">
           组卷导出仅对教师账号开放，请使用教师或管理员账号登录。
         </p>
       </div>
@@ -207,11 +207,11 @@ function DifficultyChips({ counts }: { counts: Record<string, number> }) {
       .map(([k, v]) => ({
         key: k,
         text: `${k} ${v}`,
-        cls: "bg-slate-100 text-slate-600",
+        cls: "bg-surface-muted text-ink-secondary",
       })),
   ];
   if (chips.length === 0) {
-    return <span className="text-xs text-slate-400">—</span>;
+    return <span className="text-xs text-ink-muted">—</span>;
   }
   return (
     <span className="flex flex-wrap gap-1">
@@ -313,8 +313,8 @@ export default function TeacherPage() {
     <div className="mx-auto w-full max-w-5xl space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">组卷导出</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h2 className="text-base font-semibold text-ink">组卷导出</h2>
+          <p className="mt-0.5 text-xs text-ink-muted">
             把已生成的卷子导出为结构化 JSON，或直接打印成 A4
             试卷（题目页与答案页自动分页）。
           </p>
@@ -322,7 +322,7 @@ export default function TeacherPage() {
         <button
           type="button"
           onClick={reloadList}
-          className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          className="rounded-xl border border-line-strong bg-white px-3.5 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-muted"
         >
           刷新列表
         </button>
@@ -352,7 +352,7 @@ export default function TeacherPage() {
       <Card
         title="可导出的卷子"
         extra={
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-ink-muted">
             {quizzes ? `${quizzes.length} 份` : "—"}
           </span>
         }
@@ -368,7 +368,7 @@ export default function TeacherPage() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-160 text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                <tr className="border-b border-line text-xs text-ink-muted">
                   <th className="py-2 font-medium">标题</th>
                   <th className="py-2 font-medium">创建时间</th>
                   <th className="py-2 text-right font-medium">题数</th>
@@ -379,20 +379,20 @@ export default function TeacherPage() {
               </thead>
               <tbody>
                 {quizzes.map((q) => (
-                  <tr key={q.id} className="border-b border-slate-50 align-middle">
+                  <tr key={q.id} className="border-b border-line align-middle">
                     <td className="py-2.5 pr-3">
-                      <span className="font-medium text-slate-800"><MathText text={q.title} /></span>
+                      <span className="font-medium text-ink"><MathText text={q.title} /></span>
                       <span
-                        className="ml-2 font-mono text-xs text-slate-400"
+                        className="ml-2 font-mono text-xs text-ink-muted"
                         title={q.id}
                       >
                         {q.id.slice(0, 8)}
                       </span>
                     </td>
-                    <td className="py-2.5 pr-3 whitespace-nowrap text-xs text-slate-500">
+                    <td className="py-2.5 pr-3 whitespace-nowrap text-xs text-ink-muted">
                       {fmtDateTime(q.created_at)}
                     </td>
-                    <td className="py-2.5 pr-3 text-right font-mono text-slate-700">
+                    <td className="py-2.5 pr-3 text-right font-mono text-ink-secondary">
                       {q.num_questions}
                     </td>
                     <td className="py-2.5 pr-3">
@@ -403,7 +403,7 @@ export default function TeacherPage() {
                         className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                           q.status === "ready"
                             ? "bg-emerald-50 text-emerald-700"
-                            : "bg-slate-100 text-slate-600"
+                            : "bg-surface-muted text-ink-secondary"
                         }`}
                       >
                         {q.status}
@@ -416,7 +416,7 @@ export default function TeacherPage() {
                           type="button"
                           disabled={busyId !== null}
                           onClick={() => void exportJson(q)}
-                          className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-lg border border-line-strong bg-white px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           导出 JSON
                         </button>
@@ -436,7 +436,7 @@ export default function TeacherPage() {
             </table>
           </div>
         )}
-        <p className="mt-3 text-xs text-slate-400">
+        <p className="mt-3 text-xs text-ink-muted">
           JSON 导出含题干 / 选项 / 答案 / 解析 / 难度 / 关联知识点，可直接喂给其他题库系统；
           打印视图为自包含 A4 页面（正文 12pt、题号加粗、选项缩进），答案与解析在独立分页上。
         </p>

@@ -611,6 +611,11 @@ export default function SettingsPage() {
                     <button type="button" disabled={saving} onClick={clearAll} className="text-xs font-medium text-danger-600 disabled:opacity-50">清空全部偏好</button>
                     <button type="button" disabled={saving} onClick={() => save()} className="rounded-control bg-ink px-5 py-2.5 text-xs font-medium text-white hover:bg-black disabled:opacity-50">{saving ? "保存中…" : "保存学习偏好"}</button>
                   </div>
+                  <div className="border-t border-line pt-6">
+                    <p className="text-xs font-medium text-ink">重新开始引导</p>
+                    <p className="mt-1 text-body-sm text-ink-muted">想重新选择「上传资料」或「目标起步计划」的起点？可随时回到新手引导，不会影响已有数据。</p>
+                    <Link href="/onboarding" className="mt-3 inline-flex items-center gap-1 rounded-control border border-line-strong bg-white px-4 py-2 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-muted">重新查看新手引导 →</Link>
+                  </div>
                 </div>
               )}
             </section>

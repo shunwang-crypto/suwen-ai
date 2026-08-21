@@ -16,7 +16,7 @@ export function ResourceExtractionSteps({ resource }: { resource: LearningResour
   const current = stageIndex(resource);
   return (
     <div
-      className="min-h-[58px] rounded-[10px] border border-line bg-white px-3 py-2.5"
+      className="min-h-[58px] rounded-control border border-line bg-white px-3 py-2.5"
       role="status"
       aria-label={`题目资料阶段：${STEPS[current]}`}
     >
@@ -29,7 +29,7 @@ export function ResourceExtractionSteps({ resource }: { resource: LearningResour
                 ? "bg-emerald-400"
                 : index === current
                   ? "edu-breathe bg-indigo-500"
-                  : "bg-slate-200"
+                  : "bg-surface-muted"
             }`}
             title={`${label}${index < current ? "（已完成）" : index === current ? "（进行中）" : ""}`}
           />

@@ -7,6 +7,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 
 import { BrandMark } from "@/components/ui/brand";
 import { CreditsToast } from "@/components/ui/credits-toast";
+import { Toaster } from "@/components/ui/toaster";
 import { RecentCourses } from "@/components/nav/recent-courses";
 import { RecentSessions } from "@/components/nav/recent-sessions";
 import { apiJson } from "@/lib/api";
@@ -158,12 +159,12 @@ function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: NavI
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       title={collapsed ? item.label : undefined}
-      className={`group flex items-center rounded-[8px] text-[13px] font-medium transition-colors ${
+      className={`group flex items-center rounded-control text-[13px] font-medium transition-colors ${
         collapsed ? "mx-auto h-10 w-10 justify-center" : "h-8 gap-2.5 px-2.5"
       } ${
         active
-          ? "bg-[#eeedea] text-ink"
-          : "text-ink-secondary hover:bg-[#f4f3f0] hover:text-ink"
+          ? "bg-brand-50 text-ink"
+          : "text-ink-secondary hover:bg-surface-muted hover:text-ink"
       }`}
     >
       <span className={active ? "text-ink" : "text-ink-muted group-hover:text-ink-secondary"}>{item.icon}</span>
@@ -217,7 +218,7 @@ function Brand({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?
     <div className={`flex h-14 shrink-0 items-center ${collapsed ? "justify-center" : "justify-between px-3"}`}>
       {!collapsed && (
         <Link href="/today" className="flex items-center gap-2.5" aria-label="苏问今日">
-          <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#1e1e1c] text-[14px] font-semibold text-white">苏</span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-control bg-brand-600 text-[14px] font-semibold text-white">苏</span>
           <span className="flex flex-col leading-none">
             <span className="text-[14px] font-semibold tracking-[-0.02em] text-ink">苏问</span>
             <span className="mt-1 text-caption font-medium tracking-[0.08em] text-ink-muted">AI 课堂</span>
@@ -228,7 +229,7 @@ function Brand({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?
         <button
           type="button"
           onClick={onToggle}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] text-ink-secondary transition-colors hover:bg-[#e9e8e5] hover:text-ink"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-ink-secondary transition-colors hover:bg-[#e9e8e5] hover:text-ink"
           aria-label={collapsed ? "展开功能导航" : "折叠功能导航"}
           title={collapsed ? "展开功能导航" : "折叠功能导航"}
         >
@@ -263,7 +264,7 @@ function AccountMenu({
   onLogout: () => void;
 }) {
   const role = isAdmin ? "管理员" : isTeacher ? "教师" : "学生";
-  const menuClass = "flex h-9 items-center rounded-[7px] px-3 text-[13px] text-ink-secondary transition-colors hover:bg-[#f5f4f1] hover:text-ink";
+  const menuClass = "flex h-9 items-center rounded-control px-3 text-[13px] text-ink-secondary transition-colors hover:bg-surface-muted hover:text-ink";
 
   return (
     <motion.div
@@ -271,12 +272,12 @@ function AccountMenu({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -4, scale: 0.98 }}
       transition={{ duration: 0.14, ease: "easeOut" }}
-      className="absolute right-0 top-[calc(100%+8px)] z-50 w-[248px] origin-top-right rounded-[12px] border border-line bg-white p-1.5 shadow-floating"
+      className="absolute right-0 top-[calc(100%+8px)] z-50 w-[248px] origin-top-right rounded-overlay border border-line bg-white p-1.5 shadow-floating"
     >
       <div className="px-3 pb-3 pt-2.5">
         <p className="truncate text-[13px] font-semibold text-ink">{displayName}</p>
         <p className="mt-0.5 truncate text-body-sm text-ink-muted">{email}</p>
-        <span className="mt-2 inline-flex rounded-full bg-[#f3f2ef] px-2 py-0.5 text-caption font-medium text-ink-secondary">{role}</span>
+        <span className="mt-2 inline-flex rounded-full bg-surface-muted px-2 py-0.5 text-caption font-medium text-ink-secondary">{role}</span>
       </div>
       <div className="border-t border-line pt-1.5">
         <Link href="/settings?section=profile" onClick={onClose} className={menuClass}>账户设置</Link>
@@ -290,7 +291,7 @@ function AccountMenu({
         </div>
       )}
       <div className="mt-1 border-t border-line pt-1.5">
-        <button type="button" onClick={onLogout} className="flex h-9 w-full items-center rounded-[7px] px-3 text-left text-[13px] text-danger-600 transition-colors hover:bg-danger-50">退出登录</button>
+        <button type="button" onClick={onLogout} className="flex h-9 w-full items-center rounded-control px-3 text-left text-[13px] text-danger-600 transition-colors hover:bg-danger-50">退出登录</button>
       </div>
     </motion.div>
   );
@@ -371,7 +372,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex h-dvh overflow-hidden bg-canvas">
-        <aside className={`hidden shrink-0 flex-col border-r border-line bg-[#f4f3f1] transition-[width] duration-200 md:flex ${navCollapsed ? "w-16" : "w-[200px]"}`}>
+        <aside className={`hidden shrink-0 flex-col border-r border-line bg-surface-muted transition-[width] duration-200 md:flex ${navCollapsed ? "w-16" : "w-[200px]"}`}>
           <Brand collapsed={navCollapsed} onToggle={() => setNavCollapsed((value) => !value)} />
           <Navigation pathname={pathname} userId={user?.id} collapsed={navCollapsed} />
         </aside>
@@ -379,8 +380,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <AnimatePresence>
           {drawerOpen && (
             <motion.div className="fixed inset-0 z-40 md:hidden" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-              <button type="button" aria-label="关闭导航" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setDrawerOpen(false)} />
-              <motion.aside className="absolute inset-y-0 left-0 flex w-[260px] flex-col border-r border-line bg-[#f4f3f1] shadow-floating" initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
+              <button type="button" aria-label="关闭导航" className="absolute inset-0 bg-ink/35" onClick={() => setDrawerOpen(false)} />
+              <motion.aside className="absolute inset-y-0 left-0 flex w-[260px] flex-col border-r border-line bg-surface-muted shadow-floating" initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
                 <Brand />
                 <Navigation pathname={pathname} userId={user?.id} onNavigate={() => setDrawerOpen(false)} />
               </motion.aside>
@@ -389,10 +390,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </AnimatePresence>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="relative z-30 h-14 shrink-0 border-b border-line bg-[#f7f6f4]">
+          <header className="relative z-30 h-14 shrink-0 border-b border-line bg-canvas">
             <div className="mx-auto flex h-full w-full max-w-[1480px] items-center justify-between px-4 sm:px-8 lg:px-12">
             <div className="flex min-w-0 items-center gap-3">
-              <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-[7px] p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
+              <button type="button" onClick={() => setDrawerOpen(true)} className="-ml-1.5 rounded-control p-1.5 text-ink-secondary hover:bg-[#f1f0ed] md:hidden" aria-label="打开导航">
                 <Icon><path d="M4 6h16M4 12h16M4 18h16" /></Icon>
               </button>
               {pathname === "/today" ? (
@@ -412,7 +413,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onClick={() => setMenuOpen((value) => !value)}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                className={`relative z-50 flex h-9 items-center gap-2 rounded-[8px] px-1.5 text-ink transition-colors hover:bg-[#eeedea] ${menuOpen ? "bg-[#eeedea]" : ""}`}
+                className={`relative z-50 flex h-9 items-center gap-2 rounded-control px-1.5 text-ink transition-colors hover:bg-brand-50 ${menuOpen ? "bg-brand-50" : ""}`}
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2f2f2c] text-body-sm font-semibold text-white">{initial}</span>
                 <span className="hidden max-w-40 truncate text-body-sm font-medium sm:block">{displayName}</span>
@@ -429,6 +430,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <CreditsToast />
+        <Toaster />
       </div>
     </MotionConfig>
   );

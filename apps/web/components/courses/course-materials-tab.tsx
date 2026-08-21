@@ -20,6 +20,7 @@ import { ALLOWED_SUFFIXES, UploadZone } from "@/components/kb/upload-zone";
 import { ResourceLibrary } from "@/components/resources/resource-library";
 import { ApiError, apiFetch, apiJson } from "@/lib/api";
 import { createRequestEpoch } from "@/lib/request-epoch";
+import { toast } from "@/lib/toast";
 import type { DocumentOut, KbOut } from "@/lib/types";
 
 /** 上传/配额类错误码 → 中文提示（与 /materials 同一套，迁移保持一致）。 */
@@ -152,7 +153,10 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
       }
     }
     setUploading(false);
+    const ok = files.length - failures.length;
     if (failures.length > 0) setBanner(failures.join("；"));
+    if (ok > 0) toast.success(`已上传 ${ok} 个文件，正在解析建立索引…`);
+    if (failures.length > 0) toast.error(`${failures.length} 个文件上传失败`);
     await loadDocs(selectedId, true);
   };
 
@@ -164,9 +168,12 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
       await apiJson<DocumentOut>(`/api/kb/${selectedId}/documents/from-url`, {
         body: { url },
       });
+      toast.success("网页已导入，正在解析建立索引…");
       await loadDocs(selectedId, true);
     } catch (err) {
-      setBanner(friendlyError(err, "网页导入失败"));
+      const msg = friendlyError(err, "网页导入失败");
+      setBanner(msg);
+      toast.error(msg);
     } finally {
       setImporting(false);
     }
@@ -180,9 +187,38 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
         `/api/kb/${selectedId}/documents/${doc.id}/reindex`,
         { method: "POST", body: {} },
       );
+      toast.success("已开始重建索引，完成后自动刷新");
       await loadDocs(selectedId, true);
     } catch (err) {
-      setBanner(friendlyError(err, "重建索引失败"));
+      const msg = friendlyError(err, "重建索引失败");
+      setBanner(msg);
+      toast.error(msg);
+    } finally {
+      setBusyDocId(null);
+    }
+  };
+
+  // T0-1: 重新触发知识增强。增强失败时文档停在「可检索」并带 error_msg；此处调用真实端点
+  // re-enrich（只清 error_msg + 重新入队 enrich_document，不删分块、不重置 status），成功后
+  // 文档进入「知识增强中」，isDocActive → 轮询自动恢复，无需用户手动刷新。
+  const reEnrichDoc = async (doc: DocumentOut) => {
+    setBusyDocId(doc.id);
+    setBanner(null);
+    try {
+      const res = await apiJson<{ status: string }>(
+        `/api/kb/${selectedId}/documents/${doc.id}/re-enrich`,
+        { method: "POST", body: {} },
+      );
+      if (res.status === "already_running") {
+        toast.info("该文档正在知识增强中，请稍候");
+      } else {
+        toast.success("已重新触发知识增强，完成后自动刷新");
+      }
+      await loadDocs(selectedId, true);
+    } catch (err) {
+      const msg = friendlyError(err, "重新增强失败");
+      setBanner(msg);
+      toast.error(msg);
     } finally {
       setBusyDocId(null);
     }
@@ -198,9 +234,12 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
       await apiJson<void>(`/api/kb/${selectedId}/documents/${doc.id}`, {
         method: "DELETE",
       });
+      toast.success("文档已删除");
       await loadDocs(selectedId, true);
     } catch (err) {
-      setBanner(friendlyError(err, "删除文档失败"));
+      const msg = friendlyError(err, "删除文档失败");
+      setBanner(msg);
+      toast.error(msg);
     } finally {
       setBusyDocId(null);
     }
@@ -211,14 +250,14 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
 
       {/* 入口（阶段 5）：原 对话/分级辅导/智能练习 三跳转按钮收敛为「问这门课」单入口 */}
-      <section className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-line bg-surface-muted px-5 py-4">
+      <section className="flex flex-wrap items-center justify-between gap-4 rounded-overlay border border-line bg-surface-muted px-5 py-4">
         <div>
           <h2 className="text-[13px] font-semibold text-ink">用这门课开始学习</h2>
           <p className="mt-1 text-caption text-ink-secondary">AI 只会引用这里的真实资料和来源；辅导与练习沿用课程范围。</p>
         </div>
         <Link
           href={`/chat?new=1&kb=${encodeURIComponent(selectedId)}`}
-          className="rounded-[8px] bg-brand-600 px-3.5 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
+          className="rounded-control bg-brand-600 px-3.5 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
         >
           问这门课
         </Link>
@@ -235,7 +274,7 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
                 onImportUrl={(url) => void importUrl(url)}
               />
             ) : (
-              <p className="rounded-[9px] border border-dashed border-line-strong bg-[#fafaf9] px-4 py-3 text-body-sm text-ink-muted">机构库由管理员维护；你仍可以检索、对话和查看引用。</p>
+              <p className="rounded-control border border-dashed border-line-strong bg-canvas px-4 py-3 text-body-sm text-ink-muted">机构库由管理员维护；你仍可以检索、对话和查看引用。</p>
             )}
             {docsError && <ErrorBanner message={docsError} onRetry={() => void loadDocs(selectedId)} />}
             {docs === null || docsKbId !== selectedId ? (
@@ -250,6 +289,7 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
                 busyDocId={busyDocId}
                 onPreview={setPreviewDoc}
                 onReindex={(doc) => void reindexDoc(doc)}
+                onReEnrich={(doc) => void reEnrichDoc(doc)}
                 onDelete={(doc) => void deleteDoc(doc)}
                 readOnly={!kb.writable}
               />
@@ -259,7 +299,7 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
 
         <aside className="space-y-4">
           {kb.writable && (
-            <section className="rounded-[14px] border border-line bg-white p-4">
+            <section className="rounded-overlay border border-line bg-white p-4">
               <h2 className="text-body-sm font-semibold text-ink">检索检查（高级工具）</h2>
               <p className="mt-1 text-body-sm leading-4 text-ink-muted">观察这门课资料在稠密/稀疏/融合/重排四阶段的命中。</p>
               <details className="mt-2">
@@ -270,7 +310,7 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
               </details>
             </section>
           )}
-          <section className="rounded-[14px] border border-line bg-white p-4 text-body-sm">
+          <section className="rounded-overlay border border-line bg-white p-4 text-body-sm">
             <dl className="space-y-2.5">
               <div className="flex justify-between"><dt className="text-ink-muted">归属</dt><dd className="font-medium text-ink">{kb.owner_type === "org" ? kb.org_name ?? "机构" : "个人"}</dd></div>
               <div className="flex justify-between"><dt className="text-ink-muted">权限</dt><dd className="font-medium text-ink">{kb.writable ? "可编辑" : "只读"}</dd></div>

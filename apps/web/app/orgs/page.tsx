@@ -192,7 +192,7 @@ export default function OrgsPage() {
               onChange={(e) => setNewName(e.target.value)}
               maxLength={255}
               placeholder="机构名称（如：高数教研组）"
-              className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="w-full rounded-lg border border-line-strong px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             />
             <button
               type="submit"
@@ -214,7 +214,7 @@ export default function OrgsPage() {
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
               maxLength={16}
               placeholder="输入 8 位邀请码"
-              className="w-full rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-sm tracking-widest outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="w-full rounded-lg border border-line-strong px-3 py-1.5 font-mono text-sm tracking-widest outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             />
             <button
               type="submit"
@@ -231,7 +231,7 @@ export default function OrgsPage() {
           {orgs === null ? (
             <LoadingState text="机构列表加载中…" />
           ) : orgs.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">
+            <p className="py-3 text-center text-xs text-ink-muted">
               还没有加入任何机构
             </p>
           ) : (
@@ -244,7 +244,7 @@ export default function OrgsPage() {
                     className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                       o.id === selectedId
                         ? "bg-indigo-50 font-medium text-indigo-700"
-                        : "text-slate-600 hover:bg-slate-100"
+                        : "text-ink-secondary hover:bg-surface-muted"
                     }`}
                   >
                     <span className="flex items-center gap-1.5">
@@ -253,13 +253,13 @@ export default function OrgsPage() {
                         className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-medium ${
                           o.role === "admin"
                             ? "bg-indigo-100 text-indigo-700"
-                            : "bg-slate-100 text-slate-500"
+                            : "bg-surface-muted text-ink-muted"
                         }`}
                       >
                         {o.role === "admin" ? "管理员" : "成员"}
                       </span>
                     </span>
-                    <span className="block text-xs font-normal text-slate-400">
+                    <span className="block text-xs font-normal text-ink-muted">
                       {o.member_count} 名成员
                     </span>
                   </button>
@@ -284,17 +284,17 @@ export default function OrgsPage() {
             {selected.role === "admin" && selected.invite_code && (
               <Card title="邀请码">
                 <div className="flex flex-wrap items-center gap-3">
-                  <code className="rounded-lg bg-slate-100 px-4 py-2 font-mono text-lg font-semibold tracking-[0.3em] text-slate-800">
+                  <code className="rounded-lg bg-surface-muted px-4 py-2 font-mono text-lg font-semibold tracking-[0.3em] text-ink">
                     {selected.invite_code}
                   </code>
                   <button
                     type="button"
                     onClick={() => void copyCode()}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+                    className="rounded-lg border border-line-strong px-3 py-1.5 text-sm font-medium text-ink-secondary hover:bg-surface-muted"
                   >
                     {copied ? "已复制 ✓" : "复制"}
                   </button>
-                  <span className="text-xs text-slate-400">
+                  <span className="text-xs text-ink-muted">
                     分享给同事/学生，凭码加入后即自动挂载全部机构库（只读）
                   </span>
                 </div>
@@ -317,14 +317,14 @@ export default function OrgsPage() {
                       onChange={(e) => setNewKbName(e.target.value)}
                       maxLength={255}
                       placeholder="新机构库名称（如：统一教材库）"
-                      className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                      className="min-w-0 flex-1 rounded-lg border border-line-strong px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                     />
                     <input
                       value={newKbSubject}
                       onChange={(e) => setNewKbSubject(e.target.value)}
                       maxLength={64}
                       placeholder="学科（可选）"
-                      className="w-32 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                      className="w-32 rounded-lg border border-line-strong px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                     />
                     <button
                       type="submit"
@@ -341,20 +341,20 @@ export default function OrgsPage() {
                 {!detailReady || orgKbs === null ? (
                   <LoadingState text="机构库加载中…" />
                 ) : orgKbs.length === 0 ? (
-                  <p className="py-2 text-center text-xs text-slate-400">
+                  <p className="py-2 text-center text-xs text-ink-muted">
                     {selected.role === "admin"
                       ? "还没有机构库，建库后到「知识库」页上传教材"
                       : "管理员还没有创建机构库"}
                   </p>
                 ) : (
-                  <ul className="divide-y divide-slate-100">
+                  <ul className="divide-y divide-line">
                     {orgKbs.map((kb) => (
                       <li key={kb.id} className="flex items-center gap-3 py-2.5">
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-slate-800">
+                          <span className="block truncate text-sm font-medium text-ink">
                             {kb.name}
                           </span>
-                          <span className="block text-xs text-slate-400">
+                          <span className="block text-xs text-ink-muted">
                             {kb.subject} · v{kb.kb_version}
                           </span>
                         </span>
@@ -378,7 +378,7 @@ export default function OrgsPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-100 text-left text-sm">
                     <thead>
-                      <tr className="border-b border-slate-200 text-xs text-slate-400">
+                      <tr className="border-b border-line text-xs text-ink-muted">
                         <th className="py-2 pr-3 font-medium">邮箱</th>
                         <th className="py-2 pr-3 font-medium">角色</th>
                         <th className="py-2 font-medium">加入时间</th>
@@ -386,8 +386,8 @@ export default function OrgsPage() {
                     </thead>
                     <tbody>
                       {members.map((m) => (
-                        <tr key={m.user_id} className="border-b border-slate-100">
-                          <td className="max-w-60 truncate py-2.5 pr-3 text-slate-800">
+                        <tr key={m.user_id} className="border-b border-line">
+                          <td className="max-w-60 truncate py-2.5 pr-3 text-ink">
                             {m.email}
                           </td>
                           <td className="py-2.5 pr-3">
@@ -395,13 +395,13 @@ export default function OrgsPage() {
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                                 m.role === "admin"
                                   ? "bg-indigo-100 text-indigo-700"
-                                  : "bg-slate-100 text-slate-500"
+                                  : "bg-surface-muted text-ink-muted"
                               }`}
                             >
                               {m.role === "admin" ? "管理员" : "成员"}
                             </span>
                           </td>
-                          <td className="whitespace-nowrap py-2.5 text-xs text-slate-400">
+                          <td className="whitespace-nowrap py-2.5 text-xs text-ink-muted">
                             {fmtDateTime(m.joined_at)}
                           </td>
                         </tr>

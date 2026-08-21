@@ -170,6 +170,12 @@ export interface PlanDetail {
    * 不参与掌握度与依赖图 —— 它们尚未经资料或人工确认，不是知识点。
    */
   provisional_concepts?: Array<{ name: string; status: string }>;
+  /**
+   * 上面临时概念里，现在已能匹配到本库正式 KC（同名，可锚定）的条数（T1-1c）。
+   * 资料事后增强出同名 KC 后 > 0，界面据此提示"计划可更新"并给出「重新锚定」入口；
+   * 真正的 promote 落库在 POST /api/plans/{id}/re-anchor。
+   */
+  anchorable_concepts?: number;
   created_at: string;
   status: "active" | "completed" | "archived";
 }

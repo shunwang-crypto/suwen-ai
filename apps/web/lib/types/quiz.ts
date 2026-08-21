@@ -102,6 +102,12 @@ export interface AttemptResult {
   /** F3-A3：正确率 <0.6 且存在活跃计划时，后端自动插入补强任务的结果（否则 null） */
   plan_adjustment?: (PlanAdjustResult & { plan_id: string }) | null;
   plan_task_completion?: PlanTaskCompletion | null;
+  /**
+   * 本次作答的证据口径（后端 record_attempts 已返回）：
+   * 'calibration_only'（目标起步计划的校准练习）只记录作答、不更新正式掌握度与学习画像；
+   * 'mastery_eligible' 才按 BKT 证据写入。结果页据此说真话，不谎报"已写入画像"。
+   */
+  evidence_policy?: "mastery_eligible" | "calibration_only" | string;
 }
 
 export interface PlanTaskCompletion {

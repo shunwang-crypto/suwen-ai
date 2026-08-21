@@ -45,7 +45,7 @@ const KIND_META: Record<LedgerKind, { label: string; cls: string }> = {
   },
   consume: {
     label: "消费",
-    cls: "bg-slate-100 text-slate-600 ring-slate-200/80",
+    cls: "bg-surface-muted text-ink-secondary ring-line/80",
   },
   refund: { label: "退款", cls: "bg-sky-50 text-sky-700 ring-sky-200/70" },
   admin_adjust: {
@@ -57,7 +57,7 @@ const KIND_META: Record<LedgerKind, { label: string; cls: string }> = {
 function KindBadge({ kind }: { kind: string }) {
   const meta = KIND_META[kind as LedgerKind] ?? {
     label: kind,
-    cls: "bg-slate-100 text-slate-600 ring-slate-200/80",
+    cls: "bg-surface-muted text-ink-secondary ring-line/80",
   };
   return (
     <span
@@ -216,12 +216,12 @@ export default function BillingPage() {
           ) : wallet ? (
             <div className="py-1">
               <p className="flex items-baseline gap-2">
-                <span className="text-4xl font-bold tabular-nums tracking-tight text-slate-900">
+                <span className="text-4xl font-bold tabular-nums tracking-tight text-ink">
                   {fmtAmount(wallet.balance)}
                 </span>
-                <span className="text-sm text-slate-400">额度</span>
+                <span className="text-sm text-ink-muted">额度</span>
               </p>
-              <p className="mt-2 text-xs text-slate-400">
+              <p className="mt-2 text-xs text-ink-muted">
                 1 额度 = 1 元（{wallet.currency}），AI 功能按实际用量扣减。
               </p>
               {lowBalance && (
@@ -258,7 +258,7 @@ export default function BillingPage() {
             <ErrorBanner message={pricingError} onRetry={reloadPricing} />
           ) : pricing ? (
             <>
-              <ul className="space-y-2.5 text-sm text-slate-600">
+              <ul className="space-y-2.5 text-sm text-ink-secondary">
                 <li className="flex items-start gap-2.5">
                   <span
                     className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400"
@@ -266,7 +266,7 @@ export default function BillingPage() {
                   />
                   <span>
                     AI 调用按模型用量成本的{" "}
-                    <b className="text-slate-800">
+                    <b className="text-ink">
                       {fmtMarkup(pricing.markup)} 倍
                     </b>{" "}
                     折算扣减额度，用多少扣多少
@@ -279,7 +279,7 @@ export default function BillingPage() {
                   />
                   <span>
                     新账号注册即赠{" "}
-                    <b className="text-slate-800">
+                    <b className="text-ink">
                       {fmtAmount(pricing.signup_grant)} 额度
                     </b>
                   </span>
@@ -290,13 +290,13 @@ export default function BillingPage() {
                     aria-hidden
                   />
                   <span>
-                    <b className="text-slate-800">缓存命中免费</b>
+                    <b className="text-ink">缓存命中免费</b>
                     ：相同请求命中缓存时不扣任何额度
                   </span>
                 </li>
               </ul>
               {pricing.note && (
-                <p className="mt-3 border-t border-slate-100 pt-2.5 text-xs leading-relaxed text-slate-400">
+                <p className="mt-3 border-t border-line pt-2.5 text-xs leading-relaxed text-ink-muted">
                   {pricing.note}
                 </p>
               )}
@@ -310,11 +310,11 @@ export default function BillingPage() {
           <Card title="邀请活动">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="max-w-2xl">
-                <p className="text-sm font-medium text-slate-800">
+                <p className="text-sm font-medium text-ink">
                   完成硅基流动有效注册，可申请{" "}
                   {fmtAmount(pricing.referral_campaign.reward_credits)} 元苏问 AI 额度
                 </p>
-                <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
                   请通过指定邀请链接注册。完成后联系平台管理员，经硅基流动后台确认属于有效邀请后人工发放；点击链接不会自动到账。活动额度仅限站内 AI 功能使用，不可提现或转让。
                 </p>
               </div>
@@ -353,7 +353,7 @@ export default function BillingPage() {
                   className={`rounded-control border px-3 py-3 text-center transition-colors ${
                     amount === v
                       ? "border-brand-500 bg-brand-50 text-brand-700 shadow-subtle"
-                      : "border-slate-300 bg-white text-slate-600 hover:border-brand-300 hover:text-brand-600"
+                      : "border-line-strong bg-white text-ink-secondary hover:border-brand-300 hover:text-brand-600"
                   }`}
                 >
                   <span className="block text-lg font-semibold tabular-nums">
@@ -366,7 +366,7 @@ export default function BillingPage() {
               ))}
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-ink-muted">
                 支持金额：10 / 30 / 68 / 128 元，充值后额度立即到账。
               </p>
               <button
@@ -421,7 +421,7 @@ export default function BillingPage() {
                 type="button"
                 onClick={resetRecharge}
                 disabled={busy}
-                className="rounded-control border border-slate-300 px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:border-slate-400 hover:text-slate-700 disabled:opacity-60"
+                className="rounded-control border border-line-strong px-4 py-2 text-sm font-medium text-ink-muted transition-colors hover:border-line-strong hover:text-ink-secondary disabled:opacity-60"
               >
                 取消
               </button>
@@ -458,7 +458,7 @@ export default function BillingPage() {
             <button
               type="button"
               onClick={resetRecharge}
-              className="rounded-control border border-slate-300 px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:border-brand-300 hover:text-brand-600"
+              className="rounded-control border border-line-strong px-4 py-2 text-sm font-medium text-ink-muted transition-colors hover:border-brand-300 hover:text-brand-600"
             >
               再充一笔
             </button>
@@ -467,7 +467,7 @@ export default function BillingPage() {
         </Card>
       ) : (
         <Card title="在线充值暂未开放">
-          <p className="text-sm leading-relaxed text-slate-500">
+          <p className="text-sm leading-relaxed text-ink-muted">
             当前暂不提供在线充值。注册赠送额度和每笔 AI 用量仍会如实记录；如需补充额度，请联系平台管理员。
           </p>
         </Card>
@@ -501,7 +501,7 @@ export default function BillingPage() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                <tr className="border-b border-line text-left text-xs text-ink-muted">
                   <th className="py-2 pr-3 font-medium">类型</th>
                   <th className="py-2 pr-3 font-medium">变动</th>
                   <th className="py-2 pr-3 font-medium">变动后余额</th>
@@ -513,7 +513,7 @@ export default function BillingPage() {
                 {ledger.map((row) => (
                   <tr
                     key={row.id}
-                    className="border-b border-slate-50 last:border-0"
+                    className="border-b border-line last:border-0"
                   >
                     <td className="py-2.5 pr-3">
                       <KindBadge kind={row.kind} />
@@ -521,16 +521,16 @@ export default function BillingPage() {
                     <td className="py-2.5 pr-3">
                       <DeltaText delta={row.delta} />
                     </td>
-                    <td className="py-2.5 pr-3 font-mono text-xs tabular-nums text-slate-500">
+                    <td className="py-2.5 pr-3 font-mono text-xs tabular-nums text-ink-muted">
                       {fmtAmount(row.balance_after)}
                     </td>
                     <td
-                      className="max-w-52 truncate py-2.5 pr-3 text-xs text-slate-500"
+                      className="max-w-52 truncate py-2.5 pr-3 text-xs text-ink-muted"
                       title={row.note ?? row.ref ?? undefined}
                     >
                       {row.note || row.ref || "—"}
                     </td>
-                    <td className="whitespace-nowrap py-2.5 text-xs text-slate-400">
+                    <td className="whitespace-nowrap py-2.5 text-xs text-ink-muted">
                       <time title={fmtDateTime(row.created_at)}>
                         {fmtRelative(row.created_at)}
                       </time>

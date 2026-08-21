@@ -395,7 +395,7 @@ function PlansView() {
           <button
             type="button"
             onClick={() => setShowCreate((value) => !value)}
-            className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
+            className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
           >
             新建计划
           </button>
@@ -471,7 +471,7 @@ function PlansView() {
                 </div>
               </fieldset>
               <label className="block">
-                <span className="mb-1 block text-caption font-medium text-slate-500">
+                <span className="mb-1 block text-caption font-medium text-ink-muted">
                   一句话目标 <span className="text-rose-500">*</span>
                 </span>
                 <textarea
@@ -482,7 +482,7 @@ function PlansView() {
                   required
                   aria-describedby="plan-goal-help"
                   placeholder="如：极限与导数基础"
-                  className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full resize-none rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <div className="rounded-xl border border-line bg-surface-muted/60 p-3" aria-live="polite">
@@ -530,20 +530,20 @@ function PlansView() {
                 <summary className="cursor-pointer px-3 py-2.5 text-body-sm font-medium text-ink-secondary">补充背景、范围和计划时长（可选）</summary>
                 <div className="space-y-3 border-t border-line p-3">
               <label className="block">
-                <span className="mb-1 block text-caption font-medium text-slate-500">
-                  当前基础 <span className="font-normal text-slate-400">（可选）</span>
+                <span className="mb-1 block text-caption font-medium text-ink-muted">
+                  当前基础 <span className="font-normal text-ink-muted">（可选）</span>
                 </span>
                 <input
                   value={currentLevel}
                   onChange={(e) => setCurrentLevel(e.target.value)}
                   maxLength={200}
                   placeholder="如：会基本代数运算，但极限概念不熟"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-caption font-medium text-slate-500">
-                  期望成果 <span className="font-normal text-slate-400">（可选）</span>
+                <span className="mb-1 block text-caption font-medium text-ink-muted">
+                  期望成果 <span className="font-normal text-ink-muted">（可选）</span>
                 </span>
                 <textarea
                   value={targetOutcome}
@@ -551,12 +551,12 @@ function PlansView() {
                   rows={2}
                   maxLength={500}
                   placeholder="如：能独立判断常见极限题型并完成基础导数计算"
-                  className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full resize-none rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-caption font-medium text-slate-500">
-                  验收标准 <span className="font-normal text-slate-400">（可选）</span>
+                <span className="mb-1 block text-caption font-medium text-ink-muted">
+                  验收标准 <span className="font-normal text-ink-muted">（可选）</span>
                 </span>
                 <textarea
                   value={successCriteria}
@@ -564,7 +564,7 @@ function PlansView() {
                   rows={2}
                   maxLength={500}
                   placeholder="如：不看提示完成 10 道教材基础题，至少正确 8 道并能说明错因"
-                  className="w-full resize-none rounded-xl border border-slate-300 px-3.5 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="w-full resize-none rounded-xl border border-line-strong px-3.5 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
               <div className="grid grid-cols-2 gap-1.5 text-caption sm:grid-cols-4" aria-label="目标完整度" aria-live="polite">
@@ -581,7 +581,7 @@ function PlansView() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="mb-1 block text-caption font-medium text-slate-500">
+                  <span className="mb-1 block text-caption font-medium text-ink-muted">
                     每日小时
                   </span>
                   <input
@@ -591,11 +591,11 @@ function PlansView() {
                     step={0.5}
                     value={hours ?? ""}
                     onChange={(e) => setHours(e.target.value ? Math.max(0.5, Math.min(12, Number(e.target.value))) : null)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-caption font-medium text-slate-500">
+                  <span className="mb-1 block text-caption font-medium text-ink-muted">
                     总天数
                   </span>
                   <input
@@ -604,7 +604,7 @@ function PlansView() {
                     max={90}
                     value={totalDays ?? ""}
                     onChange={(e) => setTotalDays(e.target.value ? Math.max(1, Math.min(90, Math.trunc(Number(e.target.value)))) : null)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    className="w-full rounded-xl border border-line-strong px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </label>
               </div>
@@ -613,7 +613,7 @@ function PlansView() {
               <button
                 type="submit"
                 disabled={!goalReady || !scheduleReady || !scopeReady || busy || phase === "await_confirm"}
-                className="flex w-full items-center justify-center gap-2 rounded-[8px] bg-brand-600 py-2.5 text-body-sm font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control bg-brand-600 py-2.5 text-body-sm font-medium text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                 {busy ? "正在规划…" : "生成计划草案"}
@@ -645,7 +645,7 @@ function PlansView() {
             {plans === null ? (
               <SkeletonList rows={3} />
             ) : plans.length === 0 ? (
-              <p className="py-4 text-center text-caption text-slate-400">
+              <p className="py-4 text-center text-caption text-ink-muted">
                 还没有学习计划
               </p>
             ) : (
@@ -655,14 +655,14 @@ function PlansView() {
                     <button
                       type="button"
                       onClick={() => selectPlan(p)}
-                      className={`w-full rounded-[9px] border px-3 py-2 text-left text-body-sm transition-colors ${
+                      className={`w-full rounded-control border px-3 py-2 text-left text-body-sm transition-colors ${
                         selected?.id === p.id
                           ? "border-brand-300 bg-brand-50 text-brand-700"
                           : "border-line bg-white text-ink-secondary hover:border-brand-200"
                       }`}
                     >
                       <span className="block truncate font-medium">{p.goal}</span>
-                      <span className="block text-caption font-normal text-slate-400">
+                      <span className="block text-caption font-normal text-ink-muted">
                         <span className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span>{p.status === "active" ? "进行中" : p.status === "completed" ? "已完成" : "已归档"}</span>
                           <span className={`rounded-full px-1.5 py-0.5 ${p.plan_mode === "course_bound" ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{p.plan_mode === "course_bound" ? "课程资料" : "目标起步"}</span>
@@ -695,7 +695,7 @@ function PlansView() {
             />
           )}
           {phase === "resuming" && (
-            <p className="flex items-center gap-2 text-sm text-slate-500">
+            <p className="flex items-center gap-2 text-sm text-ink-muted">
               <Spinner /> 正在保存计划…
             </p>
           )}
@@ -707,6 +707,22 @@ function PlansView() {
               status={selected.status}
               budgetHours={selected.budget_hours}
               onChanged={reloadPlans}
+              onRegenerate={(prefill) => {
+                // 用旧计划参数回填新建表单，交给既有创建 SSE 流重跑（finalize 会自动归档当前 active）。
+                setGoal(prefill.goal);
+                setCurrentLevel(prefill.currentLevel);
+                setTargetOutcome(prefill.targetOutcome);
+                setSuccessCriteria(prefill.successCriteria);
+                setPlanMode(prefill.planMode);
+                setKbId(prefill.kbId ?? "");
+                setHours(prefill.hours || null);
+                setTotalDays(prefill.totalDays || null);
+                setDeadline("");
+                setShowCreate(true);
+                if (typeof window !== "undefined") {
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }}
             />
           ) : (
             phase === "idle" &&

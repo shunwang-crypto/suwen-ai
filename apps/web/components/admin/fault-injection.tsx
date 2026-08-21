@@ -104,7 +104,7 @@ export function FaultInjectionSection() {
   return (
     <section
       className={`rounded-2xl border bg-white ${
-        active ? "border-red-400 ring-1 ring-red-200" : "border-slate-200"
+        active ? "border-red-400 ring-1 ring-red-200" : "border-line"
       }`}
     >
       {active && (
@@ -113,11 +113,11 @@ export function FaultInjectionSection() {
           故障注入生效中 —— 当前所有 live/record 网关调用都会被人为劣化
         </div>
       )}
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
-        <h2 className="text-sm font-semibold text-slate-800">故障注入</h2>
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <h2 className="text-sm font-semibold text-ink">故障注入</h2>
         <span className="flex items-center gap-2 text-xs">
           {busy && <Spinner />}
-          <span className="text-slate-400">当前网关模式</span>
+          <span className="text-ink-muted">当前网关模式</span>
           <span
             className={`rounded-full px-2 py-0.5 font-mono font-semibold ${
               inert ? "bg-amber-100 text-amber-800" : "bg-indigo-100 text-indigo-700"
@@ -139,13 +139,13 @@ export function FaultInjectionSection() {
           </div>
         )}
 
-        {state?.note && <p className="text-xs text-slate-400">{state.note}</p>}
+        {state?.note && <p className="text-xs text-ink-muted">{state.note}</p>}
 
         {/* provider 宕机开关 */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line px-4 py-3">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-800">模拟 provider 宕机</p>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="text-sm font-medium text-ink">模拟 provider 宕机</p>
+            <p className="mt-0.5 text-xs text-ink-muted">
               打开后上游一律直接失败，用于演示重试 → 降级档位 → 熔断的完整链路。
             </p>
           </div>
@@ -156,7 +156,7 @@ export function FaultInjectionSection() {
             disabled={busy}
             onClick={() => void patch({ provider_down: !(state?.provider_down === true) })}
             className={`relative h-7 w-13 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-              state?.provider_down ? "bg-red-500" : "bg-slate-300"
+              state?.provider_down ? "bg-red-500" : "bg-surface-muted"
             }`}
           >
             <span
@@ -169,9 +169,9 @@ export function FaultInjectionSection() {
 
         {/* 延迟 / 错误率滑块 */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl border border-slate-200 px-4 py-3">
+          <div className="rounded-xl border border-line px-4 py-3">
             <div className="mb-2 flex items-baseline justify-between gap-2">
-              <span className="text-sm font-medium text-slate-800">附加延迟</span>
+              <span className="text-sm font-medium text-ink">附加延迟</span>
               <span className="font-mono text-sm font-semibold text-indigo-700">
                 {latency} ms
               </span>
@@ -189,14 +189,14 @@ export function FaultInjectionSection() {
               className="w-full accent-indigo-600"
               aria-label="附加延迟（毫秒）"
             />
-            <p className="mt-1 text-body-sm text-slate-400">
+            <p className="mt-1 text-body-sm text-ink-muted">
               每次上游调用额外 sleep 这么久，用来触发超时与 p95 抬升。
             </p>
           </div>
 
-          <div className="rounded-xl border border-slate-200 px-4 py-3">
+          <div className="rounded-xl border border-line px-4 py-3">
             <div className="mb-2 flex items-baseline justify-between gap-2">
-              <span className="text-sm font-medium text-slate-800">随机错误率</span>
+              <span className="text-sm font-medium text-ink">随机错误率</span>
               <span className="font-mono text-sm font-semibold text-indigo-700">
                 {Math.round(errorRate * 100)}%
               </span>
@@ -214,7 +214,7 @@ export function FaultInjectionSection() {
               className="w-full accent-indigo-600"
               aria-label="随机错误率"
             />
-            <p className="mt-1 text-body-sm text-slate-400">
+            <p className="mt-1 text-body-sm text-ink-muted">
               按该概率随机抛错，用来演示重试与熔断阈值的累积过程。
             </p>
           </div>
@@ -235,9 +235,9 @@ export function FaultInjectionSection() {
         )}
 
         {/* 熔断器 */}
-        <div className="rounded-xl border border-slate-200 px-4 py-3">
+        <div className="rounded-xl border border-line px-4 py-3">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-medium text-slate-800">熔断器状态</span>
+            <span className="text-sm font-medium text-ink">熔断器状态</span>
             <span className="flex items-center gap-2">
               <button
                 type="button"
@@ -258,7 +258,7 @@ export function FaultInjectionSection() {
                     error_rate: 0,
                   })
                 }
-                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-line-strong bg-white px-3 py-1.5 text-xs font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
               >
                 恢复全部
               </button>
@@ -283,11 +283,11 @@ export function FaultInjectionSection() {
               );
             })}
             {(state?.breakers ?? []).length === 0 && (
-              <p className="py-2 text-xs text-slate-400">暂无熔断器信息</p>
+              <p className="py-2 text-xs text-ink-muted">暂无熔断器信息</p>
             )}
             {(state?.routing ?? []).length > 0 && (
-              <div className="mt-4 border-t border-slate-100 pt-3">
-                <p className="mb-2 text-xs font-medium text-slate-500">业务路由候选</p>
+              <div className="mt-4 border-t border-line pt-3">
+                <p className="mb-2 text-xs font-medium text-ink-muted">业务路由候选</p>
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {(state?.routing ?? []).map((candidate) => {
                     const meta = BREAKER_STATE_META[candidate.state] ?? BREAKER_STATE_META.closed;

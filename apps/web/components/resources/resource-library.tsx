@@ -125,7 +125,7 @@ function friendlyError(reason: unknown, fallback: string): string {
 
 function ResourceIcon({ resource }: { resource: LearningResourceOut }) {
   const label = resource.source_filename?.slice(resource.source_filename.lastIndexOf(".") + 1).toUpperCase() || "题";
-  return <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-caption font-semibold ${isQuestionResource(resource) ? "bg-brand-50 text-brand-700" : "bg-success-50 text-success-700"}`}>{label.slice(0, 4)}</span>;
+  return <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control text-caption font-semibold ${isQuestionResource(resource) ? "bg-brand-50 text-brand-700" : "bg-success-50 text-success-700"}`}>{label.slice(0, 4)}</span>;
 }
 
 function ResourceCard({
@@ -153,7 +153,7 @@ function ResourceCard({
   const canRetry = Boolean(resource.source_url) &&
     (resource.status === "uploaded" || resource.status === "failed" || failedPages.length > 0);
   return (
-    <article className="rounded-[13px] border border-line bg-white p-4 transition-shadow hover:shadow-card">
+    <article className="rounded-overlay border border-line bg-white p-4 transition-shadow hover:shadow-card">
       <div className="flex items-start gap-3">
         <ResourceIcon resource={resource} />
         <div className="min-w-0 flex-1">
@@ -161,18 +161,18 @@ function ResourceCard({
           <p className="mt-1 text-caption text-ink-muted">{typeLabel(resource.resource_type)} · {resource.subject || "通用"} · {formatDate(resource.created_at)}</p>
         </div>
       </div>
-      {pdfResourceSummary(resource) ? <div className="mt-4 rounded-[9px] bg-surface-muted px-3 py-2.5 text-caption"><p className="font-medium text-ink">{pdfResourceSummary(resource)}</p><p className="mt-1 truncate text-ink-muted" title={resource.source_filename ?? undefined}>待校对 {resource.pending_question_count} 题 · {resource.source_filename ?? "原文件"}</p></div> : <div className="mt-4 grid grid-cols-3 gap-2 rounded-[9px] bg-surface-muted px-3 py-2.5 text-caption"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>}
+      {pdfResourceSummary(resource) ? <div className="mt-4 rounded-control bg-surface-muted px-3 py-2.5 text-caption"><p className="font-medium text-ink">{pdfResourceSummary(resource)}</p><p className="mt-1 truncate text-ink-muted" title={resource.source_filename ?? undefined}>待校对 {resource.pending_question_count} 题 · {resource.source_filename ?? "原文件"}</p></div> : <div className="mt-4 grid grid-cols-3 gap-2 rounded-control bg-surface-muted px-3 py-2.5 text-caption"><div><p className="text-ink-muted">题目</p><p className="mt-0.5 font-semibold text-ink">{resource.question_count}</p></div><div><p className="text-ink-muted">待校对</p><p className="mt-0.5 font-semibold text-warning-700">{resource.pending_question_count}</p></div><div><p className="text-ink-muted">来源</p><p className="mt-0.5 truncate font-medium text-ink" title={resource.source_filename ?? undefined}>{resource.source_filename ?? "手动创建"}</p></div></div>}
       {(resource.status === "uploaded" || resource.status === "extracting") && <div className="mt-3"><ResourceExtractionSteps resource={resource} /></div>}
-      {resource.status === "failed" && <p className="mt-3 rounded-[8px] bg-danger-50 px-3 py-2 text-caption leading-4 text-danger-700">识别未完成，原文件已经保留。{failedPages.length > 0 ? `失败页：${failedPages.join("、")}` : ""}</p>}
-      {failedPages.length > 0 && resource.status !== "failed" && <p className="mt-3 rounded-[8px] bg-warning-50 px-3 py-2 text-caption leading-4 text-warning-700">部分页面未能识别，已保留成功题目；失败页：{failedPages.join("、")}</p>}
-      <footer className="mt-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={onOpen} className="rounded-[8px] bg-ink px-3.5 py-2 text-body-sm font-medium text-white">{questionResource && resource.status === "extracting" ? "查看识别进度" : "查看资料"}</button><div className="flex flex-wrap gap-1.5">{questionResource && canRetry && <button type="button" onClick={onExtract} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">{busy ? "提交中…" : resource.status === "uploaded" ? "开始识别" : "重试识别"}</button>}{resource.status === "archived" ? <button type="button" onClick={onRestore} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">恢复</button> : <button type="button" onClick={onArchive} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">归档</button>}{(resource.status === "uploaded" || resource.status === "failed" || resource.status === "archived") && <button type="button" onClick={onDelete} disabled={busy} className="rounded-[8px] border border-line-strong px-2.5 py-2 text-body-sm text-danger-600 disabled:opacity-40">删除</button>}</div></footer>
+      {resource.status === "failed" && <p className="mt-3 rounded-control bg-danger-50 px-3 py-2 text-caption leading-4 text-danger-700">识别未完成，原文件已经保留。{failedPages.length > 0 ? `失败页：${failedPages.join("、")}` : ""}</p>}
+      {failedPages.length > 0 && resource.status !== "failed" && <p className="mt-3 rounded-control bg-warning-50 px-3 py-2 text-caption leading-4 text-warning-700">部分页面未能识别，已保留成功题目；失败页：{failedPages.join("、")}</p>}
+      <footer className="mt-4 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={onOpen} className="rounded-control bg-ink px-3.5 py-2 text-body-sm font-medium text-white">{questionResource && resource.status === "extracting" ? "查看识别进度" : "查看资料"}</button><div className="flex flex-wrap gap-1.5">{questionResource && canRetry && <button type="button" onClick={onExtract} disabled={busy} className="rounded-control border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">{busy ? "提交中…" : resource.status === "uploaded" ? "开始识别" : "重试识别"}</button>}{resource.status === "archived" ? <button type="button" onClick={onRestore} disabled={busy} className="rounded-control border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">恢复</button> : <button type="button" onClick={onArchive} disabled={busy} className="rounded-control border border-line-strong px-2.5 py-2 text-body-sm text-ink-secondary disabled:opacity-40">归档</button>}{(resource.status === "uploaded" || resource.status === "failed" || resource.status === "archived") && <button type="button" onClick={onDelete} disabled={busy} className="rounded-control border border-line-strong px-2.5 py-2 text-body-sm text-danger-600 disabled:opacity-40">删除</button>}</div></footer>
     </article>
   );
 }
 
 export function ResourceLibrary({ scopeKbId = null }: { scopeKbId?: string | null }) {
   return (
-    <Suspense fallback={<div className="mx-auto w-full max-w-[1180px] px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={5} /></div></div>}>
+    <Suspense fallback={<div className="mx-auto w-full max-w-[1180px] px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-overlay border border-line bg-white p-5"><SkeletonList rows={5} /></div></div>}>
       <ResourcesPageContent scopeKbId={scopeKbId} />
     </Suspense>
   );
@@ -188,7 +188,7 @@ function ReferenceResourceView({
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-6 sm:px-8 lg:px-12 lg:py-8">
       <button type="button" onClick={onBack} className="text-body-sm text-ink-secondary hover:text-ink">← 返回题目资料</button>
-      <header className="rounded-[13px] border border-line bg-white p-5">
+      <header className="rounded-overlay border border-line bg-white p-5">
         <p className="text-caption font-medium uppercase tracking-[0.1em] text-ink-muted">参考资料</p>
         <h1 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-ink">{resource.title}</h1>
         <p className="mt-2 text-body-sm leading-5 text-ink-secondary">这是历史参考资料。请在知识库中管理教材、讲义和笔记；参考资料不会进入题目识别、真实作答或错题选择流程。</p>
@@ -208,11 +208,11 @@ function TutorManagedResourceView({
   return (
     <div className="mx-auto w-full max-w-[1180px] space-y-4 px-5 py-6 sm:px-8 lg:px-12 lg:py-8">
       <button type="button" onClick={onBack} className="text-body-sm text-ink-secondary hover:text-ink">← 返回题目资料</button>
-      <header className="rounded-[13px] border border-line bg-white p-5">
+      <header className="rounded-overlay border border-line bg-white p-5">
         <p className="text-caption font-medium uppercase tracking-[0.1em] text-ink-muted">辅导附件</p>
         <h1 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-ink">{resource.title}</h1>
         <p className="mt-2 text-body-sm leading-5 text-ink-secondary">这份资料由辅导附件管理，资源页不提供删除、归档或重新识别操作。</p>
-        <Link href={tutorDraftHref(String(resource.metadata.tutor_draft_id))} className="mt-3 inline-flex rounded-[8px] bg-ink px-3.5 py-2 text-body-sm font-medium text-white">前往辅导</Link>
+        <Link href={tutorDraftHref(String(resource.metadata.tutor_draft_id))} className="mt-3 inline-flex rounded-control bg-ink px-3.5 py-2 text-body-sm font-medium text-white">前往辅导</Link>
       </header>
       <SourcePreview resource={resource} />
     </div>
@@ -443,7 +443,7 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
 
   if (selectedResource) {
     if (shouldShowResourceDetailSkeleton(selectedLoading, selectedDetailsLoaded)) {
-      return <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={6} /></div></div>;
+      return <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-overlay border border-line bg-white p-5"><SkeletonList rows={6} /></div></div>;
     }
     if (isReferenceResource(selectedResource)) {
       return <ReferenceResourceView resource={selectedResource} onBack={backToResourceList} />;
@@ -458,10 +458,10 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
     <div className="mx-auto w-full max-w-[1180px] space-y-5 px-5 py-6 sm:px-8 lg:px-12 lg:py-8">
       {listError && <ErrorBanner message={listError} onRetry={() => void loadResources()} />}
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
-      <header className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-[18px] font-semibold tracking-[-0.03em] text-ink">题目资料</h2><p className="mt-1.5 max-w-[620px] text-body-sm leading-5 text-ink-secondary">上传真实试卷、练习册、作业或题单，校对后用于真实作答与错题复习。</p></div><button type="button" onClick={() => setUploadOpen(true)} className="rounded-[8px] bg-ink px-4 py-2.5 text-body-sm font-medium text-white hover:bg-black">导入题目资料</button></header>
-      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex w-fit flex-wrap gap-1 rounded-[9px] border border-line bg-white p-1">{([ ["all", "全部资料"], ["questions", "题目资料"], ["reference", "参考资料"], ["archived", "已归档"] ] as Array<[ResourceFilter, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-[7px] px-3 py-1.5 text-body-sm font-medium ${filter === value ? "bg-ink text-white" : "text-ink-secondary hover:bg-surface-muted"}`}>{label}</button>)}</div><p className="text-body-sm text-ink-muted">{filteredResources.length} 份资料</p></div>
-      {resources === null ? <div className="rounded-[13px] border border-line bg-white p-5"><SkeletonList rows={5} /></div> : filteredResources.length === 0 ? <EmptyState title={filter === "archived" ? "暂无归档资料" : "还没有题目资料"} description="可以上传一份试卷、练习册、作业或题单，也可以先创建一个空资料手动录入题目。" illustration="docs"><button type="button" onClick={() => setUploadOpen(true)} className="mt-2 rounded-[8px] bg-ink px-4 py-2 text-body-sm font-medium text-white">导入第一份题目资料</button></EmptyState> : <div className="grid gap-4 md:grid-cols-2">{filteredResources.map((resource) => <ResourceCard key={resource.id} resource={resource} questionResource={isQuestionResource(resource)} onOpen={() => openResource(resource)} onArchive={() => void archive(resource)} onRestore={() => void restore(resource)} onDelete={() => requestDelete(resource)} onExtract={() => void runExtract(resource)} busy={busyId === resource.id} />)}</div>}
-      <section className="rounded-[12px] border border-line bg-white px-4 py-3.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">边界说明：</span>知识库管理教材、讲义和笔记，用于 AI 检索与引用；题目资料用于拆题、错题和真实作答。题目资料不会自动进入普通聊天检索；待校对题、未核验答案也不会进入复习、FSRS、掌握度、报告或推荐。</section>
+      <header className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-[18px] font-semibold tracking-[-0.03em] text-ink">题目资料</h2><p className="mt-1.5 max-w-[620px] text-body-sm leading-5 text-ink-secondary">上传真实试卷、练习册、作业或题单，校对后用于真实作答与错题复习。</p></div><button type="button" onClick={() => setUploadOpen(true)} className="rounded-control bg-ink px-4 py-2.5 text-body-sm font-medium text-white hover:bg-black">导入题目资料</button></header>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex w-fit flex-wrap gap-1 rounded-control border border-line bg-white p-1">{([ ["all", "全部资料"], ["questions", "题目资料"], ["reference", "参考资料"], ["archived", "已归档"] ] as Array<[ResourceFilter, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-control px-3 py-1.5 text-body-sm font-medium ${filter === value ? "bg-ink text-white" : "text-ink-secondary hover:bg-surface-muted"}`}>{label}</button>)}</div><p className="text-body-sm text-ink-muted">{filteredResources.length} 份资料</p></div>
+      {resources === null ? <div className="rounded-overlay border border-line bg-white p-5"><SkeletonList rows={5} /></div> : filteredResources.length === 0 ? <EmptyState title={filter === "archived" ? "暂无归档资料" : "还没有题目资料"} description="可以上传一份试卷、练习册、作业或题单，也可以先创建一个空资料手动录入题目。" illustration="docs"><button type="button" onClick={() => setUploadOpen(true)} className="mt-2 rounded-control bg-ink px-4 py-2 text-body-sm font-medium text-white">导入第一份题目资料</button></EmptyState> : <div className="grid gap-4 md:grid-cols-2">{filteredResources.map((resource) => <ResourceCard key={resource.id} resource={resource} questionResource={isQuestionResource(resource)} onOpen={() => openResource(resource)} onArchive={() => void archive(resource)} onRestore={() => void restore(resource)} onDelete={() => requestDelete(resource)} onExtract={() => void runExtract(resource)} busy={busyId === resource.id} />)}</div>}
+      <section className="rounded-overlay border border-line bg-white px-4 py-3.5 text-body-sm leading-5 text-ink-secondary"><span className="font-medium text-ink">边界说明：</span>知识库管理教材、讲义和笔记，用于 AI 检索与引用；题目资料用于拆题、错题和真实作答。题目资料不会自动进入普通聊天检索；待校对题、未核验答案也不会进入复习、FSRS、掌握度、报告或推荐。</section>
       {uploadOpen && <ResourceUploadDialog initialLinkedKbId={scopeKbId === "unclassified" ? "" : scopeKbId ?? ""} onClose={() => setUploadOpen(false)} onCreated={(resource) => void handleCreated(resource)} />}
       <ConfirmDialog
         open={deleteTarget !== null}

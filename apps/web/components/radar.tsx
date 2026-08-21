@@ -16,7 +16,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
   const dims = items.slice(0, RADAR_MAX_DIMS);
   if (dims.length < 3) {
     return (
-      <p className="py-8 text-center text-xs text-slate-400">
+      <p className="py-8 text-center text-xs text-ink-muted">
         至少需要 3 个知识点才能绘制雷达图，先去练习积累证据吧
       </p>
     );
@@ -120,7 +120,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
         })}
       </svg>
       {/* 图例：数据面含义 + 网格环刻度说明 */}
-      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-slate-400">
+      <div className="relative mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-body-sm text-ink-muted">
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
@@ -132,7 +132,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
-            className="inline-block h-2.5 w-2.5 rounded-sm border border-slate-300"
+            className="inline-block h-2.5 w-2.5 rounded-sm border border-line-strong"
           />
           网格环 25 / 50 / 75 / 100%
         </span>

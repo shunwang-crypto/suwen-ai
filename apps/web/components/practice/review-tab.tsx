@@ -51,7 +51,7 @@ const CAUSE_BADGE_STYLES: Record<string, string> = {
   misread: "bg-warning-50 text-warning-700 ring-warning-500/20",
   knowledge_gap: "bg-danger-50 text-danger-700 ring-danger-500/20",
 };
-const CAUSE_BADGE_FALLBACK = "bg-slate-100 text-slate-600 ring-slate-200/70";
+const CAUSE_BADGE_FALLBACK = "bg-surface-muted text-ink-secondary ring-line/70";
 
 const STATE_LABELS: Record<string, { label: string; className: string }> = {
   new: { label: "新错题", className: "bg-red-50 text-red-600" },
@@ -72,7 +72,7 @@ type ReviewItemWithRetention = ReviewItem & {
 function StateBadge({ state }: { state: string }) {
   const meta = STATE_LABELS[state] ?? {
     label: state,
-    className: "bg-slate-100 text-slate-600",
+    className: "bg-surface-muted text-ink-secondary",
   };
   return (
     <span
@@ -250,7 +250,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
           <button
             type="button"
             onClick={reload}
-            className="rounded-[8px] border border-line-strong bg-white px-3.5 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
+            className="rounded-control border border-line-strong bg-white px-3.5 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:text-brand-700"
           >
             刷新队列
           </button>
@@ -265,7 +265,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
           {[0, 1].map((i) => (
             <div
               key={i}
-              className="rounded-2xl border border-slate-200 bg-white p-4"
+              className="rounded-2xl border border-line bg-white p-4"
             >
               <div className="mb-3 flex gap-2">
                 <Skeleton className="h-5 w-14 rounded-full" />
@@ -278,17 +278,17 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
           <span className="sr-only">复习队列加载中…</span>
         </div>
       ) : completed && data ? (
-        <section className="rounded-[14px] border border-line bg-white px-5 py-10 text-center sm:px-8">
+        <section className="rounded-overlay border border-line bg-white px-5 py-10 text-center sm:px-8">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success-50 text-xl text-success-600">✓</span>
           <h2 className="mt-4 text-[18px] font-semibold text-ink">今日复习已完成</h2>
           <p className="mt-2 text-body-sm text-ink-muted">
             完成 {finishedCount} 题，答对 {correctCount} 题；记忆进度和学习画像已按真实作答更新。
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
-            <Link href={focus ? focus.from : "/today"} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">{focus ? "返回" : "返回今日"}</Link>
-            <Link href="/practice?tab=errors" className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题</Link>
+            <Link href={focus ? focus.from : "/today"} className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">{focus ? "返回" : "返回今日"}</Link>
+            <Link href="/practice?tab=errors" className="rounded-control border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">查看错题</Link>
             {data.items.find((item) => states[item.error_item_id]?.result?.correct === false) && (
-              <Link href={`/tutor?error_id=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.error_item_id ?? "")}`} className="rounded-[8px] border border-brand-200 bg-brand-50 px-4 py-2 text-body-sm font-medium text-brand-700">辅导未掌握题目</Link>
+              <Link href={`/tutor?error_id=${encodeURIComponent(data.items.find((item) => states[item.error_item_id]?.result?.correct === false)?.error_item_id ?? "")}`} className="rounded-control border border-brand-200 bg-brand-50 px-4 py-2 text-body-sm font-medium text-brand-700">辅导未掌握题目</Link>
             )}
           </div>
         </section>
@@ -343,7 +343,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                     })()}
                     {item.due && (
                       <span
-                        className="text-caption text-slate-400"
+                        className="text-caption text-ink-muted"
                         title={fmtDateTime(item.due)}
                       >
                         到期 {fmtRelative(item.due)}
@@ -374,7 +374,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                     <QuestionMeta question={item.question} />
                   </div>
 
-                  <p className="mb-2.5 text-sm leading-relaxed text-slate-800">
+                  <p className="mb-2.5 text-sm leading-relaxed text-ink">
                     <MathText text={item.question.stem} />
                   </p>
 
@@ -435,7 +435,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                             : "回答错误，连对计数已清零。"}
                         </p>
                       )}
-                      <p className="mt-1 text-caption text-slate-600">
+                      <p className="mt-1 text-caption text-ink-secondary">
                         下次复习：
                         <span
                           className="font-medium"
@@ -443,21 +443,21 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                         >
                           {fmtRelative(st.result.next_due)}
                         </span>
-                        <span className="ml-1 text-slate-400">
+                        <span className="ml-1 text-ink-muted">
                           （{fmtDateTime(st.result.next_due)}）
                         </span>
                         · 状态：
                         {STATE_LABELS[st.result.state]?.label ?? st.result.state}
                       </p>
-                      <div className="mt-3 rounded-[8px] border border-line bg-white/70">
+                      <div className="mt-3 rounded-control border border-line bg-white/70">
                         <button type="button" onClick={() => setOpenExplanation((current) => ({ ...current, [item.error_item_id]: !current[item.error_item_id] }))} className="flex w-full items-center justify-between px-3 py-2 text-left text-body-sm font-medium text-ink-secondary">
                           <span>查看解析与思路</span>
                           <span aria-hidden>{openExplanation[item.error_item_id] ? "⌃" : "⌄"}</span>
                         </button>
                         {openExplanation[item.error_item_id] && (
-                          <div className="space-y-2 border-t border-line px-3 py-3 text-caption leading-5 text-slate-600">
-                            <p><span className="font-medium text-slate-500">参考答案：</span><MathText text={st.result.answer} /></p>
-                            {st.result.explanation && <div><p className="font-medium text-slate-500">解析：</p><ModelMarkdown text={st.result.explanation} /></div>}
+                          <div className="space-y-2 border-t border-line px-3 py-3 text-caption leading-5 text-ink-secondary">
+                            <p><span className="font-medium text-ink-muted">参考答案：</span><MathText text={st.result.answer} /></p>
+                            {st.result.explanation && <div><p className="font-medium text-ink-muted">解析：</p><ModelMarkdown text={st.result.explanation} /></div>}
                           </div>
                         )}
                       </div>
@@ -473,7 +473,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                       {item.question.type === "short" && (
                         <AppealEntry questionId={item.question.id} />
                       )}
-                      <div className="mt-3 flex flex-wrap justify-end gap-2"><Link href={`/tutor?error_id=${encodeURIComponent(item.error_item_id)}`} className="rounded-[8px] border border-brand-200 bg-white px-4 py-2 text-body-sm font-medium text-brand-700">带题去辅导</Link><button type="button" onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : setCompleted(true)} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800">{currentIndex < data.items.length - 1 ? "继续下一题 →" : "完成今日复习"}</button></div>
+                      <div className="mt-3 flex flex-wrap justify-end gap-2"><Link href={`/tutor?error_id=${encodeURIComponent(item.error_item_id)}`} className="rounded-control border border-brand-200 bg-white px-4 py-2 text-body-sm font-medium text-brand-700">带题去辅导</Link><button type="button" onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : setCompleted(true)} className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white hover:bg-brand-800">{currentIndex < data.items.length - 1 ? "继续下一题 →" : "完成今日复习"}</button></div>
                     </div>
                   ) : (
                     <div className="mt-3 flex items-center justify-end gap-2">
@@ -508,11 +508,11 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
       )}
       {showExitConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" aria-label="关闭退出确认" className="absolute inset-0 bg-[#1c1917]/35" onClick={() => setShowExitConfirm(false)} />
-          <section role="dialog" aria-modal="true" aria-labelledby="review-exit-title" className="relative w-full max-w-[400px] rounded-[14px] border border-line bg-white p-5 shadow-floating">
+          <button type="button" aria-label="关闭退出确认" className="absolute inset-0 bg-ink/35" onClick={() => setShowExitConfirm(false)} />
+          <section role="dialog" aria-modal="true" aria-labelledby="review-exit-title" className="relative w-full max-w-[400px] rounded-overlay border border-line bg-white p-5 shadow-floating">
             <h2 id="review-exit-title" className="text-[16px] font-semibold text-ink">暂时退出复习？</h2>
             <p className="mt-2 text-body-sm leading-5 text-ink-muted">已提交的答案和记忆进度会保留，未完成题目仍留在复习队列。</p>
-            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-[8px] border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">继续复习</button><Link href={focus ? focus.from : "/today"} className="rounded-[8px] bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">确认退出</Link></div>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowExitConfirm(false)} className="rounded-control border border-line-strong px-4 py-2 text-body-sm font-medium text-ink-secondary">继续复习</button><Link href={focus ? focus.from : "/today"} className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">确认退出</Link></div>
           </section>
         </div>
       )}

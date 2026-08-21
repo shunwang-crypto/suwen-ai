@@ -38,25 +38,25 @@ export function AxisBars({ axes, weakThreshold }: { axes: RadarAxis[]; weakThres
         const value = a.p_mastery ?? 0;
         const barColor =
           a.p_mastery == null
-            ? "bg-slate-300"
+            ? "bg-surface-muted"
             : value < weakThreshold
             ? "bg-rose-400"
             : "bg-indigo-500";
         return (
           <li key={a.kc_id || a.name} className="flex items-center gap-2 text-caption">
             <span
-              className="w-24 shrink-0 truncate text-slate-600 sm:w-32"
+              className="w-24 shrink-0 truncate text-ink-secondary sm:w-32"
               title={a.name}
             >
               {a.name}
             </span>
-            <span className="h-2.5 min-w-0 flex-1 rounded-full bg-slate-100">
+            <span className="h-2.5 min-w-0 flex-1 rounded-full bg-surface-muted">
               <span
                 className={`block h-full rounded-full ${barColor}`}
                 style={{ width: `${Math.max(value * 100, 2)}%` }}
               />
             </span>
-            <span className="w-10 shrink-0 text-right font-mono text-slate-600">
+            <span className="w-10 shrink-0 text-right font-mono text-ink-secondary">
               {a.p_mastery == null ? "未知" : fmtPct(a.p_mastery)}
             </span>
           </li>
@@ -73,24 +73,24 @@ export function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
   );
   if (rows.length === 0) return null;
   return (
-    <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2.5">
+    <div className="mt-3 space-y-1.5 border-t border-line pt-2.5">
       {rows.map((a) => (
         <details
           key={a.kc_id || a.name}
-          className="rounded-lg bg-slate-50/70 px-2.5 py-1.5"
+          className="rounded-lg bg-surface-muted/70 px-2.5 py-1.5"
         >
           <summary className="flex cursor-pointer flex-wrap items-center gap-1.5 text-body-sm">
             <span
-              className="min-w-0 flex-1 truncate font-medium text-slate-700"
+              className="min-w-0 flex-1 truncate font-medium text-ink-secondary"
               title={a.name}
             >
               {a.name}
             </span>
-            <span className="shrink-0 font-mono text-slate-500">
+            <span className="shrink-0 font-mono text-ink-muted">
               {a.p_mastery == null ? "未知" : fmtPct(a.p_mastery)}
             </span>
             {a.kc_count != null && (
-              <span className="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-caption text-slate-600">
+              <span className="shrink-0 rounded-full bg-surface-muted/70 px-1.5 py-0.5 text-caption text-ink-secondary">
                 {a.kc_count} 个知识点
               </span>
             )}
@@ -101,23 +101,23 @@ export function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
             )}
           </summary>
           {a.kcs && a.kcs.length > 0 ? (
-            <ul className="mt-1.5 space-y-1 border-t border-slate-200/60 pt-1.5">
+            <ul className="mt-1.5 space-y-1 border-t border-line/60 pt-1.5">
               {a.kcs.map((kc, i) => (
                 <li
                   key={kc.kc_id ?? `${kc.name}-${i}`}
                   className="flex items-center justify-between gap-2 text-body-sm"
                 >
-                  <span className="min-w-0 truncate text-slate-600" title={kc.name}>
+                  <span className="min-w-0 truncate text-ink-secondary" title={kc.name}>
                     {kc.name ?? "未命名知识点"}
                   </span>
-                  <span className="shrink-0 font-mono text-slate-500">
+                  <span className="shrink-0 font-mono text-ink-muted">
                     {kc.p_mastery != null ? fmtPct(kc.p_mastery) : "—"}
                   </span>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="mt-1 text-body-sm text-slate-400">该轴暂无下钻明细</p>
+            <p className="mt-1 text-body-sm text-ink-muted">该轴暂无下钻明细</p>
           )}
         </details>
       ))}
@@ -129,7 +129,7 @@ export function AxisDrilldown({ axes }: { axes: RadarAxis[] }) {
 export function RadarPanel({ axes, isChapter, weakThreshold }: { axes: RadarAxis[]; isChapter: boolean; weakThreshold: number }) {
   if (axes.length === 0) {
     return (
-      <p className="py-6 text-center text-caption text-slate-400">
+      <p className="py-6 text-center text-caption text-ink-muted">
         暂无掌握度证据，完成练习后这里会出现掌握度轴
       </p>
     );

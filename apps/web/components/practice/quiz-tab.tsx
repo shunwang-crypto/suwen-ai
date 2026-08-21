@@ -747,25 +747,25 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
           />
 
           {attempt && (
-            <section className="rounded-[14px] border border-line bg-white p-5">
+            <section className="rounded-overlay border border-line bg-white p-5">
               <div className="flex flex-wrap items-center gap-5">
                 <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{attempt.correct}/{attempt.total}</strong><span className="text-caption text-ink-muted">答对</span></div>
-                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-caption font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span></div><p className="mt-1 text-body-sm leading-5 text-ink-muted">结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。</p></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-caption font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span>{attempt.evidence_policy === "calibration_only" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-caption font-medium text-warning-700">校准练习</span>}</div><p className="mt-1 text-body-sm leading-5 text-ink-muted">{attempt.evidence_policy === "calibration_only" ? "结果来自本次真实判分；本次为校准练习，只记录作答用于校准起点，不更新正式掌握度与学习画像。" : "结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。"}</p></div>
               </div>
-              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-[7px] bg-[#f5f4f1] px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><ModelMarkdown text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
-              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[9px] border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-body-sm font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-body-sm text-warning-600"><ModelMarkdown text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-[7px] border border-warning-200 bg-white px-3 py-1.5 text-body-sm font-medium text-warning-700">前往学习计划 →</Link></div>}
+              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><ModelMarkdown text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
+              {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-control border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-body-sm font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-body-sm text-warning-600"><ModelMarkdown text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-control border border-warning-200 bg-white px-3 py-1.5 text-body-sm font-medium text-warning-700">前往学习计划 →</Link></div>}
               {calibration && calibration.sample_n > 0 && (
-                <div className="mt-4 rounded-[9px] border border-brand-100 bg-brand-50/45 px-4 py-3">
+                <div className="mt-4 rounded-control border border-brand-100 bg-brand-50/45 px-4 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-body-sm font-semibold text-brand-800">近 7 天自我判断校准</p>
                     <span className="text-caption text-brand-700">{calibration.sample_n} 次有效预测</span>
                   </div>
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <p className="rounded-[7px] bg-white/80 px-3 py-2 text-body-sm text-ink-secondary">
+                    <p className="rounded-control bg-white/80 px-3 py-2 text-body-sm text-ink-secondary">
                       Brier 误差：<strong className="text-ink">{calibration.brier_score == null ? "—" : calibration.brier_score.toFixed(3)}</strong>
                       <span className="ml-1 text-caption text-ink-muted">越低表示预测越贴近结果</span>
                     </p>
-                    <p className="rounded-[7px] bg-white/80 px-3 py-2 text-body-sm text-ink-secondary">
+                    <p className="rounded-control bg-white/80 px-3 py-2 text-body-sm text-ink-secondary">
                       高信心答错率：<strong className="text-ink">{calibration.overconfidence_rate == null ? "样本不足" : fmtPct(calibration.overconfidence_rate)}</strong>
                     </p>
                   </div>
@@ -777,16 +777,16 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                 </div>
               )}
               <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-4">
-                <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setPredictions({}); setAttempt(null); setCalibration(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-[8px] bg-brand-600 px-3 py-2 text-body-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
-                <Link href="/tutor" className="rounded-[8px] border border-brand-200 bg-brand-50 px-3 py-2 text-center text-body-sm font-medium text-brand-700">进入分级辅导</Link>
+                <button type="button" disabled={wrongQuestions.length === 0} onClick={() => { setQuiz({ ...quiz, title: `${quiz.title} · 错题重练`, questions: wrongQuestions }); setAnswers({}); setPredictions({}); setAttempt(null); setCalibration(null); setResultFilter("all"); setShowResultDetails(true); }} className="rounded-control bg-brand-600 px-3 py-2 text-body-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">重练本次错题</button>
+                <Link href="/tutor" className="rounded-control border border-brand-200 bg-brand-50 px-3 py-2 text-center text-body-sm font-medium text-brand-700">进入分级辅导</Link>
                 <Link href="/growth" className="px-1 py-2 text-center text-body-sm font-medium text-ink-secondary underline-offset-2 transition-colors hover:text-brand-700 hover:underline">查看成长</Link>
-                <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); setPredictions({}); setCalibration(null); }} className="rounded-[8px] border border-line-strong px-3 py-2 text-body-sm font-medium text-ink-secondary">返回智能练习</button>
+                <button type="button" onClick={() => { setQuiz(null); setAttempt(null); setAnswers({}); setPredictions({}); setCalibration(null); }} className="rounded-control border border-line-strong px-3 py-2 text-body-sm font-medium text-ink-secondary">返回智能练习</button>
               </div>
               <div className="mt-3 border-t border-line pt-3">
                 <p className="text-body-sm font-medium text-ink-secondary">想继续练？可以事后调整</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {adjustmentLabels(recommendation?.adjustments ?? []).map(([value, label]) => (
-                    <button key={value} type="button" onClick={() => startAdjustment(value)} className="rounded-[7px] border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary hover:border-brand-300 hover:text-brand-700">
+                    <button key={value} type="button" onClick={() => startAdjustment(value)} className="rounded-control border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary hover:border-brand-300 hover:text-brand-700">
                       {label}
                     </button>
                   ))}
@@ -794,7 +794,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex gap-1.5" aria-label="筛选答题结果">
-                  {([['all', `全部 ${attempt.total}`], ['wrong', `错题 ${attempt.total - attempt.correct}`], ['correct', `正确 ${attempt.correct}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setResultFilter(value)} className={`rounded-[7px] px-2.5 py-1 text-body-sm font-medium ${resultFilter === value ? "bg-brand-50 text-brand-700" : "text-ink-muted hover:bg-surface-muted"}`}>{label}</button>)}
+                  {([['all', `全部 ${attempt.total}`], ['wrong', `错题 ${attempt.total - attempt.correct}`], ['correct', `正确 ${attempt.correct}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setResultFilter(value)} className={`rounded-control px-2.5 py-1 text-body-sm font-medium ${resultFilter === value ? "bg-brand-50 text-brand-700" : "text-ink-muted hover:bg-surface-muted"}`}>{label}</button>)}
                 </div>
                 <button type="button" onClick={() => setShowResultDetails((value) => !value)} className="text-body-sm font-medium text-brand-700">{showResultDetails ? "收起逐题结果⌃" : "展开逐题结果⌄"}</button>
               </div>
@@ -818,7 +818,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                     className="rounded-overlay border border-line bg-white p-5"
                   >
                     <div className="mb-2 flex items-start justify-between gap-3">
-                      <p className="min-w-0 text-sm leading-relaxed text-slate-800">
+                      <p className="min-w-0 text-sm leading-relaxed text-ink">
                         <span className="mr-1.5 font-semibold text-indigo-600">
                           {i + 1}.
                         </span>
@@ -894,24 +894,24 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                           </svg>
                           {result.correct ? "回答正确" : "回答错误"}
                           {result.llm_score != null && (
-                            <span className="rounded-full bg-white px-2 py-0.5 text-caption font-medium text-slate-500">
+                            <span className="rounded-full bg-white px-2 py-0.5 text-caption font-medium text-ink-muted">
                               AI 评分 {(result.llm_score * 100).toFixed(0)} 分
                             </span>
                           )}
                         </p>
                         {result.scored_reason && (
-                          <div className="mt-1 text-caption text-slate-600">
-                            <span className="font-medium text-slate-500">评分理由：</span>
+                          <div className="mt-1 text-caption text-ink-secondary">
+                            <span className="font-medium text-ink-muted">评分理由：</span>
                             <ModelMarkdown text={result.scored_reason} />
                           </div>
                         )}
-                        <p className="mt-1.5 text-caption text-slate-600">
-                          <span className="font-medium text-slate-500">参考答案：</span>
+                        <p className="mt-1.5 text-caption text-ink-secondary">
+                          <span className="font-medium text-ink-muted">参考答案：</span>
                           <MathText text={result.answer} />
                         </p>
                         {result.explanation && (
-                          <div className="mt-1 text-caption leading-relaxed text-slate-600">
-                            <p className="font-medium text-slate-500">解析：</p>
+                          <div className="mt-1 text-caption leading-relaxed text-ink-secondary">
+                            <p className="font-medium text-ink-muted">解析：</p>
                             <ModelMarkdown text={result.explanation} />
                           </div>
                         )}
@@ -962,12 +962,12 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
             <div className="space-y-2">
               {difficultyReasons.length > 0 && (
                 <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-900">为什么是这套题</h3>
-                  <p className="mt-0.5 text-caption text-slate-500">难度由学情画像按掌握区间自动分档</p>
+                  <h3 className="text-sm font-semibold text-ink">为什么是这套题</h3>
+                  <p className="mt-0.5 text-caption text-ink-muted">难度由学情画像按掌握区间自动分档</p>
                   <ul className="mt-2 space-y-1">
                     {difficultyReasons.map((r) => (
-                      <li key={r.kc_name} className="text-caption leading-relaxed text-slate-600">
-                        <span className="font-medium text-slate-800">{r.kc_name}</span>
+                      <li key={r.kc_name} className="text-caption leading-relaxed text-ink-secondary">
+                        <span className="font-medium text-ink">{r.kc_name}</span>
                         <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">{r.zone}</span>
                         <MathText text={reasonTextOf(r)} />
                       </li>
@@ -991,10 +991,10 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
             </div>
           )}
           {phase === "resuming" && (
-            <p className="flex items-center gap-2 text-sm text-slate-500"><Spinner /> 蓝图已提交，正在生成并校验题目…</p>
+            <p className="flex items-center gap-2 text-sm text-ink-muted"><Spinner /> 蓝图已提交，正在生成并校验题目…</p>
           )}
           {phase === "streaming" && (
-            <p className="flex items-center gap-2 text-sm text-slate-500"><Spinner /> 正在按你的上下文生成练习…</p>
+            <p className="flex items-center gap-2 text-sm text-ink-muted"><Spinner /> 正在按你的上下文生成练习…</p>
           )}
           {phase === "idle" && !notice && !flowError && (
             <EmptyState
@@ -1018,10 +1018,10 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               <section className="rounded-2xl border border-indigo-400 bg-white p-4 shadow-[0_4px_20px_-6px_rgba(79,70,229,0.10)] ring-2 ring-indigo-100">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <h2 className="text-sm font-semibold text-slate-800">
+                    <h2 className="text-sm font-semibold text-ink">
                       验证「{verifyKc}」的掌握度
                     </h2>
-                    <p className="mt-0.5 text-caption text-slate-500">
+                    <p className="mt-0.5 text-caption text-ink-muted">
                       不同意画像？做 {verifyCount} 道该知识点的题，判分结果将作为
                       真实证据重估你的掌握度（与普通练习同一条链路）
                     </p>
@@ -1043,7 +1043,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
             )}
 
             {!fromWeakLink && recommendation && (
-              <section className="rounded-[14px] border border-brand-200 bg-gradient-to-br from-brand-50/80 to-white p-5">
+              <section className="rounded-overlay border border-brand-200 bg-gradient-to-br from-brand-50/80 to-white p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
                     <h2 className="text-[16px] font-semibold text-ink">{recommendation.title}</h2>
@@ -1054,17 +1054,17 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                       type="button"
                       disabled={busy}
                       onClick={() => startRecommended({}, recommendation.title)}
-                      className="flex shrink-0 items-center gap-2 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-brand-800 focus:ring-2 focus:ring-brand-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex shrink-0 items-center gap-2 rounded-control bg-brand-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-brand-800 focus:ring-2 focus:ring-brand-300 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy && <Spinner className="h-4 w-4 border-white/40 border-t-white" />}
                       开始练习{recommendation.question_count ? `（${recommendation.question_count} 题）` : ""}
                     </button>
                   )}
                   {recommendation.action === "review" && (
-                    <Link href="/practice?tab=review" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">去复习</Link>
+                    <Link href="/practice?tab=review" className="shrink-0 rounded-control bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">去复习</Link>
                   )}
                   {recommendation.action === "upload" && (
-                    <Link href="/courses" className="shrink-0 rounded-[8px] bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
+                    <Link href="/courses" className="shrink-0 rounded-control bg-brand-600 px-5 py-2.5 text-sm font-medium text-white">上传资料</Link>
                   )}
                 </div>
                 {recommendation.status === "needs_scope" && (
@@ -1093,7 +1093,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
 
             {/* 画像联动出题（M4-D2）：主按钮 + 将要练的 KC 预览 */}
             {(fromWeakLink || !recommendation) && <section
-              className={`rounded-[14px] border bg-gradient-to-br from-brand-50/80 to-white p-5 ${
+              className={`rounded-overlay border bg-gradient-to-br from-brand-50/80 to-white p-5 ${
                 fromWeakLink
                   ? "border-indigo-400 ring-2 ring-indigo-100"
                   : "border-line"
@@ -1104,7 +1104,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                   <h2 className="text-[16px] font-semibold text-ink">
                     为你推荐的练习
                   </h2>
-                  <p className="mt-0.5 text-caption text-slate-500">
+                  <p className="mt-0.5 text-caption text-ink-muted">
                     {hasWeakPoints
                       ? `根据真实学情画像自动选择知识点（掌握度 < ${weak ? fmtPct(weak.threshold) : "阈值"}，近 7 天错过的优先）`
                       : "还没测过你的水平，先做几道诊断题摸清底子"}
@@ -1114,7 +1114,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                   type="button"
                   disabled={busy}
                   onClick={startWeakQuiz}
-                  className="flex shrink-0 items-center gap-2 rounded-[8px] bg-brand-600 px-5 py-2.5 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex shrink-0 items-center gap-2 rounded-control bg-brand-600 px-5 py-2.5 text-body-sm font-medium text-white transition-colors hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy && (
                     <Spinner className="h-4 w-4 border-white/40 border-t-white" />
@@ -1126,7 +1126,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               {/* A3：多科目学生按科目圈定薄弱点，避免「高数+物理」混卷 */}
               {kbs.length > 1 && (
                 <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                  <span className="text-caption text-slate-400">科目范围</span>
+                  <span className="text-caption text-ink-muted">科目范围</span>
                   {[{ id: "", name: "全部" }, ...kbs.map((k) => ({ id: k.id, name: k.name }))].map(
                     (tab) => {
                       const on = weakKbId === tab.id;
@@ -1139,7 +1139,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                           className={`rounded-full border px-2.5 py-1 text-caption font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                             on
                               ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                              : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                              : "border-line bg-white text-ink-muted hover:border-line-strong"
                           }`}
                         >
                           {tab.name}
@@ -1151,7 +1151,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               )}
 
               {weak === null ? (
-                <p className="mt-3 flex items-center gap-2 text-caption text-slate-400">
+                <p className="mt-3 flex items-center gap-2 text-caption text-ink-muted">
                   <Spinner className="h-3.5 w-3.5" /> 正在读取学情画像…
                 </p>
               ) : !hasWeakPoints ? (
@@ -1160,7 +1160,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                 </p>
               ) : (
                 <div className="mt-3">
-                  <p className="mb-1.5 text-caption text-slate-500">
+                  <p className="mb-1.5 text-caption text-ink-muted">
                     将要练的 {weak.weak_points.length} 个知识点：
                   </p>
                   <ul className="flex flex-wrap gap-1.5">
@@ -1186,14 +1186,14 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                   </ul>
                   {/* 为什么练这些（P1-1）：后端逐 KC 分档理由，与实际难度分布同源 */}
                   {(weak.weak_points as Parts.WeakPointPreview[]).some((wp) => wp.reason_code) && (
-                    <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+                    <ul className="mt-2 space-y-1 border-t border-line pt-2">
                       {(weak.weak_points as Parts.WeakPointPreview[])
                         .filter((wp) => wp.reason_code)
                         .map((wp) => (
-                          <li key={wp.kc_id} className="text-caption leading-relaxed text-slate-600">
-                            <span className="font-medium text-slate-700">{wp.name}</span>
+                          <li key={wp.kc_id} className="text-caption leading-relaxed text-ink-secondary">
+                            <span className="font-medium text-ink-secondary">{wp.name}</span>
                             {wp.zone && (
-                              <span className="mx-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-caption font-medium text-slate-500">
+                              <span className="mx-1 rounded-full bg-surface-muted px-1.5 py-0.5 text-caption font-medium text-ink-muted">
                                 {wp.zone}
                               </span>
                             )}
@@ -1206,7 +1206,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               )}
             </section>}
 
-            <details className="group rounded-[14px] border border-line bg-white" open={Boolean(prefillTopic || prefillKb)}>
+            <details className="group rounded-overlay border border-line bg-white" open={Boolean(prefillTopic || prefillKb)}>
               <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4"><div><h2 className="text-[13px] font-semibold text-ink">自定义练习</h2><p className="mt-0.5 text-body-sm text-ink-muted">自选主题、资料范围和难度，生成一组专属练习</p></div><span className="text-body-sm font-medium text-brand-700 group-open:hidden">展开设置⌄</span><span className="hidden text-body-sm font-medium text-brand-700 group-open:inline">收起设置⌃</span></summary>
               <div className="border-t border-line p-5"><QuizForm key={`${prefillTopic}|${prefillKb}|${prefillQuestionCount ?? ""}|${prefillDifficulty ?? ""}`} kbs={kbs} busy={busy} onSubmit={startQuiz} initialTopic={prefillTopic} initialKbId={prefillKb} initialQuestionCount={prefillQuestionCount} initialDifficulty={prefillDifficulty} /></div>
             </details>
@@ -1216,19 +1216,19 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                 {/* 为什么这套题（P1-1）：随 blueprint interrupt 下发的逐 KC 分档理由 */}
                 {difficultyReasons.length > 0 && (
                   <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
-                    <h3 className="text-sm font-semibold text-slate-900">
+                    <h3 className="text-sm font-semibold text-ink">
                       为什么是这套题
                     </h3>
-                    <p className="mt-0.5 text-caption text-slate-500">
+                    <p className="mt-0.5 text-caption text-ink-muted">
                       难度由学情画像按掌握区间自动分档（可在下方蓝图中调整）
                     </p>
                     <ul className="mt-2 space-y-1">
                       {difficultyReasons.map((r) => (
                         <li
                           key={r.kc_name}
-                          className="text-caption leading-relaxed text-slate-600"
+                          className="text-caption leading-relaxed text-ink-secondary"
                         >
-                          <span className="font-medium text-slate-800">
+                          <span className="font-medium text-ink">
                             {r.kc_name}
                           </span>
                           <span className="mx-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-caption font-medium text-indigo-700">
@@ -1250,7 +1250,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               </div>
             )}
             {phase === "resuming" && (
-              <p className="flex items-center gap-2 text-sm text-slate-500">
+              <p className="flex items-center gap-2 text-sm text-ink-muted">
                 <Spinner /> 蓝图已提交，正在生成并校验题目…
               </p>
             )}
@@ -1266,7 +1266,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               {quizzes === null ? (
                 <SkeletonList rows={4} />
               ) : quizzes.length === 0 ? (
-                <p className="py-4 text-center text-caption text-slate-400">
+                <p className="py-4 text-center text-caption text-ink-muted">
                   还没有练习记录
                 </p>
               ) : (
@@ -1281,7 +1281,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                       >
                         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                           <span className="min-w-40 flex-1 truncate font-medium text-ink"><MathText text={qz.title || "未命名练习"} singleLine /></span>
-                          <span className="shrink-0 text-caption text-slate-400">{fmtDateTime(qz.created_at)}</span>
+                          <span className="shrink-0 text-caption text-ink-muted">{fmtDateTime(qz.created_at)}</span>
                           <span className="shrink-0 text-caption text-ink-muted">{qz.question_count ?? "—"} 题 · {qz.kc_count ?? "—"} 个知识点</span>
                           <span className="shrink-0 text-caption font-medium text-ink-secondary">{qz.score == null ? "未作答" : `正确率 ${Math.round(qz.score * 100)}%`}</span>
                           {qz.evidence_policy === "calibration_only" && <span className="rounded-full bg-warning-50 px-1.5 py-0.5 text-caption font-medium text-warning-700">校准练习</span>}

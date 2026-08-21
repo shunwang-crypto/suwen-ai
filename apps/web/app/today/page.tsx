@@ -85,14 +85,14 @@ function ReviewCountStrip() {
     );
   }
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-line bg-white px-4 py-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-overlay border border-line bg-white px-4 py-3">
       <p className="text-body-sm text-ink-secondary">
         <strong className="text-ink">今日到期 {dueCount} 题</strong>
         <span className="ml-2 text-caption text-ink-muted">按遗忘曲线安排，答对两次即攻克</span>
       </p>
       <Link
         href="/practice/session?mode=review&from=%2Ftoday"
-        className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-ink px-4 text-[13px] font-semibold text-white transition-colors hover:bg-black"
+        className="inline-flex h-9 items-center gap-1.5 rounded-control bg-ink px-4 text-[13px] font-semibold text-white transition-colors hover:bg-black"
       >
         开始复习
         <ArrowIcon />
@@ -165,7 +165,7 @@ export default function TodayPage() {
   if (state.status === "loading") {
     return (
       <div className="mx-auto w-full max-w-[1040px] space-y-5 px-5 py-8 sm:px-8 lg:py-12" aria-busy="true">
-        <div className="h-[300px] animate-pulse rounded-[16px] border border-line bg-white" />
+        <div className="h-[300px] animate-pulse rounded-card border border-line bg-white" />
         <span className="sr-only">正在决定下一步…</span>
       </div>
     );
@@ -175,7 +175,7 @@ export default function TodayPage() {
     return (
       <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-8 sm:px-8 lg:py-12">
         <ErrorBanner message={state.message} onRetry={() => { setState({ status: "loading" }); setReloadKey((key) => key + 1); }} />
-        <Link href="/courses" className="inline-flex rounded-[8px] border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary">先创建一门课程</Link>
+        <Link href="/courses" className="inline-flex rounded-control border border-line-strong bg-white px-4 py-2 text-body-sm font-medium text-ink-secondary">先创建一门课程</Link>
       </div>
     );
   }
@@ -183,13 +183,13 @@ export default function TodayPage() {
   if (state.status === "empty") {
     return (
       <div className="mx-auto w-full max-w-[1040px] px-5 py-8 sm:px-8 lg:py-12">
-        <section className="rounded-[16px] border border-line bg-white px-7 py-14 text-center">
+        <section className="rounded-card border border-line bg-white px-7 py-14 text-center">
           <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">从你的资料开始</p>
           <h2 className="mt-3 text-[24px] font-semibold tracking-[-0.035em] text-ink">先建立一个学习空间</h2>
           <p className="mx-auto mt-2 max-w-lg text-[13px] leading-6 text-ink-secondary">上传教材、讲义、试卷或作业后，苏问才能基于真实资料安排学习。</p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-            <Link href="/courses" className="inline-flex h-10 items-center rounded-[8px] bg-ink px-5 text-[13px] font-semibold text-white">上传资料开始</Link>
-            <Link href="/plans?create=1&mode=goal_only" className="inline-flex h-10 items-center rounded-[8px] border border-line-strong bg-white px-5 text-[13px] font-semibold text-ink-secondary">暂时没有资料，先制定计划</Link>
+            <Link href="/courses" className="inline-flex h-10 items-center rounded-control bg-ink px-5 text-[13px] font-semibold text-white">上传资料开始</Link>
+            <Link href="/plans?create=1&mode=goal_only" className="inline-flex h-10 items-center rounded-control border border-line-strong bg-white px-5 text-[13px] font-semibold text-ink-secondary">暂时没有资料，先制定计划</Link>
           </div>
         </section>
       </div>
@@ -204,7 +204,7 @@ export default function TodayPage() {
         <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.04em] text-ink">现在只做这一件事</h2>
       </header>
 
-      <section className="overflow-hidden rounded-[16px] border border-line bg-white shadow-card">
+      <section className="overflow-hidden rounded-card border border-line bg-white shadow-card">
         <div className="p-6 sm:p-8">
           <span className="inline-flex rounded-full bg-brand-50 px-2.5 py-1 text-caption font-semibold text-brand-700">
             {ACTION_LABELS[primary.type] ?? "下一步"}
@@ -215,7 +215,7 @@ export default function TodayPage() {
           <div className="mt-2 max-w-2xl text-[13px] leading-6 text-ink-secondary">
             <MathText text={reasonTextOf(primary)} />
           </div>
-          <Link href={focusActionHref(primary.href)} className="mt-7 inline-flex h-11 items-center gap-2 rounded-[9px] bg-ink px-5 text-[13px] font-semibold text-white transition-colors hover:bg-black">
+          <Link href={focusActionHref(primary.href)} className="mt-7 inline-flex h-11 items-center gap-2 rounded-control bg-ink px-5 text-[13px] font-semibold text-white transition-colors hover:bg-black">
             开始这一项
             <ArrowIcon />
           </Link>

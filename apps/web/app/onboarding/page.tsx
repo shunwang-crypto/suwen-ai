@@ -26,8 +26,8 @@ export default function OnboardingPage() {
           </p>
 
           <div className="mt-8 grid gap-4 md:grid-cols-2">
-            <Link href="/courses" className="group rounded-[8px] border border-line-strong bg-white p-6 shadow-subtle transition-colors hover:border-brand-400">
-              <span className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-brand-50 text-brand-700">
+            <Link href="/courses" className="group rounded-control border border-line-strong bg-white p-6 shadow-subtle transition-colors hover:border-brand-400">
+              <span className="flex h-10 w-10 items-center justify-center rounded-control bg-brand-50 text-brand-700">
                 <FileUp size={20} aria-hidden />
               </span>
               <h2 className="mt-5 text-[18px] font-semibold text-ink group-hover:text-brand-700">上传资料开始</h2>
@@ -35,8 +35,8 @@ export default function OnboardingPage() {
               <span className="mt-5 inline-flex items-center gap-2 text-body-sm font-semibold text-brand-700">进入课程资料 <BookOpen size={16} aria-hidden /></span>
             </Link>
 
-            <Link href="/plans?create=1&mode=goal_only" className="group rounded-[8px] border border-line-strong bg-white p-6 shadow-subtle transition-colors hover:border-warning-400">
-              <span className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-warning-50 text-warning-700">
+            <Link href="/plans?create=1&mode=goal_only" className="group rounded-control border border-line-strong bg-white p-6 shadow-subtle transition-colors hover:border-warning-400">
+              <span className="flex h-10 w-10 items-center justify-center rounded-control bg-warning-50 text-warning-700">
                 <BookOpen size={20} aria-hidden />
               </span>
               <h2 className="mt-5 text-[18px] font-semibold text-ink group-hover:text-warning-800">暂时没有资料，先制定计划</h2>

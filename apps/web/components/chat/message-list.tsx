@@ -106,10 +106,10 @@ export function MessageList(props: MessageListProps) {
               A
             </span>
             <div>
-              <h2 className="text-2xl font-bold leading-8 text-slate-900">
+              <h2 className="text-2xl font-bold leading-8 text-ink">
                 今天想从哪里开始？
               </h2>
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-ink-muted">
                 可以直接提问，也可以从系统根据学习状态整理的下一步开始。
               </p>
             </div>
@@ -120,7 +120,7 @@ export function MessageList(props: MessageListProps) {
                   type="button"
                   onClick={() => void send(q)}
                   style={{ "--fx-delay": `${120 + i * 90}ms` } as CSSProperties}
-                  className="fx-chip-in rounded-control border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 transition-colors hover:border-brand-300 hover:text-brand-700"
+                  className="fx-chip-in rounded-control border border-line bg-white px-3 py-1.5 text-xs text-ink-muted transition-colors hover:border-brand-300 hover:text-brand-700"
                 >
                   {q}
                 </button>
@@ -131,13 +131,13 @@ export function MessageList(props: MessageListProps) {
           messages.map((m) =>
             m.role === "user" ? (
               <div key={m.id} className="fx-msg-in flex justify-end">
-                <div className="max-w-[85%] rounded-control bg-brand-50 px-3.5 py-2.5 text-sm leading-[22px] text-slate-900">
+                <div className="max-w-[85%] rounded-control bg-brand-50 px-3.5 py-2.5 text-sm leading-[22px] text-ink">
                   {m.attachments && m.attachments.length > 0 && (
                     <div className="mb-2 flex flex-wrap justify-end gap-1.5">
                       {m.attachments.map((attachment) => (
                         <span
                           key={attachment.id}
-                          className="inline-flex max-w-56 items-center gap-1.5 rounded-[7px] border border-brand-100 bg-white/80 px-2 py-1 text-body-sm text-ink-secondary"
+                          className="inline-flex max-w-56 items-center gap-1.5 rounded-control border border-brand-100 bg-white/80 px-2 py-1 text-body-sm text-ink-secondary"
                           title={attachment.filename}
                         >
                           <span aria-hidden>
@@ -218,7 +218,7 @@ export function MessageList(props: MessageListProps) {
 
                   {(m.content || m.streaming) && (
                     <div
-                      className={`text-sm leading-[1.75] text-slate-800 ${
+                      className={`text-sm leading-[1.75] text-ink ${
                         m.done?.refused
                           ? "rounded-control border border-amber-200 bg-amber-50/50 px-3.5 py-3"
                           : ""
@@ -242,7 +242,7 @@ export function MessageList(props: MessageListProps) {
                           )}
                         </>
                       ) : m.timeline.length === 0 ? (
-                        <span className="inline-flex items-center gap-2 text-slate-400">
+                        <span className="inline-flex items-center gap-2 text-ink-muted">
                           {/* 首 token 前的「正在思考」三点跳动指示器 */}
                           <span className="fx-typing" aria-hidden>
                             <span />
@@ -308,7 +308,7 @@ export function MessageList(props: MessageListProps) {
                                 "--fx-delay": `${qi * 80}ms`,
                               } as CSSProperties
                             }
-                            className="fx-chip-in rounded-control border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 transition-colors hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="fx-chip-in rounded-control border border-line bg-white px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <MathText text={q} />
                           </button>
@@ -364,7 +364,7 @@ export function MessageList(props: MessageListProps) {
                   )}
 
                   {!m.streaming && m.done && !m.errorText && (
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
                       <span
                         className="h-2 w-2 shrink-0 rounded-full bg-sky-500"
                         aria-hidden
@@ -396,7 +396,7 @@ export function MessageList(props: MessageListProps) {
                           已参考学情画像
                         </span>
                       )}
-                      <span className="mx-1 h-3 w-px bg-slate-200" aria-hidden />
+                      <span className="mx-1 h-3 w-px bg-surface-muted" aria-hidden />
                       <button
                         type="button"
                         aria-label="讲得好"
@@ -405,7 +405,7 @@ export function MessageList(props: MessageListProps) {
                         className={`rounded-full px-2 py-0.5 transition-colors ${
                           m.rating === "good"
                             ? "bg-emerald-50 text-emerald-600"
-                            : "text-slate-400 hover:bg-surface-muted hover:text-ink-secondary"
+                            : "text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
                         }`}
                       >
                         👍 讲得好
@@ -422,7 +422,7 @@ export function MessageList(props: MessageListProps) {
                         className={`rounded-full px-2 py-0.5 transition-colors ${
                           m.rating === "bad"
                             ? "bg-amber-50 text-amber-600"
-                            : "text-slate-400 hover:bg-surface-muted hover:text-ink-secondary"
+                            : "text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
                         }`}
                       >
                         👎 讲得不好
@@ -449,7 +449,7 @@ export function MessageList(props: MessageListProps) {
                           className={`rounded-full border px-2.5 py-1 transition-colors ${
                             m.ratingReason === option.value
                               ? "border-amber-300 bg-amber-50 text-amber-700"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-amber-200 hover:text-amber-700"
+                              : "border-line bg-white text-ink-secondary hover:border-amber-200 hover:text-amber-700"
                           }`}
                         >
                           {option.label}

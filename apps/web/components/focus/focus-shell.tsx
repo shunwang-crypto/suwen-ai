@@ -64,7 +64,7 @@ export function FocusShell({
   return (
     <FocusSessionContext.Provider value={handle}>
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas">
-        <header className="flex h-12 shrink-0 items-center gap-4 border-b border-line bg-[#f7f6f4] px-4 sm:px-6">
+        <header className="flex h-12 shrink-0 items-center gap-4 border-b border-line bg-canvas px-4 sm:px-6">
           <div className="min-w-0 flex-1">
             {progress ? (
               <>
@@ -93,7 +93,7 @@ export function FocusShell({
           <button
             type="button"
             onClick={exit}
-            className="shrink-0 rounded-[8px] border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
+            className="shrink-0 rounded-control border border-line-strong bg-white px-3 py-1.5 text-body-sm font-medium text-ink-secondary transition-colors hover:border-ink-muted hover:text-ink"
           >
             退出
           </button>

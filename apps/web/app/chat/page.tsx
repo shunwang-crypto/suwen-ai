@@ -668,7 +668,7 @@ function ChatView() {
           <button
             type="button"
             aria-label="关闭会话列表"
-            className="absolute inset-0 bg-slate-900/40"
+            className="absolute inset-0 bg-ink/40"
             onClick={() => setSessionsOpen(false)}
           />
           <div className="absolute inset-y-0 left-0 w-72 bg-white shadow-xl">
@@ -764,8 +764,8 @@ function ChatView() {
       {/* 右：引用面板（桌面）—— 用户点击引用后才打开 */}
       {citationsOpen && panelCitations.length > 0 && (
       <aside className="hidden w-[318px] shrink-0 flex-col border-l border-line bg-white xl:flex">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-100 px-4">
-          <h2 className="text-base font-medium text-slate-900">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
+          <h2 className="text-base font-medium text-ink">
             {citationsPanelTitle}
             {panelCitations.length > 0 && (
               <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-brand-50 px-1.5 py-0.5 text-xs font-normal text-brand-700">
@@ -776,7 +776,7 @@ function ChatView() {
           <button
             type="button"
             onClick={() => setCitationsOpen(false)}
-            className="rounded-[7px] p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-control p-1.5 text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
             aria-label="关闭引用面板"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="h-4 w-4" aria-hidden>
@@ -794,16 +794,16 @@ function ChatView() {
           <button
             type="button"
             aria-label="关闭引用面板"
-            className="absolute inset-0 bg-slate-900/40"
+            className="absolute inset-0 bg-ink/40"
             onClick={() => setCitationsOpen(false)}
           />
           <div className="absolute inset-y-0 right-0 flex w-80 max-w-[85vw] flex-col bg-white shadow-xl">
-            <div className="flex h-11 shrink-0 items-center justify-between border-b border-slate-100 px-4">
-              <h2 className="text-sm font-semibold text-slate-800">{citationsPanelTitle}</h2>
+            <div className="flex h-11 shrink-0 items-center justify-between border-b border-line px-4">
+              <h2 className="text-sm font-semibold text-ink">{citationsPanelTitle}</h2>
               <button
                 type="button"
                 onClick={() => setCitationsOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-ink-muted hover:text-ink-secondary"
                 aria-label="关闭"
               >
                 ✕
@@ -830,7 +830,7 @@ export default function ChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex h-full items-center justify-center text-sm text-slate-400">
+        <div className="flex h-full items-center justify-center text-sm text-ink-muted">
           对话加载中…
         </div>
       }

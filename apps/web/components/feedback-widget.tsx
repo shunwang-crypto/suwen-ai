@@ -60,34 +60,34 @@ function MyFeedbackList() {
   const error = listRes.error;
 
   if (items === null) {
-    return <p className="py-4 text-center text-xs text-slate-400">加载中…</p>;
+    return <p className="py-4 text-center text-xs text-ink-muted">加载中…</p>;
   }
   if (error) {
     return <p className="py-4 text-center text-xs text-red-500">{error}</p>;
   }
   if (items.length === 0) {
-    return <p className="py-4 text-center text-xs text-slate-400">还没有提交过反馈</p>;
+    return <p className="py-4 text-center text-xs text-ink-muted">还没有提交过反馈</p>;
   }
   return (
     <ul className="max-h-64 space-y-2 overflow-y-auto pr-1">
       {items.map((it) => (
-        <li key={it.id} className="rounded-xl border border-slate-200 px-3 py-2">
+        <li key={it.id} className="rounded-xl border border-line px-3 py-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-slate-700">
+            <span className="text-xs font-medium text-ink-secondary">
               {FEEDBACK_CATEGORY_LABELS[it.category as FeedbackCategory] ?? it.category}
             </span>
             <span
               className={`rounded-full px-2 py-0.5 text-caption font-medium ${
                 it.status === "closed"
-                  ? "bg-slate-100 text-slate-500"
+                  ? "bg-surface-muted text-ink-muted"
                   : "bg-amber-50 text-amber-700"
               }`}
             >
               {STATUS_LABELS[it.status] ?? it.status}
             </span>
           </div>
-          <p className="mt-1 break-words text-xs text-slate-600">{it.content}</p>
-          <p className="mt-1 text-caption text-slate-400">
+          <p className="mt-1 break-words text-xs text-ink-secondary">{it.content}</p>
+          <p className="mt-1 text-caption text-ink-muted">
             {new Date(it.created_at).toLocaleString("zh-CN")}
             {it.page_url && ` · ${it.page_url}`}
           </p>
@@ -163,9 +163,9 @@ export function FeedbackWidget() {
       </button>
 
       {open && (
-        <div className={`fixed right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:bottom-20 sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))] ${pathname === "/chat" ? "bottom-44" : "bottom-16"}`}>
+        <div className={`fixed right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-line bg-white p-4 shadow-xl sm:bottom-20 sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))] ${pathname === "/chat" ? "bottom-44" : "bottom-16"}`}>
           <div className="mb-3 flex items-center justify-between">
-            <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+            <div className="flex gap-1 rounded-xl bg-surface-muted p-1">
               {(
                 [
                   ["submit", "提交反馈"],
@@ -179,7 +179,7 @@ export function FeedbackWidget() {
                   className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
                     tab === key
                       ? "bg-white text-indigo-700 shadow-sm"
-                      : "text-slate-500 hover:text-slate-700"
+                      : "text-ink-muted hover:text-ink-secondary"
                   }`}
                 >
                   {label}
@@ -190,7 +190,7 @@ export function FeedbackWidget() {
               type="button"
               onClick={() => setOpen(false)}
               aria-label="关闭反馈弹窗"
-              className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              className="rounded-lg p-1 text-ink-muted hover:bg-surface-muted hover:text-ink-secondary"
             >
               ✕
             </button>
@@ -201,13 +201,13 @@ export function FeedbackWidget() {
           ) : done ? (
             <div className="py-6 text-center">
               <p className="text-sm font-semibold text-emerald-700">已收到你的反馈</p>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-ink-muted">
                 我们会尽快处理；进展可在「我的反馈」中查看。
               </p>
               <button
                 type="button"
                 onClick={() => setDone(false)}
-                className="mt-3 rounded-xl border border-slate-300 px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                className="mt-3 rounded-xl border border-line-strong px-3.5 py-1.5 text-xs font-medium text-ink-secondary hover:bg-surface-muted"
               >
                 再提一条
               </button>
@@ -225,7 +225,7 @@ export function FeedbackWidget() {
                       className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
                         category === key
                           ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                          : "border-slate-200 text-slate-500 hover:border-slate-300"
+                          : "border-line text-ink-muted hover:border-line-strong"
                       }`}
                     >
                       {FEEDBACK_CATEGORY_LABELS[key]}
@@ -239,11 +239,11 @@ export function FeedbackWidget() {
                 rows={4}
                 maxLength={4000}
                 placeholder="描述你遇到的问题（如 AI 答错了什么、哪里点不动）…"
-                className="w-full resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                className="w-full resize-none rounded-xl border border-line-strong px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
               />
               {error && <p className="text-xs text-red-600">{error}</p>}
               <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-caption text-slate-400">
+                <p className="min-w-0 truncate text-caption text-ink-muted">
                   将附带页面路径{lastRequestId ? "与最近请求 ID" : ""}，便于排查
                 </p>
                 <button
