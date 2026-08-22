@@ -2,7 +2,7 @@
 
 覆盖:
 - compose_next_actions 优先级 review > resume_insight > weak_practice > plan_task, ≤5 条;
-- 冷启动兜底: 四类全空给「摸底测评」「制定计划」两条 (话术对齐 reports.py fallback);
+- 冷启动兜底: 四类全空且已有可练课程时给摸底；完全无资料时返回空列表;
 - 理由脱敏 (P2-7): 全部条目无掌握度小数, weak_practice 只用 zone 定性词;
 - resume_insight 分流: confused 链 /chat?q= 续问 (带学生原话), misconception 链 /tutor;
 - plan_today_snapshot: 截至今天的未完成任务口径 (含日程号缺失/全完成/未来任务)。
@@ -121,6 +121,17 @@ def test_cold_start_fallback_matches_reports_wording():
     assert [it["href"] for it in items] == ["/quiz"]
     assert "摸底" in items[0]["title"]
     assert "真实作答证据" in items[0]["reason"]
+
+
+def test_no_material_does_not_offer_a_dead_diagnostic_link():
+    items = compose_next_actions(
+        due_count=0,
+        insight=None,
+        weak_points=[],
+        plan=None,
+        can_start_diagnostic=False,
+    )
+    assert items == []
 
 
 def test_no_fallback_when_any_category_present():

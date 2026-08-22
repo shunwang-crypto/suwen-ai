@@ -239,6 +239,7 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
         ctx.tenant_id,
         [k for it in items for k in it["question"]["kc_ids"]],
         redis=request.app.state.redis,
+        org_ids=ctx.org_ids,
     )
     for it in items:
         info = next((meta[k] for k in it["question"]["kc_ids"] if k in meta), None)

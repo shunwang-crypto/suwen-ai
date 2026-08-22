@@ -155,7 +155,10 @@ async def invalidate_profile_summary_cache(redis, user_id: uuid.UUID | str) -> i
 
 
 async def _load_snapshot(
-    tenant_id: uuid.UUID | str, user_id: uuid.UUID | str, kb_ids: list[str]
+    tenant_id: uuid.UUID | str,
+    user_id: uuid.UUID | str,
+    kb_ids: list[str],
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> tuple[list[tuple[str, str, float, str]], list[str], Counter, dict | None]:
     """一次事务读齐: (掌握度行含 evidence_state, 最近错题 KC 名, 近期错因计数, 偏好)。
 
@@ -164,7 +167,7 @@ async def _load_snapshot(
     知识库无关, 不参与 kb 过滤。
     """
     uid = uuid.UUID(str(user_id))
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         rows = (
             await session.execute(
                 select(
@@ -352,6 +355,7 @@ async def build_profile_context(
     kb_ids=(),
     redis=None,
     role: str = "qa",
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> ProfileContext:
     """Build the minimal profile slice for a model feature.
 
@@ -375,7 +379,9 @@ async def build_profile_context(
                 )
         except Exception:  # noqa: BLE001 — 缓存故障一律回源, 不阻塞问答
             log.warning("profile_summary_cache_get_failed", user_id=str(user_id))
-    mastery, error_names, causes, prefs = await _load_snapshot(tenant_id, user_id, ids)
+    mastery, error_names, causes, prefs = await _load_snapshot(
+        tenant_id, user_id, ids, org_ids=org_ids
+    )
     if prefs is not None and not prefs.get("personalization_enabled", True):
         # 0031 总开关: 关闭 = 画像层整体停用 (摘要为空, 前端/下游按 empty 分支走)。
         # 豁免清单 (永不受此开关影响): 未成年判定、内容审核、掌握度计算 —
@@ -494,6 +500,7 @@ async def problem_mastery_band(
     user_id: uuid.UUID | str,
     problem: str,
     kb_ids=(),
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> str:
     """题目文本命中的 KC 的掌握度档 (weak/reinforce/near/mastered), 无命中返回 ""。
 
@@ -509,7 +516,7 @@ async def problem_mastery_band(
         return ""
     uid = uuid.UUID(str(user_id))
     ids = _norm_ids(kb_ids)
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         stmt = (
             select(
                 KnowledgeComponent.canonical_name,
@@ -549,6 +556,7 @@ async def weak_point_kcs(
     kb_ids=(),
     threshold: float = QUIZ_WEAK_THRESHOLD,
     limit: int = QUIZ_WEAK_TOP,
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> list[dict]:
     """定向出题的薄弱 KC: p<threshold, 近 7 天有错题者优先, 其余按 p 升序, 取 top limit。
 
@@ -556,7 +564,7 @@ async def weak_point_kcs(
     reason 是逐 KC 的难度分档与定性理由 (difficulty_rationale, P1-1 可解释出题)。
     无薄弱点返回空列表 (调用方须显式提示, 不得静默降级成普通出题)。
     """
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         return await _load_weak_point_candidates(
             session,
             tenant_id=tenant_id,
@@ -688,6 +696,7 @@ async def assessment_mode_kcs(
     user_id: uuid.UUID | str,
     kb_ids=(),
     limit: int = QUIZ_WEAK_TOP,
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> list[dict]:
     """证据不足时的诊断出题目标 (§5.3 / §15 Assessment Mode)。
 
@@ -699,7 +708,7 @@ async def assessment_mode_kcs(
     """
     uid = uuid.UUID(str(user_id))
     ids = _norm_ids(kb_ids)
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         stmt = (
             select(
                 KnowledgeComponent.id,
@@ -766,6 +775,7 @@ async def assessment_mode_kcs(
 async def has_any_kc(
     tenant_id: uuid.UUID | str,
     kb_ids=(),
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> bool:
     """作用域内是否存在任何 KC。
 
@@ -773,7 +783,7 @@ async def has_any_kc(
     (成功状态, 无题可出)。二者对用户的含义相反, 合并成一个错误码会把文案说反。
     """
     ids = _norm_ids(kb_ids)
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         stmt = select(func.count()).select_from(KnowledgeComponent)
         if ids:
             stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(i) for i in ids]))

@@ -377,6 +377,7 @@ async def complete_plan_task(
             "changed": False,
             "completion": previous,
             "progress": plan_progress(plan.structure_json),
+            "plan_status": plan.status,
         }
     if plan.status != "active":
         raise PlanTaskAttributionError("PLAN_NOT_ACTIVE")
@@ -405,6 +406,7 @@ async def complete_plan_task(
         "changed": True,
         "completion": completion,
         "progress": plan_progress(new_structure),
+        "plan_status": plan.status,
     }
 
 
@@ -474,6 +476,8 @@ async def _weak_kcs(
                 MasteryRecord.user_id == user_id,
                 MasteryRecord.p_mastery < REINFORCE_THRESHOLD,
                 KnowledgeComponent.kb_id == kb_id,
+                KnowledgeComponent.superseded_by_id.is_(None),
+                KnowledgeComponent.source_kind != "chapter_fallback",
             )
             .group_by(MasteryRecord.kc_id, KnowledgeComponent.canonical_name, MasteryRecord.p_mastery)
             .order_by(MasteryRecord.p_mastery.asc())

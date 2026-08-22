@@ -1,12 +1,11 @@
 "use client";
 
 // 课程工作区·资料 tab（UI 重构阶段 5 自 /materials 选中库视图迁入，剔除学习指南——
-// 指南独占「指南」tab）：问这门课入口（取代原 对话/辅导/练习 三跳转按钮）+ 学习资料卡
+// 指南独占「指南」tab）：学习资料卡
 // （上传两阶段摄取/文档表/重建索引/删除）+ 信息 aside（检索调试折叠）+ 题目资料库 +
 // 分块预览抽屉。机构库成员只读表现与原页一致。
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 
 import {
   Card,
@@ -118,7 +117,9 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
   // 两阶段状态机轮询：存在处理中的文档时每 2s 静默刷新
   const pollingRef = useRef(false);
   useEffect(() => {
-    const active = Boolean(docs?.some((d) => isDocActive(d.status)));
+    const active = Boolean(
+      docs?.some((d) => isDocActive(d.status, d.recognition_meta_json)),
+    );
     if (docsKbId !== selectedId || !active) return;
     const timer = setInterval(() => {
       if (pollingRef.current) return;
@@ -199,8 +200,8 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
   };
 
   // T0-1: 重新触发知识增强。增强失败时文档停在「可检索」并带 error_msg；此处调用真实端点
-  // re-enrich（只清 error_msg + 重新入队 enrich_document，不删分块、不重置 status），成功后
-  // 文档进入「知识增强中」，isDocActive → 轮询自动恢复，无需用户手动刷新。
+  // re-enrich 保留旧版本可用；enriched 文档用 recognition_meta_json 的 claim 标记刷新中，
+  // 由轮询持续观察直到 worker 清除 claim，不依赖 status 是否暂时仍为 enriched。
   const reEnrichDoc = async (doc: DocumentOut) => {
     setBusyDocId(doc.id);
     setBanner(null);
@@ -248,20 +249,6 @@ export function CourseMaterialsTab({ kb }: { kb: KbOut }) {
   return (
     <div className="space-y-4">
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
-
-      {/* 入口（阶段 5）：原 对话/分级辅导/智能练习 三跳转按钮收敛为「问这门课」单入口 */}
-      <section className="flex flex-wrap items-center justify-between gap-4 rounded-overlay border border-line bg-surface-muted px-5 py-4">
-        <div>
-          <h2 className="text-[13px] font-semibold text-ink">用这门课开始学习</h2>
-          <p className="mt-1 text-caption text-ink-secondary">AI 只会引用这里的真实资料和来源；辅导与练习沿用课程范围。</p>
-        </div>
-        <Link
-          href={`/chat?new=1&kb=${encodeURIComponent(selectedId)}`}
-          className="rounded-control bg-brand-600 px-3.5 py-2 text-body-sm font-medium text-white transition-colors hover:bg-brand-800"
-        >
-          问这门课
-        </Link>
-      </section>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_230px] lg:items-start">
         <Card title={`学习资料 · ${docs?.length ?? 0}`} extra={kb.owner_type === "org" ? <span className="text-caption text-ink-muted">{kb.org_name ?? "机构"} · {kb.writable ? "可管理" : "成员只读"}</span> : undefined}>

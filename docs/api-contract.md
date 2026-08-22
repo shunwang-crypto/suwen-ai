@@ -145,6 +145,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | GET | /api/kb/{id}/documents | 文档列表（含两阶段状态机 status/error_msg） |
 | DELETE | /api/kb/{id}/documents/{doc} | 删除文档并异步清理向量与对象 |
 | POST | /api/kb/{id}/documents/{doc}/reindex | 重新摄取 |
+| POST | /api/kb/{id}/documents/{doc}/re-enrich | 重新触发知识增强；返回 `{status: queued|already_running, job_id?}`。任务绑定提交时的 `Document.version` 与 job claim；重建索引或删除资料会使旧任务失效。已增强文档采用 stale-while-revalidate，刷新失败仍保留旧内容 |
 | GET | /api/kb/{id}/documents/{doc}/chunks | 分块预览器（text/页码/heading_path/向量化状态） |
 | POST | /api/kb/{id}/debug/retrieve | 检索调试面板：dense/sparse 命中、融合重排、置信度全透明 |
 | GET | /api/kb/{id}/kc-graph | 课程知识图（Learning Map full 模式，只读派生，不落新表）：该库全部存活 KC + 全部 `prerequisite` 边 + 按章聚合 + 本人证据档。节点带 `kc_id/kc_name/chapter/evidence_state/evidence_state_label/band`；**`band` 定性档只在 `evidence_state=observed` 时给出**（未观测/估计中不叙述成薄弱或已掌握），全程不出 `p_mastery`/百分比。章序按 `chapter_sort_key`，节点序 `(created_at, id)`（确定性可重复，同批 enrich 内不等于插入序）；被 `superseded_by_id` 归并的 KC 及其边不出境；他人库 404 |
@@ -215,6 +216,8 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   `/api/practice/next` 与出题蓝图的逐 KC 理由（`difficulty_reasons[].reason_code`）。
   例外：`/api/plans/{id}/adjust` 与 `adjustments` 的 `reason` 仍是中文散文——它是落库的
   审计事实，历史行无法反解为码。
+- `POST /api/plans/{id}/re-anchor` 返回 `{anchored: number}`；该值表示本次成功建立的
+  临时计划概念正式 KC 显示锚点数量，不会把临时概念纳入 BKT、掌握度、证据或推荐链路。
 - `POST /api/profile/answer-ratings` `{message_id?, rating: good|bad, reason?
   (too_long|too_short|confusing|off_topic), weak_points?[], profile_used}`：回答级评价遥测
   （独立于 0004 工单 feedback）；`(user_id, message_id)` 唯一，改主意为 UPDATE；提交后内联

@@ -59,13 +59,24 @@ export function useApiResource<T>(
   const epochRef = useRef(createRequestEpoch());
 
   const reload = useCallback(() => {
-    setBusy(true);
+    if (active) setBusy(true);
     setReloadKey((key) => key + 1);
-  }, []);
+  }, [active]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- request scope changes must synchronously enter loading/idle and retire stale snapshots */
   useEffect(() => {
-    if (!active || path == null) return;
     const epoch = epochRef.current;
+    // A disabled/null path is itself a scope transition. Retire every request
+    // from the previous scope and expose the documented idle state instead of
+    // leaving stale data/error (or loading=true) visible to the next consumer.
+    if (!active || path == null) {
+      epoch.invalidate();
+      setData(null);
+      setError(null);
+      setBusy(false);
+      return;
+    }
+    setBusy(true);
     const token = epoch.begin();
     void (async () => {
       try {
@@ -86,6 +97,7 @@ export function useApiResource<T>(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deps 由调用方声明为重载触发器
   }, [path, active, reloadKey, errorMessage, ...deps]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return { data, error, loading: active && busy, reload, setData };
 }

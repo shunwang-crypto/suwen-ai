@@ -184,6 +184,8 @@ export interface PlanToggleResult {
   task_id: string;
   status: "pending" | "done" | "skipped";
   progress: PlanProgress;
+  /** 当前计划最终状态；最后一个任务完成时会变为 completed。 */
+  plan_status: "active" | "completed" | "archived";
   completed?: boolean;
   changed?: boolean;
   completion?: { source_type: string; source_id: string; completed_at: string };

@@ -4,7 +4,7 @@
 - GET /api/next-actions: 断言 F8-A2 —— 响应含引用历史卡点的 resume_insight 条目
   (标题点名『导数定义』, 理由带学生原话), review 置顶且计数与到期错题一致,
   weak_practice 理由用定性词 (P2-7: 无掌握度小数), plan_task 收尾, 共 ≤5 条;
-- 冷启动: 全新用户拿到「摸底测评」「制定计划」两条兜底;
+- 冷启动: 全新无资料用户返回空行动，让今日页展示上传/目标计划双入口;
 - 本人隔离: 他人的记忆条目不会进我的开场卡。
 
 真实 PG/Redis, stub 网关 (聚合本身零 LLM)。跑法:
@@ -204,13 +204,12 @@ async def test_next_actions_reference_history_stuck_point(client):
 # ---- 冷启动兜底 ----
 
 
-async def test_cold_start_gives_one_primary_action(client):
+async def test_no_material_returns_no_action(client):
     _user_id, headers = await _register_login(client, "na-cold")
     r = await client.get("/api/next-actions", headers=headers)
     assert r.status_code == 200
     items = r.json()["items"]
-    assert [it["type"] for it in items] == ["cold_start"]
-    assert "摸底练习" in items[0]["title"] and items[0]["href"] == "/quiz"
+    assert items == []
 
 
 # ---- 本人隔离: 他人卡点不进我的开场卡 ----
@@ -224,6 +223,6 @@ async def test_other_users_insights_not_leaked(client):
     r = await client.get("/api/next-actions", headers=other_headers)
     assert r.status_code == 200
     items = r.json()["items"]
-    # 他人只该看到冷启动兜底, 绝不该看到 owner 的卡点/错题/计划
-    assert [it["type"] for it in items] == ["cold_start"]
+    # 他人没有自己的资料时只该看到空行动, 绝不该看到 owner 的卡点/错题/计划
+    assert items == []
     assert _EVIDENCE not in str(items)

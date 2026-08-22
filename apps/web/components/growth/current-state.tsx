@@ -223,7 +223,7 @@ function fmtPair(oldP: number, newP: number): [string, string] {
 interface ChapterGroup {
   key: string;
   name: string;
-  mean: number;
+  mean: number | null;
   weakCount: number;
   items: MasteryWithMeta[];
 }
@@ -240,7 +240,9 @@ const masteryValue = (m: MasteryWithMeta) => m.p_mastery ?? 0;
 const isWeak = (m: MasteryWithMeta, weakThreshold: number) => m.evidence_state === "observed" && m.p_mastery != null && m.p_mastery < weakThreshold;
 /** 「到期」口径：FSRS 3 天后保持率有值且低于 90%（与遗忘快照展示阈值一致）。 */
 const isDue = (m: MasteryWithMeta) =>
-  m.retention_in_3d != null && m.retention_in_3d < RETENTION_SHOW_BELOW;
+  m.evidence_state === "observed" &&
+  m.retention_in_3d != null &&
+  m.retention_in_3d < RETENTION_SHOW_BELOW;
 
 /** 名称/别名本地搜索（q 已 trim + 小写）。 */
 function matchesQuery(m: MasteryWithMeta, q: string): boolean {
@@ -263,7 +265,7 @@ function buildTree(items: MasteryWithMeta[], weakThreshold: number): SubjectGrou
     const cName = m.chapter ?? "未分章";
     let c = g.chapters.find((x) => x.name === cName);
     if (!c) {
-      c = { key: `${sName}⟂${cName}`, name: cName, mean: 0, weakCount: 0, items: [] };
+      c = { key: `${sName}⟂${cName}`, name: cName, mean: null, weakCount: 0, items: [] };
       g.chapters.push(c);
     }
     c.items.push(m);
@@ -276,7 +278,9 @@ function buildTree(items: MasteryWithMeta[], weakThreshold: number): SubjectGrou
   for (const g of groups) {
     for (const c of g.chapters) {
       const observed = c.items.filter((item) => item.evidence_state === "observed" && item.p_mastery != null);
-      c.mean = observed.length ? observed.reduce((sum, item) => sum + masteryValue(item), 0) / observed.length : 0;
+      c.mean = observed.length
+        ? observed.reduce((sum, item) => sum + masteryValue(item), 0) / observed.length
+        : null;
     }
   }
   return groups;
@@ -291,6 +295,7 @@ function MasteryRow({ item, weakThreshold }: {
   weakThreshold: number;
 }) {
   const weak = isWeak(item, weakThreshold);
+  const observed = item.evidence_state === "observed" && item.p_mastery != null;
   const ret3d = item.retention_in_3d;
   const retentionTitle =
     ret3d != null
@@ -305,9 +310,9 @@ function MasteryRow({ item, weakThreshold }: {
     <li className="group relative rounded-lg transition-colors hover:bg-indigo-50/50">
       <div className="flex items-center gap-2.5 px-1.5 py-1">
         <ProgressRing
-          value={masteryValue(item)}
-          color={item.p_mastery == null ? "#cbd5e1" : undefined}
-          showValue={item.p_mastery != null}
+          value={observed ? masteryValue(item) : 0}
+          color={observed ? undefined : "#cbd5e1"}
+          showValue={observed}
           size={32}
           strokeWidth={3.5}
           title={`${item.name}：${item.evidence_state_label ?? (item.evidence_state === "unobserved" ? "尚无证据" : item.evidence_state === "estimated" ? "估计中" : `掌握度 ${fmtPct(masteryValue(item))}`)}`}
@@ -337,7 +342,7 @@ function MasteryRow({ item, weakThreshold }: {
             )}
             <span>{item.evidence_state_label ?? (item.evidence_state === "unobserved" ? "尚无证据" : item.evidence_state === "estimated" ? "估计中" : "已观测")}</span>
             {/* 遗忘快照（P2-7）缩成徽章，整句进 tooltip；<90% 才显示避免噪声 */}
-            {ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
+            {observed && ret3d != null && ret3d < RETENTION_SHOW_BELOW && (
               <span
                 className="inline-flex cursor-help items-center rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70"
                 title={retentionTitle}
@@ -470,7 +475,7 @@ export function CurrentLearningState() {
         <p className="mt-2 max-w-4xl text-[15px] leading-7 text-ink">
           {mastery.length === 0
             ? "还没有足够的真实作答证据。完成第一次练习、复习或核验后的真实作答后，这里会逐步形成你的学习画像。"
-            : <>当前共观察到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : ""}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}{strongest || weakest ? "。" : ""}画像会随新的真实证据持续更新。</>}
+            : <>当前共识别到 {mastery.length} 个知识点。{strongest ? `「${strongest.name}」表现相对稳定` : "尚未形成证据充分的掌握度"}{weakest ? `，「${weakest.name}」仍最值得优先巩固` : ""}。画像会随新的真实作答证据持续更新。</>}
         </p>
         {mastery.length === 0 && (
           <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -582,10 +587,12 @@ export function CurrentLearningState() {
                                   </span>
                                   <span
                                     className="font-mono text-body-sm"
-                                    style={{ color: masteryColor(c.mean) }}
-                                    title={`章平均掌握度 ${fmtPct(c.mean)}（${c.items.length} 个知识点）`}
+                                    style={{ color: c.mean == null ? undefined : masteryColor(c.mean) }}
+                                    title={c.mean == null
+                                      ? `本章尚无证据充分的掌握度（${c.items.length} 个知识点）`
+                                      : `章平均掌握度 ${fmtPct(c.mean)}（${c.items.length} 个知识点）`}
                                   >
-                                    {fmtPct(c.mean)}
+                                    {c.mean == null ? "待验证" : fmtPct(c.mean)}
                                   </span>
                                   {c.weakCount > 0 && (
                                     <span className="rounded-full bg-amber-50 px-1.5 py-px text-caption font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">

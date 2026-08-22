@@ -100,6 +100,11 @@ function isReferenceResource(resource: LearningResourceOut): boolean {
   return !isQuestionResource(resource);
 }
 
+function isResourceInScope(resource: LearningResourceOut, scopeKbId: string | null): boolean {
+  if (scopeKbId === "unclassified") return resource.linked_kb_id === null;
+  return !scopeKbId || resource.linked_kb_id === scopeKbId;
+}
+
 function friendlyError(reason: unknown, fallback: string): string {
   if (reason instanceof ApiError) {
     const messages: Record<string, string> = {
@@ -238,9 +243,17 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
   const listRequestsRef = useRef(createRequestEpoch());
   const detailRequestsRef = useRef(createRequestEpoch());
   const selectedResourceIdRef = useRef<string | null>(null);
+  const previousScopeKbIdRef = useRef<string | null>(scopeKbId);
   const deepResourceId = searchParams.get("resource_id");
   const deepQuestionId = searchParams.get("question_id");
-  const deepLinkKey = deepResourceId ? `${deepResourceId}:${deepQuestionId ?? ""}` : null;
+  const deepLinkKey = deepResourceId
+    ? `${scopeKbId ?? "__all__"}:${deepResourceId}:${deepQuestionId ?? ""}`
+    : null;
+
+  // URL 清掉深链参数后，允许下一次进入同一资源再次触发处理。
+  useEffect(() => {
+    if (!deepResourceId) deepLinkHandled.current = null;
+  }, [deepResourceId]);
 
   const loadResources = useCallback(async () => {
     const request = listRequestsRef.current.begin();
@@ -261,6 +274,24 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
     return () => window.clearTimeout(timer);
   }, [loadResources]);
 
+  useEffect(() => {
+    if (previousScopeKbIdRef.current === scopeKbId) return;
+    previousScopeKbIdRef.current = scopeKbId;
+    detailRequestsRef.current.invalidate();
+    selectedResourceIdRef.current = null;
+    setSelectedResource(null);
+    setQuestions([]);
+    setSelectedDetailsLoaded(false);
+    setSelectedLoading(false);
+  }, [scopeKbId]);
+
+  const clearResourceQuery = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("resource_id");
+    url.searchParams.delete("question_id");
+    router.replace(`${url.pathname}${url.search || ""}`, { scroll: false });
+  }, [router]);
+
   const loadResource = useCallback(async (resourceId: string) => {
     if (selectedResourceIdRef.current !== resourceId) return;
     const request = detailRequestsRef.current.begin();
@@ -268,6 +299,20 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
     setBanner(null);
     try {
       const resource = await apiJson<LearningResourceOut>(`/api/resources/${resourceId}`);
+      if (!isResourceInScope(resource, scopeKbId)) {
+        if (
+          detailRequestsRef.current.isCurrent(request) &&
+          selectedResourceIdRef.current === resourceId
+        ) {
+          selectedResourceIdRef.current = null;
+          setSelectedResource(null);
+          setQuestions([]);
+          setSelectedDetailsLoaded(false);
+          setSelectedLoading(false);
+          clearResourceQuery();
+        }
+        return;
+      }
       const resourceQuestions = isQuestionResource(resource) && !isTutorManagedResource(resource)
         ? await apiJson<ResourceQuestionOut[]>(`/api/resources/${resourceId}/questions`)
         : [];
@@ -291,7 +336,7 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
         selectedResourceIdRef.current === resourceId
       ) setSelectedLoading(false);
     }
-  }, []);
+  }, [clearResourceQuery, scopeKbId]);
 
   const openResource = useCallback((resource: LearningResourceOut) => {
     selectedResourceIdRef.current = resource.id;
@@ -307,17 +352,21 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
       if (deepLinkHandled.current === deepLinkKey) return;
       deepLinkHandled.current = deepLinkKey;
       const listed = resources.find((resource) => resource.id === deepResourceId);
-      if (listed) {
+      if (listed && isResourceInScope(listed, scopeKbId)) {
         openResource(listed);
+      } else if (listed) {
+        // The resource exists but belongs to another course. Never render it in
+        // the current course scope; treat the stale deep link as a list view.
+        clearResourceQuery();
       } else {
-        // The detail endpoint applies the same ownership check. A stale or
-        // forbidden deep link therefore stays indistinguishable from a missing one.
+        // The detail endpoint applies the same tenant check; loadResource also
+        // enforces the current course scope before rendering the result.
         selectedResourceIdRef.current = deepResourceId;
         void loadResource(deepResourceId);
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [deepLinkKey, deepResourceId, openResource, loadResource, resources]);
+  }, [clearResourceQuery, deepLinkKey, deepResourceId, loadResource, openResource, resources, scopeKbId]);
 
   const reloadSelected = useCallback(async () => {
     if (!selectedResource) return;
@@ -434,24 +483,35 @@ function ResourcesPageContent({ scopeKbId }: { scopeKbId: string | null }) {
     setAssessmentOpen(false);
     // 收尾 ①：返回列表不跳路由——清掉资源深链参数后留在当前页
     // （/courses/[kbId] 资料 tab 内返回列表；深链进入时同样只回当前路由）。
-    const url = new URL(window.location.href);
-    url.searchParams.delete("resource_id");
-    url.searchParams.delete("question_id");
-    router.replace(`${url.pathname}${url.search || ""}`, { scroll: false });
+    clearResourceQuery();
     void loadResources();
   };
 
-  if (selectedResource) {
+  const scopedSelectedResource =
+    selectedResource && isResourceInScope(selectedResource, scopeKbId)
+      ? selectedResource
+      : null;
+
+  if (scopedSelectedResource) {
+    const detailErrorBanner = banner ? (
+      <div className="mx-auto w-full max-w-[1180px] px-5 pt-5 sm:px-8 lg:px-12">
+        <ErrorBanner
+          message={banner}
+          onRetry={() => void loadResource(scopedSelectedResource.id)}
+          onClose={() => setBanner(null)}
+        />
+      </div>
+    ) : null;
     if (shouldShowResourceDetailSkeleton(selectedLoading, selectedDetailsLoaded)) {
-      return <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-overlay border border-line bg-white p-5"><SkeletonList rows={6} /></div></div>;
+      return <>{detailErrorBanner}<div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-6 sm:px-8 lg:px-12"><div className="rounded-overlay border border-line bg-white p-5"><SkeletonList rows={6} /></div></div></>;
     }
-    if (isReferenceResource(selectedResource)) {
-      return <ReferenceResourceView resource={selectedResource} onBack={backToResourceList} />;
+    if (isReferenceResource(scopedSelectedResource)) {
+      return <>{detailErrorBanner}<ReferenceResourceView resource={scopedSelectedResource} onBack={backToResourceList} /></>;
     }
-    if (isTutorManagedResource(selectedResource)) {
-      return <TutorManagedResourceView resource={selectedResource} onBack={backToResourceList} />;
+    if (isTutorManagedResource(scopedSelectedResource)) {
+      return <>{detailErrorBanner}<TutorManagedResourceView resource={scopedSelectedResource} onBack={backToResourceList} /></>;
     }
-    return <><ResourceReview key={resourceDetailKey(selectedResource.id)} resource={selectedResource} questions={questions} initialQuestionId={deepQuestionId} onBack={backToResourceList} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={selectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
+    return <>{detailErrorBanner}<ResourceReview key={resourceDetailKey(scopedSelectedResource.id)} resource={scopedSelectedResource} questions={questions} initialQuestionId={deepQuestionId} onBack={backToResourceList} onReload={reloadSelected} onResourceChanged={(resource) => setSelectedResource(resource)} onStartAssessment={() => setAssessmentOpen(true)} />{assessmentOpen && <AssessmentPanel resource={scopedSelectedResource} questions={questions} onClose={() => setAssessmentOpen(false)} />}</>;
   }
 
   return (

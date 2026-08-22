@@ -355,6 +355,7 @@ async def create_quiz(
                 [str(effective_kb_id)] if effective_kb_id else [],
                 redis=getattr(request.app.state, "redis", None),
                 role="quiz",
+                org_ids=ctx.org_ids,
             )
             profile_summary = profile.summary
         except Exception:  # noqa: BLE001

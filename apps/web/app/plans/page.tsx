@@ -95,7 +95,7 @@ function PlansView() {
       ? (list.find((plan) => plan.id === requestedPlanId) ?? null)
       : null;
     if (requested?.kb_id && requested.plan_mode === "course_bound") {
-      router.replace(`/courses/${requested.kb_id}?tab=plan`);
+      router.replace(`/courses/${requested.kb_id}?tab=plan&plan_id=${requested.id}`);
       return;
     }
     setSelected((current) => {
@@ -173,7 +173,7 @@ function PlansView() {
   /** 切换选中计划：有 kb 的计划点击直达课程计划 tab；全局计划留在本页看详情。 */
   const selectPlan = (plan: PlanListItem | null) => {
     if (plan?.kb_id) {
-      router.push(`/courses/${plan.kb_id}?tab=plan`);
+      router.push(`/courses/${plan.kb_id}?tab=plan&plan_id=${plan.id}`);
       return;
     }
     setSelected(plan);

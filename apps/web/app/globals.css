@@ -48,7 +48,7 @@
   --color-line-strong: #d6d4cf;
   --color-ink: #1b1b19;
   --color-ink-secondary: #57564e;
-  --color-ink-muted: #97968e;
+  --color-ink-muted: #73726b;
 
   /* 主操作为近黑；旧 brand-* 组件因此自动同步到新版外壳。
      600 与 700 曾是同一个值 #1e1e1c，导致 hover:bg-brand-700 在 bg-brand-600

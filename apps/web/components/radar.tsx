@@ -8,16 +8,26 @@ import { fmtPct } from "@/components/common";
 export interface RadarItem {
   name: string;
   p_mastery: number | null;
+  /** 新契约下只有 observed 才能进入几何图；旧调用方可省略。 */
+  evidence_state?: "unobserved" | "estimated" | "observed";
 }
 
 export const RADAR_MAX_DIMS = 12;
 
 export function MasteryRadar({ items }: { items: RadarItem[] }) {
-  const dims = items.slice(0, RADAR_MAX_DIMS);
+  // 未观测/估计值没有可绘制的掌握度，不放进几何轴，避免把先验或未知
+  // 误读成 50%。未知状态由同页条形/明细文案表达。
+  const dims = items
+    .filter(
+      (item): item is RadarItem & { p_mastery: number } =>
+        item.p_mastery != null &&
+        (item.evidence_state == null || item.evidence_state === "observed"),
+    )
+    .slice(0, RADAR_MAX_DIMS);
   if (dims.length < 3) {
     return (
       <p className="py-8 text-center text-xs text-ink-muted">
-        至少需要 3 个知识点才能绘制雷达图，先去练习积累证据吧
+        至少需要 3 个已有真实作答证据的知识点才能绘制雷达图，先去练习积累证据吧
       </p>
     );
   }
@@ -38,7 +48,7 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
       .map((_, i) => point(i, radius * ratio).map((v) => v.toFixed(1)).join(","))
       .join(" ");
 
-  const dataPoints = dims.map((d, i) => point(i, radius * Math.max(0.02, d.p_mastery ?? 0.5)));
+  const dataPoints = dims.map((d, i) => point(i, radius * Math.max(0.02, d.p_mastery)));
 
   return (
     <div className="relative overflow-x-auto">
@@ -92,10 +102,8 @@ export function MasteryRadar({ items }: { items: RadarItem[] }) {
         />
         {/* 数据点（白描边与填充分离重叠标记） */}
         {dataPoints.map(([x, y], i) => (
-          <circle key={i} cx={x} cy={y} r={3.2} fill={dims[i].p_mastery == null ? "#cbd5e1" : "#4f46e5"} stroke="#fff" strokeWidth={1.5}>
-            <title>
-              {dims[i].name}：{dims[i].p_mastery == null ? "尚无已观测证据" : fmtPct(dims[i].p_mastery)}
-            </title>
+          <circle key={i} cx={x} cy={y} r={3.2} fill="#4f46e5" stroke="#fff" strokeWidth={1.5}>
+            <title>{dims[i].name}：{fmtPct(dims[i].p_mastery)}</title>
           </circle>
         ))}
         {/* 轴标签 */}

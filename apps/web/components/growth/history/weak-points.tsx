@@ -23,15 +23,17 @@ type SubjectWeakPoint = ReportWeakPoint & { subject?: string | null };
 export function WeakPointCard({
   wp,
   isRedline,
+  isUnknown,
   redPct,
   consolidatePct,
 }: {
   wp: SubjectWeakPoint;
   isRedline: boolean;
+  isUnknown: boolean;
   redPct: number;
   consolidatePct: number;
 }) {
-  const mastery = wp.p_mastery ?? 0;
+  const mastery = wp.p_mastery;
   return (
     <li className="rounded-2xl border border-line bg-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200 hover:shadow-[0_8px_24px_-8px_rgba(245,158,11,0.28)] motion-reduce:hover:translate-y-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -40,18 +42,24 @@ export function WeakPointCard({
         </span>
         <span
           className={`rounded-full px-2 py-0.5 text-caption font-medium ${
-            isRedline ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"
+            isUnknown
+              ? "bg-surface-muted text-ink-secondary"
+              : isRedline
+                ? "bg-rose-50 text-rose-700"
+                : "bg-amber-50 text-amber-700"
           }`}
           title={
-            isRedline
+            isUnknown
+              ? "历史报告没有留下可验证的掌握度证据"
+              : isRedline
               ? `掌握度低于红线（${redPct}%）`
               : `掌握度低于巩固线（${consolidatePct}%）但已过红线`
           }
         >
-          {isRedline ? "红线" : "待巩固"}
+          {isUnknown ? "待验证" : isRedline ? "红线" : "待巩固"}
         </span>
         <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-caption text-ink-secondary">
-          掌握度 {fmtPct(mastery)}
+          掌握度 {mastery == null ? "未知" : fmtPct(mastery)}
         </span>
         {wp.error_count > 0 && (
           <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">
@@ -61,8 +69,8 @@ export function WeakPointCard({
       </div>
       <div className="mt-2 h-2 rounded-full bg-surface-muted">
         <div
-          className={`h-full rounded-full ${isRedline ? "bg-rose-500" : "bg-amber-500"}`}
-          style={{ width: `${Math.max(mastery * 100, 2)}%` }}
+          className={`h-full rounded-full ${isUnknown ? "bg-surface-muted" : isRedline ? "bg-rose-500" : "bg-amber-500"}`}
+          style={{ width: mastery == null ? "0%" : `${Math.max(mastery * 100, 2)}%` }}
         />
       </div>
       <div className="mt-2 flex justify-end">
@@ -132,6 +140,7 @@ interface WeakGroup {
   items: SubjectWeakPoint[];
   red: number;
   consolidate: number;
+  unknown: number;
 }
 
 export function groupWeakPoints(points: SubjectWeakPoint[], redThreshold: number): WeakGroup[] {
@@ -140,14 +149,21 @@ export function groupWeakPoints(points: SubjectWeakPoint[], redThreshold: number
     const key = wp.subject?.trim() ?? "";
     let g = map.get(key);
     if (!g) {
-      g = { key, items: [], red: 0, consolidate: 0 };
+      g = { key, items: [], red: 0, consolidate: 0, unknown: 0 };
       map.set(key, g);
     }
     g.items.push(wp);
-    if ((wp.p_mastery ?? 1) < redThreshold) g.red += 1;
+    if (wp.p_mastery == null) g.unknown += 1;
+    else if (wp.p_mastery < redThreshold) g.red += 1;
     else g.consolidate += 1;
   }
   const groups = [...map.values()];
-  for (const g of groups) g.items.sort((a, b) => (a.p_mastery ?? 1) - (b.p_mastery ?? 1));
+  for (const g of groups) {
+    g.items.sort((a, b) => {
+      if (a.p_mastery == null) return 1;
+      if (b.p_mastery == null) return -1;
+      return a.p_mastery - b.p_mastery;
+    });
+  }
   return groups;
 }

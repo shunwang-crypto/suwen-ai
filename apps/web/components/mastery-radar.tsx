@@ -39,10 +39,12 @@ interface AggAxis {
   key: string;
   label: string;
   /** 轴值 = 组内 KC 掌握度均值 */
-  mean: number;
+  mean: number | null;
   weakCount: number;
   kcs: RadarSourceItem[];
 }
+
+type ObservedAggAxis = AggAxis & { mean: number };
 
 /** 按 keyOf 分组聚合为轴，保持首次出现顺序（章节序稳定 → 轴序稳定可对比）。 */
 function groupAxes(
@@ -57,7 +59,7 @@ function groupAxes(
     const key = keyOf(m);
     let axis = byKey.get(key);
     if (!axis) {
-      axis = { key, label: labelOf(m), mean: 0, weakCount: 0, kcs: [] };
+      axis = { key, label: labelOf(m), mean: null, weakCount: 0, kcs: [] };
       byKey.set(key, axis);
       axes.push(axis);
     }
@@ -66,7 +68,9 @@ function groupAxes(
   }
   for (const axis of axes) {
     const observed = axis.kcs.filter((item) => item.evidence_state === "observed" && item.p_mastery != null);
-    axis.mean = observed.length ? observed.reduce((sum, item) => sum + (item.p_mastery ?? 0), 0) / observed.length : 0;
+    axis.mean = observed.length
+      ? observed.reduce((sum, item) => sum + (item.p_mastery ?? 0), 0) / observed.length
+      : null;
   }
   return axes;
 }
@@ -77,7 +81,8 @@ const chapterKey = (m: RadarSourceItem) => m.chapter ?? "__misc__";
 const chapterLabel = (m: RadarSourceItem) => m.chapter ?? "未分章";
 
 function axisTitle(a: AggAxis): string {
-  return `${a.label}：平均掌握度 ${fmtPct(a.mean)} · ${a.kcs.length} 个知识点 · 薄弱 ${a.weakCount} 个（点击下钻）`;
+  const mastery = a.mean == null ? "待验证" : `平均掌握度 ${fmtPct(a.mean)}`;
+  return `${a.label}：${mastery} · ${a.kcs.length} 个知识点 · 薄弱 ${a.weakCount} 个（点击下钻）`;
 }
 
 /** 可点击聚合雷达（≥5 轴）：几何同 components/radar.tsx，轴组可点/可键盘触发。 */
@@ -86,7 +91,7 @@ function AggRadarChart({
   selected,
   onSelect,
 }: {
-  axes: AggAxis[];
+  axes: ObservedAggAxis[];
   selected: string | null;
   onSelect: (key: string) => void;
 }) {
@@ -238,6 +243,8 @@ function AxisBars({
     <div className="space-y-1.5 py-1">
       {axes.map((a) => {
         const active = selected === a.key;
+        const mean = a.mean;
+        const known = mean != null;
         return (
           <button
             key={a.key}
@@ -258,16 +265,18 @@ function AxisBars({
               {a.label}
             </span>
             <span className="h-3.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-muted">
-              <span
-                className="block h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none"
-                style={{
-                  width: `${Math.max(a.mean * 100, 3)}%`,
-                  background: masteryColor(a.mean),
-                }}
-              />
+              {known && (
+                <span
+                  className="block h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none"
+                  style={{
+                    width: `${Math.max(mean * 100, 3)}%`,
+                    background: masteryColor(mean),
+                  }}
+                />
+              )}
             </span>
-            <span className="w-10 shrink-0 text-right font-mono text-xs text-ink-secondary">
-              {fmtPct(a.mean)}
+            <span className={`w-14 shrink-0 text-right text-xs ${known ? "font-mono text-ink-secondary" : "text-ink-muted"}`}>
+              {known ? fmtPct(mean) : "待验证"}
             </span>
             {a.weakCount > 0 && (
               <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-body-sm font-medium text-amber-700 ring-1 ring-inset ring-amber-200/70">
@@ -278,7 +287,9 @@ function AxisBars({
         );
       })}
       <p className="pt-1 text-center text-body-sm text-ink-muted">
-        聚合轴不足 {MIN_RADAR_AXES} 个，已降级为条形图（避免无形状的少轴雷达）
+        {axes.some((axis) => axis.mean == null)
+          ? "尚无充分证据的分组显示为待验证，不会按 0% 掌握度绘制"
+          : `聚合轴不足 ${MIN_RADAR_AXES} 个，已降级为条形图（避免无形状的少轴雷达）`}
       </p>
     </div>
   );
@@ -286,12 +297,17 @@ function AxisBars({
 
 /** 下钻面板：选中轴（章/库）内的 KC 列表，薄弱在前，可跳 3 题验证。 */
 function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakThreshold: number; onClose: () => void }) {
-  const sorted = [...axis.kcs].sort((x, y) => (x.p_mastery == null ? 1 : x.p_mastery) - (y.p_mastery == null ? 1 : y.p_mastery));
+  const sorted = [...axis.kcs].sort((x, y) => {
+    const xObserved = x.evidence_state === "observed" && x.p_mastery != null;
+    const yObserved = y.evidence_state === "observed" && y.p_mastery != null;
+    if (xObserved !== yObserved) return xObserved ? -1 : 1;
+    return (x.p_mastery ?? 1) - (y.p_mastery ?? 1);
+  });
   return (
     <div className="edu-fade-up mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 truncate text-xs font-semibold text-ink-secondary" title={axis.label}>
-          {axis.label} · 均 {fmtPct(axis.mean)} · {axis.kcs.length} 个知识点
+          {axis.label} · {axis.mean == null ? "待验证" : `均 ${fmtPct(axis.mean)}`} · {axis.kcs.length} 个知识点
           {axis.weakCount > 0 ? ` · 薄弱 ${axis.weakCount}` : ""}
         </p>
         <button
@@ -303,8 +319,10 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
         </button>
       </div>
       <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto pr-1">
-        {sorted.map((k) => (
-          <li key={k.kc_id} className="flex items-center gap-2 text-xs">
+        {sorted.map((k) => {
+          const mastery = k.p_mastery;
+          const observed = k.evidence_state === "observed" && mastery != null;
+          return <li key={k.kc_id} className="flex items-center gap-2 text-xs">
             <Link
               href={`/practice/session?mode=quiz&from=${encodeURIComponent("/growth")}&kc=${encodeURIComponent(k.name)}&n=3`}
               title={`${k.name}：做 3 道该知识点的题，判分结果作为真实证据重估掌握度`}
@@ -313,22 +331,24 @@ function DrillDownPanel({ axis, weakThreshold, onClose }: { axis: AggAxis; weakT
               {k.name}
             </Link>
             <span className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white ring-1 ring-inset ring-line/70">
-              <span
-                className="block h-full rounded-full"
-                style={{
-                  width: `${k.p_mastery == null ? 3 : Math.max(k.p_mastery * 100, 3)}%`,
-                  background: k.p_mastery == null ? "#cbd5e1" : masteryColor(k.p_mastery),
-                }}
-              />
+              {observed && (
+                <span
+                  className="block h-full rounded-full"
+                  style={{
+                    width: `${Math.max(mastery * 100, 3)}%`,
+                    background: masteryColor(mastery),
+                  }}
+                />
+              )}
             </span>
-            <span className="w-9 shrink-0 text-right font-mono text-ink-secondary">
-              {k.p_mastery == null ? "—" : fmtPct(k.p_mastery)}
+            <span className={`w-12 shrink-0 text-right ${observed ? "font-mono text-ink-secondary" : "text-ink-muted"}`}>
+              {observed ? fmtPct(mastery) : "—"}
             </span>
             <span className="w-7 shrink-0 text-right text-body-sm font-medium text-amber-600">
               {k.evidence_state === "observed" && k.p_mastery != null && k.p_mastery < weakThreshold ? "薄弱" : k.evidence_state === "estimated" ? "估计" : k.evidence_state === "unobserved" ? "未知" : ""}
             </span>
-          </li>
-        ))}
+          </li>;
+        })}
       </ul>
     </div>
   );
@@ -346,6 +366,13 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
   const contractReady = items.some((m) => m.chapter != null && m.chapter !== "");
 
   if (!contractReady) {
+    const observedItems = items.map((item) => ({
+      ...item,
+      p_mastery:
+        item.evidence_state === "observed" && item.p_mastery != null
+          ? item.p_mastery
+          : null,
+    }));
     return (
       <Card
         title="掌握度雷达"
@@ -355,7 +382,7 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
           </span>
         }
       >
-        <MasteryRadar items={items} />
+        <MasteryRadar items={observedItems} />
       </Card>
     );
   }
@@ -377,7 +404,11 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
           chapterLabel,
         );
   const shownAxes = axes.slice(0, RADAR_MAX_DIMS);
-  const useBars = shownAxes.length < MIN_RADAR_AXES;
+  const observedShownAxes = shownAxes.filter(
+    (axis): axis is ObservedAggAxis => axis.mean != null,
+  );
+  const useBars =
+    shownAxes.length < MIN_RADAR_AXES || observedShownAxes.length !== shownAxes.length;
   const drillAxis = drill != null ? (shownAxes.find((a) => a.key === drill) ?? null) : null;
 
   const totalKcs = axes.reduce((s, a) => s + a.kcs.length, 0);
@@ -440,7 +471,7 @@ export function MasteryRadarPanel({ items, weakThreshold }: { items: RadarSource
           <AxisBars axes={shownAxes} selected={drill} onSelect={toggleDrill} />
         ) : (
           <>
-            <AggRadarChart axes={shownAxes} selected={drill} onSelect={toggleDrill} />
+            <AggRadarChart axes={observedShownAxes} selected={drill} onSelect={toggleDrill} />
             <p className="text-center text-body-sm text-ink-muted">
               {axes.length > shownAxes.length ? `仅显示前 ${RADAR_MAX_DIMS} 章 · ` : ""}
               点击任意轴可下钻查看该{activeTab === ALL_TAB ? "库" : "章"}的知识点

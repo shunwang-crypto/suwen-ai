@@ -5,7 +5,7 @@
 // 全部用内联样式并硬编码品牌色值，保证即使样式管线失效也能正确渲染。
 // 恢复回调是本版 Next 的 `unstable_retry`；防御式退回硬刷新。
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export default function GlobalError({
   error,
@@ -14,8 +14,11 @@ export default function GlobalError({
   error: Error & { digest?: string };
   unstable_retry?: () => void;
 }) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
   useEffect(() => {
     console.error("[global-error]", error);
+    headingRef.current?.focus();
   }, [error]);
 
   const retry = () => {
@@ -38,16 +41,24 @@ export default function GlobalError({
           color: "#1b1b19",
         }}
       >
-        <div style={{ maxWidth: 460, padding: "0 24px", textAlign: "center" }}>
+        <div
+          role="alert"
+          aria-labelledby="global-error-title"
+          style={{ maxWidth: 460, padding: "0 24px", textAlign: "center" }}
+        >
           <div style={{ fontSize: 40, lineHeight: 1 }} aria-hidden>
             ⚠️
           </div>
           <h1
+            ref={headingRef}
+            id="global-error-title"
+            tabIndex={-1}
             style={{
               margin: "20px 0 0",
               fontSize: 22,
               fontWeight: 600,
               letterSpacing: "-0.03em",
+              outline: "none",
             }}
           >
             页面加载失败
@@ -60,7 +71,7 @@ export default function GlobalError({
               color: "#57564e",
             }}
           >
-            应用遇到了一个未预期的错误。你的学习数据是安全的，刷新即可恢复。
+            应用遇到了一个未预期的错误。如果你刚提交了内容或完成任务，请先确认结果，再决定是否重试。
           </p>
           <div
             style={{
@@ -106,7 +117,7 @@ export default function GlobalError({
             </a>
           </div>
           {error.digest && (
-            <p style={{ marginTop: 24, fontSize: 12, color: "#97968e" }}>
+            <p style={{ marginTop: 24, fontSize: 12, color: "#73726b" }}>
               错误编号：{error.digest}
             </p>
           )}

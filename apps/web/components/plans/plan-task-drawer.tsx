@@ -48,6 +48,11 @@ export function PlanTaskDrawer({
   const [completing, setCompleting] = useState(false);
   const [completionError, setCompletionError] = useState<string | null>(null);
   const [locallyDone, setLocallyDone] = useState(task.status === "done");
+  /* eslint-disable react-hooks/set-state-in-effect -- task status is an external parent-owned snapshot. */
+  useEffect(() => {
+    setLocallyDone(task.status === "done");
+  }, [task.status, task.task_id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
   const resource = task.resource ?? null;
   const kbId = resource?.kb_id ?? planKbId ?? null;
   const topic = task.kc_names?.[0] ?? task.title;

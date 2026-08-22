@@ -121,9 +121,15 @@ async def seed_history(user, kb_id: str, *, gateway_mode: str = "live") -> None:
     错题/BKT/审计流水全部由产品代码产生, 非手插结果行。"""
     from eduagents_api.db import tenant_session
     from eduagents_api.deps import AuthContext
-    from eduagents_api.models import Attempt, KcEdge, KnowledgeComponent, MasteryRecord, Question, Quiz
+    from eduagents_api.models import (
+        Attempt,
+        KcEdge,
+        KnowledgeComponent,
+        MasteryRecord,
+        Question,
+        Quiz,
+    )
     from eduagents_api.services import record_attempts
-    from sqlalchemy import select
 
     quiz_title = "演示·泰勒公式基础卷"
     async with tenant_session(str(user.id)) as session:

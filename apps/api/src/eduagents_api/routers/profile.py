@@ -105,7 +105,7 @@ async def get_profile(
     # 业务时间经虚拟时钟 (§9): 保持率快照随 time-travel 前进而衰减, 可现场演示
     now_dt = await timectl.now(request.app.state.redis)
     at_3d = now_dt + _RETENTION_HORIZON
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         # 遗忘快照 (P2-7): 该用户全部未归档错题的 FSRS 卡, 按 KC 聚合两点保持率
         # (archived 是用户显式退出复习, 不再对其渲染"再不复习"提示)
         err_rows = (
@@ -228,7 +228,10 @@ async def get_profile(
 
     # B1: kb/章节元信息 (kc_hierarchy 确定性推导 + 5 分钟缓存), 前端折叠 库→章→KC 树
     meta = await resolve_kc_meta(
-        ctx.tenant_id, [m["kc_id"] for m in mastery], redis=request.app.state.redis
+        ctx.tenant_id,
+        [m["kc_id"] for m in mastery],
+        redis=request.app.state.redis,
+        org_ids=ctx.org_ids,
     )
     for m in mastery:
         info = meta.get(m["kc_id"]) or {}
@@ -259,7 +262,12 @@ async def get_weak_points(
     与 POST /api/quiz (from_weak_points=true) 共用 weak_point_kcs, 预览与实际一致;
     返回空列表即"数据不足", 前端据此禁用按钮。
     """
-    items = await weak_point_kcs(ctx.tenant_id, ctx.user_id, [kb_id] if kb_id else [])
+    items = await weak_point_kcs(
+        ctx.tenant_id,
+        ctx.user_id,
+        [kb_id] if kb_id else [],
+        org_ids=ctx.org_ids,
+    )
     return {
         "threshold": QUIZ_WEAK_THRESHOLD,
         "limit": QUIZ_WEAK_TOP,
@@ -274,7 +282,7 @@ async def list_insights(ctx: AuthContext = Depends(api_rate_limited)):
     text 是学生自己的原话/误解描述, 只回给本人 (RLS 限租户 + user_id 限本人),
     是 F8-A2"上次你在 X 卡住"开场卡的数据源。
     """
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         rows = (
             await session.execute(
                 select(LearnerInsight, KnowledgeComponent.canonical_name)
@@ -317,7 +325,7 @@ async def patch_insight(
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """切换一条记忆条目的软抑制 (用户纠正权; 与 DELETE 的物理删除互补)。"""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await session.get(LearnerInsight, insight_id)
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
@@ -335,7 +343,11 @@ async def memory_preview(
 ):
     """记忆摘要预览 (0031): 与问答注入同源同缓存 — 用户看到的就是 AI 看到的。"""
     pref_ctx = await build_profile_context(
-        ctx.tenant_id, ctx.user_id, redis=redis, role="qa"
+        ctx.tenant_id,
+        ctx.user_id,
+        redis=redis,
+        role="qa",
+        org_ids=ctx.org_ids,
     )
     return {
         "summary": pref_ctx.summary,
@@ -353,7 +365,7 @@ async def delete_insight(
     RLS 已限租户; 再显式核对 user_id (个人表 tenant_id 即 user_id, 双保险),
     不存在或不属于本人一律 404, 不泄露他人条目存在性。
     """
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await session.get(LearnerInsight, insight_id)
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")

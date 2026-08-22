@@ -47,20 +47,26 @@ function rememberRecentCourse(userId: string, kbId: string) {
 }
 
 /** 计划 tab：该 kb_id 关联计划（优先进行中）的详情；发起表单留在 /plans 聚合壳。 */
-function CoursePlanTab({ kbId }: { kbId: string }) {
+function CoursePlanTab({ kbId, requestedPlanId }: { kbId: string; requestedPlanId?: string | null }) {
   const [plan, setPlan] = useState<PlanListItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- route/reload scope changes must clear the previous plan before the new request resolves */
   useEffect(() => {
     let alive = true;
+    setLoading(true);
+    setError(null);
+    setPlan(null);
     void apiJson<PlanListItem[]>(`/api/plans?kb_id=${encodeURIComponent(kbId)}`)
       .then((list) => {
         if (!alive) return;
         const scoped = list.filter((item) => item.kb_id === kbId);
-        setPlan(
-          scoped.find((item) => item.status === "active") ?? scoped[0] ?? null,
-        );
+        const requested = requestedPlanId
+          ? scoped.find((item) => item.id === requestedPlanId) ?? null
+          : null;
+        setPlan(requested ?? scoped.find((item) => item.status === "active") ?? scoped[0] ?? null);
         setError(null);
         setLoading(false);
       })
@@ -72,7 +78,15 @@ function CoursePlanTab({ kbId }: { kbId: string }) {
     return () => {
       alive = false;
     };
-  }, [kbId]);
+  }, [kbId, requestedPlanId, reloadKey]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const reload = () => {
+    setLoading(true);
+    setError(null);
+    setPlan(null);
+    setReloadKey((key) => key + 1);
+  };
 
   if (loading) {
     return (
@@ -103,6 +117,7 @@ function CoursePlanTab({ kbId }: { kbId: string }) {
       goal={plan.goal}
       status={plan.status}
       budgetHours={plan.budget_hours}
+      onChanged={reload}
     />
   );
 }
@@ -114,6 +129,7 @@ function CourseWorkspaceView() {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const rawTab = searchParams.get("tab");
+  const requestedPlanId = searchParams.get("plan_id");
   const tab: TabKey =
     rawTab === "guide" || rawTab === "plan" || rawTab === "graph" ? rawTab : "materials";
 
@@ -128,8 +144,15 @@ function CourseWorkspaceView() {
         ? `${summary.source_processing} 份处理中`
         : "资料处理失败";
 
+  /* eslint-disable react-hooks/set-state-in-effect -- dynamic route switch must clear the previous course before its replacement resolves */
   useEffect(() => {
     let alive = true;
+    // Dynamic route segments can change without remounting this client
+    // component. Clear the old course synchronously so A is never rendered
+    // under B's URL while the new course list request is in flight.
+    setKb(null);
+    setKbError(null);
+    setPageTitle(null);
     void apiJson<KbOut[]>("/api/kb")
       .then((list) => {
         if (!alive) return;
@@ -150,6 +173,7 @@ function CourseWorkspaceView() {
       alive = false;
     };
   }, [kbId, router]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 顶栏动态标题 + 最近访问课程记录
   useEffect(() => {
@@ -199,7 +223,13 @@ function CourseWorkspaceView() {
           return (
             <Link
               key={key}
-              href={key === "materials" ? `/courses/${kbId}` : `/courses/${kbId}?tab=${key}`}
+              href={
+                key === "materials"
+                  ? `/courses/${kbId}`
+                  : key === "plan" && requestedPlanId
+                    ? `/courses/${kbId}?tab=plan&plan_id=${encodeURIComponent(requestedPlanId)}`
+                    : `/courses/${kbId}?tab=${key}`
+              }
               role="tab"
               aria-current={active ? "page" : undefined}
               className={`rounded-control px-4 py-2 text-body-sm font-medium transition-colors ${
@@ -232,7 +262,7 @@ function CourseWorkspaceView() {
         ))}
       {tab === "graph" && <KcGraphPanel key={kbId} kbId={kbId} />}
 
-      {tab === "plan" && <CoursePlanTab kbId={kbId} />}
+      {tab === "plan" && <CoursePlanTab kbId={kbId} requestedPlanId={requestedPlanId} />}
     </div>
   );
 }

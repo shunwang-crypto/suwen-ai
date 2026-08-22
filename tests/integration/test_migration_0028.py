@@ -72,7 +72,7 @@ async def _seed_user_and_kb(database_url: str) -> tuple[str, str]:
 async def _assert_edu_app_can_write_new_columns(
     database_url: str, *, tenant_id: str, kb_id: str
 ) -> None:
-    """Exercise the unchanged 0001 tenant policy with the new columns."""
+    """Exercise owner writes after the org-read policy split."""
 
     url = make_url(database_url)
     conn = await asyncpg.connect(
@@ -299,11 +299,16 @@ async def _assert_schema(database_url: str) -> None:
         "WHERE c.oid='public.knowledge_components'::regclass "
         "AND p.schemaname='public'",
     )
-    assert len(rls) == 1
-    assert (rls[0]["relrowsecurity"], rls[0]["relforcerowsecurity"]) == (True, True)
-    assert rls[0]["policyname"] == "tenant_isolation"
-    assert "tenant_id" in rls[0]["qual"]
-    assert "tenant_id" in rls[0]["with_check"]
+    assert {row["policyname"] for row in rls} == {"tenant_read", "tenant_write"}
+    assert all(
+        (row["relrowsecurity"], row["relforcerowsecurity"]) == (True, True)
+        for row in rls
+    )
+    policies = {row["policyname"]: row for row in rls}
+    assert "tenant_id" in policies["tenant_read"]["qual"]
+    assert "app.org_ids" in policies["tenant_read"]["qual"]
+    assert "tenant_id" in policies["tenant_write"]["qual"]
+    assert "tenant_id" in policies["tenant_write"]["with_check"]
 
 
 def test_0028_from_zero_legacy_upgrade_constraints_rls_and_downgrade():
@@ -405,8 +410,8 @@ def test_0028_from_zero_legacy_upgrade_constraints_rls_and_downgrade():
             _fetch(database_url, "SELECT count(*) AS n FROM questions WHERE id=$1", question_id)
         )[0]["n"] == 1
 
-        # RLS metadata and actual read/write of the new columns use the policy
-        # already installed by 0001; no replacement policy is introduced.
+        # Downgrade/re-upgrade must restore both the 0028 columns and the later
+        # 0036 organization-read/owner-write policy split.
         _alembic(database_url, "downgrade", "0027")
         assert not _KC_COLUMNS & asyncio.run(_columns(database_url))
         legacy = asyncio.run(_seed_historical_rows(database_url))

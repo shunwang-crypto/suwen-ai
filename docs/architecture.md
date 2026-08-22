@@ -111,7 +111,7 @@ BKT。Explain-back 只写 observation-only 反馈记录；对话反思和辅导�
 |---|---|---|
 | Next.js Web | 学生、教师、管理员界面和同源 API 访问 | 不保存权威业务状态 |
 | FastAPI API | 鉴权、邮箱所有权验证、权限、状态机、SSE、事务和业务契约 | 同步请求不承担长耗时摄取；邮件统一经 EmailSender |
-| ARQ Worker | 文档摄取、题目识别、导出、清理、报告等异步任务 | 本地开发时与 API 分进程启动 |
+| ARQ Worker | 文档摄取、题目识别、导出、清理、报告等异步任务 | 本地开发时与 API 分进程启动；知识增强 claim 同时保存 `enrich_job_id` 与 `Document.version`，旧版本任务不能回写新分块/KC或提交终态 |
 | PostgreSQL | 关系数据、状态机、审计、RLS、多租户 | migration 使用独立高权限连接 |
 | Redis | 限流、预算、缓存、任务队列、虚拟时钟 | 不是长期事实存储 |
 | Qdrant | 文档向量与答案缓存向量 | 查询必须携带租户/知识库过滤 |
@@ -168,6 +168,9 @@ Next 不转发 incoming query，深链参数会丢失；需要查库才能确定
 - 不可见的个人资源通常返回 404，避免泄露资源是否存在。
 - 文件上传校验扩展名、大小和签名；文件名规范化；响应带 `nosniff`。
 - 删除数据库事实与删除外部对象通过 pending cleanup/outbox 协调，失败可重试。
+- 文档摄取/知识增强的 PostgreSQL 写入受文档版本栅栏保护。重建索引会在行锁内递增
+  `Document.version` 并清除增强 claim；删除直接删除事实并通过 cleanup 清理向量。增强刷新
+  保留旧的 `enriched` 内容直到新一轮向量写入成功，失败只释放本轮 claim，不把旧内容标成不可用。
 - 用户导出包含可读取原件，缺失对象记录在 manifest 中而不伪造成功。
 
 ## 当前产品边界

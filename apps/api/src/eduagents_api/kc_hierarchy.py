@@ -181,6 +181,7 @@ async def resolve_kc_meta(
     tenant_id: uuid.UUID | str,
     kc_ids,
     redis=None,
+    org_ids: tuple[str, ...] | list[str] = (),
 ) -> dict[str, dict]:
     """给定 tenant 的 KC 集合, 逐 KC 推导 {kb_id, kb_name, subject, chapter}。
 
@@ -200,7 +201,7 @@ async def resolve_kc_meta(
             continue
     if not ids:
         return {}
-    async with tenant_session(tenant_id) as session:
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         kc_rows = (
             await session.execute(
                 select(KnowledgeComponent.id, KnowledgeComponent.kb_id).where(

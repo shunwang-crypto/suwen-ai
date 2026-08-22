@@ -123,13 +123,17 @@ def test_mastery_write_boundary_only_accepts_real_kc_ids():
     assert not any("concept" in name for name in params)
 
 
-def test_plan_concept_model_has_no_kc_foreign_key():
-    """刻意不给 kc_id 外键：从模型层面就无法混进 KC 关系。"""
+def test_plan_concept_kc_foreign_key_is_only_an_optional_anchor():
+    """kc_id 只保存事后归并目标；计划归属仍独立，且锚点删除时自动回到 NULL。"""
     from eduagents_api.models import PlanConcept
 
-    columns = {column.name for column in PlanConcept.__table__.columns}
-    assert "kc_id" not in columns
+    columns = {column.name: column for column in PlanConcept.__table__.columns}
+    assert columns["kc_id"].nullable is True
+    kc_fks = list(columns["kc_id"].foreign_keys)
+    assert len(kc_fks) == 1
+    assert kc_fks[0].target_fullname == "knowledge_components.id"
+    assert kc_fks[0].ondelete == "SET NULL"
     foreign_targets = {
         fk.column.table.name for column in PlanConcept.__table__.columns for fk in column.foreign_keys
     }
-    assert foreign_targets == {"plans"}
+    assert foreign_targets == {"plans", "knowledge_components"}

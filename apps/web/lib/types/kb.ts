@@ -11,6 +11,11 @@ export interface DocumentOut {
   parse_backend: string;
   error_msg: string | null;
   recognition_meta_json: {
+    /** 持久化的知识增强任务 claim；存在时即使 status=enriched 也仍在刷新。 */
+    enrich_job_id?: string;
+    enrich_previous_status?: string;
+    enrich_started_at?: string;
+    enrich_job_state?: "queued" | "running";
     page_count?: number;
     pages?: Array<{
       page_number: number;

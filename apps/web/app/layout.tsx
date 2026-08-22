@@ -6,6 +6,8 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { AppShell } from "@/components/app-shell";
 import { FeedbackWidget } from "@/components/feedback-widget";
+import { CreditsToastRegistrar } from "@/components/ui/credits-toast";
+import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
   title: {
@@ -26,6 +28,8 @@ export default function RootLayout({
         <AuthProvider>
           <AppShell>{children}</AppShell>
           <FeedbackWidget />
+          <CreditsToastRegistrar />
+          <Toaster />
         </AuthProvider>
       </body>
     </html>

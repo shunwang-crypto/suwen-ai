@@ -53,8 +53,11 @@ const STATUS_META: Record<string, StatusMeta> = {
 };
 
 /** 处于处理中状态（需要继续轮询）的判断。 */
-export function isDocActive(status: string): boolean {
-  return Boolean(STATUS_META[status]?.active);
+export function isDocActive(
+  status: string,
+  recognitionMeta?: DocumentOut["recognition_meta_json"],
+): boolean {
+  return Boolean(STATUS_META[status]?.active || recognitionMeta?.enrich_job_id);
 }
 
 export function DocStatusBadge({ status }: { status: string }) {
@@ -150,6 +153,9 @@ export function DocumentTable({
         <tbody>
           {documents.map((doc) => {
             const busy = busyDocId === doc.id;
+            const refreshing = Boolean(doc.recognition_meta_json?.enrich_job_id);
+            const displayStatus =
+              refreshing && doc.status === "enriched" ? "enriching" : doc.status;
             const failedPages = (doc.recognition_meta_json?.pages ?? []).filter(
               (page) => page.recognition_status === "failed",
             );
@@ -196,9 +202,11 @@ export function DocumentTable({
                 <td className="whitespace-nowrap py-2.5 pr-3">
                   <DocStatusBadge
                     status={
-                      failedPages.length > 0 && ["ready", "enriched"].includes(doc.status)
+                      failedPages.length > 0 &&
+                      ["ready", "enriched"].includes(doc.status) &&
+                      !refreshing
                         ? "partial_ready"
-                        : doc.status
+                        : displayStatus
                     }
                   />
                   <IngestSteps status={doc.status} />
@@ -219,7 +227,7 @@ export function DocumentTable({
                       <>
                         <button
                           type="button"
-                          disabled={busy || isDocActive(doc.status)}
+                          disabled={busy || isDocActive(doc.status, doc.recognition_meta_json)}
                           onClick={() => onReindex(doc)}
                           className="rounded-lg px-2 py-1 text-xs font-medium text-ink-secondary hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
                         >
@@ -229,13 +237,15 @@ export function DocumentTable({
                           ["ready", "partial_ready", "enriched"].includes(doc.status) && (
                             <button
                               type="button"
-                              disabled={busy}
+                              disabled={busy || isDocActive(doc.status, doc.recognition_meta_json)}
                               onClick={() => onReEnrich(doc)}
                               className="rounded-lg px-2 py-1 text-xs font-medium text-violet-600 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40"
                               title={
-                                doc.error_msg
-                                  ? "上次知识增强失败，点此重新生成知识点与依赖图"
-                                  : "重新生成知识点与依赖图"
+                                refreshing
+                                  ? "知识增强正在进行中，请等待完成"
+                                  : doc.error_msg
+                                    ? "上次知识增强失败，点此重新生成知识点与依赖图"
+                                    : "重新生成知识点与依赖图"
                               }
                             >
                               重新增强
@@ -243,7 +253,7 @@ export function DocumentTable({
                           )}
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={busy || isDocActive(doc.status, doc.recognition_meta_json)}
                           onClick={() => onDelete(doc)}
                           className="rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                         >

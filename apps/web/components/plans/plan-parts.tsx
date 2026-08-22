@@ -6,6 +6,7 @@
 // 「根据学情调整计划」插入补强任务并高亮、调整历史时间线。
 
 import {useState} from "react";
+import { LockKeyhole } from "lucide-react";
 
 import {EmptyState} from "@/components/common";
 
@@ -173,9 +174,10 @@ export function TaskLockBadge({ task }: { task: PlanTask }) {
   return (
     <span
       title={`需先掌握：${detail}`}
-      className="inline-flex items-center gap-0.5 rounded bg-surface-muted px-1 py-0.5 font-medium text-ink-secondary"
+      className="inline-flex items-center gap-1 rounded bg-surface-muted px-1 py-0.5 font-medium text-ink-secondary"
     >
-      🔒 需先掌握 {blockers[0].kc_name}
+      <LockKeyhole aria-hidden="true" size={12} strokeWidth={2} />
+      需先掌握 {blockers[0].kc_name}
       {blockers.length > 1 ? ` 等 ${blockers.length} 项` : ""}
     </span>
   );
@@ -255,11 +257,42 @@ export function PlanTodayCard({
   const heuristicIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
   const calendarIndex =
     currentDayNumber != null ? days.findIndex((day) => day.day === currentDayNumber) : -1;
+  const lastDayNumber = days.at(-1)?.day ?? 0;
+  const pastSchedule = currentDayNumber != null && currentDayNumber > lastDayNumber;
+  const missingCalendarDay = currentDayNumber != null && calendarIndex < 0 && !pastSchedule;
+  if (missingCalendarDay) {
+    return (
+      <section className="overflow-hidden rounded-overlay border border-line bg-white">
+        <header className="border-b border-line px-4 py-3">
+          <h3 className="text-[13px] font-semibold text-ink">
+            今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDayNumber} 天</span>
+          </h3>
+        </header>
+        <p className="px-4 py-6 text-center text-body-sm text-ink-muted">
+          今天没有安排计划任务；可以按上方推荐复习或练习。
+        </p>
+      </section>
+    );
+  }
+  if (pastSchedule && firstPendingIndex < 0) {
+    return (
+      <section className="overflow-hidden rounded-overlay border border-line bg-white">
+        <header className="border-b border-line px-4 py-3">
+          <h3 className="text-[13px] font-semibold text-ink">计划日程已结束</h3>
+        </header>
+        <p className="px-4 py-6 text-center text-body-sm text-ink-muted">
+          日程内没有待补任务，可以查看成长变化或新建下一份计划。
+        </p>
+      </section>
+    );
+  }
   const currentIndex = calendarIndex >= 0 ? calendarIndex : heuristicIndex;
   const currentDay = days[currentIndex] ?? days[0];
+  const cardTitle = pastSchedule ? "逾期待补" : "今日任务";
+  const footerLabel = pastSchedule ? "本次待补预计" : "今日预计";
   return (
     <section className="overflow-hidden rounded-overlay border border-line bg-white">
-      <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">今日任务 <span className="ml-1 font-normal text-ink-muted">第 {currentDay.day} 天</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
+      <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">{cardTitle} <span className="ml-1 font-normal text-ink-muted">{pastSchedule ? `原第 ${currentDay.day} 天` : `第 ${currentDay.day} 天`}</span></h3><span className="text-caption text-ink-muted">{currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "done").length} 完成 · {currentDay.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length} 跳过</span></header>
       <ul className="divide-y divide-line">
         {currentDay.tasks.map((task, index) => {
           const key = task.task_id;
@@ -269,7 +302,7 @@ export function PlanTodayCard({
           return <li key={key ?? index} className={`flex items-center gap-3 px-4 py-3 ${isNew ? "bg-warning-50" : ""}`}><TaskStatusControls task={task} taskId={key} busy={busy} disabled={!onStatus} onStatus={onStatus} /><div className="min-w-0 flex-1"><button type="button" onClick={() => onTaskOpen?.({ task, stageName: currentDay.stageName, day: currentDay.day })} className={`block max-w-full truncate text-left text-body-sm hover:text-brand-700 ${status === "done" ? "text-ink-muted line-through" : status === "skipped" || task.locked ? "text-ink-muted" : "font-medium text-ink"}`}><MathText text={task.title} singleLine /></button><p className="mt-1 flex gap-2 text-body-sm text-ink-muted"><span>{task.kc_names[0] || currentDay.stageName}</span>{isNew && <span className="font-medium text-warning-600">补强</span>}<TaskLockBadge task={task} /></p></div><span className="text-body-sm text-ink-muted">{task.minutes} 分钟</span></li>;
         })}
       </ul>
-      <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">今日预计 {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
+      <p className="border-t border-line px-4 py-2.5 text-caption text-ink-muted">{footerLabel} {currentDay.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0)} 分钟</p>
     </section>
   );
 }
@@ -299,8 +332,18 @@ export function PlanCalendar({
   const heuristicIndex = firstPendingIndex >= 0 ? firstPendingIndex : days.length - 1;
   const calendarIndex =
     currentDayNumber != null ? days.findIndex((day) => day.day === currentDayNumber) : -1;
-  const currentIndex = calendarIndex >= 0 ? calendarIndex : heuristicIndex;
-  const currentDay = days[currentIndex] ?? days[0];
+  const nextCalendarIndex =
+    currentDayNumber != null ? days.findIndex((day) => day.day > currentDayNumber) : -1;
+  const pastSchedule = currentDayNumber != null && currentDayNumber > (days.at(-1)?.day ?? 0);
+  const currentIndex =
+    calendarIndex >= 0
+      ? calendarIndex
+      : nextCalendarIndex >= 0
+        ? nextCalendarIndex
+        : pastSchedule
+          ? Math.max(0, days.length - 7)
+          : heuristicIndex;
+  const currentDay = calendarIndex >= 0 ? days[calendarIndex] : null;
   const upcoming = days.slice(currentIndex, currentIndex + 7);
   return (
     <div className="space-y-4">
@@ -308,8 +351,8 @@ export function PlanCalendar({
         <PlanTodayCard structure={structure} currentDayNumber={currentDayNumber} onStatus={onStatus} onTaskOpen={onTaskOpen} pendingKeys={pendingKeys} highlightKeys={highlightKeys} />
 
         <section className="overflow-hidden rounded-overlay border border-line bg-white">
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">近期日程 <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-body-sm font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
-        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${day.day === currentDay.day ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${day.day === currentDay.day ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-caption font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-body-sm font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-caption text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-caption ${handled === day.tasks.length ? "text-success-600" : day.day === currentDay.day ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : day.day === currentDay.day ? `${done}/${day.tasks.length - skipped} 进行中` : "待开始"}</span></li>; })}</ol>
+        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h3 className="text-[13px] font-semibold text-ink">{pastSchedule ? "最近日程" : "近期日程"} <span className="ml-1 font-normal text-ink-muted">第 {upcoming[0]?.day ?? 1}–{upcoming.at(-1)?.day ?? 1} 天</span></h3><button type="button" aria-expanded={showFull} onClick={() => setShowFull((value) => !value)} className="text-body-sm font-medium text-brand-700 hover:text-brand-800">{showFull ? "收起完整计划" : `查看完整计划（${days.length} 天）`}</button></header>
+        <ol className="divide-y divide-line">{upcoming.map((day) => { const done = day.tasks.filter((task) => normalizedTaskStatus(task) === "done").length; const skipped = day.tasks.filter((task) => normalizedTaskStatus(task) === "skipped").length; const handled = done + skipped; const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0); const isToday = day.day === currentDay?.day; return <li key={day.day} className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 ${isToday ? "bg-brand-50/50" : ""}`}><strong className={`text-[13px] ${isToday ? "text-brand-700" : "text-ink-secondary"}`}>{day.day}<span className="block text-caption font-normal text-ink-muted">天</span></strong><div className="min-w-0"><p className="truncate text-body-sm font-medium text-ink">{day.stageName}</p><p className="mt-0.5 text-caption text-ink-muted">{day.tasks.length} 个任务 · {totalMinutes} 分钟{skipped > 0 ? ` · ${skipped} 个跳过` : ""}</p></div><span className={`text-caption ${handled === day.tasks.length ? "text-success-600" : isToday ? "text-brand-700" : "text-ink-muted"}`}>{handled === day.tasks.length ? `✓ ${done} 完成` : isToday ? `${done}/${day.tasks.length - skipped} 进行中` : pastSchedule ? "已逾期" : "待开始"}</span></li>; })}</ol>
         </section>
       </div>
 
@@ -337,7 +380,7 @@ export function PlanCalendar({
                     {(stage.days ?? []).map((day) => {
                       const totalMinutes = day.tasks.reduce((sum, task) => sum + (task.minutes || 0), 0);
                       return (
-                        <article key={day.day} className={`overflow-hidden rounded-control border bg-white ${day.day === currentDay.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
+                        <article key={day.day} className={`overflow-hidden rounded-control border bg-white ${day.day === currentDay?.day ? "border-brand-300 ring-1 ring-brand-100" : "border-line"}`}>
                           <header className="flex items-center justify-between border-b border-line px-3 py-2"><strong className="text-body-sm text-ink">第 {day.day} 天</strong><span className="text-caption text-ink-muted">{totalMinutes} 分钟</span></header>
                           <ul className="divide-y divide-line/70">
                             {day.tasks.map((task, taskIndex) => {

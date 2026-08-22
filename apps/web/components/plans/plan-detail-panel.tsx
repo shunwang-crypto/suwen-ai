@@ -123,6 +123,11 @@ export function PlanDetailPanel({
     if (!previousTask) return;
     const previousStatus = normalizedTaskStatus(previousTask);
     setDetail(withTaskStatus(detail, taskId, next));
+    setOpenTask((current) =>
+      current?.task.task_id === taskId
+        ? { ...current, task: { ...current.task, status: next } }
+        : current,
+    );
     setPendingKeys((prev) => new Set(prev).add(taskId));
     setTaskBanner(null);
     try {
@@ -132,7 +137,9 @@ export function PlanDetailPanel({
       );
       // 以服务端进度为准（并发勾选时避免本地计数漂移）
       setDetail((prev) =>
-        prev && prev.id === snapshot.id ? { ...prev, progress: res.progress } : prev,
+        prev && prev.id === snapshot.id
+          ? { ...prev, progress: res.progress, status: res.plan_status }
+          : prev,
       );
       onChanged?.();
     } catch (err) {
@@ -140,6 +147,11 @@ export function PlanDetailPanel({
         prev && prev.id === snapshot.id
           ? withTaskStatus(prev, taskId, previousStatus)
           : prev,
+      );
+      setOpenTask((current) =>
+        current?.task.task_id === taskId
+          ? { ...current, task: { ...current.task, status: previousStatus } }
+          : current,
       );
       setTaskBanner(err instanceof ApiError ? err.message : "任务状态更新失败，已回滚");
     } finally {
@@ -200,12 +212,12 @@ export function PlanDetailPanel({
     setReAnchoring(true);
     setTaskBanner(null);
     try {
-      const res = await apiJson<{ promoted: number }>(
+      const res = await apiJson<{ anchored: number }>(
         `/api/plans/${detail.id}/re-anchor`,
         { method: "POST", body: {} },
       );
-      if (res.promoted > 0) {
-        toast.success(`已把 ${res.promoted} 个临时概念锚定为正式知识点`);
+      if (res.anchored > 0) {
+        toast.success(`已把 ${res.anchored} 个临时概念锚定为正式知识点`);
       } else {
         toast.info("暂时没有可锚定的概念，去资料里补充或增强后再试");
       }
@@ -259,6 +271,7 @@ export function PlanDetailPanel({
   };
 
   const view = detail;
+  const currentStatus = view?.status ?? status;
 
   // 逾期概览（T1-2）：只统计仍待办的逾期任务，避免把已完成的旧任务误报为"逾期"。
   // 后端 schedule.overdue_tasks 仅按日期分桶（day < current_day），不看任务状态，故此处再过滤。
@@ -292,7 +305,7 @@ export function PlanDetailPanel({
         extra={
           <span className="flex flex-wrap items-center justify-end gap-1.5 text-caption text-ink-muted">
             {view && <span className={`rounded-full px-2 py-0.5 font-medium ${view.plan_mode === "course_bound" ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{view.plan_mode === "course_bound" ? "课程资料计划" : "目标起步计划"}</span>}
-            <span>{status === "active" ? "进行中 · " : status === "completed" ? "已完成 · " : "已归档 · "}每日 {budgetHours} 小时</span>
+            <span>{currentStatus === "active" ? "进行中 · " : currentStatus === "completed" ? "已完成 · " : "已归档 · "}每日 {budgetHours} 小时</span>
           </span>
         }
       >
@@ -554,7 +567,7 @@ export function PlanDetailPanel({
             {view.status === "active" && (view.anchorable_concepts ?? 0) > 0 && (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
                 <p className="min-w-0 text-caption leading-5 text-emerald-700">
-                  资料已更新：其中 {view.anchorable_concepts} 个概念现在能匹配到本库正式知识点，锚定后即纳入依赖图与掌握度。
+                  资料已更新：其中 {view.anchorable_concepts} 个临时概念现在能匹配到课程知识点。确认后会建立持久对应并从临时列表移除；掌握度仍只由真实作答证据更新。
                 </p>
                 <button
                   type="button"
@@ -611,7 +624,14 @@ export function PlanDetailPanel({
         <PlanTaskDrawer
           location={openTask}
           onClose={() => setOpenTask(null)}
-          onCompleted={() => setDetailKey((key) => key + 1)}
+          onCompleted={(result) => {
+            // 最后一个任务完成后计划已不可再执行；关闭旧抽屉，避免继续携带已完成计划的归因链接。
+            if (result.plan_status !== "active") {
+              setOpenTask(null);
+              setPendingKeys(new Set());
+            }
+            setDetailKey((key) => key + 1);
+          }}
         />
       )}
 

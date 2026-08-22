@@ -21,6 +21,10 @@ class _EnrichmentIncomplete(RuntimeError):
     """Semantic enrichment did not produce a safe, non-empty KC result."""
 
 
+class _StaleEnrichment(RuntimeError):
+    """The document was reindexed while this enrichment generation was running."""
+
+
 def _kc_source_kind(row: object) -> str:
     """Read the 0028 source discriminator without trusting names/counts."""
 
@@ -108,13 +112,14 @@ async def enrich_document(
     doc_id: str,
     gateway: ModelGateway | None = None,
     user_id: str | None = None,
+    claimed_job_id: str | None = None,
 ) -> str:
     """Stage 2 (F2 两阶段摄取): ready/partial_ready → enriching → enriched。
 
     内容: ① 知识库级 KC 受控词表 (首个文档时构建, strong 档) ② chunk 级 KC 抽取
     并经 KcNormalizer 归一化挂载 (cheap 档) ③ 上下文前缀生成并重嵌入 (cheap 档)。
-    失败语义: semantic KC 未覆盖全部 child 时回落 ready，保留已有章节 KC 与学习证据；
-    只有真实 ``source_kind=enrichment`` KC 覆盖完成后才进入 enriched。
+    失败语义: semantic KC 未覆盖全部 child 时回落刷新前状态，保留已有章节 KC 与学习
+    证据；已成功增强的文档采用 stale-while-revalidate，刷新失败仍保持 enriched 可用。
     stub 网关下跳过（章节 fallback 由 ingestion 在 ready 前同步建立）。
     """
     from eduagents_api.db import tenant_session
@@ -134,28 +139,103 @@ async def enrich_document(
     from eduagents_core.vectorstore.base import VectorPoint
     from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
+    from .vector_lock import document_vector_lock
+
     settings = get_settings()
     if gateway is None:
         if settings.gateway_mode == "stub":
             log.info("enrich_skipped_stub_mode", doc_id=doc_id)
+            # 手动 re-enrich 可能在 stub 模式下入队；不能留下永久抢占标记。
+            stub_job_id = claimed_job_id or str(ctx.get("job_id") or "") or None
+            async with tenant_session(tenant_id) as session:
+                doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+                if doc is not None:
+                    meta = dict(doc.recognition_meta_json or {})
+                    persisted_job_id = meta.get("enrich_job_id")
+                    if not persisted_job_id or str(persisted_job_id) == stub_job_id:
+                        fallback = str(meta.get("enrich_previous_status") or doc.status)
+                        for key in (
+                            "enrich_job_id",
+                            "enrich_previous_status",
+                            "enrich_started_at",
+                            "enrich_job_state",
+                            "enrich_document_version",
+                        ):
+                            meta.pop(key, None)
+                        doc.recognition_meta_json = meta
+                        doc.status = fallback
             return "skipped"
-        # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造
-        gateway = get_worker_gateway(settings)
 
+    # ARQ 的 ctx job_id 是队列记录 id，手动刷新同时显式传入同一个稳定 id。
+    # 自动串联未持久化 claim，因此可直接用 ctx id；若测试/直调没有则本地生成。
+    active_job_id = claimed_job_id or str(ctx.get("job_id") or "") or None
+    enrich_document_version: int
     async with tenant_session(tenant_id) as session:
-        doc = await session.get(Document, uuid.UUID(doc_id))
-        if doc is None or doc.status not in ("ready", "partial_ready", "enriched"):
+        doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+        if doc is None:
             return "not_ready"
-        fallback_status = "partial_ready" if doc.status == "partial_ready" else "ready"
+        meta = dict(doc.recognition_meta_json or {})
+        persisted_job_id = meta.get("enrich_job_id")
+        if persisted_job_id:
+            # API 已经原子抢占。只有携带同一稳定 job id 的 worker 能真正执行；
+            # 重复/过期任务不得覆盖当前刷新。
+            if active_job_id != str(persisted_job_id):
+                return "stale_job"
+            if meta.get("enrich_job_state") == "running":
+                return "already_running"
+            fallback_status = str(meta.get("enrich_previous_status") or "ready")
+            raw_version = meta.get("enrich_document_version")
+            try:
+                enrich_document_version = int(raw_version or doc.version)
+            except (TypeError, ValueError):
+                return "stale_job"
+            if enrich_document_version != int(doc.version):
+                return "stale_job"
+        else:
+            # 自动串联路径（ingestion → enrichment）也在行锁内抢占；并发任务看到
+            # enriching/running 后直接退出，避免重复模型调用和 KC 并发写。
+            if doc.status not in ("ready", "partial_ready", "enriched"):
+                return "not_ready"
+            fallback_status = doc.status
+            active_job_id = active_job_id or f"enrich:{doc_id}:{uuid.uuid4().hex}"
+            meta["enrich_job_id"] = active_job_id
+            meta["enrich_previous_status"] = fallback_status
+            meta["enrich_started_at"] = datetime.now(UTC).isoformat()
+            enrich_document_version = int(doc.version)
+        if fallback_status not in ("ready", "partial_ready", "enriched"):
+            fallback_status = "ready"
+        meta["enrich_document_version"] = enrich_document_version
+        meta["enrich_job_state"] = "running"
+        doc.recognition_meta_json = meta
+        # 旧成功版本刷新期间保持 enriched，让检索/Quiz 继续读旧版本。
+        if fallback_status != "enriched":
+            doc.status = "enriching"
         kb_id = str(doc.kb_id)
         # Personal jobs can use the owner credential; org jobs without a
         # request user deliberately remain platform-only.
         effective_user_id = user_id or (str(doc.uploaded_by) if doc.uploaded_by else "")
-        await session.execute(
-            update(Document).where(Document.id == doc.id).values(status="enriching")
-        )
+
+    async def ensure_current(stage: str) -> None:
+        """Check both generation identity and document version at a write boundary."""
+
+        async with tenant_session(tenant_id) as session:
+            current = await session.get(Document, uuid.UUID(doc_id))
+            if current is None:
+                raise _StaleEnrichment(f"document disappeared during {stage}")
+            meta = dict(current.recognition_meta_json or {})
+            if (
+                current.version != enrich_document_version
+                or meta.get("enrich_job_id") != active_job_id
+                or int(meta.get("enrich_document_version") or -1)
+                != enrich_document_version
+            ):
+                raise _StaleEnrichment(f"stale enrichment at {stage}")
 
     try:
+        if gateway is None:
+            # P0-2a: 共享带 usage_sink+budget_guard 的进程级单例, 不再裸构造。
+            # 工厂失败也必须走下方统一回退，不能留下永久 running claim。
+            gateway = get_worker_gateway(settings)
         # ---- 载入 chunk 与既有词表 ----
         async with tenant_session(tenant_id) as session:
             children = (
@@ -340,7 +420,20 @@ async def enrich_document(
             raise _EnrichmentIncomplete("semantic KC coverage is incomplete")
 
         # ---- 持久化: 词表新增/别名更新 + 边 + chunk 回写 ----
+        await ensure_current("before-pg-persist")
         async with tenant_session(tenant_id) as session:
+            current_doc = await session.get(
+                Document, uuid.UUID(doc_id), with_for_update=True
+            )
+            current_meta = dict(current_doc.recognition_meta_json or {}) if current_doc else {}
+            if (
+                current_doc is None
+                or current_doc.version != enrich_document_version
+                or current_meta.get("enrich_job_id") != active_job_id
+                or int(current_meta.get("enrich_document_version") or -1)
+                != enrich_document_version
+            ):
+                raise _StaleEnrichment("stale enrichment before PG commit")
             existing = {
                 str(r.id): r
                 for r in (
@@ -422,44 +515,83 @@ async def enrich_document(
             ):
                 raise _EnrichmentIncomplete("semantic KC persistence invariant failed")
 
-        # ---- 前缀拼接后增量重嵌入 (§5.1 上下文化) ----
+        # ---- 前缀拼接后重嵌入全部 child (§5.1 上下文化) ----
+        # A failed prefix call is represented by None in PG.  Re-embedding only
+        # successful prefixes would leave the Qdrant vector carrying an older
+        # prefix while the chunk row says it has none, so every child is rebuilt
+        # against the same generation and payload contract.
         with_prefix = [c for c in enriched if c["prefix"]]
-        if with_prefix:
-            texts = [
-                f"{c['prefix']}\n{c['heading_path']}\n{c['text']}" for c in with_prefix
-            ]
+        if enriched:
+            await ensure_current("before-qdrant-upsert")
+
+            def embedding_text(child: dict) -> str:
+                prefix_text = f"{child['prefix']}\n" if child["prefix"] else ""
+                return f"{prefix_text}{child['heading_path']}\n{child['text']}"
+
+            texts = [embedding_text(child) for child in enriched]
             vectors = await embedder.embed(texts)
             sparse_encoder = Bm25SparseEncoder()
             store = QdrantStore(settings)
-            await store.ensure_ready()
-            await store.upsert(
-                [
-                    VectorPoint(
-                        id=c["id"],
-                        dense=vectors[i],
-                        sparse=sparse_encoder.encode_document(texts[i]),
-                        payload={
-                            "tenant_id": tenant_id,
-                            "kb_id": kb_id,
-                            "doc_id": doc_id,
-                            "text": c["text"],
-                            "parent_id": c["parent_id"],
-                            "heading_path": c["heading_path"],
-                            "page_start": c["page_start"],
-                            "page_end": c["page_end"],
-                            "is_table": False,
-                            "context_prefix": c["prefix"],
-                        },
-                    )
-                    for i, c in enumerate(with_prefix)
-                ]
-            )
+            points = [
+                VectorPoint(
+                    id=c["id"],
+                    dense=vectors[i],
+                    sparse=sparse_encoder.encode_document(texts[i]),
+                    payload={
+                        "tenant_id": tenant_id,
+                        "kb_id": kb_id,
+                        "doc_id": doc_id,
+                        "text": c["text"],
+                        "parent_id": c["parent_id"],
+                        "heading_path": c["heading_path"],
+                        "page_start": c["page_start"],
+                        "page_end": c["page_end"],
+                        "is_table": False,
+                        "context_prefix": c["prefix"],
+                        "document_version": enrich_document_version,
+                        "enrich_job_id": active_job_id,
+                    },
+                )
+                for i, c in enumerate(enriched)
+            ]
+            async with document_vector_lock(ctx.get("redis"), tenant_id, doc_id):
+                await store.ensure_ready()
+                await store.upsert(points)
+                try:
+                    await ensure_current("after-qdrant-upsert")
+                except _StaleEnrichment:
+                    # Reindex may already have written replacement points for the
+                    # same document; only remove this generation's exact IDs.
+                    await store.delete_points([point.id for point in points])
+                    raise
 
         async with tenant_session(tenant_id) as session:
+            doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+            if doc is None:
+                return "missing"
+            meta = dict(doc.recognition_meta_json or {})
+            # 新一轮刷新若已取代本任务，旧任务不得提交终态或 bump 缓存版本。
+            if (
+                doc.version != enrich_document_version
+                or meta.get("enrich_job_id") != active_job_id
+                or int(meta.get("enrich_document_version") or -1)
+                != enrich_document_version
+            ):
+                return "stale_job"
+            meta.pop("enrich_job_id", None)
+            meta.pop("enrich_previous_status", None)
+            meta.pop("enrich_started_at", None)
+            meta.pop("enrich_job_state", None)
+            meta.pop("enrich_document_version", None)
+            doc.recognition_meta_json = meta
+            doc.status = "enriched"
+            doc.error_msg = None
+            # KC、依赖边、chunk 绑定、上下文前缀和检索向量均可能变化；版本递增让
+            # AnswerCache 与 KC 章节映射自然失效。
             await session.execute(
-                update(Document)
-                .where(Document.id == uuid.UUID(doc_id))
-                .values(status="enriched")
+                update(KnowledgeBase)
+                .where(KnowledgeBase.id == uuid.UUID(kb_id))
+                .values(kb_version=KnowledgeBase.kb_version + 1)
             )
         kc_count = sum(1 for c in enriched if c["kc_ids"])
         log.info(
@@ -535,15 +667,24 @@ async def enrich_document(
                                 }
                                 kb.config_json = config
         return "enriched"
-    except Exception:  # noqa: BLE001 — enriching 失败仅降级为 ready, 不回退 Stage1
+    except _StaleEnrichment:
+        log.info("enrich_stale_job", doc_id=doc_id, job_id=active_job_id)
+        return "stale_job"
+    except BaseException as exc:  # noqa: BLE001 — 取消/超时也必须释放刷新抢占
         log.exception("enrich_failed", doc_id=doc_id)
         async with tenant_session(tenant_id) as session:
-            await session.execute(
-                update(Document)
-                .where(Document.id == uuid.UUID(doc_id))
-                .values(
-                    status=fallback_status,
-                    error_msg="知识增强暂时失败，文档仍可检索，请稍后重试",
-                )
-            )
+            doc = await session.get(Document, uuid.UUID(doc_id), with_for_update=True)
+            if doc is not None:
+                meta = dict(doc.recognition_meta_json or {})
+                if meta.get("enrich_job_id") == active_job_id:
+                    meta.pop("enrich_job_id", None)
+                    meta.pop("enrich_previous_status", None)
+                    meta.pop("enrich_started_at", None)
+                    meta.pop("enrich_job_state", None)
+                    meta.pop("enrich_document_version", None)
+                    doc.recognition_meta_json = meta
+                    doc.status = fallback_status
+                    doc.error_msg = "知识增强暂时失败，旧版本仍可使用，请稍后重试"
+        if not isinstance(exc, Exception):
+            raise
         return "failed"

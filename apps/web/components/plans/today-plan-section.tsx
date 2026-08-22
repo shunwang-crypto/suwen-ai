@@ -41,9 +41,23 @@ export function TodayPlanSection() {
       try {
         const plans = await apiJson<PlanListItem[]>("/api/plans");
         const active = plans.find((plan) => plan.status === "active") ?? null;
-        if (!active) return;
+        if (!active) {
+          if (alive) {
+            setDetail(null);
+            setOpenTask(null);
+            setPendingKeys(new Set());
+          }
+          return;
+        }
         const loaded = await apiJson<PlanDetail>(`/api/plans/${active.id}`);
-        if (alive && loaded.status === "active") setDetail(loaded);
+        if (alive) {
+          if (loaded.status === "active") setDetail(loaded);
+          else {
+            setDetail(null);
+            setOpenTask(null);
+            setPendingKeys(new Set());
+          }
+        }
       } catch {
         // 静默隐藏：今日页的主视图是 next-actions，计划区块不可用不阻塞
       }
@@ -55,13 +69,18 @@ export function TodayPlanSection() {
 
   /** 与 /plans 页同一套三态更新：乐观更新 + 失败回滚（见 plans/page.tsx）。 */
   const updateTaskStatus = async (taskId: string, status: PlanTaskStatus) => {
-    if (!detail || pendingKeys.has(taskId)) return;
+    if (!detail || detail.status !== "active" || pendingKeys.has(taskId)) return;
     const previousTask = flattenDays(detail.structure)
       .flatMap((day) => day.tasks)
       .find((task) => task.task_id === taskId);
     if (!previousTask) return;
     const previousStatus = normalizedTaskStatus(previousTask);
     setDetail(withTaskStatus(detail, taskId, status));
+    setOpenTask((current) =>
+      current?.task.task_id === taskId
+        ? { ...current, task: { ...current.task, status } }
+        : current,
+    );
     setPendingKeys((prev) => new Set(prev).add(taskId));
     setBanner(null);
     try {
@@ -69,14 +88,26 @@ export function TodayPlanSection() {
         `/api/plans/${detail.id}/tasks/${taskId}/toggle`,
         { body: { status } },
       );
-      setDetail((prev) =>
-        prev && prev.id === detail.id ? { ...prev, progress: res.progress } : prev,
-      );
+      if (res.plan_status !== "active") {
+        setDetail(null);
+        setOpenTask(null);
+      } else {
+        setDetail((prev) =>
+          prev && prev.id === detail.id
+            ? { ...prev, progress: res.progress, status: res.plan_status }
+            : prev,
+        );
+      }
     } catch (err) {
       setDetail((prev) =>
         prev && prev.id === detail.id
           ? withTaskStatus(prev, taskId, previousStatus)
           : prev,
+      );
+      setOpenTask((current) =>
+        current?.task.task_id === taskId
+          ? { ...current, task: { ...current.task, status: previousStatus } }
+          : current,
       );
       setBanner(err instanceof ApiError ? err.message : "任务状态更新失败，已回滚");
     } finally {
@@ -88,7 +119,7 @@ export function TodayPlanSection() {
     }
   };
 
-  if (!detail) return null;
+  if (!detail || detail.status !== "active") return null;
   const hasSchedule = flattenDays(detail.structure).length > 0;
   if (!hasSchedule) return null;
 
@@ -103,6 +134,7 @@ export function TodayPlanSection() {
       {banner && <ErrorBanner message={banner} onClose={() => setBanner(null)} />}
       <PlanTodayCard
         structure={detail.structure}
+        currentDayNumber={detail.schedule?.current_day}
         onStatus={(taskId, status) => void updateTaskStatus(taskId, status)}
         onTaskOpen={setOpenTask}
         pendingKeys={pendingKeys}
@@ -111,7 +143,15 @@ export function TodayPlanSection() {
         <PlanTaskDrawer
           location={{ ...openTask, planId: detail.id, planKbId: detail.kb_id }}
           onClose={() => setOpenTask(null)}
-          onCompleted={() => setReloadKey((key) => key + 1)}
+          onCompleted={(result) => {
+            if (result.plan_status !== "active") {
+              setDetail(null);
+              setOpenTask(null);
+              setPendingKeys(new Set());
+            } else {
+              setReloadKey((key) => key + 1);
+            }
+          }}
         />
       )}
     </section>

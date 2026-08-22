@@ -262,6 +262,7 @@ async def chat(
             [str(k) for k in kb_ids],
             redis=getattr(request.app.state, "redis", None),
             role="qa",
+            org_ids=ctx.org_ids,
         )
     except Exception:  # noqa: BLE001
         log.exception("profile_summary_failed")

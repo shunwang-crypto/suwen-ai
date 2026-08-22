@@ -116,6 +116,22 @@ class QdrantStore:
     async def delete_by_doc(self, tenant_id: str, doc_id: str) -> None:
         await self._delete(self._filter(tenant_id=tenant_id, doc_id=doc_id))
 
+    async def delete_points(self, point_ids: list[str]) -> None:
+        """Delete an exact point set after a stale worker generation is detected.
+
+        This is deliberately narrower than ``delete_by_doc``: a reindex may have
+        already written a newer set of points for the same document, so stale
+        enrichment cleanup must never remove the replacement generation.
+        """
+        if not point_ids:
+            return
+        await asyncio.to_thread(
+            self._client.delete,
+            self._collection,
+            points_selector=models.PointIdsList(points=list(point_ids)),
+            wait=True,
+        )
+
     async def delete_by_kb(self, tenant_id: str, kb_id: str) -> None:
         await self._delete(self._filter(tenant_id=tenant_id, kb_id=kb_id))
 

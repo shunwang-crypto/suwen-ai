@@ -6,8 +6,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { BrandMark } from "@/components/ui/brand";
-import { CreditsToast } from "@/components/ui/credits-toast";
-import { Toaster } from "@/components/ui/toaster";
 import { RecentCourses } from "@/components/nav/recent-courses";
 import { RecentSessions } from "@/components/nav/recent-sessions";
 import { apiJson } from "@/lib/api";
@@ -84,7 +82,10 @@ const NAV_HIGHLIGHT_ALIASES: Record<string, string> = {
   "/tutor": "/chat",
   "/quiz": "/practice",
   "/reviews": "/practice",
+  "/errors": "/practice",
   "/materials": "/courses",
+  "/reports": "/growth",
+  "/profile": "/growth",
 };
 
 const ORG_ITEM: NavItem = {
@@ -130,6 +131,9 @@ const TITLE_MAP: Record<string, string> = {
   "/practice": "练习",
   "/quiz": "智能练习",
   "/reviews": "复习",
+  "/errors": "错题本",
+  "/reports": "学情报告",
+  "/profile": "学习画像",
   "/plans": "学习计划",
   "/growth": "成长",
   "/settings": "账户设置",
@@ -429,8 +433,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <main key={pathname} className={`min-h-0 flex-1 animate-fade-in ${isChatRoute ? "overflow-hidden" : "overflow-y-auto"}`}>{children}</main>
         </div>
 
-        <CreditsToast />
-        <Toaster />
       </div>
     </MotionConfig>
   );

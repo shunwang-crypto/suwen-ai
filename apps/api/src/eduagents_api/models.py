@@ -569,11 +569,12 @@ class PlanConcept(Base):
     """计划里的临时概念（0034）—— **不是知识点**。
 
     计划任务的 kc_names 里匹配不到正式 KC 的那些自然语言概念落在这里：可以用于
-    计划展示与将来的归并候选，但绝不进入掌握度 / BKT / 证据 / 推荐 / 报告路径
-    （那些只认 knowledge_components 外键）。因此本表刻意没有 kc_id 外键。
+    计划展示与将来的归并候选，但绝不进入掌握度 / BKT / 证据 / 推荐 / 报告路径。
+    可空 ``kc_id`` 只保存资料到位后的映射，不把这张计划审计表变成掌握度来源。
 
-    升级为正式 KC 只能经资料归并或用户确认（后续波次），v1 不自动升级、不存先修边
-    —— 模型猜的关系一旦画出来就会被当成真实课程结构。
+    ``kc_id`` 只记录资料归并/用户确认后的真实锚点；它不改变本表的临时概念边界，
+    也不会让该行进入掌握度、BKT、证据或推荐路径。状态仍保留 ``promoted`` 作为
+    展示审计，但只有存在 ``kc_id`` 时才代表一个可追溯的正式 KC 归并。
     """
 
     __tablename__ = "plan_concepts"
@@ -597,6 +598,14 @@ class PlanConcept(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="provisional", server_default="provisional"
+    )
+    # 事后资料归并的持久锚点；nullable 保留无资料/未匹配的临时概念。
+    # 该列由后续增量迁移加入，不能把临时概念强制写成正式 KC。
+    kc_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_components.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     created_at: Mapped[datetime] = _created_at()
 

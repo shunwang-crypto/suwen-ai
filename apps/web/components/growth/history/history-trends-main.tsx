@@ -16,24 +16,10 @@ import {Card, EmptyState, ErrorBanner, PageHeader, SkeletonPage, Spinner} from "
 import { RADAR_MAX_DIMS } from "@/components/radar";
 import { ModelMarkdown } from "@/components/chat/model-markdown";
 import { ApiError, apiJson } from "@/lib/api";
-import type {KbOut, LearningReportResponse, ReportRadarItem, ReportWeakPoint} from "@/lib/types";
+import type {KbOut, LearningReportResponse, ReportWeakPoint} from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 
 // ---- 后端可选字段与空值降级 ----
-
-/** 章节聚合轴的下钻明细项（?kb_id= 时每轴附带）。 */
-interface RadarAxisKcDetail {
-  kc_id?: string;
-  name?: string;
-  p_mastery?: number | null;
-}
-
-/** 雷达轴：章节聚合模式附带 kc_count/weak_count/kcs；KC 模式与旧契约一致。 */
-type RadarAxis = ReportRadarItem & {
-  kc_count?: number | null;
-  weak_count?: number | null;
-  kcs?: RadarAxisKcDetail[] | null;
-};
 
 /** 薄弱点：分科目契约附带 subject；缺失时降级为单节展示。 */
 type SubjectWeakPoint = ReportWeakPoint & { subject?: string | null };
@@ -142,8 +128,13 @@ export function HistoryTrends() {
   };
 
   const switchKb = (next: string) => {
-    if (next === kbId || loading) return;
+    if (next === kbId) return;
     setKbId(next);
+    // A report is scoped to one knowledge base. Do not render the previous
+    // scope while the next request is loading or when it fails.
+    setReport(null);
+    setError(null);
+    setRefreshError(null);
     setExpandedGroups({});
     setLoading(true);
   };
@@ -170,7 +161,7 @@ export function HistoryTrends() {
   }
 
   const { trend, narrative, narrative_note } = report;
-  const radarAxes = report.radar as RadarAxis[];
+  const radarAxes = report.radar;
   // 后端两档分开下发（weak_points=红线 / consolidate_points=待巩固），此处合并后
   // 由 groupWeakPoints 按科目分节并各自计数；旧后端无 consolidate_points 时自动降级
   const weakPoints = [
@@ -262,12 +253,13 @@ export function HistoryTrends() {
           <div className="order-1 space-y-3">
             <EmptyState
               title="还没有足够的学习数据"
-              description="完成几次练习或辅导后，这里会生成你的学情报告"
+              description="先从自己的教材、讲义或题目资料开始；完成练习、复习或核验后，这里会形成可追溯的学情趋势"
               illustration="chart"
             />
-            <div className="flex justify-center gap-2">
-              <Link href="/practice/session?mode=quiz&from=%2Fgrowth&topic=%E6%91%B8%E5%BA%95%E7%BB%83%E4%B9%A0" className="text-body-sm font-medium text-brand-700 underline-offset-2 hover:underline">开始摸底练习</Link>
-              <Link href="/plans" className="text-body-sm font-medium text-ink-secondary underline-offset-2 hover:text-brand-700 hover:underline">制定学习计划</Link>
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-2">
+              <Link href="/courses" className="text-body-sm font-medium text-brand-700 underline-offset-2 hover:underline">上传或选择学习资料</Link>
+              <Link href="/practice/session?mode=quiz&from=%2Fgrowth" className="text-body-sm font-medium text-ink-secondary underline-offset-2 hover:text-brand-700 hover:underline">用现有资料开始练习</Link>
+              <Link href="/plans?create=1&mode=goal_only" className="text-body-sm font-medium text-ink-secondary underline-offset-2 hover:text-brand-700 hover:underline">暂无资料，先制定计划</Link>
             </div>
           </div>
         )}
@@ -339,8 +331,13 @@ export function HistoryTrends() {
                           待巩固{" "}
                           <b className="font-semibold text-amber-600">
                             {g.consolidate}
-                          </b>{" "}
-                          个
+                          </b>{" "}个
+                          {g.unknown > 0 && (
+                            <>
+                              {" · "}待验证{" "}
+                              <b className="font-semibold text-ink-secondary">{g.unknown}</b> 个
+                            </>
+                          )}
                         </span>
                       </header>
                       <ul className="grid gap-2.5 md:grid-cols-2">
@@ -348,7 +345,8 @@ export function HistoryTrends() {
                           <WeakPointCard
                             key={wp.kc_id}
                             wp={wp}
-                            isRedline={(wp.p_mastery ?? 1) < redThreshold}
+                            isRedline={wp.p_mastery != null && wp.p_mastery < redThreshold}
+                            isUnknown={wp.p_mastery == null}
                             redPct={redPct}
                             consolidatePct={consolidatePct}
                           />

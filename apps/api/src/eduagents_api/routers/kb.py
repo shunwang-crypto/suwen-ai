@@ -54,6 +54,7 @@ _MAGIC = {
     ".pptx": (b"PK\x03\x04",),
 }
 _READY_DOCUMENT_STATUSES = frozenset({"ready", "partial_ready", "enriched"})
+_ENRICH_CLAIM_STALE_SECONDS = 30 * 60
 
 
 def _course_next_action(
@@ -351,13 +352,34 @@ async def upload_document(
         )
         session.add(doc)
         await session.flush()
+        ingest_job_id = f"ingest:{doc.id}:v{doc.version}"
+        doc.recognition_meta_json = {
+            "ingest_job_id": ingest_job_id,
+            "ingest_document_version": doc.version,
+            "ingest_job_state": "queued",
+        }
         doc_out = DocumentOut.model_validate(doc, from_attributes=True)
 
     storage = request.app.state.storage
     await storage.save(f"{owner_id}/{kb_id}/{doc_out.id}/{filename}", data)
-    await request.app.state.arq.enqueue_job(
-        "ingest_document", str(owner_id), str(doc_out.id)
-    )
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "ingest_document",
+            str(owner_id),
+            str(doc_out.id),
+            ingest_job_id,
+            _job_id=ingest_job_id,
+        )
+        if job is None:
+            raise RuntimeError("ingestion job was not enqueued")
+    except Exception as exc:
+        async with tenant_session(owner_id) as session:
+            failed_doc = await session.get(Document, doc_out.id, with_for_update=True)
+            if failed_doc is not None:
+                failed_doc.status = "failed"
+                failed_doc.error_msg = "文档处理任务提交失败，请重新上传"
+                failed_doc.recognition_meta_json = {}
+        raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
     log.info("document_uploaded", doc_id=str(doc_out.id), size=len(data))
     return doc_out
 
@@ -440,11 +462,34 @@ async def import_document_from_url(
         )
         session.add(doc)
         await session.flush()
+        ingest_job_id = f"ingest:{doc.id}:v{doc.version}"
+        doc.recognition_meta_json = {
+            "ingest_job_id": ingest_job_id,
+            "ingest_document_version": doc.version,
+            "ingest_job_state": "queued",
+        }
         doc_out = DocumentOut.model_validate(doc, from_attributes=True)
 
     storage = request.app.state.storage
     await storage.save(f"{owner_id}/{kb_id}/{doc_out.id}/{filename}", data)
-    await request.app.state.arq.enqueue_job("ingest_document", str(owner_id), str(doc_out.id))
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "ingest_document",
+            str(owner_id),
+            str(doc_out.id),
+            ingest_job_id,
+            _job_id=ingest_job_id,
+        )
+        if job is None:
+            raise RuntimeError("ingestion job was not enqueued")
+    except Exception as exc:
+        async with tenant_session(owner_id) as session:
+            failed_doc = await session.get(Document, doc_out.id, with_for_update=True)
+            if failed_doc is not None:
+                failed_doc.status = "failed"
+                failed_doc.error_msg = "文档处理任务提交失败，请重新导入"
+                failed_doc.recognition_meta_json = {}
+        raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
     log.info("document_imported_from_url", doc_id=str(doc_out.id), size=len(data))
     return doc_out
 
@@ -510,14 +555,32 @@ async def reindex_document(
     kb = await _resolve_kb(ctx, kb_id)
     _require_kb_write(ctx, kb)
     owner_id = kb.tenant_id
+    reindex_version: int | None = None
+    ingest_job_id: str | None = None
     async with tenant_session(owner_id) as session:
-        doc = await session.get(Document, doc_id)
+        doc = await session.get(Document, doc_id, with_for_update=True)
         if doc is None or doc.kb_id != kb_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
+        # Reindex advances the document generation. Any in-flight ingestion or
+        # enrichment carrying the previous version must lose all write rights.
+        meta = dict(doc.recognition_meta_json or {})
+        for key in (
+            "enrich_job_id",
+            "enrich_previous_status",
+            "enrich_started_at",
+            "enrich_job_state",
+            "enrich_document_version",
+        ):
+            meta.pop(key, None)
         doc.status = "pending"
         doc.error_msg = None
         doc.version += 1
-        doc.recognition_meta_json = {}
+        ingest_job_id = f"ingest:{doc.id}:v{doc.version}"
+        reindex_version = int(doc.version)
+        meta["ingest_job_id"] = ingest_job_id
+        meta["ingest_document_version"] = doc.version
+        meta["ingest_job_state"] = "queued"
+        doc.recognition_meta_json = meta
         if doc.parse_backend.startswith("pdf-"):
             doc.parse_backend = ""
         await session.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
@@ -527,9 +590,30 @@ async def reindex_document(
             .where(KnowledgeBase.id == kb_id)
             .values(kb_version=KnowledgeBase.kb_version + 1)
         )
-    await request.app.state.arq.enqueue_job(
-        "ingest_document", str(owner_id), str(doc_id)
-    )
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "ingest_document",
+            str(owner_id),
+            str(doc_id),
+            ingest_job_id,
+            _job_id=ingest_job_id,
+        )
+        if job is None:
+            raise RuntimeError("ingestion job was not enqueued")
+    except Exception as exc:
+        async with tenant_session(owner_id) as session:
+            failed_doc = await session.get(Document, doc_id, with_for_update=True)
+            failed_meta = dict(failed_doc.recognition_meta_json or {}) if failed_doc else {}
+            if (
+                failed_doc is not None
+                and reindex_version is not None
+                and failed_doc.version == reindex_version
+                and failed_meta.get("ingest_job_id") == ingest_job_id
+            ):
+                failed_doc.status = "failed"
+                failed_doc.error_msg = "文档处理任务提交失败，请稍后重试"
+                failed_doc.recognition_meta_json = {}
+        raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
     return {"status": "queued"}
 
 
@@ -540,31 +624,101 @@ async def re_enrich_document(
     request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """重新触发知识增强 (T0-1).
+    """重新触发知识增强 (T0-1), 采用原子抢占 + stale-while-revalidate。
 
-    增强失败时文档会回落到 ready/partial_ready 并带 error_msg——仍可检索, 但知识点
-    与依赖图没生成。这里只清空 error_msg 后重新入队 enrich_document, **不重置 status、
-    不删分块、不 bump 版本**: enrich_document 内部会自行把状态置 enriching→enriched
-    (失败再回落 ready 并写 error_msg)。与 reindex(全量重摄取)是两回事。
+    已经成功增强的文档在刷新期间仍保留旧 KC/分块可用；只有新版本成功写完后才
+    进入新的 ``enriched`` 状态。重复点击不会重复入队，队列失败会恢复到刷新前的
+    可用状态。``job_id`` 写入文档元数据，保证同一轮刷新可重试/重放时使用同一 ID。
     """
     kb = await _resolve_kb(ctx, kb_id)
     _require_kb_write(ctx, kb)
     owner_id = kb.tenant_id
-    async with tenant_session(owner_id) as session:
-        doc = await session.get(Document, doc_id)
+    job_id: str | None = None
+    fallback_status = "ready"
+    async with tenant_session(owner_id, org_ids=ctx.org_ids) as session:
+        doc = await session.get(Document, doc_id, with_for_update=True)
         if doc is None or doc.kb_id != kb_id:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
-        if doc.status == "enriching":
-            # 已在增强队列中, 避免重复入队
-            return {"status": "already_running"}
+        meta = dict(doc.recognition_meta_json or {})
+        current_job_id = meta.get("enrich_job_id")
+        if current_job_id or doc.status == "enriching":
+            # Worker 崩溃后 claim 可能永久残留。超过回收窗口才允许换代；
+            # 活跃 claim 仍保持幂等，不创建第二个模型任务。
+            stale = not current_job_id or not meta.get("enrich_started_at")
+            raw_started = meta.get("enrich_started_at")
+            if current_job_id and raw_started:
+                try:
+                    started_at = datetime.fromisoformat(str(raw_started))
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=UTC)
+                    stale = (
+                        datetime.now(UTC) - started_at
+                    ).total_seconds() > _ENRICH_CLAIM_STALE_SECONDS
+                except (TypeError, ValueError):
+                    stale = True
+            if not stale:
+                return {
+                    "status": "already_running",
+                    "job_id": str(current_job_id) if current_job_id else None,
+                }
+            for key in (
+                "enrich_job_id",
+                "enrich_previous_status",
+                "enrich_started_at",
+                "enrich_job_state",
+                "enrich_document_version",
+            ):
+                meta.pop(key, None)
+            doc.recognition_meta_json = meta
+            if doc.status == "enriching":
+                doc.status = "ready"
         if doc.status not in ("ready", "partial_ready", "enriched"):
             # 摄取尚未完成 (pending/parsing/…) 或摄取失败 (failed): 还不能增强
             raise HTTPException(status_code=409, detail="DOC_NOT_READY")
+        fallback_status = doc.status
+        job_id = f"enrich:{doc.id}:{uuid.uuid4().hex}"
+        meta = dict(doc.recognition_meta_json or {})
+        meta["enrich_job_id"] = job_id
+        meta["enrich_previous_status"] = fallback_status
+        meta["enrich_started_at"] = datetime.now(UTC).isoformat()
+        meta["enrich_document_version"] = int(doc.version)
+        meta["enrich_job_state"] = "queued"
+        # 先在同一事务内抢占，两个并发请求最多只有一个能进入这里。旧成功版本刷新
+        # 时保持 enriched，对 Quiz/检索继续可用；首次增强才显示 enriching。
+        if fallback_status != "enriched":
+            doc.status = "enriching"
         doc.error_msg = None
-    await request.app.state.arq.enqueue_job(
-        "enrich_document", str(owner_id), str(doc_id), None, str(ctx.user_id)
-    )
-    return {"status": "queued"}
+        doc.recognition_meta_json = meta
+    try:
+        job = await request.app.state.arq.enqueue_job(
+            "enrich_document",
+            str(owner_id),
+            str(doc_id),
+            None,
+            str(ctx.user_id),
+            job_id,
+            _job_id=job_id,
+        )
+        if job is None:
+            raise RuntimeError("enrichment job already exists or was not enqueued")
+    except Exception as exc:
+        # 入队失败不能把文档永久卡在 enriching；恢复旧成功版本仍可检索/出题。
+        async with tenant_session(owner_id, org_ids=ctx.org_ids) as session:
+            doc = await session.get(Document, doc_id, with_for_update=True)
+            if doc is not None:
+                meta = dict(doc.recognition_meta_json or {})
+                if meta.get("enrich_job_id") == job_id:
+                    meta.pop("enrich_job_id", None)
+                    meta.pop("enrich_previous_status", None)
+                    meta.pop("enrich_started_at", None)
+                    meta.pop("enrich_document_version", None)
+                    meta.pop("enrich_job_state", None)
+                    doc.recognition_meta_json = meta
+                    doc.status = fallback_status
+                    doc.error_msg = "知识增强任务提交失败，请稍后重试"
+        log.exception("enrich_enqueue_failed", doc_id=str(doc_id), job_id=job_id)
+        raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
+    return {"status": "queued", "job_id": job_id}
 
 
 @router.post("/{kb_id}/debug/retrieve")
@@ -708,7 +862,12 @@ async def get_kb_kc_graph(
                     )
                 ).all()
             )
-    meta = await resolve_kc_meta(ctx.tenant_id, kc_ids, redis=request.app.state.redis)
+    meta = await resolve_kc_meta(
+        ctx.tenant_id,
+        kc_ids,
+        redis=request.app.state.redis,
+        org_ids=ctx.org_ids,
+    )
     chapter_by_kc = {kc_id: (info or {}).get("chapter") or "" for kc_id, info in meta.items()}
     graph = build_kb_kc_graph(list(kc_rows), edge_rows, chapter_by_kc, mastery_rows)
     return {"kb_id": str(kb_id), "kb_name": kb.name, **graph}

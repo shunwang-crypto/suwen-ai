@@ -39,6 +39,10 @@ class KcBootstrapError(RuntimeError):
     """The document cannot be made safe for KC-backed practice."""
 
 
+class KcBootstrapStale(KcBootstrapError):
+    """A newer document generation replaced this bootstrap attempt."""
+
+
 @dataclass(frozen=True, slots=True)
 class ChapterKey:
     """A display name plus its stable, normalized identity."""
@@ -235,6 +239,8 @@ async def bootstrap_document_kcs(
     doc_id: uuid.UUID | str,
     *,
     max_chapters: int = MAX_CHAPTER_KCS,
+    expected_version: int | None = None,
+    expected_job_id: str | None = None,
 ) -> BootstrapResult:
     """Create chapter fallback KCs and bind every child chunk in one transaction.
 
@@ -258,6 +264,12 @@ async def bootstrap_document_kcs(
             raise KcBootstrapError("document not found")
         if uuid.UUID(str(document.tenant_id)) != tenant_uuid:
             raise KcBootstrapError("document tenant mismatch")
+        if expected_version is not None and int(document.version) != int(expected_version):
+            raise KcBootstrapStale("document generation changed during KC bootstrap")
+        if expected_job_id is not None:
+            meta = dict(document.recognition_meta_json or {})
+            if meta.get("ingest_job_id") != expected_job_id:
+                raise KcBootstrapStale("document ingestion claim changed during KC bootstrap")
 
         kb_uuid = uuid.UUID(str(document.kb_id))
         children = (
@@ -427,6 +439,7 @@ __all__ = [
     "ChapterKey",
     "ChildChapterAssignment",
     "KcBootstrapError",
+    "KcBootstrapStale",
     "MAX_CHAPTER_KCS",
     "bootstrap_document_kcs",
     "chapter_key_for_heading",

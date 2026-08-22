@@ -37,6 +37,8 @@ export default function GrowthPage() {
                 type="button"
                 role="tab"
                 aria-selected={on}
+                aria-controls={`growth-panel-${t.key}`}
+                id={`growth-tab-${t.key}`}
                 onClick={() => setTab(t.key)}
                 className={`-mb-px border-b-2 px-3.5 py-2 text-body-sm font-medium transition-colors ${
                   on ? "border-brand-600 text-ink" : "border-transparent text-ink-muted hover:text-ink-secondary"
@@ -48,7 +50,24 @@ export default function GrowthPage() {
           })}
         </div>
       </header>
-      {tab === "current" ? <CurrentLearningState /> : <HistoryTrends />}
+      {tab === "current" && (
+        <section
+          id="growth-panel-current"
+          role="tabpanel"
+          aria-labelledby="growth-tab-current"
+        >
+          <CurrentLearningState />
+        </section>
+      )}
+      {tab === "history" && (
+        <section
+          id="growth-panel-history"
+          role="tabpanel"
+          aria-labelledby="growth-tab-history"
+        >
+          <HistoryTrends />
+        </section>
+      )}
     </div>
   );
 }

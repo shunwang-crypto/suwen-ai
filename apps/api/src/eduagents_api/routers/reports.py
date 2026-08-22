@@ -136,7 +136,10 @@ async def _build_aggregates(
     #   不传     -> 轴 = 各知识库 (库级聚合)。
     # 章序按章号排 (中文数字), 保证轴序稳定; 旧 top12 结构保留在 radar_kcs 兼容。
     meta = await resolve_kc_meta(
-        ctx.tenant_id, [str(r.kc_id) for r, _name, _count in mastery_rows], redis=redis
+        ctx.tenant_id,
+        [str(r.kc_id) for r, _name, _count in mastery_rows],
+        redis=redis,
+        org_ids=ctx.org_ids,
     )
     scoped = [
         (r, name)
@@ -558,7 +561,7 @@ async def learning_report(
 ):
     """立即返回最近快照；首次访问只做确定性聚合，不在页面首屏等待 LLM。"""
     scope_key, scoped_kb_id = _scope(kb_id)
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         snapshot = await session.scalar(
             select(LearningReportSnapshot).where(
                 LearningReportSnapshot.user_id == ctx.user_id,
@@ -622,7 +625,7 @@ async def refresh_learning_report(
 ):
     """刷新确定性快照并将 AI 诊断入队；页面离开不取消后台生成。"""
     scope_key, scoped_kb_id = _scope(kb_id)
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         agg = await _build_aggregates(
             session,
             ctx,
@@ -698,7 +701,7 @@ async def refresh_learning_report(
             raise RuntimeError("learning report job was not enqueued")
     except Exception:  # noqa: BLE001 — 确定性报告仍可展示，只将 AI 诊断收口为失败
         log.exception("report_refresh_enqueue_failed", user_id=str(ctx.user_id), scope=scope_key)
-        async with tenant_session(ctx.tenant_id) as session:
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
             snapshot = await session.get(LearningReportSnapshot, snapshot_id)
             if snapshot is not None and snapshot.data_signature == signature:
                 snapshot.status = "failed"

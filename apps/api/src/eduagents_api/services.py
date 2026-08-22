@@ -897,16 +897,21 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
         # 模型猜的概念会污染 BKT 与成长报告 (见 plan_concepts 模块注释)。
         known_names: list[str] = []
         if kb_id is not None:
-            known_names = list(
-                (
-                    await session.scalars(
-                        select(KnowledgeComponent.canonical_name).where(
-                            KnowledgeComponent.kb_id == kb_id,
-                            KnowledgeComponent.superseded_by_id.is_(None),
-                        )
+            known_rows = (
+                await session.scalars(
+                    select(KnowledgeComponent).where(
+                        KnowledgeComponent.kb_id == kb_id,
+                        KnowledgeComponent.superseded_by_id.is_(None),
+                        KnowledgeComponent.source_kind != "chapter_fallback",
                     )
-                ).all()
-            )
+                )
+            ).all()
+            known_names = [
+                value
+                for kc in known_rows
+                for value in [kc.canonical_name, *(kc.aliases or [])]
+                if isinstance(value, str) and value.strip()
+            ]
         provisional = collect_plan_concepts(structure, known_names)
         if provisional:
             session.add_all(

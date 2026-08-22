@@ -409,6 +409,8 @@ async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str,
                 .where(
                     MasteryRecord.user_id == ctx.user_id,
                     KnowledgeComponent.kb_id == uuid.UUID(kb_id),
+                    KnowledgeComponent.superseded_by_id.is_(None),
+                    KnowledgeComponent.source_kind != "chapter_fallback",
                 )
                 .group_by(
                     KnowledgeComponent.canonical_name,
@@ -419,7 +421,9 @@ async def _load_personalization(ctx: AuthContext, kb_id: str) -> tuple[dict[str,
             )
         ).all()
         kc_query = select(KnowledgeComponent.id, KnowledgeComponent.canonical_name).where(
-            KnowledgeComponent.kb_id == uuid.UUID(kb_id)
+            KnowledgeComponent.kb_id == uuid.UUID(kb_id),
+            KnowledgeComponent.superseded_by_id.is_(None),
+            KnowledgeComponent.source_kind != "chapter_fallback",
         )
         kc_rows = (
             await session.execute(kc_query.order_by(KnowledgeComponent.created_at.asc()))
@@ -481,6 +485,7 @@ async def create_plan(
                 [str(body.kb_id)],
                 redis=getattr(request.app.state, "redis", None),
                 role="plan",
+                org_ids=ctx.org_ids,
             )
         except Exception:  # noqa: BLE001
             log.exception("plan_profile_summary_failed")
@@ -493,6 +498,7 @@ async def create_plan(
                     ctx.user_id,
                     [str(body.kb_id)],
                     limit=_PLAN_WEAK_LIMIT,
+                    org_ids=ctx.org_ids,
                 )
             )
         except Exception:  # noqa: BLE001
@@ -594,6 +600,7 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
             select(
                 KnowledgeComponent.id,
                 KnowledgeComponent.canonical_name,
+                KnowledgeComponent.aliases,
                 MasteryRecord.p_mastery,
                 func.count(func.distinct(MasteryLog.evidence_id)),
             )
@@ -608,30 +615,59 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
             .where(
                 MasteryRecord.user_id == plan.user_id,
                 KnowledgeComponent.kb_id == plan.kb_id,
+                KnowledgeComponent.superseded_by_id.is_(None),
+                KnowledgeComponent.source_kind != "chapter_fallback",
             )
             .group_by(
                 KnowledgeComponent.id,
                 KnowledgeComponent.canonical_name,
+                KnowledgeComponent.aliases,
                 MasteryRecord.p_mastery,
             )
         )
     ).all()
     if not mastery_rows:
         return {}
-    mastery_by_kc = {
-        normalize_kc_name(name): float(score)
-        for _kc_id, name, score, _count in mastery_rows
+    mastery_by_kc: dict[str, float] = {}
+    evidence_by_kc: dict[str, str] = {}
+    names_by_id: dict[str, str] = {}
+    keys_by_id: dict[str, set[str]] = defaultdict(set)
+    for kc_id, name, aliases, score, count in mastery_rows:
+        names_by_id[str(kc_id)] = name
+        for value in [name, *(aliases or [])]:
+            if not isinstance(value, str):
+                continue
+            normalized = normalize_kc_name(value)
+            if normalized:
+                mastery_by_kc[normalized] = float(score)
+                evidence_by_kc[normalized] = evidence_state(int(count))
+                keys_by_id[str(kc_id)].add(normalized)
+    anchored_rows = (
+        await session.execute(
+            select(PlanConcept.kc_id, PlanConcept.display_name).where(
+                PlanConcept.plan_id == plan.id,
+                PlanConcept.status == "promoted",
+                PlanConcept.kc_id.is_not(None),
+            )
+        )
+    ).all()
+    mastery_by_id = {
+        str(kc_id): (float(score), evidence_state(int(count)))
+        for kc_id, _name, _aliases, score, count in mastery_rows
     }
-    evidence_by_kc = {
-        normalize_kc_name(name): evidence_state(int(count))
-        for _kc_id, name, _score, count in mastery_rows
-    }
-    names_by_id = {str(kc_id): name for kc_id, name, _score, _count in mastery_rows}
+    for kc_id, display_name in anchored_rows:
+        values = mastery_by_id.get(str(kc_id))
+        if values is None or not isinstance(display_name, str):
+            continue
+        normalized = normalize_kc_name(display_name)
+        if normalized:
+            mastery_by_kc[normalized], evidence_by_kc[normalized] = values
+            keys_by_id[str(kc_id)].add(normalized)
     edge_rows = (
         await session.execute(
             select(KcEdge.from_kc, KcEdge.to_kc).where(
                 KcEdge.type == "prerequisite",
-                KcEdge.to_kc.in_([kc_id for kc_id, _n, _s, _c in mastery_rows]),
+                KcEdge.to_kc.in_([kc_id for kc_id, _n, _a, _s, _c in mastery_rows]),
             )
         )
     ).all()
@@ -641,9 +677,9 @@ async def _load_task_locks(session, plan: Plan) -> dict[str, dict]:
         source = names_by_id.get(str(from_kc))
         if not target or not source:
             continue
-        prereq_by_kc.setdefault(normalize_kc_name(target), []).append(
-            normalize_kc_name(source)
-        )
+        source_key = normalize_kc_name(source)
+        for target_key in keys_by_id.get(str(to_kc), {normalize_kc_name(target)}):
+            prereq_by_kc.setdefault(target_key, []).append(source_key)
     return compute_task_locks(
         plan.structure_json,
         mastery_by_kc,
@@ -659,15 +695,30 @@ async def _load_kc_dependency(
     if plan.plan_mode != "course_bound" or plan.kb_id is None:
         return {"levels": [], "edges": [], "primary_route": []}
     kc_rows = (
-        await session.execute(
-            select(KnowledgeComponent.id, KnowledgeComponent.canonical_name)
-            .where(KnowledgeComponent.kb_id == plan.kb_id)
+        await session.scalars(
+            select(KnowledgeComponent)
+            .where(
+                KnowledgeComponent.kb_id == plan.kb_id,
+                KnowledgeComponent.superseded_by_id.is_(None),
+                KnowledgeComponent.source_kind != "chapter_fallback",
+            )
             .order_by(KnowledgeComponent.created_at.asc(), KnowledgeComponent.id.asc())
         )
     ).all()
     if not kc_rows:
         return {"levels": [], "edges": [], "primary_route": []}
-    kc_ids = [kc_id for kc_id, _name in kc_rows]
+    kc_ids = [row.id for row in kc_rows]
+    anchored_rows = (
+        await session.execute(
+            select(PlanConcept.kc_id, PlanConcept.display_name)
+            .where(
+                PlanConcept.plan_id == plan.id,
+                PlanConcept.status == "promoted",
+                PlanConcept.kc_id.is_not(None),
+            )
+            .order_by(PlanConcept.ordinal.asc(), PlanConcept.id.asc())
+        )
+    ).all()
     edge_rows = (
         await session.execute(
             select(KcEdge.from_kc, KcEdge.to_kc)
@@ -679,26 +730,52 @@ async def _load_kc_dependency(
             .order_by(KcEdge.id.asc())
         )
     ).all()
+    names: list[tuple[str, str]] = []
+    for row in kc_rows:
+        names.append((str(row.id), row.canonical_name))
+        names.extend(
+            (str(row.id), alias)
+            for alias in (row.aliases or [])
+            if isinstance(alias, str) and alias.strip()
+        )
+    names.extend(
+        (str(kc_id), display_name)
+        for kc_id, display_name in anchored_rows
+        if kc_id is not None and isinstance(display_name, str) and display_name.strip()
+    )
     return _build_kc_dependency(
         plan.structure_json,
-        [(str(kc_id), name) for kc_id, name in kc_rows],
+        names,
         [(str(from_kc), str(to_kc)) for from_kc, to_kc in edge_rows],
         locks,
     )
 
 
-async def _kb_kc_normalized_names(session, kb_id) -> set[str]:
-    """本库全部正式 KC 的归一化名字集合 (临时概念锚定比对用)。"""
-    names = (
+async def _kb_kc_anchor_index(session, kb_id) -> dict[str, KnowledgeComponent]:
+    """Canonical + aliases -> current, semantic KC; fallback/superseded excluded."""
+    rows = (
         await session.scalars(
-            select(KnowledgeComponent.canonical_name).where(
-                KnowledgeComponent.kb_id == kb_id
+            select(KnowledgeComponent).where(
+                KnowledgeComponent.kb_id == kb_id,
+                KnowledgeComponent.superseded_by_id.is_(None),
+                KnowledgeComponent.source_kind != "chapter_fallback",
             )
         )
     ).all()
-    known = {normalize_kc_name(name) for name in names if isinstance(name, str)}
-    known.discard("")
-    return known
+    candidates: dict[str, dict[uuid.UUID, KnowledgeComponent]] = defaultdict(dict)
+    for row in rows:
+        for value in [row.canonical_name, *(row.aliases or [])]:
+            if not isinstance(value, str):
+                continue
+            normalized = normalize_kc_name(value)
+            if normalized:
+                candidates[normalized][row.id] = row
+    # 同一个别名指向多个 KC 时宁可继续保留临时概念，也不做不可解释的任意绑定。
+    return {
+        normalized: next(iter(by_id.values()))
+        for normalized, by_id in candidates.items()
+        if len(by_id) == 1
+    }
 
 
 async def _plan_detail(session, plan: Plan, today) -> dict:
@@ -718,22 +795,31 @@ async def _plan_detail(session, plan: Plan, today) -> dict:
     provisional_rows = (
         await session.scalars(
             select(PlanConcept)
-            .where(PlanConcept.plan_id == plan.id, PlanConcept.status == "provisional")
+            .where(
+                PlanConcept.plan_id == plan.id,
+                PlanConcept.status != "dismissed",
+                PlanConcept.kc_id.is_(None),
+            )
             .order_by(PlanConcept.ordinal.asc(), PlanConcept.id.asc())
         )
     ).all()
     provisional_concepts = [
-        {"name": row.display_name, "status": row.status} for row in provisional_rows
+        {
+            "name": row.display_name,
+            "status": "provisional",
+            "kc_id": str(row.kc_id) if row.kc_id else None,
+        }
+        for row in provisional_rows
     ]
-    # 0035 (T1-1c): 资料事后增强出同名真实 KC 后, 这些临时概念已能"锚定"成正式知识点。
+    # 0035 (T1-1c): 资料事后增强出同名/别名真实 KC 后, 这些临时概念可持久锚定。
     # 依赖图/解锁 GET 时按名动态判定 (见 _load_kc_dependency/_load_task_locks) 早已反映真实,
     # 唯独此快照仍标临时。如实数出"现在已能锚定"的条数, 供界面提示计划可更新并给出重新锚定
     # 入口 (真正 promote 落库在 POST /{plan_id}/re-anchor)。
     anchorable_concepts = 0
     if provisional_rows and plan.plan_mode == "course_bound" and plan.kb_id is not None:
-        known = await _kb_kc_normalized_names(session, plan.kb_id)
+        known = await _kb_kc_anchor_index(session, plan.kb_id)
         anchorable_concepts = sum(
-            1 for row in provisional_rows if row.normalized_name in known
+            1 for row in provisional_rows if row.kc_id is None and row.normalized_name in known
         )
     structure = enrich_structure(plan.structure_json, resources, locks)
     schedule = plan_schedule_snapshot(
@@ -809,7 +895,7 @@ async def toggle_task(
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """勾选/取消勾选一个任务 (F3 计划是活的)。task_id 见 plan_adjust 模块文档。"""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx, for_update=True)
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
@@ -825,6 +911,7 @@ async def toggle_task(
             "task_id": task_id,
             "status": final_status,
             "progress": plan_progress(new_structure),
+            "plan_status": plan.status,
         }
 
 
@@ -833,9 +920,11 @@ async def archive_plan(
     plan_id: uuid.UUID,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """Abandon the active plan; archived and completed plans stay immutable."""
-    async with tenant_session(ctx.tenant_id) as session:
+    """Abandon the active plan; retrying an already archived request is idempotent."""
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        if plan.status == "archived":
+            return {"id": str(plan.id), "status": plan.status}
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         plan.status = "archived"
@@ -847,34 +936,37 @@ async def re_anchor_plan(
     plan_id: uuid.UUID,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """把已能匹配本库正式 KC 的临时概念锚定为 promoted (T1-1c)。
+    """把已能唯一匹配本库正式 KC 的临时概念建立持久外键锚点 (T1-1c)。
 
-    资料事后增强出同名真实 KC 后, 计划任务的依赖图/解锁在 GET 时已按名自动反映;
-    唯独 provisional_concepts 快照仍显示为临时。这里按 normalize_kc_name 取交集, 命中的
-    PlanConcept 从 provisional 升为 promoted —— 不加 kc_id 外键、不进掌握度/BKT 路径, 仅让
-    其从"临时概念"里消失。grounding_status 是创建期依资料来源算定的事实, 不在此重算。
+    匹配 canonical_name 与 aliases，排除 superseded/chapter_fallback；别名存在歧义时
+    不自动绑定。命中后写 ``PlanConcept.kc_id`` 并标记 promoted。该外键仅用于计划
+    展示/依赖映射，仍不进入掌握度/BKT/证据路径。grounding_status 是创建期事实，
+    不在此重算。
     """
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx, for_update=True)
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         if plan.plan_mode != "course_bound" or plan.kb_id is None:
-            return {"promoted": 0}
-        known = await _kb_kc_normalized_names(session, plan.kb_id)
+            return {"anchored": 0}
+        known = await _kb_kc_anchor_index(session, plan.kb_id)
         rows = (
             await session.scalars(
                 select(PlanConcept).where(
                     PlanConcept.plan_id == plan.id,
-                    PlanConcept.status == "provisional",
+                    PlanConcept.status != "dismissed",
+                    PlanConcept.kc_id.is_(None),
                 )
             )
         ).all()
-        promoted = 0
+        anchored = 0
         for row in rows:
-            if row.normalized_name in known:
+            target = known.get(row.normalized_name)
+            if target is not None:
+                row.kc_id = target.id
                 row.status = "promoted"
-                promoted += 1
-        return {"promoted": promoted}
+                anchored += 1
+        return {"anchored": anchored}
 
 
 @router.post("/{plan_id}/tasks/{task_id}/complete")
@@ -884,7 +976,7 @@ async def complete_reading_task(
     ctx: AuthContext = Depends(api_rate_limited),
 ):
     """Explicitly complete a reading task; merely opening a link never completes it."""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         try:
             return await complete_plan_task(
                 session,
@@ -903,7 +995,7 @@ async def complete_reading_task(
 @router.post("/{plan_id}/adjust")
 async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """依据当前学情调整计划 (F3-A3): 薄弱 KC 无对应任务 → 插补强任务 + 写调整审计。"""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx, for_update=True)
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
@@ -915,7 +1007,7 @@ async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited
 @router.get("/{plan_id}/adjustments")
 async def list_adjustments(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
     """调整历史 (时间倒序): 每条含中文理由与插入明细。"""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         await _load_plan(session, plan_id, ctx)
         rows = (
             await session.scalars(
@@ -1053,7 +1145,7 @@ async def tutor_turn(
     if body.tutor_draft_id is not None:
         from ..models import TutorProblemDraft
 
-        async with tenant_session(ctx.tenant_id) as session:
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
             draft = await session.scalar(
                 select(TutorProblemDraft).where(
                     TutorProblemDraft.id == body.tutor_draft_id,
@@ -1089,7 +1181,7 @@ async def tutor_turn(
     plan_id = stored_plan_id or requested_plan_id
     task_id = stored_task_id or requested_task_id
     if plan_id:
-        async with tenant_session(ctx.tenant_id) as session:
+        async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
             try:
                 await validate_plan_task_attribution(
                     session,
@@ -1112,11 +1204,17 @@ async def tutor_turn(
             ctx.user_id,
             redis=getattr(request.app.state, "redis", None),
             role="tutor",
+            org_ids=ctx.org_ids,
         )
     except Exception:  # noqa: BLE001
         log.exception("tutor_profile_summary_failed")
     try:
-        band = await problem_mastery_band(ctx.tenant_id, ctx.user_id, problem)
+        band = await problem_mastery_band(
+            ctx.tenant_id,
+            ctx.user_id,
+            problem,
+            org_ids=ctx.org_ids,
+        )
     except Exception:  # noqa: BLE001
         # 与画像同样的降级口径: 算不出档位就按无画像走原有起始层级, 不拖垮辅导主链路
         log.exception("tutor_mastery_band_failed")
@@ -1154,7 +1252,7 @@ async def tutor_turn(
             learner_insights = await apply_tutor_summary(ctx, summary)
         if plan_id and task_id:
             try:
-                async with tenant_session(ctx.tenant_id) as session:
+                async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
                     plan_task_completion = await complete_plan_task(
                         session,
                         tenant_id=ctx.tenant_id,
@@ -1177,7 +1275,7 @@ async def tutor_turn(
     # ChatSession（id=thread_local_id，与 checkpoint 同键），后续轮次仅刷新
     # updated_at 维持排序；标题只在创建时写入，用户重命名不被覆盖。
     title = " ".join((problem or body.message or "辅导解题").split())[:60] or "辅导解题"
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         row = await session.scalar(
             select(ChatSession).where(
                 ChatSession.id == uuid.UUID(local_id),

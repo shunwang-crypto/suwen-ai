@@ -9,7 +9,9 @@ GET /api/next-actions: 确定性聚合 (零 LLM), 每一条推荐都能回答"�
 - weak_practice: 复用 profile_summary.weak_point_kcs 的 top 薄弱 KC, 理由沿用
   difficulty_rationale 的 zone/reason 定性词 (P2-7), 链到 /quiz?weak=1 定向出题卡;
 - plan_task: active plan's current task with exact plan/task attribution;
-- cold start: one diagnostic action while evidence is still absent.
+- cold start: one diagnostic action while evidence is absent and a real course
+  scope is ready; users without any material receive an empty action list so
+  Today can offer upload or a goal-only plan instead of a dead Quiz link.
 
 优先级 到期复习 > 上次卡点 > 有充分证据的薄弱点 > active 计划当前任务 > 冷启动，最多 5 条。
 脱敏口径 (P2-7): 理由只用定性词 (zone_label 两档等), 不带掌握度小数;
@@ -29,7 +31,7 @@ from sqlalchemy import select
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import KnowledgeComponent, LearnerInsight
+from ..models import KnowledgeBase, KnowledgeComponent, LearnerInsight
 from ..plan_adjust import (
     active_plan,
     iter_tasks,
@@ -39,6 +41,7 @@ from ..plan_adjust import (
 )
 from ..profile_summary import weak_point_kcs
 from ..reason_codes import ZONE_VALUES, ReasonCode, reason_payload
+from ..services import quiz_kc_readiness
 
 # B3 到期数同源: 与 /api/reviews/today 的 total_due 调同一个函数 (唯一出处),
 # 开场卡与复习页的"到期数"不再各查各的 (此前 5 vs 37 打架)
@@ -143,6 +146,7 @@ def compose_next_actions(
     insight: dict | None,
     weak_points: list[dict],
     plan: dict | None,
+    can_start_diagnostic: bool = True,
 ) -> list[dict]:
     """确定性拼装推荐条目 (纯函数, 单测入口): 优先级排布 + ≤5 条 + 冷启动兜底。
 
@@ -204,7 +208,7 @@ def compose_next_actions(
                 "href": _plan_task_href(plan),
             }
         )
-    if not items:
+    if not items and can_start_diagnostic:
         items = [
             {
                 "type": "cold_start",
@@ -238,10 +242,10 @@ def _plan_task_href(plan: dict) -> str:
 
 
 async def _load_snapshots(
-    ctx: AuthContext, now_dt: datetime
-) -> tuple[int, dict | None, dict | None]:
+    ctx: AuthContext, now_dt: datetime, *, gateway_mode: str
+) -> tuple[int, dict | None, dict | None, bool]:
     """Load the deterministic recommendation snapshots in one transaction."""
-    async with tenant_session(ctx.tenant_id) as session:
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         # 到期数 = len(全量到期集合), 与 reviews.today 的 total_due 同一函数 (B3)
         due_count = len(await due_error_items(session, ctx.user_id, now_dt))
 
@@ -277,20 +281,56 @@ async def _load_snapshots(
             if plan_row is not None
             else None
         )
-    return due_count, insight, plan
+        # A raw KC row is not enough to start a diagnostic: it may belong to a
+        # still-processing/empty course, or be a superseded enrichment record.
+        # Reuse the same KB/document/KC barrier as quiz creation so Today never
+        # links to a dead `/quiz` entry point.  In stub mode this intentionally
+        # accepts chapter-fallback KCs, matching the local demo gateway policy.
+        visible_kbs = (
+            await session.scalars(
+                select(KnowledgeBase).order_by(KnowledgeBase.created_at)
+            )
+        ).all()
+        can_start_diagnostic = False
+        for kb in visible_kbs:
+            readiness = await quiz_kc_readiness(
+                session,
+                tenant_id=ctx.tenant_id,
+                kb_id=kb.id,
+                gateway_mode=gateway_mode,
+                org_ids=ctx.org_ids,
+            )
+            if readiness.status == "ready":
+                can_start_diagnostic = True
+                break
+    return due_count, insight, plan, can_start_diagnostic
 
 
 @router.get("")
 async def next_actions(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
     """可解释的"下一步"推荐 (G13): 全部确定性聚合, 逐条自带"为什么"。"""
     now_dt = await timectl.now(request.app.state.redis)
-    due_count, insight, plan = await _load_snapshots(ctx, now_dt)
+    settings = getattr(request.app.state, "settings", None)
+    gateway_mode = getattr(settings, "gateway_mode", None)
+    if not isinstance(gateway_mode, str) or not gateway_mode:
+        from eduagents_core.config import get_settings
+
+        gateway_mode = get_settings().gateway_mode
+    due_count, insight, plan, can_start_diagnostic = await _load_snapshots(
+        ctx, now_dt, gateway_mode=gateway_mode
+    )
     # 薄弱点走既有共用函数 (自开事务); kb 不限定 —— 开场卡是全局视角
-    weak = await weak_point_kcs(ctx.tenant_id, ctx.user_id, [])
+    weak = await weak_point_kcs(
+        ctx.tenant_id,
+        ctx.user_id,
+        [],
+        org_ids=ctx.org_ids,
+    )
     items = compose_next_actions(
         due_count=due_count,
         insight=insight,
         weak_points=weak,
         plan=plan,
+        can_start_diagnostic=can_start_diagnostic,
     )
     return {"items": items}
