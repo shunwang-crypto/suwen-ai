@@ -9,7 +9,7 @@
 
 真实 PG/Redis, stub 网关 (聚合本身零 LLM)。跑法:
 INTEGRATION=1 pytest tests/integration/test_next_actions_flow.py -q
-(需 make dev-infra + LD_LIBRARY_PATH=/home/shunw/miniforge3/envs/eduagents/lib)
+(需 make dev-infra + LD_LIBRARY_PATH=$HOME/miniforge3/envs/eduagents/lib)
 """
 
 from __future__ import annotations

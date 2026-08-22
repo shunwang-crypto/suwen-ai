@@ -66,7 +66,7 @@ _MASK64 = (1 << 64) - 1
 @lru_cache(maxsize=8192)
 def _token_vector(token: str, dim: int) -> tuple[float, ...]:
     """token -> dim 维伪随机向量, 值域 [-1, 1), xxhash 播种的 LCG 展开。"""
-    state = xxhash.xxh64_intdigest(token)
+    state = xxhash.xxh64_intdigest(token.encode())
     out: list[float] = []
     for _ in range(dim):
         state = (state * _LCG_MULT + _LCG_INC) & _MASK64

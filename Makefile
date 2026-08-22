@@ -1,4 +1,4 @@
-PY_ENV ?= /home/shunw/miniforge3/envs/eduagents
+PY_ENV ?= $(HOME)/miniforge3/envs/eduagents
 PY := $(PY_ENV)/bin/python
 PIP := $(PY_ENV)/bin/pip
 # conda libstdc++ 优先 (pymupdf/qdrant ABI 冲突, 见 tests/conftest.py 注释)

@@ -61,7 +61,7 @@ AI 识别结果、待核验题目、阅读行为、普通聊天和反讲反馈�
 本机固定使用 Conda 环境：
 
 ~~~text
-/home/shunw/miniforge3/envs/eduagents
+$HOME/miniforge3/envs/eduagents
 ~~~
 
 即使当前 shell 显示为 `base`，也不要裸跑 `python`、`pip`、`pytest` 或 `alembic`。
@@ -71,7 +71,7 @@ Makefile 始终调用上述环境中的 Python 3.12，并在执行前校验；�
 首次初始化：
 
 ~~~bash
-cd /home/shunw/eduagents
+cd /path/to/eduagent
 [ -f .env ] || cp .env.example .env
 make env-check
 make install

@@ -43,7 +43,7 @@ class Bm25SparseEncoder:
             return {}
         tf: dict[int, int] = {}
         for token in tokens:
-            idx = xxhash.xxh32_intdigest(token)
+            idx = xxhash.xxh32_intdigest(token.encode())
             tf[idx] = tf.get(idx, 0) + 1
         length_norm = self.K1 * (1.0 - self.B + self.B * len(tokens) / self.AVG_DOC_LEN)
         return {
@@ -52,7 +52,7 @@ class Bm25SparseEncoder:
 
     def encode_query(self, text: str) -> dict[int, float]:
         """查询端: 每个去重 token 权重 1.0。"""
-        return {xxhash.xxh32_intdigest(token): 1.0 for token in self._tokenize(text)}
+        return {xxhash.xxh32_intdigest(token.encode()): 1.0 for token in self._tokenize(text)}
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:

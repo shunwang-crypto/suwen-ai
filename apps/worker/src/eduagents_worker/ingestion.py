@@ -580,7 +580,7 @@ async def ingest_document(
                             heading_path=child.heading_path,
                             page_start=child.page_start,
                             page_end=child.page_end,
-                            content_hash=xxhash.xxh64_hexdigest(child.text),
+                            content_hash=xxhash.xxh64_hexdigest(child.text.encode()),
                             embedding_status="pending",
                         )
                     )

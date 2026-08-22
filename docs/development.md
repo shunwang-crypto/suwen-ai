@@ -4,7 +4,7 @@
 
 ## 环境
 
-- Python 3.12：`/home/shunw/miniforge3/envs/eduagents`
+- Python 3.12：`$HOME/miniforge3/envs/eduagents`
 - Node.js 20+ 与 npm
 - PostgreSQL 16、Redis 7、Qdrant
 - 文件对象链路按 `.env` 使用 MinIO 或本地实现
@@ -19,7 +19,7 @@ make env-check
 Makefile 会直接调用：
 
 ~~~text
-/home/shunw/miniforge3/envs/eduagents/bin/python
+$HOME/miniforge3/envs/eduagents/bin/python
 ~~~
 
 并校验 `sys.prefix` 和 Python 3.12。其他机器可显式覆盖：
@@ -31,7 +31,7 @@ make PY_ENV=/absolute/path/to/conda-env env-check
 ## 初始化与启动
 
 ~~~bash
-cd /home/shunw/eduagents
+cd /path/to/eduagent
 [ -f .env ] || cp .env.example .env
 make install
 (cd apps/web && npm ci)
@@ -165,7 +165,7 @@ make migration-check
 ~~~bash
 export READONLY_DATABASE_URL='<local PostgreSQL DSN>'
 export READONLY_QDRANT_URL='http://127.0.0.1:6333'
-/home/shunw/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py
+$HOME/miniforge3/envs/eduagents/bin/python scripts/check_vector_drift.py
 ~~~
 
 ## 提交前

@@ -3,7 +3,7 @@
 # 幂等: 重复执行只会确保服务在运行
 set -euo pipefail
 
-ENV_BIN="${PY_ENV:-/home/shunw/miniforge3/envs/eduagents}/bin"
+ENV_BIN="${PY_ENV:-$HOME/miniforge3/envs/eduagents}/bin"
 DATA_ROOT="$HOME/.local/share/eduagents"
 PGDATA="$DATA_ROOT/pgdata"
 REDIS_DIR="$DATA_ROOT/redis"
@@ -43,12 +43,16 @@ if [ -x "$QDRANT_BIN" ]; then
 fi
 
 # ---------- Redis ----------
-if ! timeout 2 "$ENV_BIN/redis-cli" -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
+# conda-forge 无 aarch64 redis 构建, 改用系统 redis (apt 安装)。
+# 清除 conda 的 LD_LIBRARY_PATH, 避免系统二进制误加载冲突的 conda 共享库。
+REDIS_CLI=(env -u LD_LIBRARY_PATH redis-cli)
+REDIS_SERVER=(env -u LD_LIBRARY_PATH redis-server)
+if ! timeout 2 "${REDIS_CLI[@]}" -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
   echo "[dev-infra] starting redis ..."
-  "$ENV_BIN/redis-server" --daemonize yes --port 6379 --dir "$REDIS_DIR" \
+  "${REDIS_SERVER[@]}" --daemonize yes --port 6379 --dir "$REDIS_DIR" \
     --appendonly yes --logfile "$DATA_ROOT/redis.log"
 fi
 
 "$ENV_BIN/psql" -U edu -h 127.0.0.1 -p 5432 -d eduagents -c 'SELECT 1' >/dev/null
-timeout 2 "$ENV_BIN/redis-cli" -h 127.0.0.1 -p 6379 ping >/dev/null
+timeout 2 "${REDIS_CLI[@]}" -h 127.0.0.1 -p 6379 ping >/dev/null
 echo "[dev-infra] postgres:5432 + redis:6379 就绪"
