@@ -119,7 +119,7 @@ export function WeakPointCard({
                     {wp.name}
                   </span>
                   <span className="font-mono text-caption text-amber-500">
-                    当前 · {fmtPct(mastery)}
+                    当前 · {mastery == null ? "未知" : fmtPct(mastery)}
                   </span>
                 </span>
               </div>

@@ -23,7 +23,7 @@ export function AxisBars({ axes, weakThreshold }: { axes: ReportRadarAxis[]; wea
       {axes.map((a) => {
         // 聚合轴只有存在 observed KC 时才有 p_mastery；空值表示尚无可展示证据。
         const observed = a.p_mastery != null;
-        const value = observed ? a.p_mastery : 0;
+        const value = a.p_mastery ?? 0;
         const barColor =
           !observed
             ? "bg-surface-muted"
