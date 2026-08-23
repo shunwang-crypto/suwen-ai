@@ -7,7 +7,7 @@
 
 import { CheckCircle2, Clock3, FileStack, TriangleAlert } from "lucide-react";
 import Link from "next/link";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { CourseMaterialsTab } from "@/components/courses/course-materials-tab";
@@ -47,13 +47,21 @@ function rememberRecentCourse(userId: string, kbId: string) {
 }
 
 /** 计划 tab：该 kb_id 关联计划（优先进行中）的详情；发起表单留在 /plans 聚合壳。 */
-function CoursePlanTab({ kbId, requestedPlanId }: { kbId: string; requestedPlanId?: string | null }) {
+function CoursePlanTab({
+  kbId,
+  requestedPlanId,
+  onPlanChanged,
+}: {
+  kbId: string;
+  requestedPlanId?: string | null;
+  /** 计划变更（任务勾选/归档/重锚）后通知外层同步顶栏概览。 */
+  onPlanChanged?: () => void;
+}) {
   const [plan, setPlan] = useState<PlanListItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
 
-  /* eslint-disable react-hooks/set-state-in-effect -- route/reload scope changes must clear the previous plan before the new request resolves */
+  /* eslint-disable react-hooks/set-state-in-effect -- route scope changes must clear the previous plan before the new request resolves */
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -78,15 +86,8 @@ function CoursePlanTab({ kbId, requestedPlanId }: { kbId: string; requestedPlanI
     return () => {
       alive = false;
     };
-  }, [kbId, requestedPlanId, reloadKey]);
+  }, [kbId, requestedPlanId]);
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  const reload = () => {
-    setLoading(true);
-    setError(null);
-    setPlan(null);
-    setReloadKey((key) => key + 1);
-  };
 
   if (loading) {
     return (
@@ -111,13 +112,15 @@ function CoursePlanTab({ kbId, requestedPlanId }: { kbId: string; requestedPlanI
       </EmptyState>
     );
   }
+  // 面板 toggle 后用服务端返回就地自愈自身进度（无需父层重挂 → 不折叠手风琴/不闪骨架）；
+  // 这里只把变更冒泡给外层刷新顶栏「学习计划 done/total」概览，实现顶栏实时同步。
   return (
     <PlanDetailPanel
       planId={plan.id}
       goal={plan.goal}
       status={plan.status}
       budgetHours={plan.budget_hours}
-      onChanged={reload}
+      onChanged={onPlanChanged}
     />
   );
 }
@@ -135,6 +138,8 @@ function CourseWorkspaceView() {
 
   const [kb, setKb] = useState<KbOut | null>(null);
   const [kbError, setKbError] = useState<string | null>(null);
+  // 课程切换后丢弃在途的旧概览刷新，避免用旧课的 summary 覆盖新课
+  const kbIdRef = useRef(kbId);
   const summary = kb?.summary;
   const sourceStatus = !summary || summary.source_total === 0
     ? "还没有资料"
@@ -144,9 +149,24 @@ function CourseWorkspaceView() {
         ? `${summary.source_processing} 份处理中`
         : "资料处理失败";
 
+  // 顶栏概览随计划变更实时刷新：勾选任务后静默重取 kb.summary（不清空 kb → 不闪烁）。
+  // GET /api/kb 的 summary 每次由计划结构实时算出，故重取即得最新 done/total。
+  const refreshSummary = useCallback(() => {
+    void apiJson<KbOut[]>("/api/kb")
+      .then((list) => {
+        if (kbIdRef.current !== kbId) return; // 已切走课程 → 丢弃过期结果
+        const found = list.find((item) => item.id === kbId);
+        if (found) setKb(found);
+      })
+      .catch(() => {
+        // 静默：概览刷新失败不打断勾选；下次进页或手动刷新即对
+      });
+  }, [kbId]);
+
   /* eslint-disable react-hooks/set-state-in-effect -- dynamic route switch must clear the previous course before its replacement resolves */
   useEffect(() => {
     let alive = true;
+    kbIdRef.current = kbId;
     // Dynamic route segments can change without remounting this client
     // component. Clear the old course synchronously so A is never rendered
     // under B's URL while the new course list request is in flight.
@@ -262,7 +282,7 @@ function CourseWorkspaceView() {
         ))}
       {tab === "graph" && <KcGraphPanel key={kbId} kbId={kbId} />}
 
-      {tab === "plan" && <CoursePlanTab kbId={kbId} requestedPlanId={requestedPlanId} />}
+      {tab === "plan" && <CoursePlanTab kbId={kbId} requestedPlanId={requestedPlanId} onPlanChanged={refreshSummary} />}
     </div>
   );
 }
