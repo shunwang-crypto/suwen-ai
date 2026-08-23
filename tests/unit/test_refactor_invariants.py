@@ -52,9 +52,12 @@ def test_retired_student_pages_and_links_are_absent() -> None:
 
     # Match only browser paths that begin a JS string/template.  Backend API
     # contracts such as "/api/kb" remain valid and are intentionally ignored.
+    # 别名映射表的 key (NAV_HIGHLIGHT_ALIASES / 中文标签表, 形如 "/errors": "/practice")
+    # 是把旧 URL 高亮/标注到新页的显式声明, 不是指向下线页的链接, 故豁免
+    # "闭合引号后紧跟冒号" 的对象 key 形态。
     retired_link = re.compile(
         r'(?P<quote>["\'`])/(?:kb|resources|errors|profile|reports)'
-        r'(?=[/?]|(?P=quote))'
+        r'(?=[/?]|(?P=quote)(?!\s*:))'
     )
     offenders = [
         str(path.relative_to(ROOT))

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from eduagents_core.config import get_settings
@@ -120,6 +121,9 @@ class _ReapRedis(FakeAsyncRedis):
 
     async def enqueue_job(self, name, *args, **kwargs):
         self.enqueued.append((name, *args))
+        # 源码 reap 会校验 enqueue_job 返回值 (job is None 视为入队失败)；真 arq
+        # 成功入队返回 Job 句柄，这里如实模拟一个非 None 句柄。
+        return SimpleNamespace(job_id=kwargs.get("_job_id"))
 
 
 async def test_reap_stale_ingestion_requeues_then_gives_up(client):
@@ -152,7 +156,12 @@ async def test_reap_stale_ingestion_requeues_then_gives_up(client):
         doc = await _doc_row(client, headers, kb_id, doc_id)
         assert doc["status"] == "failed"
         assert len(redis.enqueued) == i
-        assert redis.enqueued[-1] == ("ingest_document", user_id, doc_id)
+        assert redis.enqueued[-1] == (
+            "ingest_document",
+            user_id,
+            doc_id,
+            f"ingest:{doc_id}:v1:retry:{i}",
+        )
 
     # 第 4 次: 只回收不再重入队, 错误信息提示放弃
     await _set_status(doc_id, user_id, "parsing")

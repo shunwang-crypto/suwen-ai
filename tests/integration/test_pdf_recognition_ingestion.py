@@ -121,15 +121,17 @@ async def test_mixed_pdf_ingestion_preserves_pages_and_is_retry_idempotent(
         assert await session.scalar(select(func.count()).select_from(Question)) == 0
         assert await session.scalar(select(func.count()).select_from(ErrorItem)) == 0
 
-    # A worker replay of the same document version replaces chunks/vectors and
-    # reuses page request IDs, allowing wallet consumption to remain idempotent.
+    # 8-22 重构后：已 ready 的文档再次直接摄取会被防重复摄取拦截 (status 已非
+    # pending/failed)，返回 already_running —— 既不重新识别也不重复扣费 (比旧的
+    # "重放替换" 更强的钱包幂等)。正式重摄改由下面的 reindex 流程 (bump version) 触发。
     assert (
         await ingestion.ingest_document(
             {"gateway": gateway, "redis": None}, user_id, doc_id
         )
-        == "ready"
+        == "already_running"
     )
-    assert {request.request_id for request in gateway.requests[2:]} == set(first_request_ids)
+    # 被拦截 → 未新增识别请求 (仍是首轮 2 次)
+    assert len(gateway.requests) == 2
     async with tenant_session(user_id) as session:
         assert (
             await session.scalar(
@@ -160,6 +162,6 @@ async def test_mixed_pdf_ingestion_preserves_pages_and_is_retry_idempotent(
         )
         == "ready"
     )
-    reindexed_request_ids = {request.request_id for request in gateway.requests[4:]}
+    reindexed_request_ids = {request.request_id for request in gateway.requests[2:]}
     assert len(reindexed_request_ids) == 2
     assert reindexed_request_ids.isdisjoint(first_request_ids)

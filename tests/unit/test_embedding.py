@@ -76,17 +76,17 @@ def test_sparse_chinese_segmentation_and_stable_indices():
     query = encoder.encode_query("泰勒公式的余项")
     # 分词后 ≥2 个词项 (停用词 "的" 被过滤)
     assert len(query) >= 2
-    assert xxhash.xxh32_intdigest("的") not in query
+    assert xxhash.xxh32_intdigest("的".encode()) not in query
     # 同 token 跨调用索引稳定, 且 doc 端与 query 端映射到同一索引
     assert query == encoder.encode_query("泰勒公式的余项")
     doc = encoder.encode_document("泰勒公式的余项")
     assert set(doc) == set(query)
-    assert xxhash.xxh32_intdigest("泰勒") in query
+    assert xxhash.xxh32_intdigest("泰勒".encode()) in query
 
 
 def test_sparse_document_tf_sublinear():
     encoder = Bm25SparseEncoder()
-    idx = xxhash.xxh32_intdigest("泰勒")
+    idx = xxhash.xxh32_intdigest("泰勒".encode())
     w1 = encoder.encode_document("泰勒")[idx]
     w3 = encoder.encode_document("泰勒 泰勒 泰勒")[idx]
     assert w3 > w1  # tf 增加权重增加

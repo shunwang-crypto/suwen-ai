@@ -43,7 +43,7 @@ async def test_disabled_personalization_returns_empty_context(monkeypatch):
     但摘要/薄弱点/已掌握全部为空 — 下游 (qa/quiz/tutor) 按 empty 分支走。"""
     called = {"snapshot": 0}
 
-    async def _fake_snapshot(tenant_id, user_id, kb_ids):
+    async def _fake_snapshot(tenant_id, user_id, kb_ids, org_ids=None):
         called["snapshot"] += 1
         return (
             [("kc1", "泰勒公式", 0.2, "observed")],
@@ -68,7 +68,7 @@ async def test_disabled_personalization_returns_empty_context(monkeypatch):
 async def test_enabled_personalization_loads_snapshot(monkeypatch):
     """开关默认开 (无偏好行 = None) 时行为不变: 正常走快照与拼装。"""
 
-    async def _fake_snapshot(tenant_id, user_id, kb_ids):
+    async def _fake_snapshot(tenant_id, user_id, kb_ids, org_ids=None):
         return (
             [("kc1", "泰勒公式", 0.2, "observed")],
             ["泰勒公式"],
