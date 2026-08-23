@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create LangGraph checkpoint tables with the production migration role."""
+"""Create LangGraph checkpoint tables with the migration role (dev or prod).
+
+Idempotent: AsyncPostgresSaver.setup() tracks applied steps in checkpoint_migrations,
+so re-running is a no-op. Wired into `make migrate` so a fresh dev/prod DB is fully
+provisioned; skipped in other envs (tests build their own tables in conftest)."""
 
 from __future__ import annotations
 
@@ -17,8 +21,9 @@ def _pg_conninfo(url: str) -> str:
 
 async def main() -> None:
     settings = get_settings()
-    if settings.app_env != "prod":
-        raise RuntimeError("LangGraph checkpoint setup requires APP_ENV=prod")
+    if settings.app_env not in ("dev", "prod"):
+        print(f"LangGraph checkpoint setup skipped (APP_ENV={settings.app_env}; dev/prod only)")
+        return
     if not settings.migration_database_url:
         raise RuntimeError("MIGRATION_DATABASE_URL is required for checkpoint setup")
 

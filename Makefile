@@ -4,7 +4,7 @@ PIP := $(PY_ENV)/bin/pip
 # conda libstdc++ 优先 (pymupdf/qdrant ABI 冲突, 见 tests/conftest.py 注释)
 export LD_LIBRARY_PATH := $(PY_ENV)/lib
 
-.PHONY: env-check install dev-infra migrate migration-check test-migration api worker compile test test-backend test-unit test-integration test-integration-isolated test-web lint docs-check gen-corpus seed eval-retrieval time-travel
+.PHONY: env-check install dev-infra migrate setup-checkpoint migration-check test-migration api worker compile test test-backend test-unit test-integration test-integration-isolated test-web lint docs-check gen-corpus seed eval-retrieval time-travel
 
 env-check:
 	@test -x "$(PY)" || { echo "ERROR: project Python not found: $(PY)" >&2; exit 1; }
@@ -18,6 +18,10 @@ dev-infra:     ## 启动本机 PostgreSQL、Redis 和 Qdrant
 
 migrate: env-check
 	$(PY) -m alembic upgrade head
+	$(PY) scripts/setup_langgraph_checkpoint.py
+
+setup-checkpoint: env-check   ## 建 LangGraph checkpoint 表 (迁移角色, dev/prod, 幂等)
+	$(PY) scripts/setup_langgraph_checkpoint.py
 
 migration-check: env-check
 	@heads=$$($(PY) -m alembic heads | wc -l); test "$$heads" -eq 1 || { echo "ERROR: expected one Alembic head, got $$heads" >&2; exit 1; }
