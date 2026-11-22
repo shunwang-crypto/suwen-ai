@@ -8,8 +8,8 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { BrandMark } from "@/components/ui/brand";
 import { RecentCourses } from "@/components/nav/recent-courses";
 import { RecentSessions } from "@/components/nav/recent-sessions";
-import { apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useOrgMembership } from "@/lib/use-org-membership";
 import {
   getSnapshotPageTitle,
   subscribePageTitle,
@@ -98,29 +98,6 @@ const BILLING_ITEM: NavItem = {
   label: "苏问 AI 额度",
   icon: <FigmaNavIcon name="billing" />,
 };
-
-/** 机构成员关系模块缓存（裁决 3）：null=未知（fail-open 显示），登录后懒加载一次。 */
-let cachedHasOrgs: boolean | null = null;
-
-function useOrgMembership(userId: string | undefined) {
-  const [hasOrgs, setHasOrgs] = useState<boolean | null>(cachedHasOrgs);
-  useEffect(() => {
-    if (!userId || cachedHasOrgs !== null) return;
-    let alive = true;
-    void apiJson<unknown[]>("/api/orgs")
-      .then((list) => {
-        cachedHasOrgs = Array.isArray(list) && list.length > 0;
-        if (alive) setHasOrgs(cachedHasOrgs);
-      })
-      .catch(() => {
-        // 失败 fail-open：保持显示（与最近会话区同款"不阻塞、不打扰"约束）
-      });
-    return () => {
-      alive = false;
-    };
-  }, [userId]);
-  return hasOrgs;
-}
 
 const TITLE_MAP: Record<string, string> = {
   "/today": "今日",

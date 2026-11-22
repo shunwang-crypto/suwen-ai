@@ -13,7 +13,7 @@ import {EmptyState} from "@/components/common";
 import {type PlanTaskLocation} from "@/components/plans/plan-task-drawer";
 
 import { MathText } from "@/lib/katex";
-import type {GraphInterruptData, PlanDetail, PlanGoalAnalysis, PlanMode, PlanSkillGap, PlanStructure, PlanTask, PlanResource} from "@/lib/types";
+import type {GraphInterruptData, PlanDetail, PlanGoalAnalysis, PlanMode, PlanSkillGap, PlanStructure, PlanTask, PlanResource, PlanToggleResult} from "@/lib/types";
 
 export type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 export const PENDING_PLAN_KEY = "suwen:pending-plan-draft";
@@ -163,6 +163,34 @@ export function withTaskStatus(
       ratio: total ? done / total : 0,
       effective_ratio: effectiveTotal ? done / effectiveTotal : total ? 1 : 0,
     },
+  };
+}
+
+/** Keep newer server data and overlay only the tasks still being submitted. */
+export function mergePlanSnapshot(
+  previous: PlanDetail | null,
+  incoming: PlanDetail,
+  pending: ReadonlyMap<string, PlanTaskStatus>,
+): PlanDetail {
+  if (previous?.id === incoming.id && incoming.version < previous.version) return previous;
+  let next = incoming;
+  if (previous?.id === incoming.id) {
+    for (const [taskId, status] of pending) next = withTaskStatus(next, taskId, status);
+  }
+  return next;
+}
+
+export function withTaskResult(
+  previous: PlanDetail,
+  result: PlanToggleResult,
+  hasOtherPending: boolean,
+): PlanDetail {
+  if (result.version < previous.version) return previous;
+  return {
+    ...withTaskStatus(previous, result.task_id, result.status),
+    ...(hasOtherPending ? {} : { progress: result.progress }),
+    version: result.version,
+    status: result.plan_status,
   };
 }
 

@@ -140,6 +140,7 @@ function CourseWorkspaceView() {
   const [kbError, setKbError] = useState<string | null>(null);
   // 课程切换后丢弃在途的旧概览刷新，避免用旧课的 summary 覆盖新课
   const kbIdRef = useRef(kbId);
+  const summaryEpoch = useRef(0);
   const summary = kb?.summary;
   const sourceStatus = !summary || summary.source_total === 0
     ? "还没有资料"
@@ -152,9 +153,10 @@ function CourseWorkspaceView() {
   // 顶栏概览随计划变更实时刷新：勾选任务后静默重取 kb.summary（不清空 kb → 不闪烁）。
   // GET /api/kb 的 summary 每次由计划结构实时算出，故重取即得最新 done/total。
   const refreshSummary = useCallback(() => {
+    const epoch = ++summaryEpoch.current;
     void apiJson<KbOut[]>("/api/kb")
       .then((list) => {
-        if (kbIdRef.current !== kbId) return; // 已切走课程 → 丢弃过期结果
+        if (kbIdRef.current !== kbId || epoch !== summaryEpoch.current) return;
         const found = list.find((item) => item.id === kbId);
         if (found) setKb(found);
       })
@@ -167,6 +169,7 @@ function CourseWorkspaceView() {
   useEffect(() => {
     let alive = true;
     kbIdRef.current = kbId;
+    const epoch = ++summaryEpoch.current;
     // Dynamic route segments can change without remounting this client
     // component. Clear the old course synchronously so A is never rendered
     // under B's URL while the new course list request is in flight.
@@ -175,7 +178,7 @@ function CourseWorkspaceView() {
     setPageTitle(null);
     void apiJson<KbOut[]>("/api/kb")
       .then((list) => {
-        if (!alive) return;
+        if (!alive || epoch !== summaryEpoch.current) return;
         const found = list.find((item) => item.id === kbId) ?? null;
         if (found) {
           setKb(found);
@@ -186,7 +189,7 @@ function CourseWorkspaceView() {
         }
       })
       .catch((err: unknown) => {
-        if (!alive) return;
+        if (!alive || epoch !== summaryEpoch.current) return;
         setKbError(err instanceof Error ? err.message : "课程加载失败");
       });
     return () => {

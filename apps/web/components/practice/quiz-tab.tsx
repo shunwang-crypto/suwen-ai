@@ -29,6 +29,7 @@ import {
 import type { FlowItem } from "@/components/flow-timeline";
 import { BlueprintCard } from "@/components/quiz/blueprint-card";
 import { ExplainBackPanel } from "@/components/quiz/explain-back-panel";
+import { PendingGrading } from "@/components/quiz/pending-grading";
 import { PredictionSlider } from "@/components/quiz/prediction-slider";
 import { QuizForm, type QuizFormValue } from "@/components/quiz/quiz-form";
 import {
@@ -113,9 +114,12 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
   // 作答
   const [quiz, setQuiz] = useState<Parts.ActiveQuiz | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
+  const quizLoadSequence = useRef(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [predictions, setPredictions] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
+  const submissionIdentity = useRef<{ quiz: unknown; fingerprint: string; key: string } | null>(null);
+  const submissionBusy = useRef(false);
   const [attempt, setAttempt] = useState<AttemptResult | null>(null);
   const [calibration, setCalibration] = useState<MetacognitionSummary | null>(null);
   const [resultFilter, setResultFilter] = useState<"all" | "correct" | "wrong">("all");
@@ -590,11 +594,16 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
   );
 
   const openQuiz = useCallback(async (id: string) => {
+    const sequence = ++quizLoadSequence.current;
     setQuizLoading(true);
     setNotice(null);
     setFlowError(null);
     try {
-      const detail = await apiJson<QuizDetail>(`/api/quiz/${id}`);
+      const [detail, saved] = await Promise.all([
+        apiJson<QuizDetail>(`/api/quiz/${id}`),
+        apiJson<{ submission: { request: { answers: Array<{ question_id: string; response: string }> }; result: AttemptResult } | null }>(`/api/quiz/${id}/pending-submission`),
+      ]);
+      if (sequence !== quizLoadSequence.current) return;
       setQuiz({
         id: detail.id,
         title: detail.title || "历史练习",
@@ -605,22 +614,36 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
       setAttempt(null);
       setCalibration(null);
       setTimeline([]);
+      if (saved.submission) {
+        setAnswers(Object.fromEntries(saved.submission.request.answers.map((answer) => [answer.question_id, answer.response])));
+        setAttempt(saved.submission.result);
+        setShowResultDetails(true);
+        setResultFilter("all");
+      }
     } catch (err) {
-      setFlowError(err instanceof ApiError ? err.message : "练习加载失败");
+      if (sequence === quizLoadSequence.current) setFlowError(err instanceof ApiError ? err.message : "练习加载失败");
     } finally {
-      setQuizLoading(false);
+      if (sequence === quizLoadSequence.current) setQuizLoading(false);
     }
   }, []);
 
   const submitAnswers = useCallback(async () => {
-    if (!quiz || submitting) return;
+    if (!quiz || submissionBusy.current) return;
+    submissionBusy.current = true;
     setSubmitting(true);
     setFlowError(null);
     try {
-      const result = await apiJson<AttemptResult>(`/api/quiz/${quiz.id}/attempts`, {
-        body: {
-          answers: buildAttemptAnswers(quiz.questions, answers, predictions),
-        },
+      const retrying = attempt?.grading_status === "pending" && attempt.submission_id;
+      const payload = { answers: buildAttemptAnswers(quiz.questions, answers, predictions) };
+      const fingerprint = JSON.stringify(payload);
+      if (!submissionIdentity.current || submissionIdentity.current.quiz !== quiz || submissionIdentity.current.fingerprint !== fingerprint) {
+        submissionIdentity.current = { quiz, fingerprint, key: typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `quiz-${Date.now()}-${Math.random().toString(36).slice(2)}` };
+      }
+      const result = await apiJson<AttemptResult>(retrying
+        ? `/api/quiz/${quiz.id}/submissions/${attempt.submission_id}/retry-grading`
+        : `/api/quiz/${quiz.id}/attempts`, {
+        ...(retrying ? {} : { headers: { "Idempotency-Key": submissionIdentity.current.key } }),
+        body: retrying ? { expected_revision: attempt.grading_revision } : payload,
       });
       setAttempt(result);
       setResultFilter("all");
@@ -645,9 +668,10 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
     } catch (err) {
       setFlowError(err instanceof ApiError ? err.message : "提交失败，请重试");
     } finally {
+      submissionBusy.current = false;
       setSubmitting(false);
     }
-  }, [quiz, answers, predictions, submitting, weakPointsPath]);
+  }, [quiz, answers, predictions, attempt, weakPointsPath]);
 
   const busy = phase === "streaming" || phase === "resuming";
   // 定向出题的逐 KC 分档理由（interrupt 负载平铺，普通出题为空数组）
@@ -659,15 +683,17 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
   const visibleQuestions = (quiz?.questions ?? []).filter((question) => {
     if (!attempt || resultFilter === "all") return true;
     const result = resultByQid.get(question.id);
-    return resultFilter === "correct" ? result?.correct : result && !result.correct;
+    return resultFilter === "correct" ? result?.correct : result?.correct === false;
   });
   const wrongQuestions = (quiz?.questions ?? []).filter(
     (question) => attempt && resultByQid.get(question.id)?.correct === false,
   );
+  const gradedTotal = attempt ? (attempt.graded_total ?? attempt.total) : 0;
+  const pendingCount = attempt?.pending_count ?? 0;
   const answeredCount = quiz
     ? quiz.questions.filter((q) => (answers[q.id] ?? "").trim()).length
     : 0;
-  const practiceStage = attempt ? 4 : quiz ? 3 : phase === "await_confirm" || phase === "resuming" ? 2 : 1;
+  const practiceStage = attempt && pendingCount === 0 ? 4 : quiz ? 3 : phase === "await_confirm" || phase === "resuming" ? 2 : 1;
 
   // 专注壳内：向顶栏上报进度（作答中=已答占比；生成中=不确定进度）
   useEffect(() => {
@@ -675,11 +701,11 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
     if (quiz) {
       focusApi.setProgress({
         label: attempt
-          ? `已判分 · 答对 ${attempt.correct}/${attempt.total}`
+          ? `已判分 ${gradedTotal}/${attempt.total} · 待评分 ${pendingCount}`
           : `已答 ${answeredCount} / 共 ${quiz.questions.length} 题`,
         ratio: quiz.questions.length
           ? attempt
-            ? 1
+            ? gradedTotal / Math.max(attempt.total, 1)
             : answeredCount / quiz.questions.length
           : 0,
       });
@@ -688,7 +714,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
     } else {
       focusApi.setProgress(null);
     }
-  }, [focusApi, quiz, attempt, answeredCount, busy]);
+  }, [focusApi, quiz, attempt, gradedTotal, pendingCount, answeredCount, busy]);
 
   return (
     <div className={focus ? "space-y-5" : "mx-auto w-full max-w-[1120px] space-y-5 px-5 py-8 sm:px-8 lg:px-10 lg:py-10"}>
@@ -722,7 +748,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               <>
                 共 {quiz.questions.length} 题
                 {attempt
-                  ? ` · 答对 ${attempt.correct}/${attempt.total}`
+                  ? pendingCount ? ` · 已评分 ${gradedTotal}/${attempt.total} · 待评分 ${pendingCount}` : ` · 答对 ${attempt.correct}/${attempt.total}`
                   : ` · 已作答 ${answeredCount}/${quiz.questions.length}`}
               </>
             }
@@ -749,10 +775,11 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
           {attempt && (
             <section className="rounded-overlay border border-line bg-white p-5">
               <div className="flex flex-wrap items-center gap-5">
-                <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{attempt.correct}/{attempt.total}</strong><span className="text-caption text-ink-muted">答对</span></div>
-                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">正确率 {Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%</h2><span className={`rounded-full px-2 py-0.5 text-caption font-medium ${attempt.correct / Math.max(attempt.total, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{attempt.correct / Math.max(attempt.total, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span>{attempt.evidence_policy === "calibration_only" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-caption font-medium text-warning-700">校准练习</span>}</div><p className="mt-1 text-body-sm leading-5 text-ink-muted">{attempt.evidence_policy === "calibration_only" ? "结果来自本次真实判分；本次为校准练习，只记录作答用于校准起点，不更新正式掌握度与学习画像。" : "结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。"}</p></div>
+                <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border-[4px] border-brand-600"><strong className="text-[17px] leading-5 text-ink">{gradedTotal ? `${attempt.correct}/${gradedTotal}` : "—"}</strong><span className="text-caption text-ink-muted">{gradedTotal ? "答对" : "待评分"}</span></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-[14px] font-semibold text-ink">{gradedTotal ? `已评分题正确率 ${Math.round((attempt.correct / gradedTotal) * 100)}%` : "暂未完成评分"}</h2><span className={`rounded-full px-2 py-0.5 text-caption font-medium ${attempt.correct / Math.max(gradedTotal, 1) >= 0.6 ? "bg-success-50 text-success-700" : "bg-warning-50 text-warning-700"}`}>{pendingCount ? "等待评分" : attempt.correct / Math.max(gradedTotal, 1) >= 0.8 ? "完成良好" : "建议巩固"}</span>{attempt.evidence_policy === "calibration_only" && <span className="rounded-full bg-warning-50 px-2 py-0.5 text-caption font-medium text-warning-700">校准练习</span>}</div><p className="mt-1 text-body-sm leading-5 text-ink-muted">{pendingCount ? "已保存本次作答；待评分题尚未形成学习证据。" : attempt.evidence_policy === "calibration_only" ? "结果来自本次真实判分；本次为校准练习，只记录作答用于校准起点，不更新正式掌握度与学习画像。" : "结果来自本次真实判分；知识点掌握变化已按证据写入学习画像。"}</p></div>
               </div>
-              <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => !result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><ModelMarkdown text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>
+              {gradedTotal > 0 && <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2"><div><p className="text-caption font-semibold text-success-700">● 表现较好</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary">第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · 回答正确</li>)}</ul></div><div><p className="text-caption font-semibold text-warning-700">● 仍需巩固</p><ul className="mt-2 space-y-1.5">{attempt.results.filter((result) => result.correct === false).slice(0, 3).map((result, index) => <li key={result.question_id} className="rounded-control bg-surface-muted px-3 py-2 text-body-sm text-ink-secondary"><span>第 {quiz.questions.findIndex((question) => question.id === result.question_id) + 1 || index + 1} 题 · </span><ModelMarkdown text={result.scored_reason || "查看解析后再次练习"} /></li>)}</ul></div></div>}
+              {pendingCount > 0 && <PendingGrading count={pendingCount} retryAvailable={Boolean(attempt.retry_available)} busy={submitting} onRetry={() => void submitAnswers()} />}
               {attempt.plan_adjustment && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-control border border-warning-200 bg-warning-50 px-4 py-3"><div><p className="text-body-sm font-semibold text-warning-700">学习计划已更新</p><div className="mt-0.5 text-body-sm text-warning-600"><ModelMarkdown text={attempt.plan_adjustment.reason} /></div></div><Link href={`/plans?id=${attempt.plan_adjustment.plan_id}`} className="rounded-control border border-warning-200 bg-white px-3 py-1.5 text-body-sm font-medium text-warning-700">前往学习计划 →</Link></div>}
               {calibration && calibration.sample_n > 0 && (
                 <div className="mt-4 rounded-control border border-brand-100 bg-brand-50/45 px-4 py-3">
@@ -794,7 +821,7 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex gap-1.5" aria-label="筛选答题结果">
-                  {([['all', `全部 ${attempt.total}`], ['wrong', `错题 ${attempt.total - attempt.correct}`], ['correct', `正确 ${attempt.correct}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setResultFilter(value)} className={`rounded-control px-2.5 py-1 text-body-sm font-medium ${resultFilter === value ? "bg-brand-50 text-brand-700" : "text-ink-muted hover:bg-surface-muted"}`}>{label}</button>)}
+                  {([['all', `全部 ${attempt.total}`], ['wrong', `错题 ${gradedTotal - attempt.correct}`], ['correct', `正确 ${attempt.correct}`]] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setResultFilter(value)} className={`rounded-control px-2.5 py-1 text-body-sm font-medium ${resultFilter === value ? "bg-brand-50 text-brand-700" : "text-ink-muted hover:bg-surface-muted"}`}>{label}</button>)}
                 </div>
                 <button type="button" onClick={() => setShowResultDetails((value) => !value)} className="text-body-sm font-medium text-brand-700">{showResultDetails ? "收起逐题结果⌃" : "展开逐题结果⌄"}</button>
               </div>
@@ -854,7 +881,10 @@ export function QuizTab({ focus }: { focus?: { from: string } }) {
                       />
                     )}
 
-                    {result && (
+                    {result?.correct === null && (
+                      <p role="status" className="mt-3 rounded-control border border-line bg-surface-muted px-3.5 py-3 text-body-sm text-ink-secondary">待评分 · 作答已保存</p>
+                    )}
+                    {result && result.correct !== null && (
                       <div
                         className={`edu-fade-up mt-3 rounded-xl border px-3.5 py-2.5 text-sm ${
                           result.correct

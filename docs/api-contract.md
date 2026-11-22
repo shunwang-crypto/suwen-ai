@@ -234,20 +234,26 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
 | GET | /api/practice/next | 由服务端按到期错题、今日计划、薄弱 KC、已准备资料和上下文缺口统一返回下一步推荐；返回 `status/action/source/title/reason_code/reason_params/question_count/difficulty_mix`，不返回题干或掌握度小数 |
 | POST | /api/quiz/recommended | 只接受 `scope_kb_id?/plan_id?/task_id?/previous_quiz_id?/adjustment?` 安全上下文；服务端重新计算推荐，决策变化返回 409 及最新 recommendation，稳定后复用 Quiz SSE 并以 `confirmation_mode=auto` 生成蓝图和题目 |
 | GET | /api/quiz · /api/quiz/{id} | 普通智能练习卷列表 / 题目详情（kc_ids 已归一化）；列表同时返回题数、有效作答数、正确率、错题数/ID、KC 数、`evidence_policy` 与 `plan_mode`（`course_bound`/`goal_only`/`standalone`），供练习历史按行扫描；`blueprint.kind=error_import` 的导入卷不返回 |
-| POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}]}`；完整提交归因练习后幂等完成对应计划任务；信心为可选 1–5 级且不影响判分。课程资料练习写 BKT/mastery_log；目标起步计划的 `calibration_only` 练习保留作答、错题和空 KC 学习事件，但**绝不写正式 KC 或掌握度**。正确率<0.6 时仅同课程的正式练习可附 `plan_adjustment`；导入卷不可作答 |
+| POST | /api/quiz/{id}/attempts | `{answers:[{question_id,response,predicted_confidence?}],idempotency_key?}`；客户端为一次提交生成并在重试间复用 `Idempotency-Key`（≤128 字符）。完整且全部评分成功的归因练习幂等完成计划任务；信心为可选 1–5 级且不影响判分。课程资料练习写 BKT/mastery_log；目标起步计划的 `calibration_only` 练习保留已评分作答、错题和空 KC 学习事件，但**绝不写正式 KC 或掌握度**。全部评分完成且正确率<0.6 时，仅同课程正式练习可附 `plan_adjustment`；导入卷不可作答 |
+| GET | /api/quiz/{id}/pending-submission | 恢复本人最近待评分提交，返回 `{submission:{request,result}\|null}`，供重新打开历史练习恢复原答案和状态 |
+| POST | /api/quiz/{id}/submissions/{submission_id}/retry-grading | `{expected_revision}`；只重新评分该提交保存的待定答案，已评分题不重复写证据 |
 | GET | /api/metacognition/summary?window=day\|week\|all | 本人信心校准 `{sample_n,brier_score,overconfidence_rate}`；无有效样本的指标为 null，不保存聚合行 |
 | POST | /api/metacognition/explain-back | `{student_text,kc_id?,prompt_span_ref?,source_attempt_id?,question_id?}` → `understanding_score`、反馈、缺口、重试建议、`rubric_version`、`quality_score`（默认 null）和 `quality_shadow`；只保存反馈观察，不写掌握度/画像/错题/报告 |
 | POST | /api/plans | `{goal, plan_mode, current_level?, target_outcome?, success_criteria?, kb_id?, budget_hours_per_day, total_days}` → SSE → `interrupt(plan_confirm)`；`plan_mode` 必须显式为 `course_bound`（必须带 `kb_id`）或 `goal_only`（禁止带 `kb_id`），不再从空值猜模式。课程计划只读取所选 KB 的资料、KC、先修和掌握度，**不调用或接受网页资源**；目标起步计划不读取任何课程画像，只安排基线校准，并可使用安全公开网页作为辅助资料。`budget_hours_per_day` 与 `total_days` 必须由用户自然语言或缺失追问明确确认；interrupt 含受限的 `goal_analysis`、定性 `skill_gaps`、草案、资源与 `plan_mode`。服务端重新校验 KB 访问、任务结构与资源引用 |
 | GET | /api/plans | 计划列表，可选 `kb_id` 精确过滤；含 `kb_id/kb_name/plan_mode/grounding_status/status`；`status` 为 `active/completed/archived`，每个用户最多一个 active 计划 |
 | GET | /api/plans/{id} | 本人计划详情（历史计划可读）：含 `status/kb_id/kb_name/plan_mode/grounding_status/resources`；`plan_mode=goal_only` 的任务标 `evidence_policy=calibration_only` 与 `concept_status=provisional`，不产生 KC 依赖图或学情自动补强。`structure` 保留确认时的 `goal_analysis/skill_gaps` 快照；每任务带服务端生成且不随结构调整变化的 UUID `task_id`、`objective/instructions/completion_criteria/action_type/resource/resource_id/status`、`practice_count`（1–20）和 `difficulty`，附由 time-control 业务时钟计算的 UUID 集合 `schedule{current_day,today_tasks,overdue_tasks,upcoming_tasks}`、`progress{total,done,ratio}` 与只读派生 `kc_dependency{levels,edges,primary_route}`。`kc_dependency` 只包含课程资料计划的当前任务 KC 及真实先修边递归闭包，节点带 `kc_id/kc_name/task_ids/task_statuses/is_current_task/is_prerequisite/is_blocking/blocking_task_ids`，不含 `p_mastery`/`confidence`；`primary_route` 是到「最深的计划任务 KC」的关键路径（确定性：终点取 depth 最大者、回退时每步取支撑链最长的前驱，并列按稳定库序），**只走真实先修边，相邻两点必有边**，无任务 KC 时为空数组；空图返回空 `levels/edges/primary_route`，不写回计划结构。另附 `provisional_concepts`（0034）：计划任务里没有正式 KC 承接的临时概念（`{name,status}`，按计划里首次出现序），只用于说明这份计划打算覆盖什么，**不参与掌握度/证据/依赖图** |
 | GET | /api/plans/{id}/tasks/{task_id}/tutor-context | 校验本人计划和任务归属后返回有界 `problem/kb_id/plan_id/task_id`；任务文字不进入 URL，非法或他人任务统一 404 |
-| POST | /api/plans/{id}/tasks/{task_id}/toggle | `{status: pending|done|skipped}` 显式更新任务状态；状态内嵌 `structure_json`，不另建列 |
+| POST | /api/plans/{id}/tasks/{task_id}/toggle | `{status: pending|done|skipped}` 显式更新任务状态；状态内嵌 `structure_json`，不另建列；响应含 `version`，用于拒绝乱序旧快照 |
 | POST | /api/plans/{id}/tasks/{task_id}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
 | POST | /api/plans/{id}/archive | 放弃唯一 active 计划并置为 archived；completed/archived 计划只读，不可隐式恢复 |
 | POST | /api/plans/{id}/adjust | 仅课程资料计划可依学情调整；候选必须来自同一 KB、`evidence_state=observed` 且低于补强阈值，并且尚未被计划覆盖。目标起步计划返回空调整，不读取其他课程掌握度 |
 | GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
 | POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
 | GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_id`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |
+
+计划详情和任务 `toggle/complete` 响应共享单调递增的 `version`。任务状态、完成证据、
+计划归档、结构调整或概念重新关联实际发生变化时，在计划行锁事务内递增版本；
+相同状态重复置位或相同完成证据重放不递增。前端忽略较旧版本的响应，刷新时保留仍在提交的任务状态。
 
 作答前信心的五级概率映射固定为 `0.1/0.3/0.5/0.7/0.9`。高信心答错率只统计概率
 `>=0.7` 的样本；Brier 分数和该比率均只描述预测校准，不评价学习能力。跳过预测时不写
@@ -303,6 +309,18 @@ schema 重试耗尽是 `validation_failed`。`confirmation_mode` 为 `required` 
 | POST | /api/errors/{id}/cause | {cause} 错因修正（五分类之一，越界 422） |
 | GET | /api/reviews/today | 到期复习队列；计划入口使用 URL 中的 `plan_id/task_id` |
 | POST | /api/reviews/{id}/answer | `{response, plan_id?, task_id?, review_duration_ms?}`；客户端必须为一次提交生成并在网络重试间复用 `Idempotency-Key`（≤128 字符）；仅真实到期复习作答可幂等完成 `review_errors/mixed` 计划任务 |
+| GET | /api/reviews/{id}/pending-submission | 恢复本人最近待评分复习的原始请求和结果，返回 `{submission:{request,result}\|null}` |
+| POST | /api/reviews/{id}/submissions/{submission_id}/retry-grading | `{expected_revision}`；评分成功后只写一次 FSRS/学习证据，任务归因资格按原提交时是否到期判断 |
+
+普通 Quiz 和复习响应增加 `submission_id/grading_status/grading_revision/retry_available`。
+评分失败时 `correct=null`，不返回参考答案和解析，不计为错误；Quiz 汇总附
+`graded_total/pending_count`，正确率分母使用 `graded_total`。原答案持久化保存，页面提供
+“重新评分已保存的答案”；最多首次评分加两次重试。请求的 `expected_revision` 落后于当前
+版本时返回当前结果，不再次评分；达到上限返回 `409 GRADING_RETRY_LIMIT`。评分成功的终态
+只重放结果。相同提交标识且内容/来源不同返回 `QUIZ_IDEMPOTENCY_CONFLICT` 或
+`REVIEW_IDEMPOTENCY_CONFLICT`；同时传 body/header 标识时两者必须一致。旧客户端未传标识
+时服务器分配新标识，不能识别旧客户端的网络重放。提交记录的去重与恢复窗口为 730 天。
+复习重放仍附 `idempotent=true`，不重复返回掌握度变化。
 
 > 错因自动分类：`POST /api/reviews/{id}/answer` 判错时以 cheap 档 json_mode 重标错因并回传 `cause`；
 > 网关 stub 模式不发请求、异常一律回落 `knowledge_gap`（入本初值），绝不冒充分类结果。

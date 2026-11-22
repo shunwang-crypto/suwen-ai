@@ -445,6 +445,40 @@ class Question(Base):
     difficulty: Mapped[str] = mapped_column(String(8), nullable=False, default="mid")
 
 
+class AssessmentSubmission(Base):
+    """Durable request identity and recoverable grading, owned by one learner."""
+
+    __tablename__ = "assessment_submissions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", "idempotency_key", name="uq_assessment_submission_key"),
+        CheckConstraint(
+            "(kind = 'quiz' AND quiz_id IS NOT NULL AND error_item_id IS NULL) OR "
+            "(kind = 'review' AND error_item_id IS NOT NULL AND quiz_id IS NULL)",
+            name="ck_assessment_submission_source",
+        ),
+        CheckConstraint("grading_attempts BETWEEN 1 AND 3", name="ck_assessment_grading_attempts"),
+    )
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    quiz_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quizzes.id", ondelete="CASCADE"), index=True
+    )
+    error_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("error_items.id", ondelete="CASCADE"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    grading_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    submitted_at: Mapped[datetime] = _created_at()
+    created_at: Mapped[datetime] = _created_at()
+
+
 class Attempt(Base):
     __tablename__ = "attempts"
     id: Mapped[uuid.UUID] = _uuid_pk()

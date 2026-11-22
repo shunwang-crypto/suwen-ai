@@ -4,7 +4,7 @@
 // （结果横幅/补强高亮）+ 目标回看 + KC 依赖图 + 日历（含任务抽屉）+ 调整历史。
 // /plans 聚合壳与 /courses/[kbId] 计划 tab 渲染同一份，交互逻辑单处维护。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { ModelMarkdown } from "@/components/chat/model-markdown";
@@ -23,8 +23,10 @@ import {
   STAGE_COLORS,
   TRIGGER_LABELS,
   flattenDays,
+  mergePlanSnapshot,
   normalizedTaskStatus,
   withTaskStatus,
+  withTaskResult,
   type PlanTaskStatus,
 } from "@/components/plans/plan-parts";
 import {
@@ -60,14 +62,7 @@ export interface PlanRegeneratePrefill {
   currentLevel: string;
 }
 
-export function PlanDetailPanel({
-  planId,
-  goal,
-  status,
-  budgetHours,
-  onChanged,
-  onRegenerate,
-}: {
+type PlanDetailPanelProps = {
   planId: string;
   goal: string;
   status: "active" | "completed" | "archived";
@@ -79,9 +74,24 @@ export function PlanDetailPanel({
    * 只负责回填，真正重生成复用 POST /api/plans 创建流。
    */
   onRegenerate?: (prefill: PlanRegeneratePrefill) => void;
-}) {
+};
+
+export function PlanDetailPanel(props: PlanDetailPanelProps) {
+  // A new plan owns a new editing session, including its drawers and requests.
+  return <PlanDetailContent key={props.planId} {...props} />;
+}
+
+function PlanDetailContent({
+  planId,
+  goal,
+  status,
+  budgetHours,
+  onChanged,
+  onRegenerate,
+}: PlanDetailPanelProps) {
   const [detailKey, setDetailKey] = useState(0);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+  const pendingStatuses = useRef(new Map<string, PlanTaskStatus>());
   const [openTask, setOpenTask] = useState<DrawerLocation | null>(null);
   const [taskBanner, setTaskBanner] = useState<string | null>(null);
   const [adjusting, setAdjusting] = useState(false);
@@ -103,7 +113,11 @@ export function PlanDetailPanel({
   const [detail, setDetail] = useState<PlanDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   useEffect(() => {
-    setDetail(detailRes.data);
+    const incoming = detailRes.data;
+    if (incoming) {
+      const pending = new Map(pendingStatuses.current);
+      setDetail((previous) => mergePlanSnapshot(previous, incoming, pending));
+    }
     setDetailError(detailRes.error);
   }, [detailRes.data, detailRes.error]);
 
@@ -115,14 +129,15 @@ export function PlanDetailPanel({
 
   /** 任务三态更新：乐观更新；失败只恢复当前任务（与今日页同一模式）。 */
   const updateTaskStatus = async (taskId: string, next: PlanTaskStatus) => {
-    if (!detail || detail.status !== "active" || pendingKeys.has(taskId)) return;
+    if (!detail || detail.status !== "active" || pendingStatuses.current.has(taskId)) return;
     const snapshot = detail;
     const previousTask = flattenDays(detail.structure)
       .flatMap((day) => day.tasks)
       .find((task) => task.task_id === taskId);
     if (!previousTask) return;
     const previousStatus = normalizedTaskStatus(previousTask);
-    setDetail(withTaskStatus(detail, taskId, next));
+    pendingStatuses.current.set(taskId, next);
+    setDetail((previous) => previous ? withTaskStatus(previous, taskId, next) : previous);
     setOpenTask((current) =>
       current?.task.task_id === taskId
         ? { ...current, task: { ...current.task, status: next } }
@@ -135,13 +150,13 @@ export function PlanDetailPanel({
         `/api/plans/${snapshot.id}/tasks/${taskId}/toggle`,
         { body: { status: next } },
       );
-      // 以服务端进度为准（并发勾选时避免本地计数漂移）
+      // Server commit order, rather than response arrival order, owns progress.
+      const hasOtherPending = pendingStatuses.current.size > 1;
       setDetail((prev) =>
         prev && prev.id === snapshot.id
-          ? { ...prev, progress: res.progress, status: res.plan_status }
+          ? withTaskResult(prev, res, hasOtherPending)
           : prev,
       );
-      onChanged?.();
     } catch (err) {
       setDetail((prev) =>
         prev && prev.id === snapshot.id
@@ -155,11 +170,16 @@ export function PlanDetailPanel({
       );
       setTaskBanner(err instanceof ApiError ? err.message : "任务状态更新失败，已回滚");
     } finally {
+      pendingStatuses.current.delete(taskId);
       setPendingKeys((prev) => {
         const next = new Set(prev);
         next.delete(taskId);
         return next;
       });
+      if (pendingStatuses.current.size === 0) {
+        setDetailKey((key) => key + 1);
+        onChanged?.();
+      }
     }
   };
 
@@ -176,6 +196,7 @@ export function PlanDetailPanel({
       setAdjustResult(res);
       setHighlightKeys(new Set(res.inserted.map((t) => t.task_id)));
       setDetailKey((k) => k + 1);
+      onChanged?.();
     } catch (err) {
       setTaskBanner(err instanceof ApiError ? err.message : "计划调整失败，请重试");
     } finally {
@@ -631,6 +652,7 @@ export function PlanDetailPanel({
               setPendingKeys(new Set());
             }
             setDetailKey((key) => key + 1);
+            onChanged?.();
           }}
         />
       )}

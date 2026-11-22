@@ -87,7 +87,8 @@ export interface MasteryChange {
 
 export interface AttemptResultItem {
   question_id: string;
-  correct: boolean;
+  correct: boolean | null;
+  grading_status?: "pending" | "scored";
   llm_score: number | null;
   scored_reason: string | null;
   explanation: string;
@@ -98,6 +99,12 @@ export interface AttemptResultItem {
 export interface AttemptResult {
   total: number;
   correct: number;
+  graded_total?: number;
+  pending_count?: number;
+  grading_status?: "pending" | "scored";
+  submission_id?: string;
+  grading_revision?: number;
+  retry_available?: boolean;
   results: AttemptResultItem[];
   /** F3-A3：正确率 <0.6 且存在活跃计划时，后端自动插入补强任务的结果（否则 null） */
   plan_adjustment?: (PlanAdjustResult & { plan_id: string }) | null;

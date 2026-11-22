@@ -300,6 +300,7 @@ async def test_plan_alive_and_error_book(client):
     r = await client.get(f"/api/plans/{plan_id}", headers=headers)
     assert r.status_code == 200, r.text
     detail = r.json()
+    original_version = detail["version"]
     assert detail["progress"] == {
         "total": 5,
         "done": 0,
@@ -323,10 +324,12 @@ async def test_plan_alive_and_error_book(client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "done" and r.json()["progress"]["done"] == 1
+    assert r.json()["version"] == original_version + 1
 
     r = await client.get(f"/api/plans/{plan_id}", headers=headers)
     detail = r.json()
     assert detail["progress"]["done"] == 1
+    assert detail["version"] == original_version + 1
     statuses = [t["status"] for t in _all_tasks(detail["structure"])]
     assert statuses == ["pending", "done", "pending", "pending", "pending"]
 
@@ -337,6 +340,7 @@ async def test_plan_alive_and_error_book(client):
         json={"status": "done"},
     )
     assert r.json()["status"] == "done"
+    assert r.json()["version"] == original_version + 1
     r = await client.post(
         f"/api/plans/{plan_id}/tasks/{second_day_task}/toggle",
         headers=headers,
@@ -344,6 +348,7 @@ async def test_plan_alive_and_error_book(client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "skipped"
+    assert r.json()["version"] == original_version + 2
     assert r.json()["status"] == "skipped"
     assert r.json()["progress"]["skipped"] == 1
     assert r.json()["progress"]["pending"] == 3
@@ -617,3 +622,46 @@ async def test_plan_alive_and_error_book(client):
     finally:
         app.state.gateway = old_gateway
     assert r.json()["correct"] is True and r.json()["cause"] == "calc_slip"
+
+
+async def test_concurrent_task_updates_return_commit_versions(client):
+    import asyncio
+
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import Plan
+
+    email = f"plan-version-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
+    headers = await _register_login(client, email)
+    uid = await _uid(email)
+    structure = _structure(day_count=2)
+    async with tenant_session(uid) as session:
+        plan = Plan(
+            tenant_id=uid,
+            user_id=uid,
+            goal="并发任务版本",
+            plan_mode="goal_only",
+            grounding_status="unreferenced",
+            structure_json=structure,
+        )
+        session.add(plan)
+        await session.flush()
+        plan_id, version = str(plan.id), plan.version
+    tasks = _all_tasks(structure)
+    first, second = tasks[0]["task_id"], tasks[1]["task_id"]
+    responses = await asyncio.gather(*(
+        client.post(
+            f"/api/plans/{plan_id}/tasks/{task_id}/toggle",
+            headers=headers,
+            json={"status": "done"},
+        )
+        for task_id in (first, second)
+    ))
+    assert all(response.status_code == 200 for response in responses)
+    assert sorted(response.json()["version"] for response in responses) == [version + 1, version + 2]
+    detail = (await client.get(f"/api/plans/{plan_id}", headers=headers)).json()
+    assert detail["version"] == version + 2
+    assert detail["progress"]["done"] == 2
+    repeated = await client.post(
+        f"/api/plans/{plan_id}/tasks/{first}/toggle", headers=headers, json={"status": "done"}
+    )
+    assert repeated.json()["version"] == detail["version"]

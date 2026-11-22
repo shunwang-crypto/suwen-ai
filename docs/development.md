@@ -104,6 +104,14 @@ fixture 会拒绝远程数据库和无法确认名称的连接，不会清空本
 
 ~~~bash
 make test-migration TEST=tests/integration/test_migration_0029.py
+make test-migration TEST=tests/integration/test_migration_0038.py
+~~~
+
+0038 新增普通练习/复习提交记录，运行更新后的 API 前执行 `make migrate`。
+专项验证评分异常、并发提交去重、评分重试与账号生命周期：
+
+~~~bash
+INTEGRATION=1 "$HOME/miniforge3/envs/eduagents/bin/python" -m pytest tests/integration/test_assessment_submissions.py -q
 ~~~
 
 前端：

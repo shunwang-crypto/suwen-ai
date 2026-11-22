@@ -143,6 +143,8 @@ async def test_goal_only_attempt_cannot_update_formal_mastery_even_with_kc_input
     assert body["evidence_policy"] == "calibration_only"
     assert body["results"][0]["mastery_changes"] == []
     assert body["plan_task_completion"]["completed"] is True
+    detail = await client.get(f"/api/plans/{plan_id}", headers=headers)
+    assert body["plan_task_completion"]["version"] == detail.json()["version"]
 
     async with tenant_session(user_id) as session:
         persisted_record = await session.scalar(

@@ -181,6 +181,8 @@ export interface PlanDetail {
 }
 
 export interface PlanToggleResult {
+  /** 计划的服务端版本；较旧响应不能覆盖较新的详情。 */
+  version: number;
   task_id: string;
   status: "pending" | "done" | "skipped";
   progress: PlanProgress;

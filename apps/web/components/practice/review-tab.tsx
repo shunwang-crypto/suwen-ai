@@ -5,7 +5,7 @@
 // 卡片附 FSRS 遗忘快照（P2-7「再不复习，3 天后预计保持率 N%」，<90% 才显示）。
 
 import Link from "next/link";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { AppealEntry } from "@/components/appeal-entry";
 import { useFocusSession } from "@/components/focus/focus-shell";
@@ -22,6 +22,7 @@ import {
   fmtDateTime,
   fmtRelative,
 } from "@/components/common";
+import { PendingGrading } from "@/components/quiz/pending-grading";
 import { QuestionAnswer, QuestionMeta } from "@/components/quiz/question-answer";
 import { Celebrate } from "@/components/ui/celebrate";
 import { ApiError, apiJson } from "@/lib/api";
@@ -120,6 +121,7 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
   const urlParams = new URLSearchParams(search);
   const planId = urlParams.get("plan_id") ?? "";
   const taskId = urlParams.get("task_id") ?? "";
+  const pendingRequests = useRef(new Set<string>());
   const [banner, setBanner] = useState<string | null>(null);
   const [states, setStates] = useState<Record<string, ItemState>>({});
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -133,6 +135,22 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
     "/api/reviews/today",
     { errorMessage: "复习队列加载失败", deps: [reloadKey] },
   );
+
+  useEffect(() => {
+    if (!data) return;
+    let alive = true;
+    for (const item of data.items) {
+      void apiJson<{ submission: { request: { response: string }; result: ReviewAnswerResult } | null }>(`/api/reviews/${item.error_item_id}/pending-submission`)
+        .then(({ submission }) => {
+          if (!alive || !submission) return;
+          setStates((previous) => previous[item.error_item_id]?.result ? previous : {
+            ...previous,
+            [item.error_item_id]: { ...createItemState(), value: submission.request.response, result: submission.result },
+          });
+        }).catch(() => { /* A failed recovery read does not block the due queue. */ });
+    }
+    return () => { alive = false; };
+  }, [data]);
 
   const reload = () => {
     // 重载即重置作答进度（loading 态遮盖，等价于原"数据到达后重置"）
@@ -151,7 +169,10 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
 
   const submit = async (item: ReviewItem) => {
     const st = states[item.error_item_id] ?? createItemState();
-    if (st.submitting || st.result) return;
+    if (pendingRequests.current.has(item.error_item_id) || (st.result && st.result.grading_status !== "pending")) return;
+    const retrying = st.result?.grading_status === "pending" && st.result.submission_id;
+    if (retrying && !st.result?.retry_available) return;
+    pendingRequests.current.add(item.error_item_id);
     // Keep this key in state: a network/401 retry must replay the same
     // submission, while a later intentional submission gets a new key.
     patchState(item.error_item_id, {
@@ -161,10 +182,12 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
     setBanner(null);
     try {
       const result = await apiJson<ReviewAnswerResult>(
-        `/api/reviews/${item.error_item_id}/answer`,
+        retrying
+          ? `/api/reviews/${item.error_item_id}/submissions/${st.result!.submission_id}/retry-grading`
+          : `/api/reviews/${item.error_item_id}/answer`,
         {
-          headers: { "Idempotency-Key": st.idempotencyKey },
-          body: {
+          ...(retrying ? {} : { headers: { "Idempotency-Key": st.idempotencyKey } }),
+          body: retrying ? { expected_revision: st.result!.grading_revision } : {
             response: st.value,
             ...(planId && taskId ? { plan_id: planId, task_id: taskId } : {}),
           },
@@ -174,6 +197,8 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
     } catch (err) {
       patchState(item.error_item_id, { submitting: false });
       setBanner(err instanceof ApiError ? err.message : "提交失败，请重试");
+    } finally {
+      pendingRequests.current.delete(item.error_item_id);
     }
   };
 
@@ -210,21 +235,24 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
     }
   };
 
-  const finishedCount = Object.values(states).filter((state) => state.result).length;
+  const finishedCount = Object.values(states).filter((state) => state.result && state.result.correct !== null).length;
   const correctCount = Object.values(states).filter((state) => state.result?.correct).length;
 
   // 专注壳内：上报进度（顶栏进度条）；退出按钮走既有「暂时退出」确认模态。
   useEffect(() => {
     if (!focusApi || !data) return;
     if (completed) {
-      focusApi.setProgress({ label: `今日复习完成 · 共 ${data.items.length} 题`, ratio: 1 });
+      focusApi.setProgress({
+        label: finishedCount === data.items.length ? `今日复习完成 · 共 ${data.items.length} 题` : `本次已评分 ${finishedCount} 题 · 其余待评分`,
+        ratio: data.items.length ? finishedCount / data.items.length : 0,
+      });
       return;
     }
     focusApi.setProgress({
       label: `第 ${Math.min(currentIndex + 1, data.items.length)} 题 / 共 ${data.items.length}`,
       ratio: data.items.length ? (currentIndex + 1) / data.items.length : 0,
     });
-  }, [focusApi, data, currentIndex, completed]);
+  }, [focusApi, data, currentIndex, completed, finishedCount]);
 
   useEffect(() => {
     if (!focusApi) return;
@@ -280,9 +308,10 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
       ) : completed && data ? (
         <section className="rounded-overlay border border-line bg-white px-5 py-10 text-center sm:px-8">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success-50 text-xl text-success-600">✓</span>
-          <h2 className="mt-4 text-[18px] font-semibold text-ink">今日复习已完成</h2>
+          <h2 className="mt-4 text-[18px] font-semibold text-ink">{finishedCount === data.items.length ? "今日复习已完成" : "本次复习已结束"}</h2>
           <p className="mt-2 text-body-sm text-ink-muted">
-            完成 {finishedCount} 题，答对 {correctCount} 题；记忆进度和学习画像已按真实作答更新。
+            已评分 {finishedCount} 题，答对 {correctCount} 题。{finishedCount > 0 && "记忆进度和学习画像已按有效评分结果更新。"}
+            {finishedCount < data.items.length && ` 还有 ${data.items.length - finishedCount} 题待评分，原答案已保存，仍留在复习队列。`}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             <Link href={focus ? focus.from : "/today"} className="rounded-control bg-brand-600 px-4 py-2 text-body-sm font-medium text-white">{focus ? "返回" : "返回今日"}</Link>
@@ -309,8 +338,8 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
         <ul className="space-y-4">
           {(data.items as ReviewItemWithRetention[]).slice(currentIndex, currentIndex + 1).map((item) => {
             const st = states[item.error_item_id] ?? createItemState();
-            const mastered = st.result?.state === "mastered";
-            const wrong = Boolean(st.result && !st.result.correct);
+            const mastered = st.result?.correct !== null && st.result?.state === "mastered";
+            const wrong = st.result?.correct === false;
             return (
               <li key={item.error_item_id}>
                 <Card
@@ -393,7 +422,14 @@ export function ReviewTab({ focus }: { focus?: { from: string } }) {
                     }
                   />
 
-                  {st.result ? (
+                  {st.result?.grading_status === "pending" ? (
+                    <>
+                      <PendingGrading retryAvailable={Boolean(st.result.retry_available)} busy={st.submitting} onRetry={() => void submit(item)} />
+                      <button type="button" disabled={st.submitting} onClick={() => currentIndex < data.items.length - 1 ? setCurrentIndex((index) => index + 1) : setCompleted(true)} className="mt-3 text-body-sm text-ink-secondary underline underline-offset-4">
+                        {currentIndex < data.items.length - 1 ? "暂时保留待评分，继续下一题" : "保留待评分，结束本次复习"}
+                      </button>
+                    </>
+                  ) : st.result ? (
                     <div
                       className={`mt-3 rounded-xl border px-3.5 py-2.5 text-sm transition-colors duration-500 ${
                         mastered

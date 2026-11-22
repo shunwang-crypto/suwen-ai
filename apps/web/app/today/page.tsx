@@ -1,8 +1,8 @@
 "use client";
 
 // 今日（UI 重构阶段 4 加厚）：主推卡（next-actions 唯一决策源，保留）+ 今日计划任务卡
-// （复用 PlanTodayCard，无活跃计划整块隐藏）+ 到期复习计数条（0=复习清零）+
-// 本周活跃摘要一行（/api/reports/learning 已有聚合，拿不到不渲染）。
+// （复用 PlanTodayCard，无活跃计划整块隐藏）+ 主推不是复习时的到期计数条 +
+// 最近报告摘要（30 天快照，标明截止日期，拿不到不渲染）。
 // 次要推荐 <details> 与页脚「真实学习证据」说明保留。
 
 import Link from "next/link";
@@ -88,7 +88,7 @@ function ReviewCountStrip() {
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-overlay border border-line bg-white px-4 py-3">
       <p className="text-body-sm text-ink-secondary">
         <strong className="text-ink">今日到期 {dueCount} 题</strong>
-        <span className="ml-2 text-caption text-ink-muted">按遗忘曲线安排，答对两次即攻克</span>
+        <span className="ml-2 text-caption text-ink-muted">优先完成到期内容，帮助巩固记忆</span>
       </p>
       <Link
         href="/practice/session?mode=review&from=%2Ftoday"
@@ -101,8 +101,8 @@ function ReviewCountStrip() {
   );
 }
 
-/** 本周活跃摘要（一行小字）：复用 /api/reports/learning 已有聚合；拿不到整行不渲染。 */
-function WeeklySummary() {
+/** 最近学习报告的 30 天摘要：快照不是实时计数，明确标示统计截止日期。 */
+function ReportActivitySummary() {
   const [summary, setSummary] = useState<string | null>(null);
 
   useEffect(() => {
@@ -117,15 +117,15 @@ function WeeklySummary() {
         }
         const delta =
           metrics.attempt_count_delta > 0
-            ? `（较前 7 天 +${metrics.attempt_count_delta}）`
+            ? `（较前 30 天 +${metrics.attempt_count_delta}）`
             : metrics.attempt_count_delta < 0
-              ? `（较前 7 天 ${metrics.attempt_count_delta}）`
+              ? `（较前 30 天 ${metrics.attempt_count_delta}）`
               : "";
         const accuracy =
           metrics.accuracy != null ? ` · 正确率 ${Math.round(metrics.accuracy * 100)}%` : "";
-        setSummary(
-          `近 7 天作答 ${metrics.attempt_count} 次${delta} · 活跃 ${metrics.active_days}/30 天${accuracy}`,
-        );
+        const through = report.trend.at(-1)?.date;
+        const label = through ? `报告截至 ${through}` : "最近学习报告";
+        setSummary(`${label} · 30 天作答 ${metrics.attempt_count} 次${delta} · 活跃 ${metrics.active_days}/30 天${accuracy}`);
       })
       .catch(() => {
         if (alive) setSummary(null);
@@ -184,9 +184,9 @@ export default function TodayPage() {
     return (
       <div className="mx-auto w-full max-w-[1040px] px-5 py-8 sm:px-8 lg:py-12">
         <section className="rounded-card border border-line bg-white px-7 py-14 text-center">
-          <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">从你的资料开始</p>
+          <p className="text-caption font-semibold uppercase tracking-[0.12em] text-ink-muted">从你的目标或资料开始</p>
           <h2 className="mt-3 text-[24px] font-semibold tracking-[-0.035em] text-ink">先建立一个学习空间</h2>
-          <p className="mx-auto mt-2 max-w-lg text-[13px] leading-6 text-ink-secondary">上传教材、讲义、试卷或作业后，苏问才能基于真实资料安排学习。</p>
+          <p className="mx-auto mt-2 max-w-lg text-[13px] leading-6 text-ink-secondary">上传教材、讲义、试卷或作业，围绕资料安排学习；也可以先写下目标，制定起步计划。</p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             <Link href="/courses" className="inline-flex h-10 items-center rounded-control bg-ink px-5 text-[13px] font-semibold text-white">上传资料开始</Link>
             <Link href="/plans?create=1&mode=goal_only" className="inline-flex h-10 items-center rounded-control border border-line-strong bg-white px-5 text-[13px] font-semibold text-ink-secondary">暂时没有资料，先制定计划</Link>
@@ -219,6 +219,11 @@ export default function TodayPage() {
             开始这一项
             <ArrowIcon />
           </Link>
+          {primary.type === "cold_start" && !primary.href.includes("mode=goal_only") && (
+            <Link href="/plans?create=1&mode=goal_only" className="mt-4 block w-fit text-body-sm text-ink-secondary underline underline-offset-4">
+              暂时没有资料，先制定起步计划
+            </Link>
+          )}
         </div>
 
         {secondary.length > 0 && (
@@ -247,10 +252,10 @@ export default function TodayPage() {
           task list here as well would create a duplicate CTA for plan_task. */}
       {primary.type !== "plan_task" && <TodayPlanSection />}
 
-      <ReviewCountStrip />
+      {primary.type !== "review" && <ReviewCountStrip />}
 
       <p className="text-center text-caption text-ink-muted">阅读、普通对话、反讲反馈和完成任务不会自动改变掌握度；练习、复习与核验后的真实作答才会形成掌握度证据。</p>
-      <WeeklySummary />
+      <ReportActivitySummary />
     </div>
   );
 }

@@ -17,7 +17,6 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
-import orjson
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import Tier
@@ -32,12 +31,21 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import array as pg_array
 
 from .. import timectl
+from ..assessment_submissions import (
+    GradingRetryIn,
+    load_submission,
+    prepare_submission,
+    save_submission_result,
+    submission_key,
+)
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
 from ..error_analysis import CAUSES, classify_error_cause
 from ..fsrs_params import resolve_schedule_params
+from ..grading import grade_short
 from ..kc_hierarchy import resolve_kc_meta
 from ..models import (
+    AssessmentSubmission,
     Attempt,
     ErrorItem,
     FsrsReviewEvent,
@@ -249,41 +257,6 @@ async def today_queue(request: Request, ctx: AuthContext = Depends(api_rate_limi
     return {"items": items, "total_due": total_due, "now": now_dt.isoformat()}
 
 
-async def _grade_short(
-    gateway, ctx: AuthContext, question: Question, response: str, request_id: str
-) -> bool:
-    """short 题 LLM 评分 (与 services.record_attempts 同款规则: score ≥0.6 记对)。"""
-    result = await gateway.chat(
-        GwRequest(
-            messages=(
-                GwMessage(
-                    role="user",
-                    content=(
-                        "你是评分助手。对照参考答案给学生作答打分。\n"
-                        f"题目: {question.stem}\n参考答案: {question.answer}\n"
-                        f"学生作答: {response}\n"
-                        '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}。'
-                        "reason 中的数学表达式必须使用成对的 $...$, 不得把中文正文"
-                        "放进公式定界符, 不得裸输出完整 LaTeX 公式。"
-                    ),
-                ),
-            ),
-            tier=Tier.standard,
-            json_mode=True,
-            feature="review_grade",
-            tenant_id=str(ctx.tenant_id),
-            user_id=str(ctx.user_id),
-            request_id=request_id,
-        )
-    )
-    try:
-        parsed = orjson.loads(result.text)
-        score = max(0.0, min(1.0, float(parsed.get("score", 0))))
-    except Exception:  # noqa: BLE001 — 评分解析失败按 0 分处理
-        score = 0.0
-    return score >= _SHORT_PASS_SCORE
-
-
 async def _update_mastery_review(
     session,
     ctx: AuthContext,
@@ -317,6 +290,12 @@ async def answer_review(
     body: AnswerIn,
     request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
+):
+    return await _answer_review(error_item_id, body, request, ctx)
+
+
+async def _answer_review(
+    error_item_id, body, request, ctx, *, retry_submission_id=None, expected_revision=None,
 ):
     """复习作答: 判分 → FSRS review → 状态机推进 → BKT 同步。"""
     header_idempotency_key = request.headers.get("Idempotency-Key")
@@ -358,7 +337,7 @@ async def answer_review(
             user_id=ctx.user_id,
             enabled=personalization_enabled,
         )
-        provided_idempotency_key = (body.idempotency_key or header_idempotency_key or "").strip()
+        provided_idempotency_key = submission_key(body.idempotency_key, header_idempotency_key)
         request_fingerprint = hashlib.sha256(
             (
                 f"{question.id}\0{body.response}\0{body.review_duration_ms}\0"
@@ -372,6 +351,14 @@ async def answer_review(
                 FsrsReviewEvent.idempotency_key == idempotency_key,
             )
         )
+        submission, should_grade = await prepare_submission(
+            session, ctx, kind="review", source_id=error_item_id,
+            payload={**body.model_dump(mode="json", exclude={"idempotency_key"}), "question_id": str(question.id)},
+            key=idempotency_key, now_dt=now_dt, retry_id=retry_submission_id,
+            expected_revision=expected_revision,
+        )
+        if not should_grade:
+            return {**submission.result_json, "idempotent": True, "mastery_changes": []}
         if existing_event is not None:
             if (
                 existing_event.error_item_id != item.id
@@ -383,7 +370,8 @@ async def answer_review(
                 raise HTTPException(status_code=409, detail="REVIEW_IDEMPOTENCY_CONFLICT")
             replay_card = dict(existing_event.card_after_json or {})
             replay_due = scheduler.due_at(replay_card)
-            return {
+            return save_submission_result(submission, {
+                "grading_status": "scored",
                 "correct": existing_event.correct,
                 "state": item.state,
                 "cause": item.cause,
@@ -392,20 +380,31 @@ async def answer_review(
                 "explanation": question.explanation,
                 "mastery_changes": [],
                 "idempotent": True,
-            }
+            })
         if question.type in ("single", "multi", "blank"):
             correct = grade_objective(
                 {"type": question.type, "answer": question.answer}, body.response
             )
             weight = 1.0
         else:  # short
-            correct = await _grade_short(
-                request.app.state.gateway, ctx, question, body.response, request_id
+            grade = await grade_short(
+                request.app.state.gateway, ctx, question, body.response,
+                feature="review_grade", request_id=request_id,
             )
+            if grade is None:
+                due = scheduler.due_at(item.fsrs_card_json)
+                return save_submission_result(submission, {
+                    "correct": None, "grading_status": "pending",
+                    "state": item.state, "cause": item.cause,
+                    "next_due": due.isoformat() if due else "",
+                    "answer": "", "explanation": "", "mastery_changes": [],
+                    "plan_task_completion": None,
+                })
+            correct = grade[0] >= _SHORT_PASS_SCORE
             weight = _SHORT_ANSWER_WEIGHT
         # FSRS: 对=Good 错=Again; streak 计数随卡走 (fsrs_card_json 扩展键)
         old_card = dict(item.fsrs_card_json or {})
-        was_due = item.state in _ACTIVE_STATES and scheduler.is_due(old_card, now_dt)
+        was_due = item.state in _ACTIVE_STATES and scheduler.is_due(old_card, submission.submitted_at)
         streak = int(old_card.get("streak", 0))
         card_before = scheduler.normalize_business_card_json(old_card, item.id)
         new_card, next_due, review_log = scheduler.review_with_log(
@@ -499,16 +498,42 @@ async def answer_review(
                     code=exc.code,
                 )
                 plan_task_completion = {"completed": False, "error_code": exc.code}
-    return {
-        "correct": correct,
-        "state": state,
-        "cause": cause,
-        "next_due": next_due.isoformat(),
-        "answer": question.answer,
-        "explanation": question.explanation,
-        "mastery_changes": changes,
-        "plan_task_completion": plan_task_completion,
-    }
+        return save_submission_result(submission, {
+            "grading_status": "scored",
+            "correct": correct,
+            "state": state,
+            "cause": cause,
+            "next_due": next_due.isoformat(),
+            "answer": question.answer,
+            "explanation": question.explanation,
+            "mastery_changes": changes,
+            "plan_task_completion": plan_task_completion,
+        })
+
+@router.get("/{error_item_id}/pending-submission")
+async def pending_review_submission(error_item_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.scalar(select(AssessmentSubmission).where(
+            AssessmentSubmission.error_item_id == error_item_id,
+            AssessmentSubmission.user_id == ctx.user_id,
+            AssessmentSubmission.result_json["grading_status"].astext == "pending",
+        ).order_by(AssessmentSubmission.created_at.desc(), AssessmentSubmission.id.desc()).limit(1))
+        return {"submission": {"request": row.request_json, "result": row.result_json} if row else None}
+
+
+@router.post("/{error_item_id}/submissions/{submission_id}/retry-grading")
+async def retry_review_grading(
+    error_item_id: uuid.UUID, submission_id: uuid.UUID, body: GradingRetryIn,
+    request: Request, ctx: AuthContext = Depends(api_rate_limited),
+):
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await load_submission(session, ctx, "review", error_item_id, submission_id)
+        saved_body = AnswerIn(**row.request_json, idempotency_key=row.idempotency_key)
+    return await _answer_review(
+        error_item_id, saved_body, request, ctx,
+        retry_submission_id=submission_id, expected_revision=body.expected_revision,
+    )
+
 
 
 @router.post("/{error_item_id}/variant")

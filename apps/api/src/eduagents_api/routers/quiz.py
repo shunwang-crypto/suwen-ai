@@ -11,9 +11,17 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import or_, select
 
 from .. import timectl
+from ..assessment_submissions import GradingRetryIn, load_submission, submission_key
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
-from ..models import ERROR_IMPORT_QUIZ_KIND, Attempt, ErrorItem, Question, Quiz
+from ..models import (
+    ERROR_IMPORT_QUIZ_KIND,
+    AssessmentSubmission,
+    Attempt,
+    ErrorItem,
+    Question,
+    Quiz,
+)
 from ..plan_adjust import PlanTaskAttributionError, validate_plan_task_attribution
 from ..practice_recommendation import (
     PracticeAdjustmentUnavailable,
@@ -83,6 +91,7 @@ class AttemptAnswerIn(BaseModel):
 
 class AttemptIn(BaseModel):
     answers: list[AttemptAnswerIn] = Field(min_length=1, max_length=20)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 @router.post("/recommended")
@@ -550,6 +559,33 @@ async def submit_attempts(
         ctx,
         request.app.state.gateway,
         quiz_id,
-        [answer.model_dump() for answer in body.answers],
+        [answer.model_dump(mode="json", exclude_none=True) for answer in body.answers],
         now_dt=now_dt,
+        idempotency_key=submission_key(body.idempotency_key, request.headers.get("Idempotency-Key")),
+    )
+
+
+@router.get("/{quiz_id}/pending-submission")
+async def pending_submission(quiz_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await session.scalar(select(AssessmentSubmission).where(
+            AssessmentSubmission.quiz_id == quiz_id,
+            AssessmentSubmission.user_id == ctx.user_id,
+            AssessmentSubmission.result_json["grading_status"].astext == "pending",
+        ).order_by(AssessmentSubmission.created_at.desc(), AssessmentSubmission.id.desc()).limit(1))
+        return {"submission": {"request": row.request_json, "result": row.result_json} if row else None}
+
+
+@router.post("/{quiz_id}/submissions/{submission_id}/retry-grading")
+async def retry_quiz_grading(
+    quiz_id: uuid.UUID, submission_id: uuid.UUID, body: GradingRetryIn,
+    request: Request, ctx: AuthContext = Depends(api_rate_limited),
+):
+    async with tenant_session(ctx.tenant_id) as session:
+        row = await load_submission(session, ctx, "quiz", quiz_id, submission_id)
+        answers, key = row.request_json["answers"], row.idempotency_key
+    return await record_attempts(
+        ctx, request.app.state.gateway, quiz_id, answers,
+        now_dt=await timectl.now(request.app.state.redis), idempotency_key=key,
+        retry_submission_id=submission_id, expected_revision=body.expected_revision,
     )

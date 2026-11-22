@@ -97,6 +97,12 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
             {"cutoff": cut_learning_events},
         ),
         (
+            "assessment_submissions",
+            "DELETE FROM assessment_submissions WHERE created_at < :cutoff",
+            "SELECT count(*) FROM assessment_submissions WHERE created_at < :cutoff",
+            {"cutoff": cut_learning_events},
+        ),
+        (
             "fsrs_params",
             "DELETE FROM fsrs_params WHERE created_at < :cutoff AND status <> 'active'",
             "SELECT count(*) FROM fsrs_params "

@@ -76,10 +76,10 @@ export function WeakPointCard({
       <div className="mt-2 flex justify-end">
         <Link
           href={`/practice/session?mode=quiz&from=${encodeURIComponent("/growth")}&weak=1`}
-          title="按画像定向出题：薄弱点自动进卷（掌握度最低的优先）"
+          title="进入薄弱点练习，由系统选择当前优先练习的内容"
           className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-caption font-medium text-amber-700 hover:border-amber-300 hover:bg-amber-100"
         >
-          针对此点练习
+          练习薄弱点
         </Link>
       </div>
       {wp.possible_root_cause.length > 0 && (

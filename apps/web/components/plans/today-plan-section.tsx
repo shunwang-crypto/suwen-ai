@@ -5,14 +5,16 @@
 // PlanTaskDrawer（练习/复习=专注会话、辅导=跳 /tutor，见抽屉内按钮）。
 // 无活跃计划 / 加载失败 / 结构为空 → 整块隐藏（今日页以 next-actions 为主视图）。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ErrorBanner } from "@/components/common";
 import {
   PlanTodayCard,
   flattenDays,
+  mergePlanSnapshot,
   normalizedTaskStatus,
   withTaskStatus,
+  withTaskResult,
   type PlanTaskStatus,
 } from "@/components/plans/plan-parts";
 import {
@@ -31,6 +33,7 @@ type DrawerLocation = Omit<PlanTaskLocation, "planKbId">;
 export function TodayPlanSection() {
   const [detail, setDetail] = useState<PlanDetail | null>(null);
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+  const pendingStatuses = useRef(new Map<string, PlanTaskStatus>());
   const [openTask, setOpenTask] = useState<DrawerLocation | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -51,7 +54,10 @@ export function TodayPlanSection() {
         }
         const loaded = await apiJson<PlanDetail>(`/api/plans/${active.id}`);
         if (alive) {
-          if (loaded.status === "active") setDetail(loaded);
+          if (loaded.status === "active") {
+            const pending = new Map(pendingStatuses.current);
+            setDetail((previous) => mergePlanSnapshot(previous, loaded, pending));
+          }
           else {
             setDetail(null);
             setOpenTask(null);
@@ -69,13 +75,14 @@ export function TodayPlanSection() {
 
   /** 与 /plans 页同一套三态更新：乐观更新 + 失败回滚（见 plans/page.tsx）。 */
   const updateTaskStatus = async (taskId: string, status: PlanTaskStatus) => {
-    if (!detail || detail.status !== "active" || pendingKeys.has(taskId)) return;
+    if (!detail || detail.status !== "active" || pendingStatuses.current.has(taskId)) return;
     const previousTask = flattenDays(detail.structure)
       .flatMap((day) => day.tasks)
       .find((task) => task.task_id === taskId);
     if (!previousTask) return;
     const previousStatus = normalizedTaskStatus(previousTask);
-    setDetail(withTaskStatus(detail, taskId, status));
+    pendingStatuses.current.set(taskId, status);
+    setDetail((previous) => previous ? withTaskStatus(previous, taskId, status) : previous);
     setOpenTask((current) =>
       current?.task.task_id === taskId
         ? { ...current, task: { ...current.task, status } }
@@ -88,16 +95,10 @@ export function TodayPlanSection() {
         `/api/plans/${detail.id}/tasks/${taskId}/toggle`,
         { body: { status } },
       );
-      if (res.plan_status !== "active") {
-        setDetail(null);
-        setOpenTask(null);
-      } else {
-        setDetail((prev) =>
-          prev && prev.id === detail.id
-            ? { ...prev, progress: res.progress, status: res.plan_status }
-            : prev,
-        );
-      }
+      const hasOtherPending = pendingStatuses.current.size > 1;
+      setDetail((prev) => prev && prev.id === detail.id
+        ? withTaskResult(prev, res, hasOtherPending) : prev);
+      if (res.plan_status !== "active") setOpenTask(null);
     } catch (err) {
       setDetail((prev) =>
         prev && prev.id === detail.id
@@ -111,11 +112,13 @@ export function TodayPlanSection() {
       );
       setBanner(err instanceof ApiError ? err.message : "任务状态更新失败，已回滚");
     } finally {
+      pendingStatuses.current.delete(taskId);
       setPendingKeys((prev) => {
         const next = new Set(prev);
         next.delete(taskId);
         return next;
       });
+      if (pendingStatuses.current.size === 0) setReloadKey((key) => key + 1);
     }
   };
 

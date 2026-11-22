@@ -7,9 +7,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from eduagents_core.gateway import ChatMessage as GwMessage
-from eduagents_core.gateway import ChatRequest as GwRequest
-from eduagents_core.gateway import Tier
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import HTTPException
@@ -753,7 +750,7 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
                 Plan.user_id == ctx.user_id,
                 Plan.status == "active",
             )
-            .values(status="archived")
+            .values(status="archived", version=Plan.version + 1)
         )
         kb = None
         if kb_id is not None:
@@ -1274,13 +1271,20 @@ async def record_attempts(
     quiz_id: uuid.UUID,
     answers: list[dict],
     now_dt: datetime | None = None,
+    *,
+    idempotency_key: str | None = None,
+    retry_submission_id: uuid.UUID | None = None,
+    expected_revision: int | None = None,
 ) -> dict:
-    """作答判分: 客观题本地判 / 简答 LLM 评分附理由; 错题自动入本; BKT 直写 (F5-A3)。
+    """作答判分: 已评分结果写学习证据；待评分仅保存原答案，支持幂等恢复。
 
     now_dt: 业务时间 (路由层从 timectl 虚拟时钟取, §9); 缺省回退系统时间保持向后兼容。
     """
     from eduagents_core.graphs.quiz_graph import grade_objective
     from eduagents_core.mastery.scheduler import new_card_json
+
+    from .assessment_submissions import prepare_submission, save_submission_result, submission_key
+    from .grading import grade_short
 
     business_now = now_dt or datetime.now(UTC)
     results = []
@@ -1294,6 +1298,17 @@ async def record_attempts(
             or (quiz.blueprint_json or {}).get("kind") == ERROR_IMPORT_QUIZ_KIND
         ):
             raise HTTPException(status_code=404, detail="NOT_FOUND")
+        submission, should_grade = await prepare_submission(
+            session, ctx, kind="quiz", source_id=quiz_id,
+            payload={"answers": answers}, key=submission_key(idempotency_key, None),
+            now_dt=business_now, retry_id=retry_submission_id,
+            expected_revision=expected_revision,
+        )
+        if not should_grade:
+            return submission.result_json
+        previous_results = {
+            item["question_id"]: item for item in submission.result_json.get("results", [])
+        }
         questions = {
             str(q.id): q
             for q in (
@@ -1338,6 +1353,10 @@ async def record_attempts(
             if q is None or str(q.id) in seen_question_ids:
                 continue
             seen_question_ids.add(str(q.id))
+            previous_result = previous_results.get(str(q.id))
+            if previous_result and previous_result["correct"] is not None:
+                results.append(previous_result)
+                continue
             response = str(item.get("response", ""))
             llm_score = None
             scored_reason = None
@@ -1345,51 +1364,27 @@ async def record_attempts(
                 correct = grade_objective({"type": q.type, "answer": q.answer}, response)
                 weight = 1.0
             else:  # short: LLM 评分, ≥0.6 记 correct, 0.5 权重 (§5.6)
-                result = await gateway.chat(
-                    GwRequest(
-                        messages=(
-                            GwMessage(
-                                role="user",
-                                content=(
-                                    "你是评分助手。对照参考答案给学生作答打分。\n"
-                                    f"题目: {q.stem}\n参考答案: {q.answer}\n"
-                                    f"学生作答: {response}\n"
-                                    '只输出 JSON: {"score": 0到1的小数, "reason": "评分理由"}。'
-                                    "reason 中的数学表达式必须使用成对的 $...$, 不得把中文正文"
-                                    "放进公式定界符, 不得裸输出完整 LaTeX 公式。"
-                                ),
-                            ),
-                        ),
-                        tier=Tier.standard,
-                        json_mode=True,
-                        feature="quiz_grade",
-                        tenant_id=str(ctx.tenant_id),
-                        user_id=str(ctx.user_id),
-                    )
+                grade = await grade_short(gateway, ctx, q, response, feature="quiz_grade")
+                llm_score, scored_reason = grade if grade is not None else (
+                    None, "暂未完成评分；作答已保存，尚未更新掌握度或错题记录。"
                 )
-                import orjson
-
-                try:
-                    parsed = orjson.loads(result.text)
-                    llm_score = max(0.0, min(1.0, float(parsed.get("score", 0))))
-                    scored_reason = str(parsed.get("reason", ""))[:2000]
-                except Exception:  # noqa: BLE001 — 评分解析失败按 0 分并如实记录
-                    llm_score = 0.0
-                    scored_reason = "评分解析失败, 已按 0 分处理, 请人工复核"
-                correct = llm_score >= _SHORT_PASS_SCORE
+                correct = llm_score >= _SHORT_PASS_SCORE if llm_score is not None else None
                 weight = _SHORT_ANSWER_WEIGHT
-            attempt = Attempt(
-                at=business_now,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                question_id=q.id,
-                response=response,
-                is_correct=correct,
-                llm_score=llm_score,
-                scored_reason=scored_reason,
-            )
-            session.add(attempt)
-            await session.flush()
+            if previous_result:
+                attempt = await session.get(Attempt, uuid.UUID(previous_result["attempt_id"]))
+                if attempt is None:
+                    raise HTTPException(status_code=409, detail="SAVED_ATTEMPT_NOT_FOUND")
+                attempt.is_correct = correct
+                attempt.llm_score = llm_score
+                attempt.scored_reason = scored_reason
+            else:
+                attempt = Attempt(
+                    at=submission.submitted_at, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                    question_id=q.id, response=response, is_correct=correct,
+                    llm_score=llm_score, scored_reason=scored_reason,
+                )
+                session.add(attempt)
+                await session.flush()
             predicted_confidence = item.get("predicted_confidence")
             if (
                 not isinstance(predicted_confidence, int)
@@ -1400,7 +1395,7 @@ async def record_attempts(
             predicted_correct = item.get("predicted_correct")
             if not isinstance(predicted_correct, bool):
                 predicted_correct = None
-            if predicted_confidence is not None or predicted_correct is not None:
+            if not previous_result and (predicted_confidence is not None or predicted_correct is not None):
                 session.add(
                     MetacognitionPrediction(
                         tenant_id=ctx.tenant_id,
@@ -1418,7 +1413,7 @@ async def record_attempts(
             # MasteryRecord and MasteryLog in this transaction.
             kc_ids = kc_snapshots[str(q.id)]
             changes = []
-            if evidence_policy == "mastery_eligible":
+            if correct is not None and evidence_policy == "mastery_eligible":
                 changes = await apply_mastery_evidence(
                     session,
                     ctx,
@@ -1428,23 +1423,24 @@ async def record_attempts(
                     attempt.id,
                     now_dt=business_now,
                 )
-            await write_learning_event(
-                session,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                source_type="quiz_attempt",
-                source_id=attempt.id,
-                question_id=q.id,
-                item_key=str(q.id),
-                kc_ids=kc_ids,
-                correct=correct,
-                score=llm_score if llm_score is not None else (1.0 if correct else 0.0),
-                rating=3 if correct else 1,
-                difficulty_label=q.difficulty,
-                occurred_at=business_now,
-                idempotency_key=f"attempt:{attempt.id}",
-            )
-            if not correct:
+            if correct is not None:
+                await write_learning_event(
+                    session,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    source_type="quiz_attempt",
+                    source_id=attempt.id,
+                    question_id=q.id,
+                    item_key=str(q.id),
+                    kc_ids=kc_ids,
+                    correct=correct,
+                    score=llm_score if llm_score is not None else (1.0 if correct else 0.0),
+                    rating=3 if correct else 1,
+                    difficulty_label=q.difficulty,
+                    occurred_at=business_now,
+                    idempotency_key=f"attempt:{attempt.id}",
+                )
+            if correct is False:
                 # F6-A1: 错题 100% 自动入本 (错因初值 knowledge_gap, M4 错因分类细化)
                 # F6-A4: 入本即挂 FSRS 卡 (due=业务时间, 当天进复习队列)
                 error_item_id = uuid.uuid4()
@@ -1471,15 +1467,19 @@ async def record_attempts(
             results.append(
                 {
                     "question_id": str(q.id),
+                    "attempt_id": str(attempt.id),
+                    "grading_status": "pending" if correct is None else "scored",
                     "correct": correct,
                     "llm_score": llm_score,
                     "scored_reason": scored_reason,
-                    "explanation": q.explanation,
-                    "answer": q.answer,
+                    "explanation": q.explanation if correct is not None else "",
+                    "answer": q.answer if correct is not None else "",
                     "mastery_changes": changes,
                 }
             )
-        if isinstance(attribution, dict) and len(results) == len(questions) and questions:
+        pending_count = sum(item["correct"] is None for item in results)
+        if (isinstance(attribution, dict) and len(results) == len(questions)
+                and questions and not pending_count):
             from .plan_adjust import PlanTaskAttributionError, complete_plan_task
 
             try:
@@ -1501,33 +1501,38 @@ async def record_attempts(
                     code=code,
                 )
                 plan_task_completion = {"completed": False, "error_code": code}
-    total = len(results)
-    n_correct = sum(1 for r in results if r["correct"])
-    # F3-A3 联动 (尾部追加, 判分主流程一行未改): 本次正确率 <0.6 且存在活跃计划时,
-    # 自动按当前学情插入补强任务并写 plan_adjustments; 失败只记日志, 不影响判分返回。
-    from .plan_adjust import LOW_SCORE_THRESHOLD, adjust_on_low_score
+        total = len(results)
+        n_correct = sum(1 for r in results if r["correct"])
+        # Only a fully graded submission can trigger automatic reinforcement.
+        # Its savepoint and response share this transaction, so replay cannot repeat it.
+        from .plan_adjust import LOW_SCORE_THRESHOLD, adjust_on_low_score
 
-    plan_adjustment = None
-    accuracy = (n_correct / total) if total else 1.0
-    attributed_plan_id = None
-    if isinstance(attribution, dict):
-        try:
-            attributed_plan_id = uuid.UUID(str(attribution.get("plan_id") or ""))
-        except ValueError:
-            attributed_plan_id = None
-    if total and accuracy < LOW_SCORE_THRESHOLD:
-        plan_adjustment = await adjust_on_low_score(
-            ctx,
-            accuracy,
-            quiz_kb_id=quiz.kb_id,
-            attributed_plan_id=attributed_plan_id,
-            evidence_policy=evidence_policy,
-        )
-    return {
-        "total": total,
-        "correct": n_correct,
-        "results": results,
-        "plan_adjustment": plan_adjustment,  # 新增键, 老调用方忽略即可
-        "plan_task_completion": plan_task_completion,
-        "evidence_policy": evidence_policy,
-    }
+        plan_adjustment = None
+        graded_total = total - pending_count
+        accuracy = (n_correct / graded_total) if graded_total else 1.0
+        attributed_plan_id = None
+        if isinstance(attribution, dict):
+            try:
+                attributed_plan_id = uuid.UUID(str(attribution.get("plan_id") or ""))
+            except ValueError:
+                attributed_plan_id = None
+        if total and not pending_count and accuracy < LOW_SCORE_THRESHOLD:
+            plan_adjustment = await adjust_on_low_score(
+                ctx,
+                accuracy,
+                quiz_kb_id=quiz.kb_id,
+                attributed_plan_id=attributed_plan_id,
+                evidence_policy=evidence_policy,
+                session=session,
+            )
+        return save_submission_result(submission, {
+            "total": total,
+            "graded_total": graded_total,
+            "pending_count": pending_count,
+            "grading_status": "pending" if pending_count else "scored",
+            "correct": n_correct,
+            "results": results,
+            "plan_adjustment": plan_adjustment,  # 新增键, 老调用方忽略即可
+            "plan_task_completion": plan_task_completion,
+            "evidence_policy": evidence_policy,
+        })

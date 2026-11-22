@@ -378,6 +378,7 @@ async def complete_plan_task(
             "completion": previous,
             "progress": plan_progress(plan.structure_json),
             "plan_status": plan.status,
+            "version": plan.version,
         }
     if plan.status != "active":
         raise PlanTaskAttributionError("PLAN_NOT_ACTIVE")
@@ -395,6 +396,7 @@ async def complete_plan_task(
     target["status"] = "done"
     target["completion"] = completion
     plan.structure_json = new_structure
+    plan.version = (plan.version or 1) + 1
     progress = plan_progress(new_structure)
     if progress["pending"] == 0 and progress["total"] > 0:
         plan.status = "completed"
@@ -407,6 +409,7 @@ async def complete_plan_task(
         "completion": completion,
         "progress": plan_progress(new_structure),
         "plan_status": plan.status,
+        "version": plan.version,
     }
 
 
@@ -624,19 +627,31 @@ async def adjust_on_low_score(
     quiz_kb_id: uuid.UUID | None,
     attributed_plan_id: uuid.UUID | None,
     evidence_policy: str,
+    session=None,
 ) -> dict | None:
     """低分测评 (正确率 < 0.6) 自动触发一次计划调整; 无活跃计划或异常时返回 None。
 
-    本函数是 services.record_attempts 的尾部挂载点: 判分主流程已完成并提交,
-    调整失败绝不能反噬作答结果, 因此整体吞异常只记日志 (向后兼容第一)。
+    与提交结果共用事务时使用 savepoint；调整失败不回滚已保存作答。
+    没有传入 session 的调用方仍使用独立事务。
     """
+    from contextlib import asynccontextmanager
+
     from .db import tenant_session
+
+    @asynccontextmanager
+    async def adjustment_session():
+        if session is None:
+            async with tenant_session(ctx.tenant_id) as own_session:
+                yield own_session
+        else:
+            async with session.begin_nested():
+                yield session
 
     if evidence_policy != "mastery_eligible":
         return None
     try:
-        async with tenant_session(ctx.tenant_id) as session:
-            plan = await active_plan(session, ctx.tenant_id, ctx.user_id)
+        async with adjustment_session() as adjust_session:
+            plan = await active_plan(adjust_session, ctx.tenant_id, ctx.user_id)
             if (
                 plan is None
                 or plan.plan_mode != "course_bound"
@@ -646,7 +661,7 @@ async def adjust_on_low_score(
             ):
                 return None
             result = await adjust_plan(
-                session,
+                adjust_session,
                 ctx.user_id,
                 ctx.tenant_id,
                 plan,

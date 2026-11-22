@@ -45,6 +45,7 @@ RUNTIME_TABLES = (
     "quizzes",
     "questions",
     "attempts",
+    "assessment_submissions",
     "error_items",
     "fsrs_review_events",
     "fsrs_params",

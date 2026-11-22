@@ -20,7 +20,11 @@ export interface ReviewTodayResponse {
 }
 
 export interface ReviewAnswerResult {
-  correct: boolean;
+  correct: boolean | null;
+  grading_status?: "pending" | "scored";
+  submission_id?: string;
+  grading_revision?: number;
+  retry_available?: boolean;
   state: string;
   /** 答错时由错因自动分类刷新（stub 网关不分类，保留原值） */
   cause: string;

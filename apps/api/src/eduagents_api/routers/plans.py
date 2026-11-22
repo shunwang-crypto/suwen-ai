@@ -903,15 +903,20 @@ async def toggle_task(
             new_structure, final_status = set_task_status(plan.structure_json, task_id, body.status)
         except KeyError:
             raise HTTPException(status_code=404, detail="TASK_NOT_FOUND") from None
+        changed = new_structure != plan.structure_json
+        previous_status = plan.status
         plan.structure_json = new_structure  # JSONB 未挂 MutableDict, 必须整体重新赋值
         progress = plan_progress(new_structure)
         if progress["pending"] == 0 and progress["total"] > 0:
             plan.status = "completed"
+        if changed or plan.status != previous_status:
+            plan.version = (plan.version or 1) + 1
         return {
             "task_id": task_id,
             "status": final_status,
             "progress": plan_progress(new_structure),
             "plan_status": plan.status,
+            "version": plan.version,
         }
 
 
@@ -928,6 +933,7 @@ async def archive_plan(
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
         plan.status = "archived"
+        plan.version = (plan.version or 1) + 1
         return {"id": str(plan.id), "status": plan.status}
 
 
@@ -966,6 +972,8 @@ async def re_anchor_plan(
                 row.kc_id = target.id
                 row.status = "promoted"
                 anchored += 1
+        if anchored:
+            plan.version = (plan.version or 1) + 1
         return {"anchored": anchored}
 
 

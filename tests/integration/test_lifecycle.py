@@ -644,6 +644,7 @@ async def test_export_user_data(client):
         "tables/error_imports.json",
         "tables/metacognition_predictions.json",
         "tables/explain_backs.json",
+        "tables/assessment_submissions.json",
     } <= tables
     kbs = json.loads(zf.read("tables/knowledge_bases.json"))
     assert any(row["id"] == kb_id for row in kbs)

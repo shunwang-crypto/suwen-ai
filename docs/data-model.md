@@ -64,6 +64,9 @@ erDiagram
     USER ||--o{ QUIZ : owns
     QUIZ ||--o{ QUESTION : contains
     QUESTION ||--o{ ATTEMPT : receives
+    USER ||--o{ ASSESSMENT_SUBMISSION : owns
+    QUIZ ||--o{ ASSESSMENT_SUBMISSION : submitted
+    ERROR_ITEM ||--o{ ASSESSMENT_SUBMISSION : submitted
     ATTEMPT ||--o| METACOGNITION_PREDICTION : may_have
     USER ||--o{ METACOGNITION_PREDICTION : owns
     USER ||--o{ EXPLAIN_BACK : writes
@@ -123,6 +126,20 @@ stub 文档在 `ready` 前完成章节 KC 与 child chunk 回写；live/record/r
 MasteryLog；作答链路复用同一批已归一化 KC ID。
 
 ## 普通测验与学习状态
+
+`AssessmentSubmission`（0038）保存普通 Quiz/复习的提交身份、原始请求和当前评分结果，
+与资料测评的 `AssessmentAttempt/AssessmentAnswer` 是不同实体。
+`(user_id, kind, idempotency_key)` 唯一；首次写入使用事务级 advisory lock，已有记录再加行锁，
+并与作答、学习事件、FSRS、掌握度和计划归因共用事务。相同标识及内容返回保存结果，内容或
+来源冲突返回 409；客户端明确开始新轮练习才创建新标识。记录启用 FORCE RLS，随用户、
+Quiz/错题级联删除，进入账号导出，并按真实 `created_at` 留存 730 天。
+
+简答评分异常、缺少分数、错误类型、非有限值或超出 0–1 范围时保持 `pending`。
+Quiz 的原始 Attempt 保留 `is_correct/llm_score=NULL`；复习保存提交但不产生 FsrsReviewEvent。
+待评分结果不计入有效正确率，不写学习事件/掌握度/错题/FSRS，不完成或自动补强计划。
+显式重新评分只读取已保存答案；成功后更新原 Attempt，并且仅补写此前待定题目的证据。
+每次提交最多尝试评分 3 次（首次加 2 次重试）；`expected_revision` 使重试自身也可安全重放。
+耗尽后保留待评分状态供后续复核，当前未实现人工评分工作台。0038 不回写历史零分记录。
 
 | 实体 | 语义 |
 |---|---|
