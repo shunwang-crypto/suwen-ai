@@ -6,9 +6,9 @@ import json
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatResult
-from eduagents_core.graphs.quiz_graph import build_quiz_graph
-from eduagents_core.graphs.state import GraphDeps
-from langgraph.checkpoint.memory import MemorySaver
+from eduagents_core.harness.workflow import MemoryStore
+from eduagents_core.workflows.quiz import build_quiz_workflow
+from eduagents_core.workflows.state import WorkflowDeps
 
 
 class _Gateway:
@@ -58,9 +58,9 @@ class _Gateway:
 
 async def test_generated_kc_must_match_target_scope_after_retries():
     gateway = _Gateway()
-    app = build_quiz_graph(
-        GraphDeps(settings=Settings(), gateway=gateway)
-    ).compile(checkpointer=MemorySaver())
+    app = build_quiz_workflow(
+        WorkflowDeps(settings=Settings(), gateway=gateway)
+    ).with_store(MemoryStore())
 
     final = await app.ainvoke(
         {

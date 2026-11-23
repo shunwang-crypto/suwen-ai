@@ -168,6 +168,8 @@ class OpenAIGateway(
                         "prompt_tokens": result.prompt_tokens,
                         "completion_tokens": result.completion_tokens,
                         "finish_reason": result.finish_reason,
+                        "tool_calls": list(result.tool_calls),
+                        "reasoning_content": result.reasoning_content,
                     },
                 )
             await self._emit_usage(
@@ -391,9 +393,11 @@ class OpenAIGateway(
     ) -> dict:
         kwargs: dict = {
             "model": candidate.model if candidate is not None else req.model_override or cfg.model,
-            "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+            "messages": [m.to_wire() for m in req.messages],
             "temperature": req.temperature,
         }
+        if req.tools:
+            kwargs["tools"] = list(req.tools)
         if req.max_tokens:
             kwargs["max_tokens"] = req.max_tokens
         if req.json_mode and (candidate is None or candidate.supports_json):

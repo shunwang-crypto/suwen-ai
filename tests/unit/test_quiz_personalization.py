@@ -14,11 +14,10 @@ from eduagents_api.profile_summary import difficulty_rationale
 from eduagents_api.routers.quiz import adaptive_difficulty_mix
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.quiz_graph import PROFILE_SECTION_TEMPLATE, build_quiz_graph
-from eduagents_core.graphs.state import GraphDeps
+from eduagents_core.harness.workflow import MemoryStore, Resume
 from eduagents_core.mastery.thresholds import difficulty_for_mastery, zone_label
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
+from eduagents_core.workflows.quiz import PROFILE_SECTION_TEMPLATE, build_quiz_workflow
+from eduagents_core.workflows.state import WorkflowDeps
 
 # --- fakes (同 test_quiz_graph 的 FakeGateway 模式) ---
 
@@ -77,8 +76,8 @@ def weak_item(name: str, p: float, recent: bool = False) -> dict:
 
 
 def make_app(gateway: FakeGateway):
-    deps = GraphDeps(settings=Settings(), gateway=gateway, retrieval=None)
-    return build_quiz_graph(deps).compile(checkpointer=MemorySaver())
+    deps = WorkflowDeps(settings=Settings(), gateway=gateway, retrieval=None)
+    return build_quiz_workflow(deps).with_store(MemoryStore())
 
 
 def base_state(**over) -> dict:
@@ -174,7 +173,7 @@ async def test_generate_prompt_contains_profile_section_for_weak_student():
     assert payload["kind"] == "blueprint_confirm"
     assert payload["difficulty_reasons"] == reasons
 
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
     assert final["validation_errors"] == []
 
     gen_prompt = gateway.requests[1].messages[0].content
@@ -200,7 +199,7 @@ async def test_generate_prompt_clean_without_profile():
     # 普通出题: interrupt 负载理由为空数组 (前端据此不渲染理由块)
     assert first["__interrupt__"][0].value["difficulty_reasons"] == []
 
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
     gen_prompt = gateway.requests[1].messages[0].content
     assert "学生画像" not in gen_prompt
     assert "{{PROFILE_SECTION}}" not in gen_prompt  # 占位符不残留
@@ -226,7 +225,7 @@ def _bp_items(*difficulties: str, kc: str = "导数定义") -> dict:
 
 def test_blueprint_difficulty_pinned_by_kc_reasons():
     """蓝图 LLM 给薄弱 KC 配错难度: 按定向分档表钉回, 展示与实际必须一致。"""
-    from eduagents_core.graphs.quiz_graph import _fix_blueprint
+    from eduagents_core.workflows.quiz import _fix_blueprint
 
     blueprint, _, enforced = _fix_blueprint(
         _bp_items("hard", "hard"),
@@ -243,7 +242,7 @@ def test_blueprint_difficulty_pinned_by_kc_reasons():
 
 def test_blueprint_mix_enforced_when_llm_ignores_it():
     """题数够但难度全错 (审查 P2 场景): mix 程序性强制, 不再静默失效。"""
-    from eduagents_core.graphs.quiz_graph import _fix_blueprint
+    from eduagents_core.workflows.quiz import _fix_blueprint
 
     blueprint, corrected, enforced = _fix_blueprint(
         _bp_items("mid", "mid", "mid"),
@@ -260,7 +259,7 @@ def test_blueprint_mix_enforced_when_llm_ignores_it():
 
 def test_blueprint_mix_not_enforced_for_user_edit():
     """用户改过的蓝图: 学习者控制权, 难度不被系统改回 (enforce_mix=False)。"""
-    from eduagents_core.graphs.quiz_graph import _fix_blueprint
+    from eduagents_core.workflows.quiz import _fix_blueprint
 
     blueprint, _, enforced = _fix_blueprint(
         _bp_items("hard", "hard", "hard"),
@@ -276,7 +275,7 @@ def test_blueprint_mix_not_enforced_for_user_edit():
 
 def test_blueprint_mix_skipped_when_sum_mismatch():
     """mix 目标数之和 != 题数时不做配比改标 (无法整除的意图不猜), 钉住仍生效。"""
-    from eduagents_core.graphs.quiz_graph import _fix_blueprint
+    from eduagents_core.workflows.quiz import _fix_blueprint
 
     blueprint, _, enforced = _fix_blueprint(
         _bp_items("mid", "mid", kc="极值判定"),
@@ -323,16 +322,16 @@ async def test_generate_calls_retrieval_with_real_signature():
 
     gateway = FakeGateway([BP_JSON, GEN_JSON])
     settings = Settings()
-    deps = GraphDeps(
+    deps = WorkflowDeps(
         settings=settings, gateway=gateway,
         retrieval=_RealSignatureRetrieval(), web_search=None,
     )
-    app = build_quiz_graph(deps).compile(checkpointer=MemorySaver())
+    app = build_quiz_workflow(deps).with_store(MemoryStore())
     config = cfg("retrieval-signature")
     state = base_state()
     state["kb_id"] = "kb-1"
     await app.ainvoke(state, config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
     assert final["validation_errors"] == []
     # 生成和独立 critic 各检索一次；素材正文不进入 Graph checkpoint。
     assert calls == [

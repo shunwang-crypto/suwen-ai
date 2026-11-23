@@ -1,8 +1,8 @@
-"""quiz 子图 (F5): blueprint → interrupt 人工确认 → 按蓝图生成 → schema 校验重试环。
+"""quiz 工作流 (F5): blueprint → interrupt 人工确认 → 按蓝图生成 → schema 校验重试环。
 
 - 蓝图 cheap 档、题目 standard 档, 全部 json_mode 经 ModelGateway;
 - 蓝图数量/难度分布与需求不符时程序性修正 (截断/补齐), 保证 items 数 == num_questions;
-- 确认经 langgraph interrupt(), resume 值 {"approved": bool, "blueprint": 可选修改后蓝图};
+- 确认通过服务端 interrupt(), resume 值 {"approved": bool, "blueprint": 可选修改后蓝图};
   interrupt 负载附带 difficulty_reasons (定向出题的逐 KC 分档理由, P1-1 可解释);
 - generate 注入学生画像段 (P1-2): 干扰项贴合近期错因分布, 摘要为空即不注入;
 - 逐题 Pydantic 严格校验 (QUESTION_SCHEMA), 失败带错误清单回 generate 修复, 最多重试 2 轮;
@@ -16,17 +16,18 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ..gateway.base import BudgetExceeded, ChatMessage, ChatRequest, Tier
+from ..harness.workflow import Workflow, interrupt
 from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
 from ..logging import get_logger
-from .state import GraphDeps, QuizState
+from .state import QuizState, WorkflowDeps
 
-# 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
+END = ""
+
+# 本文件位于 packages/core/src/eduagents_core/workflows/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 MAX_RETRIES = 2  # 校验失败最多打回 generate 修复 2 轮
 MAX_CRITIC_RETRIES = 1  # 独立评审最多返工 1 轮，避免无限增加成本
@@ -46,7 +47,7 @@ _TYPES = ("single", "multi", "blank", "short")
 _DIFFICULTIES = ("easy", "mid", "hard")
 _LETTERS = ("A", "B", "C", "D")
 
-# 画像注入 (P1-2, 同 qa_graph 的注入法): 摘要由 API 层 profile_summary.py 确定性
+# 画像注入 (P1-2, 同 qa 工作流的注入法): 摘要由 API 层 profile_summary.py 确定性
 # 拼装并已按 P2-7 脱敏 (定性词, 无题干原文/PII), 空串即完全不改 prompt。
 PROFILE_SECTION_TEMPLATE = (
     "## 学生画像（来自该学生的历史作答与掌握度记录，仅用于调整出题）\n\n"
@@ -58,11 +59,11 @@ PROFILE_SECTION_TEMPLATE = (
     "画像含兴趣标签时，例题的应用情境可自然贴合其兴趣（用其熟悉的场景包装题目背景），"
     "不得生硬堆砌兴趣词，不得改变蓝图规定的知识点与考察目标。"
 )
-log = get_logger("quiz_graph")
+log = get_logger("quiz_workflow")
 
 
-class _QuizGraphState(QuizState, total=False):
-    """构图私有扩展通道 (同 qa 的 _QaGraphState): 不进 QuizState 公共契约。"""
+class _QuizWorkflowState(QuizState, total=False):
+    """工作流私有扩展 (同 qa 的 _QaWorkflowState): 不进 QuizState 公共契约。"""
 
     profile_summary: str  # 学生画像摘要 (API 层 profile_summary.py 产出; 空=无画像)
     difficulty_reasons: list[dict]  # 逐薄弱 KC 难度分档理由 (随 blueprint interrupt 下发)
@@ -225,7 +226,12 @@ def _enforce_difficulty_mix(
         targets.values()  # type: ignore[arg-type]
     ) == len(items):
         counts = {d: sum(1 for it in items if it["difficulty"] == d) for d in _DIFFICULTIES}
-        deficit = [d for d in _DIFFICULTIES for _ in range(targets[d] - counts[d]) if targets[d] > counts[d]]  # type: ignore[operator]
+        deficit = [
+            d
+            for d in _DIFFICULTIES
+            for _ in range(targets[d] - counts[d])
+            if targets[d] > counts[d]
+        ]  # type: ignore[operator]
         for item in items:
             if not deficit:
                 break
@@ -294,8 +300,8 @@ def _fix_blueprint(
     return {"items": items, "summary": summary}, corrected, enforced
 
 
-def build_quiz_graph(deps: GraphDeps) -> StateGraph:
-    """构建 quiz 子图 (未编译)。deps 闭包捕获, 不进 state (state 须可进 checkpointer)。"""
+def build_quiz_workflow(deps: WorkflowDeps) -> Workflow:
+    """构建 quiz 工作流。deps 闭包捕获, 不进 state (state 须可保存为快照)。"""
 
     async def make_blueprint(state: QuizState) -> dict:
         topic = state.get("topic", "")
@@ -347,7 +353,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    def confirm_blueprint(state: _QuizGraphState) -> dict:
+    def confirm_blueprint(state: _QuizWorkflowState) -> dict:
         # difficulty_reasons: 定向出题时路由层产出的逐 KC 分档理由 (P1-1 可解释),
         # 随 interrupt 平铺进 SSE, 前端蓝图确认卡渲染"为什么这套题"
         if state.get("confirmation_mode", "required") == "auto":
@@ -388,15 +394,13 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             )
             update["blueprint"] = blueprint
             update["num_questions"] = len(blueprint["items"])
-        update["trace"] = [
-            {"node": "confirm_blueprint", "event": "approved", "edited": edited}
-        ]
+        update["trace"] = [{"node": "confirm_blueprint", "event": "approved", "edited": edited}]
         return update
 
     def route_after_confirm(state: QuizState) -> str:
         return "generate" if state.get("blueprint_confirmed") else END
 
-    async def generate(state: _QuizGraphState) -> dict:
+    async def generate(state: _QuizWorkflowState) -> dict:
         blueprint = state.get("blueprint") or {}
         kb_id = state.get("kb_id", "")
         chunk_ids: list[str] = []
@@ -427,8 +431,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
         if critic_issues:
             critic_lines = "\n".join(f"- {issue}" for issue in critic_issues)
             critic_block = (
-                "## 独立质量评审要求返工\n\n"
-                f"重新输出全部题目, 并修复以下问题:\n{critic_lines}"
+                f"## 独立质量评审要求返工\n\n重新输出全部题目, 并修复以下问题:\n{critic_lines}"
             )
             fix_block = f"{fix_block}\n\n{critic_block}" if fix_block else critic_block
         # 画像注入 (P1-2): 空摘要即整段置空, prompt 与无画像时完全一致
@@ -611,22 +614,20 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    def route_after_validate(state: _QuizGraphState) -> str:
+    def route_after_validate(state: _QuizWorkflowState) -> str:
         if state.get("validation_errors"):
             if int(state.get("retry_count") or 0) <= MAX_RETRIES:
                 return "generate"
             return END
         return "critic_review"
 
-    async def critic_review(state: _QuizGraphState) -> dict:
+    async def critic_review(state: _QuizWorkflowState) -> dict:
         """独立质量评审；增强项失败可降级，但预算熔断必须继续向上抛出。"""
         questions = state.get("questions") or []
         if not questions:
             return {
                 "critic_issues": [],
-                "trace": [
-                    {"node": "critic_review", "event": "skipped", "reason": "no_questions"}
-                ],
+                "trace": [{"node": "critic_review", "event": "skipped", "reason": "no_questions"}],
             }
 
         materials: list[dict[str, str | int | None]] = []
@@ -634,7 +635,7 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
         kb_id = state.get("kb_id", "")
         if kb_id and deps.retrieval is not None:
             try:
-                # 不把素材正文塞入 Graph state/checkpoint；独立评审按相同查询重新检索。
+                # 不把素材正文塞入工作流状态快照；独立评审按相同查询重新检索。
                 # 检索层可复用现有缓存，失败则只跳过事实锚定维度，不阻断 schema 合格题目。
                 retrieval = await deps.retrieval.retrieve(
                     state.get("tenant_id", ""), kb_id, state.get("topic", "")
@@ -783,27 +784,24 @@ def build_quiz_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    def route_after_critic(state: _QuizGraphState) -> str:
+    def route_after_critic(state: _QuizWorkflowState) -> str:
         return "generate" if state.get("critic_issues") else END
 
-    graph = StateGraph(_QuizGraphState)
-    graph.add_node("make_blueprint", make_blueprint)
-    graph.add_node("confirm_blueprint", confirm_blueprint)
-    graph.add_node("generate", generate)
-    graph.add_node("validate", validate)
-    graph.add_node("critic_review", critic_review)
-    graph.add_edge(START, "make_blueprint")
-    graph.add_edge("make_blueprint", "confirm_blueprint")
-    graph.add_conditional_edges(
-        "confirm_blueprint", route_after_confirm, {"generate": "generate", END: END}
+    return Workflow(
+        entry="make_blueprint",
+        phases={
+            "make_blueprint": make_blueprint,
+            "confirm_blueprint": confirm_blueprint,
+            "generate": generate,
+            "validate": validate,
+            "critic_review": critic_review,
+        },
+        transitions={
+            "make_blueprint": "confirm_blueprint",
+            "confirm_blueprint": route_after_confirm,
+            "generate": "validate",
+            "validate": route_after_validate,
+            "critic_review": route_after_critic,
+        },
+        gateway=deps.gateway,
     )
-    graph.add_edge("generate", "validate")
-    graph.add_conditional_edges(
-        "validate",
-        route_after_validate,
-        {"generate": "generate", "critic_review": "critic_review", END: END},
-    )
-    graph.add_conditional_edges(
-        "critic_review", route_after_critic, {"generate": "generate", END: END}
-    )
-    return graph

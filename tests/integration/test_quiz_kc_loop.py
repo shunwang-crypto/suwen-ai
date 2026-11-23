@@ -433,19 +433,19 @@ async def test_stub_three_question_quiz_uses_one_kc_batch_through_profile(client
     uid, headers = await _register(client, "quiz-kc-loop")
     seeded = await _seed_kb(uid)
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     app = client._transport.app
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    old_runtime = app.state.graphs
-    app.state.graphs = runtime
+    old_runtime = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(
             client,
@@ -473,6 +473,7 @@ async def test_stub_three_question_quiz_uses_one_kc_batch_through_profile(client
         assert detail.status_code == 200, detail.text
         questions = detail.json()["questions"]
         assert len(questions) == 3
+        assert questions == done["result"]["questions"]
         assert [q["difficulty"] for q in questions] == ["easy", "mid", "mid"]
         assert all(q["kc_ids"] for q in questions)
         assert {
@@ -494,7 +495,7 @@ async def test_stub_three_question_quiz_uses_one_kc_batch_through_profile(client
         assert submit.status_code == 200, submit.text
         assert submit.json()["total"] == 3
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
 
     from eduagents_api.db import tenant_session
@@ -655,19 +656,19 @@ async def test_real_stub_ingestion_bootstrap_quiz_submit_and_profile_loop(client
                 mode="stub",
             )
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     app = client._transport.app
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=GeneratedKcGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=GeneratedKcGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    old_runtime = app.state.graphs
-    app.state.graphs = runtime
+    old_runtime = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(
             client,
@@ -712,7 +713,7 @@ async def test_real_stub_ingestion_bootstrap_quiz_submit_and_profile_loop(client
         assert submit.status_code == 200, submit.text
         assert submit.json()["total"] == 3
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
 
     from eduagents_api.models import LearningEvent, MasteryLog, MasteryRecord

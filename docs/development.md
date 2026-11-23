@@ -6,6 +6,7 @@
 
 - Python 3.12：`$HOME/miniforge3/envs/eduagents`
 - Node.js 20+ 与 npm
+- DSH SDK/runtime 固定 `0.2.2rc2`；平台 wheel 自带运行时，无须升级系统 Node 来运行 DSH
 - PostgreSQL 16、Redis 7、Qdrant
 - 文件对象链路按 `.env` 使用 MinIO 或本地实现
 
@@ -78,6 +79,25 @@ npm run dev
 
 stub 输出不能用来判断模型质量。真实模型、嵌入、重排和联网搜索变量见 `.env.example`。
 
+## Harness 运行与旧会话迁移
+
+普通/附件问答、辅导、出题和计划都通过 DSH，再进入现有模型网关。
+`HARNESS_TIMEOUT_SECONDS` 默认 180 秒，`HARNESS_MAX_CONCURRENCY` 默认 8；超时和显式
+停止取消模型工作并回收子进程。SDK 处于预览阶段，升级时须同时验证 profile patch、
+原生工具历史和协议。
+
+升级已有本地数据库时，先停止 API/Worker，再安装仅用于旧数据导入的可选依赖：
+
+~~~bash
+"$HOME/miniforge3/envs/eduagents/bin/pip" install -e 'packages/core[legacy-migration]'
+make migrate
+~~~
+
+`make migrate` 应用 `0039` 并导入旧会话；新库跳过旧数据读取，不需要上述可选依赖。
+导入器不执行旧图，不删除旧表，不覆盖已有新会话。导入完成后 API 和 Worker 只运行 DSH。
+`make migrate-legacy` 可单独幂等重跑导入。`test_dsh_runtime.py` 使用真实配套二进制和
+测试模型网关，不向真实模型发送请求；其结果不能用于宣称模型质量或成本改善。
+
 ## 验证命令
 
 后端静态检查与单测：
@@ -105,6 +125,7 @@ fixture 会拒绝远程数据库和无法确认名称的连接，不会清空本
 ~~~bash
 make test-migration TEST=tests/integration/test_migration_0029.py
 make test-migration TEST=tests/integration/test_migration_0038.py
+make test-migration TEST=tests/integration/test_migration_0039.py
 ~~~
 
 0038 新增普通练习/复习提交记录，运行更新后的 API 前执行 `make migrate`。

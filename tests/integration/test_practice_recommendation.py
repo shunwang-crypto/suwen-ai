@@ -70,22 +70,22 @@ async def test_recommended_cold_start_uses_auto_confirmation_and_real_kcs(client
     await _seed_kb(uid)
     client._transport.app.state.settings.gateway_mode = "stub"
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     app = client._transport.app
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         get_settings(),
-        GraphDeps(settings=get_settings(), gateway=_LoopGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=get_settings(), gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    previous = app.state.graphs
-    app.state.graphs = runtime
+    previous = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(client, "/api/quiz/recommended", headers, {})
     finally:
-        app.state.graphs = previous
+        app.state.harness = previous
         await runtime.stop()
 
     assert "interrupt" not in events
@@ -128,10 +128,10 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
         await session.flush()
         plan_id = str(plan.id)
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
     from eduagents_core.gateway import ChatResult
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     class PlanGateway:
         async def chat(self, request):
@@ -175,13 +175,13 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
     app = client._transport.app
     app.state.settings.gateway_mode = "stub"
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=PlanGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=PlanGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    previous = app.state.graphs
-    app.state.graphs = runtime
+    previous = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(
             client,
@@ -198,7 +198,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
                 {"value": {"approved": True}},
             )
     finally:
-        app.state.graphs = previous
+        app.state.harness = previous
         await runtime.stop()
 
     assert "done" in events, events
@@ -397,18 +397,18 @@ async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_err
     assert list(recommendation.target_kc_names[:2]) == preview_names[:2]
     assert all(key not in str(recommendation.to_dict()) for key in ("p_mastery", "confidence", "mastery_band"))
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    previous = app.state.graphs
-    app.state.graphs = runtime
+    previous = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(
             client,
@@ -417,7 +417,7 @@ async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_err
             {"from_weak_points": True, "num_questions": 2},
         )
     finally:
-        app.state.graphs = previous
+        app.state.harness = previous
         await runtime.stop()
 
     selected = [event for event in events["trace_event"] if event.get("event") == "weak_points_selected"]

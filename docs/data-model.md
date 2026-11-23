@@ -39,6 +39,18 @@ GUC 未设置时策略默认拒绝。应用连接使用 `edu_app`（`NOSUPERUSER
 机构库读取允许 owner 或机构成员；写入需要机构管理员，服务层校验后使用正确 owner 事务。
 `usage_log` 的管理员聚合是受限例外。
 
+## Harness 会话与迁移
+
+`0039` 新增 `harness_sessions`，主键 `thread_id={kind}:{user_id}:{local_id}`。
+`tenant_id/user_id/kind` 固定会话归属，`state/next_phase/pending` 保存教育状态和确认载荷，
+`updated_at` 用于 30 天留存清理。应用事务遵守个人租户 RLS，用户外键随账号删除级联；
+只有内部清理事务可跨租户扫描。DSH 临时执行目录在活动结束后回收，真实模型密钥和内联
+图片不进入持久化会话；附件仍按现有授权资料链路管理。
+
+迁移工具将旧 PostgreSQL checkpoints 中的最新状态、下一阶段和中断载荷导入新表，
+不覆盖已有新行、不删除旧表。聊天删除按会话前缀清新旧状态，账号导出包含新会话，
+账号注销和留存清理同时覆盖新表与旧 checkpoint 表。
+
 ## 核心关系
 
 ~~~mermaid
@@ -156,6 +168,9 @@ Quiz 的原始 Attempt 保留 `is_correct/llm_score=NULL`；复习保存提交�
 | `FsrsParams` | 用户级、版本化的 21 参数 FSRS-6 拟合产物；默认 `shadow`，只有显式门槛通过后才可激活 |
 
 `Question.quiz_id` 可空。资源题不创建隐藏 Quiz，也不能进入普通测验或教师组卷列表。
+
+新生成的题卷在 `Question.source_meta_json.quiz_ordinal` 保存题序，题卷读取、教师导出和
+重复确认按该序号返回。历史题目缺少序号时按题目 ID 稳定排序。
 
 `MetacognitionPrediction` 与对应 `Attempt/Question/User` 同事务写入；1–5 映射为
 `0.1/0.3/0.5/0.7/0.9`，Brier 误差和高信心答错率按查询窗口实时计算，不保存易过期聚合。

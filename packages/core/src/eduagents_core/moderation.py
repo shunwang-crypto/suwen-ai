@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Protocol
 
 _WORDS_FILE = Path(__file__).resolve().parent / "data" / "sensitive_words.txt"
-# 仓库根 prompts/ 下的未成年安全约束段 (与 graphs/qa_graph.py 的 _PROMPTS_DIR 同约定);
+# 仓库根 prompts/ 下的未成年安全约束段 (与 workflows/qa.py 的 _PROMPTS_DIR 同约定);
 # 打包部署下文件不存在时回退到内置文案, 不炸。
 _MINOR_GUARD_FILE = Path(__file__).resolve().parents[4] / "prompts" / "minor_safety_guard.md"
 

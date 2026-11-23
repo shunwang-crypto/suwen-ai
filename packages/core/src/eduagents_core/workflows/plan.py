@@ -1,13 +1,13 @@
-"""planner 子图 (F3 学习规划, M3 简版)。
+"""planner 工作流 (F3 学习规划, M3 简版)。
 
 流程: parse_goal → diagnose (摸底简版) → gather_resources → draft_plan (硬校验) → confirm_plan (interrupt)。
 
 设计要点:
 - 全部 LLM 调用经 deps.gateway (json_mode), 解析失败重试一次, 仍失败走确定性降级并写 trace,
-  节点不向图外抛裸异常 (降级不是冒充: trace 里明确记录 fallback 事件);
+  阶段不向工作流外抛裸异常 (降级不是冒充: trace 里明确记录 fallback 事件);
 - 计划合规性 (总天数 / 每日分钟预算 / resource_ref 越界 / KC 先后顺序) 由程序硬校验修正,
   不依赖模型自觉; 每项修正都以 event="fix" 写入 trace (F3-A1/A2);
-- confirm_plan 用 langgraph interrupt() 挂起, 等前端 Command(resume=...) 确认 (F3: 生成后供用户编辑确认)。
+- confirm_plan 通过服务端 interrupt() 挂起, 等前端确认后由宿主 Resume(...) 继续执行。
 """
 
 from __future__ import annotations
@@ -18,17 +18,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
-
 from ..gateway.base import ChatMessage, ChatRequest, Tier
+from ..harness.workflow import Workflow, interrupt
 
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与全仓共用 json_utils.parse_json_object
 from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
-from .state import GraphDeps, PlanState
+from .state import PlanState, WorkflowDeps
 
-# 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
+# 本文件位于 packages/core/src/eduagents_core/workflows/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
 _DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
@@ -110,14 +108,14 @@ def _render_diagnosis(
     return "\n".join(lines) or "(暂无真实学习证据，先安排基线任务)"
 
 
-class PlanGraphState(PlanState, total=False):
-    """PlanState 的图内扩展通道 (契约 state.py 不动)。
+class PlanWorkflowState(PlanState, total=False):
+    """PlanState 的工作流内部扩展 (契约 state.py 不动)。
 
     parsed_goal: parse_goal 节点产物
         {"subject", "key_topics", "level_hint", "skills"};
     kc_order: 主题先后约束 (list[str], KC 名)。来自真实先修 DAG: API 层
         (routers/plans.py) 预查 kc_edges 先修边, 经 kc.dag.topological_order
-        计算拓扑序后注入 —— GraphDeps 无 kc_edges 字段, 图内不查库,
+        计算拓扑序后注入 —— WorkflowDeps 无 kc_edges 字段, 工作流内不查库,
         故沿用 state 直接注入通道 (F3-A2)。
     """
 
@@ -300,7 +298,7 @@ def _coerce_text_list(raw: object, *, limit: int = _GOAL_ANALYSIS_ITEM_LIMIT) ->
     return result
 
 
-def _coerce_goal_analysis(data: object, state: PlanGraphState) -> dict:
+def _coerce_goal_analysis(data: object, state: PlanWorkflowState) -> dict:
     """把目标解析收紧为可展示、可进 checkpoint 的安全契约。
 
     明确表单字段优先于模型提取；未提供验收标准时保持空列表，
@@ -431,7 +429,7 @@ def is_safe_public_url(value: object) -> bool:
 
 
 async def _chat_json(
-    deps: GraphDeps,
+    deps: WorkflowDeps,
     state: dict,
     *,
     feature: str,
@@ -770,9 +768,7 @@ def _fix_resource_refs(plan: dict, n_resources: int, fixes: list[dict]) -> None:
             elif not n_resources and task["action_type"] == "read":
                 task["action_type"] = "tutor"
                 task["resource_ref"] = None
-                fixes.append(
-                    {"fix": "unreferenced_read_replaced", "task": task["title"]}
-                )
+                fixes.append({"fix": "unreferenced_read_replaced", "task": task["title"]})
 
 
 def _fix_day_minutes(plan: dict, budget_minutes: float, fixes: list[dict]) -> None:
@@ -841,13 +837,13 @@ def _harden_plan(
     _fix_day_minutes(plan, budget_minutes, fixes)
 
 
-# ---------------------------------------------------------------- 图构建
+# ---------------------------------------------------------------- 工作流构建
 
 
-def build_plan_graph(deps: GraphDeps) -> StateGraph:
-    """构建 planner 子图; deps 由闭包捕获 (不进 state, 见 GraphDeps 文档)。调用方负责 compile。"""
+def build_plan_workflow(deps: WorkflowDeps) -> Workflow:
+    """构建 planner 工作流；依赖由闭包捕获，宿主通过 with_store 注入持久化存储。"""
 
-    async def parse_goal(state: PlanGraphState) -> dict:
+    async def parse_goal(state: PlanWorkflowState) -> dict:
         goal = state.get("goal", "")
         prompt = (
             _load_prompt("plan_parse_goal.md")
@@ -907,7 +903,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    async def diagnose(state: PlanGraphState) -> dict:
+    async def diagnose(state: PlanWorkflowState) -> dict:
         # Only verified evidence may supply a mastery band. Unobserved topics
         # are scheduled for a baseline check; the planner never asks an LLM to
         # invent a probability for them.
@@ -952,7 +948,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    async def gather_resources(state: PlanGraphState) -> dict:
+    async def gather_resources(state: PlanWorkflowState) -> dict:
         parsed = state.get("parsed_goal") or {}
         topics = (parsed.get("key_topics") or list(state.get("diagnosis") or {}))[:_TOPIC_LIMIT]
         resources: list[dict] = []
@@ -1046,7 +1042,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         trace.append({"node": "gather_resources", "event": event, "count": len(resources)})
         return {"resources": resources, "trace": trace}
 
-    async def draft_plan(state: PlanGraphState) -> dict:
+    async def draft_plan(state: PlanWorkflowState) -> dict:
         total_days = max(int(state.get("total_days") or 1), 1)
         budget_minutes = max(float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0)
         resources = state.get("resources") or []
@@ -1069,7 +1065,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{GOAL_ANALYSIS}}", _render_goal_analysis(state.get("goal_analysis")))
             .replace("{{SUBJECT}}", parsed.get("subject") or "(未知)")
             # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
-            # LLM 排计划只需要定性档, 精确值留在图内供确定性硬校验使用
+            # LLM 排计划只需要定性档, 精确值留在宿主供确定性硬校验使用
             .replace(
                 "{{DIAGNOSIS}}",
                 _render_diagnosis(
@@ -1112,7 +1108,7 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         trace.extend({"node": "draft_plan", "event": "fix", **fix} for fix in fixes)
         return {"plan": plan, "trace": trace}
 
-    async def confirm_plan(state: PlanGraphState) -> dict:
+    async def confirm_plan(state: PlanWorkflowState) -> dict:
         # interrupt 挂起等待前端确认; resume 后本节点从头重放 (前面无副作用)
         decision = interrupt(
             {
@@ -1155,16 +1151,20 @@ def build_plan_graph(deps: GraphDeps) -> StateGraph:
         updates["trace"] = trace
         return updates
 
-    graph = StateGraph(PlanGraphState)
-    graph.add_node("parse_goal", parse_goal)
-    graph.add_node("diagnose", diagnose)
-    graph.add_node("gather_resources", gather_resources)
-    graph.add_node("draft_plan", draft_plan)
-    graph.add_node("confirm_plan", confirm_plan)
-    graph.add_edge(START, "parse_goal")
-    graph.add_edge("parse_goal", "diagnose")
-    graph.add_edge("diagnose", "gather_resources")
-    graph.add_edge("gather_resources", "draft_plan")
-    graph.add_edge("draft_plan", "confirm_plan")
-    graph.add_edge("confirm_plan", END)
-    return graph
+    return Workflow(
+        entry="parse_goal",
+        phases={
+            "parse_goal": parse_goal,
+            "diagnose": diagnose,
+            "gather_resources": gather_resources,
+            "draft_plan": draft_plan,
+            "confirm_plan": confirm_plan,
+        },
+        transitions={
+            "parse_goal": "diagnose",
+            "diagnose": "gather_resources",
+            "gather_resources": "draft_plan",
+            "draft_plan": "confirm_plan",
+        },
+        gateway=deps.gateway,
+    )

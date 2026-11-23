@@ -293,13 +293,13 @@ async def _resource_question_editability(session, resource_id: uuid.UUID) -> dic
     ).all()
     answer_rows = (
         await session.execute(
-            select(AssessmentAnswer.resource_question_id, AssessmentAnswer.id).where(
+            select(AssessmentAnswer.resource_question_id, AssessmentAnswer.id, AssessmentAnswer.grading_status).where(
                 AssessmentAnswer.resource_question_id.in_(resource_question_ids)
             )
         )
     ).all()
     evidence_ids = [error_id for _rq_id, _question_id, error_id, _card in error_rows]
-    evidence_ids.extend(answer_id for _rq_id, answer_id in answer_rows)
+    evidence_ids.extend(answer_id for _rq_id, answer_id, _status in answer_rows)
     evidence_ids.extend(resource_question_ids)
     evidence_ids.extend(question_ids)
     mastered_evidence = set()
@@ -321,7 +321,7 @@ async def _resource_question_editability(session, resource_id: uuid.UUID) -> dic
         )
     }
     locked.update(
-        rq_id for rq_id, answer_id in answer_rows if answer_id in mastered_evidence
+        rq_id for rq_id, answer_id, status in answer_rows if status == "verified" or answer_id in mastered_evidence
     )
     return {resource_question_id: resource_question_id not in locked for resource_question_id in resource_question_ids}
 
@@ -1131,7 +1131,13 @@ async def _edit_resource_question(
             )
             is not None
         )
-        has_evidence = has_evidence or assessment_evidence
+        verified_assessment = await session.scalar(
+            select(AssessmentAnswer.id).where(
+                AssessmentAnswer.resource_question_id == rq.id,
+                AssessmentAnswer.grading_status == "verified",
+            ).limit(1)
+        )
+        has_evidence = has_evidence or assessment_evidence or verified_assessment is not None
         semantic_changed = any(
             key in values
             and values[key] != {

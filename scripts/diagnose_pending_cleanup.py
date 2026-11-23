@@ -734,7 +734,7 @@ async def _checkpoint_count(
 ) -> tuple[int | None, str | None]:
     try:
         total = 0
-        for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+        for table in ("harness_sessions", "checkpoints", "checkpoint_blobs", "checkpoint_writes"):
             exists = await conn.scalar(
                 text("SELECT to_regclass(:name)"), {"name": f"public.{table}"}
             )

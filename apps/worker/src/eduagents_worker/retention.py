@@ -60,6 +60,7 @@ def _statements(now: datetime) -> list[tuple[str, str, str, dict]]:
         "(SELECT 1 FROM checkpoints c WHERE c.thread_id = cb.thread_id)"
     )
     return [
+        ("harness_sessions", "DELETE FROM harness_sessions WHERE updated_at < :cutoff", "SELECT count(*) FROM harness_sessions WHERE updated_at < :cutoff", {"cutoff": cut_ckpt}),
         (
             "usage_log",
             "DELETE FROM usage_log WHERE at < :cutoff",
@@ -152,6 +153,7 @@ async def purge_retention(ctx: dict, dry_run: bool = False) -> dict:
         for name, delete_sql, count_sql, params in _statements(now):
             try:
                 async with engine.begin() as conn:
+                    await conn.execute(text("SELECT set_config('app.internal_cleanup', 'true', true)"))
                     if dry_run:
                         n = int(await conn.scalar(text(count_sql), params) or 0)
                     else:

@@ -77,6 +77,7 @@ RUNTIME_TABLES = (
     "wallet_accounts",
     "wallet_ledger",
     "payment_orders",
+    "harness_sessions",
     "checkpoints",
     "checkpoint_blobs",
     "checkpoint_writes",

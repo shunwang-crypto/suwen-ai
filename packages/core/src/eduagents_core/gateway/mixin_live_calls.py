@@ -186,6 +186,11 @@ class GatewayLiveCallsMixin:
             route=candidate.route.value,
             platform_billed_cost_cny=cost,
             finish_reason=getattr(resp.choices[0], "finish_reason", None),
+            reasoning_content=getattr(resp.choices[0].message, "reasoning_content", None),
+            tool_calls=tuple(
+                call.model_dump(exclude_none=True)
+                for call in (getattr(resp.choices[0].message, "tool_calls", None) or [])
+            ),
         )
 
     async def _create_candidate_stream(self, req: ChatRequest, candidate: ProviderCandidate):
@@ -223,7 +228,10 @@ class GatewayLiveCallsMixin:
                     vision_req,
                     vision_result,
                     reserved_tier=vision_result.reserved_tier,
-                    billing_reference=f"{req.request_id}:vision" if req.request_id else "",
+                    billing_reference=(
+                        f"{req.billing_reference or req.request_id}:vision"
+                        if req.billing_reference or req.request_id else ""
+                    ),
                 )
                 plain_messages = tuple(
                     ChatMessage(role=message.role, content=message_text(message.content))
@@ -322,7 +330,10 @@ class GatewayLiveCallsMixin:
                 vision_req,
                 vision_result,
                 reserved_tier=vision_result.reserved_tier,
-                billing_reference=f"{req.request_id}:vision" if req.request_id else "",
+                billing_reference=(
+                    f"{req.billing_reference or req.request_id}:vision"
+                    if req.billing_reference or req.request_id else ""
+                ),
             )
             plain_messages = tuple(
                 ChatMessage(role=message.role, content=message_text(message.content))
@@ -560,6 +571,11 @@ class GatewayLiveCallsMixin:
             provider="platform",
             platform_billed_cost_cny=cost,
             finish_reason=getattr(resp.choices[0], "finish_reason", None),
+            reasoning_content=getattr(resp.choices[0].message, "reasoning_content", None),
+            tool_calls=tuple(
+                call.model_dump(exclude_none=True)
+                for call in (getattr(resp.choices[0].message, "tool_calls", None) or [])
+            ),
         )
 
     async def _call_user_tier(
@@ -604,6 +620,11 @@ class GatewayLiveCallsMixin:
                 provider=credential.provider,
                 platform_billed_cost_cny=0.0,
                 finish_reason=getattr(resp.choices[0], "finish_reason", None),
+                reasoning_content=getattr(resp.choices[0].message, "reasoning_content", None),
+                tool_calls=tuple(
+                    call.model_dump(exclude_none=True)
+                    for call in (getattr(resp.choices[0].message, "tool_calls", None) or [])
+                ),
             )
         except AuthenticationError as exc:
             raise GatewayError("BYOK_KEY_INVALID", "自带 DeepSeek API Key 无效") from exc
@@ -1027,7 +1048,7 @@ class GatewayLiveCallsMixin:
                 if result.credential_source == CredentialSource.platform.value
                 else result.platform_billed_cost_cny
             ),
-            billing_reference=billing_reference or req.request_id,
+            billing_reference=billing_reference or req.billing_reference or req.request_id,
         )
         # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
         # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。

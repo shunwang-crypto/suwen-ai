@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 import orjson
 from eduagents_core.gateway import GatewayError
-from eduagents_core.graphs.qa_graph import PROFILE_SECTION_TEMPLATE
 from eduagents_core.logging import get_logger
 from eduagents_core.retrieval.sanitize import sanitize_retrieved_text
+from eduagents_core.workflows.qa import PROFILE_SECTION_TEMPLATE
 from fastapi import Request
 
 from ..deps import AuthContext
@@ -55,6 +55,14 @@ _ATTACHMENT_CHUNK_CHARS = 1_600
 _ATTACHMENT_CHUNK_STEP = 1_400
 
 _SAFE_GATEWAY_ERROR_MESSAGES = {
+    "HARNESS_TIMEOUT": "AI 任务运行超时，当前进度已保留，请重试",
+    "HARNESS_STEP_LIMIT": "资料检索已到上限，请缩小问题范围后重试",
+    "HARNESS_PHASE_LIMIT": "任务重试已到上限，请重新发起",
+    "HARNESS_TOOL_DENIED": "AI 请求了不可用的工具，请重试",
+    "HARNESS_PROTOCOL_ERROR": "AI 运行异常，请重试",
+    "HARNESS_NOT_PAUSED": "当前会话没有等待确认的任务",
+    "HARNESS_CONFIRMATION_REQUIRED": "请先确认当前任务",
+    "GRAPHS_UNAVAILABLE": "AI 服务暂时不可用，请稍后重试",
     "MODEL_ROUTE_UNAVAILABLE": "文本模型通道暂时不可用，请稍后重试",
     "VISION_ROUTE_UNAVAILABLE": "视觉模型通道暂时不可用，请稍后重试",
     "PLAN_ROUTE_UNAVAILABLE": "学习计划模型通道暂时不可用，请稍后重试",

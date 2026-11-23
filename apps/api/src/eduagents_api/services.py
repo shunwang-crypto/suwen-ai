@@ -605,6 +605,37 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
 
         gateway_mode = get_settings().gateway_mode
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"quiz-finalize:{ctx.user_id}:{local_id}"},
+        )
+        existing = await session.scalar(
+            select(Quiz).where(Quiz.id == uuid.UUID(local_id), Quiz.user_id == ctx.user_id)
+        )
+        if existing is not None:
+            rows = (
+                await session.scalars(
+                    select(Question)
+                    .where(Question.quiz_id == existing.id)
+                    .order_by(Question.source_meta_json["quiz_ordinal"].as_integer(), Question.id)
+                )
+            ).all()
+            if not rows:
+                raise ValueError("QUIZ_FINALIZE_EMPTY")
+            return {
+                "quiz_id": local_id,
+                "questions": [
+                    {
+                        "id": str(row.id),
+                        "type": row.type,
+                        "stem": row.stem,
+                        "options": row.options_json,
+                        "difficulty": row.difficulty,
+                        "kc_ids": row.kc_ids,
+                    }
+                    for row in rows
+                ],
+            }
         readiness = None
         kb_uuid = None
         if kb_id:
@@ -674,7 +705,7 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
         # 先 flush 父行: UoW 跨表排序不看数据库外键 (同 enrichment.py 的教训)
         await session.flush()
         out = []
-        for q, kc_ids in resolved_questions:
+        for ordinal, (q, kc_ids) in enumerate(resolved_questions):
             source_chunk = q.get("source_chunk_id")
             row = Question(
                 tenant_id=ctx.tenant_id,
@@ -687,6 +718,7 @@ async def finalize_quiz(ctx: AuthContext, local_id: str, state: dict) -> dict:
                 kc_ids=kc_ids,
                 source_chunk_id=uuid.UUID(source_chunk) if source_chunk else None,
                 difficulty=q.get("difficulty", "mid"),
+                source_meta_json={"quiz_ordinal": ordinal},
             )
             session.add(row)
             await session.flush()
@@ -712,7 +744,7 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
     Invalid or stale references degrade to an executable task without a
     resource; they can never attach another tenant's material.
     """
-    from eduagents_core.graphs.plan_graph import is_safe_public_url
+    from eduagents_core.workflows.plan import is_safe_public_url
 
     try:
         plan_id = uuid.UUID(local_id)
@@ -740,6 +772,21 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"plan-lifecycle:{ctx.tenant_id}:{ctx.user_id}"},
         )
+        existing = await session.scalar(
+            select(Plan).where(Plan.id == plan_id, Plan.user_id == ctx.user_id)
+        )
+        if existing is not None:
+            resources = (
+                await session.scalars(select(PlanResource).where(PlanResource.plan_id == plan_id))
+            ).all()
+            return {
+                "plan_id": local_id,
+                "plan": existing.structure_json,
+                "kb_id": str(existing.kb_id) if existing.kb_id else None,
+                "plan_mode": existing.plan_mode,
+                "grounding_status": existing.grounding_status,
+                "resources": [_plan_resource_public(row) for row in resources],
+            }
         # Lifecycle is owned by plans: replace the current plan atomically in
         # this transaction so the partial unique index never sees two active
         # rows for the same learner.
@@ -1280,8 +1327,8 @@ async def record_attempts(
 
     now_dt: 业务时间 (路由层从 timectl 虚拟时钟取, §9); 缺省回退系统时间保持向后兼容。
     """
-    from eduagents_core.graphs.quiz_graph import grade_objective
     from eduagents_core.mastery.scheduler import new_card_json
+    from eduagents_core.workflows.quiz import grade_objective
 
     from .assessment_submissions import prepare_submission, save_submission_result, submission_key
     from .grading import grade_short

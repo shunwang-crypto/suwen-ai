@@ -28,8 +28,12 @@ class ResearchGateway:
         from eduagents_core.gateway.base import ChatResult
 
         self.requests.append(req)
+        tool_calls = ()
         if req.feature == "qa_research_action":
-            text = json.dumps(self.decisions.pop(0))
+            decision = self.decisions.pop(0)
+            if decision["action"] == "search":
+                tool_calls = ({"id": f"call-{len(self.requests)}", "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"queries": decision["queries"]})}},)
+            text = "finished"
         elif req.feature == "qa_generate":
             text = "原始资料与独立评测存在差异 [1][2]。"
         elif req.feature == "qa_verify_support":
@@ -42,7 +46,7 @@ class ResearchGateway:
         else:
             raise AssertionError(f"Unexpected model call: {req.feature}")
         return ChatResult(
-            text=text, model="research-test", tier=req.tier.value,
+            tool_calls=tool_calls, text=text, model="research-test", tier=req.tier.value,
             prompt_tokens=1, completion_tokens=1, cost_cny=0,
             latency_ms=0, mode="stub",
         )
@@ -106,8 +110,8 @@ async def web_search(query, **options):
 async def test_research_progress_citations_regeneration_and_history(research_client, unsupported):
     app, client = research_client
     gateway = ResearchGateway(unsupported=unsupported)
-    app.state.graphs._deps.gateway = gateway
-    app.state.graphs._deps.web_search = web_search
+    app.state.harness.deps.gateway.gateway = gateway
+    app.state.harness.deps.web_search = web_search
     headers = await login(client)
     response = await client.post(
         "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers,
@@ -140,12 +144,12 @@ async def test_research_progress_citations_regeneration_and_history(research_cli
 
 async def test_research_initial_search_outage_reports_search_error(research_client):
     app, client = research_client
-    app.state.graphs._deps.gateway = ResearchGateway()
+    app.state.harness.deps.gateway.gateway = ResearchGateway()
 
     async def unavailable(*args, **kwargs):
         raise WebSearchUnavailable("offline")
 
-    app.state.graphs._deps.web_search = unavailable
+    app.state.harness.deps.web_search = unavailable
     headers = await login(client)
     response = await client.post(
         "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers,

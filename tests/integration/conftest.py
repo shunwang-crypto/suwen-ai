@@ -100,32 +100,6 @@ def _stop_isolated_redis(container: str) -> None:
     subprocess.run(["docker", "rm", "--force", container], capture_output=True, text=True)
 
 
-async def _setup_checkpoint_tables(database_url: str) -> None:
-    """Prepare LangGraph's PostgreSQL checkpointer in the disposable DB.
-
-    Checkpoint tables are intentionally not application migrations: the API
-    role must not run ``setup()`` in production. The isolated test database
-    is created with the migration role, so this keeps integration tests as
-    close as possible to the deployment contract without touching a shared
-    database.
-    """
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from psycopg.rows import dict_row
-    from psycopg_pool import AsyncConnectionPool
-
-    conninfo = database_url.replace("postgresql+asyncpg://", "postgresql://")
-    pool = AsyncConnectionPool(
-        conninfo,
-        open=False,
-        kwargs={"autocommit": True, "row_factory": dict_row},
-    )
-    await pool.open()
-    try:
-        await AsyncPostgresSaver(pool).setup()
-    finally:
-        await pool.close()
-
-
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_services():
     """Provision disposable PostgreSQL and Redis for the integration run.
@@ -214,9 +188,7 @@ def _migrated(_isolated_services):
         "alembic upgrade failed:\n"
         + _redact_connection_text(result.stderr)
     )
-    from eduagents_core.config import get_settings
 
-    asyncio.run(_setup_checkpoint_tables(get_settings().migration_database_url))
     yield
 
 

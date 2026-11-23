@@ -53,6 +53,8 @@ async def _get_pending(row_id):
 async def test_two_workers_claim_one_row_and_expired_lease_is_recoverable(monkeypatch):
     from eduagents_worker import cleanup_outbox
 
+    # Other API tests can enqueue tenant cleanup in this suite's shared disposable DB.
+    await cleanup_outbox.process_pending_cleanup({})
     tenant_id, kb_id, doc_id = (uuid.uuid4() for _ in range(3))
     row_id = await _add_pending("doc", _doc_payload(tenant_id, kb_id, doc_id))
     active = 0

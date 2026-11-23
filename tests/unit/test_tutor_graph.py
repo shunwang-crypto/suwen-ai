@@ -7,9 +7,9 @@ import json
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.state import GraphDeps
-from eduagents_core.graphs.tutor_graph import build_tutor_graph
-from langgraph.checkpoint.memory import MemorySaver
+from eduagents_core.harness.workflow import MemoryStore
+from eduagents_core.workflows.state import WorkflowDeps
+from eduagents_core.workflows.tutor import build_tutor_workflow
 
 BAN = "绝对禁止给出最终答案"  # F4-A1 结构性禁令 (代码注入 system prompt)
 PERSIST = "索要最终答案"  # 温和坚持话术指令标记
@@ -52,8 +52,8 @@ def classify(stuck="concept", asked=False, solved=False) -> dict:
 
 def make_graph(script: dict):
     gateway = FakeGateway(script)
-    deps = GraphDeps(settings=Settings(_env_file=None), gateway=gateway)
-    graph = build_tutor_graph(deps).compile(checkpointer=MemorySaver())
+    deps = WorkflowDeps(settings=Settings(_env_file=None), gateway=gateway)
+    graph = build_tutor_workflow(deps).with_store(MemoryStore())
     config = {"configurable": {"thread_id": "tutor-t1"}}
     return gateway, graph, config
 

@@ -1,5 +1,5 @@
 """M3-D2/M3-D3/F5-A3: 出题 Blueprint→interrupt→resume→生成→作答→BKT 直写 全链路。
-FakeGateway 注入 GraphRuntime (PG Checkpointer 真实), 图挂起与恢复跨 HTTP 请求。"""
+FakeGateway 注入 HarnessRuntime (PG Checkpointer 真实), 图挂起与恢复跨 HTTP 请求。"""
 import json
 import uuid
 
@@ -70,10 +70,10 @@ async def _sse(client, method, url, headers, body) -> dict[str, list]:
 
 
 async def test_quiz_interrupt_resume_grade_bkt(client):
-    # 注入 FakeGateway 的 GraphRuntime (Checkpointer 走真实 PG)
-    from eduagents_api.graph_runtime import GraphRuntime
+    # 注入 FakeGateway 的 HarnessRuntime (Checkpointer 走真实 PG)
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     email = f"quiz-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
     await client.post("/api/auth/register", json={"email": email, "password": "pass-12345"})
@@ -82,13 +82,13 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
 
     app = client._transport.app  # ASGITransport 持有 app
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=FakeQuizGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=FakeQuizGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    old_runtime = app.state.graphs
-    app.state.graphs = runtime
+    old_runtime = app.state.harness
+    app.state.harness = runtime
     try:
         # 1) 发起出题 -> interrupt 挂起, 带 blueprint 与 resume_url (M3-D2)
         events = await _sse(client, "POST", "/api/quiz", headers, {
@@ -170,7 +170,7 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
         )
         assert r.status_code == 404
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
 
 

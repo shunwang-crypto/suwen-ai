@@ -84,3 +84,30 @@ def test_route_candidates_have_no_fallbacks(tmp_path):
 def test_production_requires_the_single_provider():
     with pytest.raises(ValueError, match="routes: text, vision, plan"):
         Settings(_env_file=None, app_env="prod", model_routing_enabled=True, trenddao_api_key="")
+
+
+async def test_visual_json_activities_meter_transcription_and_structuring_independently(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    import eduagents_core.gateway.openai_gateway as module
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeProvider)
+    events = []
+
+    async def sink(event):
+        events.append(event)
+
+    gateway = OpenAIGateway(settings(tmp_path), usage_sink=sink)
+    visual_request = replace(
+        request(json_mode=True),
+        credential_policy="platform",
+        messages=(ChatMessage("user", [
+            {"type": "text", "text": "识别并结构化题目"},
+            {"type": "image_url", "image_url": {"url": "https://test.invalid/question.png"}},
+        ]),),
+    )
+    for activity in ("activity-1", "activity-2"):
+        await gateway.chat(replace(visual_request, billing_reference=activity))
+    assert len(FakeProvider.calls) == len(events) == 4
+    assert len({event.billing_reference for event in events}) == 4
+    assert all(event.request_id == "request-1" for event in events)

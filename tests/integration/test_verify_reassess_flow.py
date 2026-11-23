@@ -71,7 +71,7 @@ async def _sse(client, method, url, headers, body) -> dict[str, list]:
 
 async def test_verify_quiz_without_kb_reassesses_mastery(client):
     from eduagents_api.db import plain_session, tenant_session
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_api.models import (
         KnowledgeBase,
         KnowledgeComponent,
@@ -81,7 +81,7 @@ async def test_verify_quiz_without_kb_reassesses_mastery(client):
         User,
     )
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     email = f"verify-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
     await client.post("/api/auth/register", json={"email": email, "password": "pass-12345"})
@@ -111,13 +111,13 @@ async def test_verify_quiz_without_kb_reassesses_mastery(client):
 
     app = client._transport.app
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=_FakeQuizGateway(), retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=_FakeQuizGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
-    old_runtime = app.state.graphs
-    app.state.graphs = runtime
+    old_runtime = app.state.harness
+    app.state.harness = runtime
     try:
         # 验证流入口口径 (quiz/page.tsx startVerifyQuiz): 不绑库 + kc_names 定向 + 3 题
         events = await _sse(client, "POST", "/api/quiz", headers, {
@@ -150,7 +150,7 @@ async def test_verify_quiz_without_kb_reassesses_mastery(client):
         )
         assert r.json()["correct"] == 3, r.text
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
 
     # 修复锁死点②: 掌握度真实上升 + mastery_log 有可核对的审计行 (F8-A3)

@@ -42,10 +42,23 @@ class BudgetExceeded(GatewayError):
 
 @dataclass(frozen=True)
 class ChatMessage:
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     # OpenAI-compatible multimodal messages use a list of text/image_url parts.
     # Existing callers remain plain strings; only chat attachments opt into parts.
     content: str | list[dict[str, Any]]
+    tool_call_id: str | None = None
+    tool_calls: tuple[dict[str, Any], ...] = ()
+    reasoning_content: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        value: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_call_id is not None:
+            value["tool_call_id"] = self.tool_call_id
+        if self.tool_calls:
+            value["tool_calls"] = list(self.tool_calls)
+        if self.reasoning_content is not None:
+            value["reasoning_content"] = self.reasoning_content
+        return value
 
 
 def message_text(content: str | list[dict[str, Any]]) -> str:
@@ -79,6 +92,9 @@ class ChatRequest:
     # Images, embeddings and other platform-only work must opt out of BYOK.
     # The API/worker sets this explicitly for multimodal requests.
     credential_policy: Literal["text", "platform"] = "text"
+    tools: tuple[dict[str, Any], ...] = ()
+    # Internal per-model-call identity, separate from the public request ID.
+    billing_reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -121,6 +137,8 @@ class ChatResult:
     # Provider completion reason when the compatible API exposes it.  This is
     # diagnostic metadata only; response bodies are never persisted here.
     finish_reason: str | None = None
+    tool_calls: tuple[dict[str, Any], ...] = ()
+    reasoning_content: str | None = None
 
 
 @dataclass

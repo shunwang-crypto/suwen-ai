@@ -156,7 +156,7 @@ async def create_quiz(
     topic 缺省为"薄弱点强化练习"; 难度分布同样由后端按掌握度算 (P1-1, 覆盖前端传值),
     逐 KC 分档理由随蓝图 interrupt 下发。选中的薄弱点作为 trace 事件先行下发, 可核对。
     """
-    runtime = getattr(request.app.state, "graphs", None)
+    runtime = getattr(request.app.state, "harness", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     effective_kb_id = body.kb_id
@@ -516,7 +516,11 @@ async def get_quiz(quiz_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limit
         ):
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         questions = (
-            await session.scalars(select(Question).where(Question.quiz_id == quiz_id))
+            await session.scalars(
+                select(Question)
+                .where(Question.quiz_id == quiz_id)
+                .order_by(Question.source_meta_json["quiz_ordinal"].as_integer(), Question.id)
+            )
         ).all()
         blueprint = dict(quiz.blueprint_json or {})
         blueprint.pop("_plan_task_attribution", None)

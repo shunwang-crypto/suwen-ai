@@ -48,7 +48,7 @@ AI 识别结果、待核验题目、阅读行为、普通聊天和反讲反馈�
 - `apps/web`：Next.js 前端。
 - `apps/api`：FastAPI API、业务状态机和权限边界。
 - `apps/worker`：文档摄取、识别、清理、报告等异步任务。
-- `packages/core`：模型网关、检索、解析、学习模型和 LangGraph 工作流。
+- `packages/core`：模型网关、检索、解析、学习模型和 DeepSeek Harness 教育工作流。
 - `alembic/versions`：数据库迁移。
 - `prompts`：运行时真正使用的模型提示词。
 - `tests`：单元与集成测试。

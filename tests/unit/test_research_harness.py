@@ -6,9 +6,9 @@ import asyncio
 import json
 
 import pytest
-from eduagents_core.gateway.base import BudgetExceeded
-from eduagents_core.graphs.research_harness import run_web_research
+from eduagents_core.gateway.base import BudgetExceeded, ChatResult, GatewayError
 from eduagents_core.tools.web_search import WebSearchUnavailable
+from eduagents_core.workflows.research_harness import run_web_research
 
 
 class ResearchTools:
@@ -18,12 +18,21 @@ class ResearchTools:
         self.observations = []
         self.searches = []
 
-    async def decide(self, observation):
-        self.observations.append(json.loads(observation))
+    async def chat(self, req):
+        if not self.decisions:
+            return ChatResult("finished", "fake", req.tier.value, 1, 1, 0, 0, "stub")
+        latest = next((m for m in reversed(req.messages) if m.role == "tool"), None)
+        observation = json.loads(latest.content).get("observation", {}) if latest else json.loads(req.messages[1].content)
+        self.observations.append(observation)
         decision = self.decisions.pop(0)
         if isinstance(decision, BaseException):
             raise decision
-        return decision
+        if not isinstance(decision, dict) or decision.get("action") not in ("search", "finish"):
+            raise GatewayError("MODEL_REQUEST_INVALID", "invalid native result")
+        calls = ()
+        if decision["action"] == "search":
+            calls = ({"id": f"call-{len(self.observations)}", "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"queries": decision.get("queries", [])[:2]})}},)
+        return ChatResult("finished", "fake", req.tier.value, 1, 1, 0, 0, "stub", tool_calls=calls)
 
     async def search(self, queries):
         self.searches.extend(queries)
@@ -36,7 +45,7 @@ class ResearchTools:
 
     async def run(self):
         return await run_web_research(
-            query="原始用户问题", history="最近对话", decide=self.decide, search=self.search,
+            query="原始用户问题", history="最近对话", gateway=self, search=self.search,
             prepare=lambda sources: (sources, 0),
             merge=lambda sources: list({item["url"]: item for item in sources}.values()),
         )

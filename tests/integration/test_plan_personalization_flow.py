@@ -7,7 +7,7 @@
    薄弱 KC 时主动点明关联, 且 F4-A1 结构性禁答令仍压轴不受画像影响;
 ③ 无画像用户: tutor prompt 不含画像段, 占位符不残留。
 
-FakeGateway 脚本化 (swap runtime._deps.gateway, 同 test_tutor_profile.py);
+FakeGateway 脚本化 (swap runtime.deps.gateway, 同 test_tutor_profile.py);
 PG/Redis 为真, 全程零真实 LLM。
 """
 
@@ -168,8 +168,8 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     seeded = await _seed_mastery_with_dag(uid)
 
     app = client._transport.app
-    runtime = app.state.graphs
-    assert runtime is not None, "集成环境应有 GraphRuntime"
+    runtime = app.state.harness
+    assert runtime is not None, "集成环境应有 HarnessRuntime"
     fake = FakeGateway(
         {
             # 一个主题有真实记录 (导数定义)，一个无记录 (级数)。
@@ -228,8 +228,8 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             ],
         }
     )
-    original = runtime._deps.gateway
-    runtime._deps.gateway = fake
+    original = runtime.deps.gateway.gateway
+    runtime.deps.gateway.gateway = fake
     try:
         events = await _sse(
             client,
@@ -248,7 +248,7 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             },
         )
     finally:
-        runtime._deps.gateway = original
+        runtime.deps.gateway.gateway = original
 
     # 计划流走到 interrupt 确认 (F3), 计划已生成
     assert events.get("interrupt"), events
@@ -292,11 +292,11 @@ async def test_tutor_prompt_receives_profile_with_opening_weak_kc(client):
     await _seed_mastery_with_dag(uid)
 
     app = client._transport.app
-    runtime = app.state.graphs
+    runtime = app.state.harness
     unsolved = {"stuck_type": "concept", "asked_for_answer": False, "solved": False}
     fake = FakeGateway({"tutor_classify": [unsolved], "tutor_respond": ["我们先从定义本身说起?"]})
-    original = runtime._deps.gateway
-    runtime._deps.gateway = fake
+    original = runtime.deps.gateway.gateway
+    runtime.deps.gateway.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -322,7 +322,7 @@ async def test_tutor_prompt_receives_profile_with_opening_weak_kc(client):
         )
         assert r.status_code == 200, r.text
     finally:
-        runtime._deps.gateway = original
+        runtime.deps.gateway.gateway = original
 
     systems = fake.prompts("tutor_respond")
     assert len(systems) == 2
@@ -343,11 +343,11 @@ async def test_tutor_without_profile_has_no_section(client):
     _uid, headers = await _register(client, "tutor-nopf")
 
     app = client._transport.app
-    runtime = app.state.graphs
+    runtime = app.state.harness
     unsolved = {"stuck_type": "unknown", "asked_for_answer": False, "solved": False}
     fake = FakeGateway({"tutor_classify": [unsolved], "tutor_respond": ["说说你的思路?"]})
-    original = runtime._deps.gateway
-    runtime._deps.gateway = fake
+    original = runtime.deps.gateway.gateway
+    runtime.deps.gateway.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -356,7 +356,7 @@ async def test_tutor_without_profile_has_no_section(client):
         )
         assert r.status_code == 200, r.text
     finally:
-        runtime._deps.gateway = original
+        runtime.deps.gateway.gateway = original
 
     system = fake.prompts("tutor_respond")[0]
     assert "学生画像" not in system

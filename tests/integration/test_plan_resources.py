@@ -11,7 +11,6 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from .conftest import requires_services
 
@@ -208,18 +207,13 @@ async def test_plan_resource_finalize_detail_is_atomic_and_scoped(client):
     first_task_id = body["structure"]["stages"][0]["days"][0]["tasks"][0]["task_id"]
     assert first_task_id in body["schedule"]["today_tasks"]
 
-    # A repeated save fails at the database primary key while its new resource
-    # is in the same transaction; rollback must leave the original one only.
+    # Repeated confirmation returns stable tasks/resources without new rows.
     async with tenant_session(user_id) as session:
         before = await session.scalar(
             select(func.count()).select_from(PlanResource).where(PlanResource.plan_id == plan_id)
         )
-    try:
-        await finalize_plan(ctx, str(plan_id), state)
-    except IntegrityError:
-        pass
-    else:
-        pytest.fail("duplicate plan id should fail in PostgreSQL")
+    replay = await finalize_plan(ctx, str(plan_id), state)
+    assert replay == saved
     async with tenant_session(user_id) as session:
         after = await session.scalar(
             select(func.count()).select_from(PlanResource).where(PlanResource.plan_id == plan_id)

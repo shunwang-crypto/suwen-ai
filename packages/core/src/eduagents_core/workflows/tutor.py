@@ -1,6 +1,6 @@
-"""tutor 子图 (F4 苏格拉底辅导)。
+"""tutor 工作流 (F4 苏格拉底辅导)。
 
-多轮模式: 每次 ainvoke (同 thread_id + checkpointer) 处理一轮学生消息:
+多轮模式: 每次 ainvoke (同 thread_id + store) 处理一轮学生消息:
 classify (cheap 判卡点/索答/已解决) → policy (纯逻辑状态机) → respond | summarize。
 
 F4-A1 结构性保障 (核心设计):
@@ -18,12 +18,11 @@ from __future__ import annotations
 
 import json
 
-from langgraph.graph import END, START, StateGraph
-
 from ..gateway.base import ChatMessage, ChatRequest, Tier
+from ..harness.workflow import Workflow
 from ..kc.types import normalize_kc_name
-from .plan_graph import _chat_json, _load_prompt
-from .state import GraphDeps, TutorState
+from .plan import _chat_json, _load_prompt
+from .state import TutorState, WorkflowDeps
 
 _MAX_HINT_LEVEL = 3
 # 首轮起始层级的天花板: 掌握度再高也不能首轮直接给完整解答 (那是 _MAX_HINT_LEVEL),
@@ -68,7 +67,7 @@ _MATH_FORMAT = (
 
 # 画像段 ({{PROFILE_SECTION}} 占位, 四级 hint prompt 共用)。摘要由 API 层
 # profile_summary.py 确定性拼装 (P2-7 脱敏: 定性词, 无掌握度小数/题干原文), 空串即不注入。
-# 措辞纪律同 qa_graph.PROFILE_SECTION_TEMPLATE: 画像仅调整讲法与开场,
+# 措辞纪律同 qa.PROFILE_SECTION_TEMPLATE: 画像仅调整讲法与开场,
 # 不降低苏格拉底约束 —— 提示层级与禁答防线仍完全由 policy 状态机与 _ANSWER_BAN 决定。
 _PROFILE_SECTION = (
     "## 学生画像（来自该学生的历史作答与掌握度记录，非本轮对话内容）\n"
@@ -87,8 +86,8 @@ _OPENING_WEAK_NOTE = (
 )
 
 
-class TutorGraphState(TutorState, total=False):
-    """TutorState 的图内扩展通道 (契约 state.py 不动)。
+class TutorWorkflowState(TutorState, total=False):
+    """TutorState 的工作流内部扩展 (契约 state.py 不动)。
 
     asked_for_answer/solved/persist_gently 为每轮由 classify/policy 重写的轮内标志;
     profile_summary/profile_weak_points 由 API 层 (routers/plans.py tutor_turn) 每轮注入。
@@ -101,7 +100,7 @@ class TutorGraphState(TutorState, total=False):
     profile_weak_points: list[str]  # 薄弱 KC 名列表 (开场关联卡点用, 仅名字无数值)
 
 
-def _render_profile_section(state: TutorGraphState, hint_level: int) -> tuple[str, str]:
+def _render_profile_section(state: TutorWorkflowState, hint_level: int) -> tuple[str, str]:
     """渲染画像段: 返回 (画像段文本, 开场命中的薄弱 KC 名)。无画像返回 ("", "")。
 
     开场轮 (hint_level 0) 做确定性匹配: 题目文本 (normalize_kc_name 归一后) 包含
@@ -139,10 +138,10 @@ def _format_history(messages: list[dict], *, exclude_last_user: bool = False) ->
     return "\n".join(lines) or "(无)"
 
 
-def build_tutor_graph(deps: GraphDeps) -> StateGraph:
-    """构建 tutor 子图; deps 由闭包捕获。调用方 compile(checkpointer=...) 后按轮 ainvoke。"""
+def build_tutor_workflow(deps: WorkflowDeps) -> Workflow:
+    """构建 tutor 工作流；宿主注入 store 后按轮 ainvoke，依赖由闭包捕获。"""
 
-    async def classify(state: TutorGraphState) -> dict:
+    async def classify(state: TutorWorkflowState) -> dict:
         messages = state.get("messages") or []
         student_msg = next(
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
@@ -180,7 +179,7 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    def policy(state: TutorGraphState) -> dict:
+    def policy(state: TutorWorkflowState) -> dict:
         """纯逻辑状态机 (不调 LLM): hint_level / answer_requests / persist_gently 只在这里推进。"""
         hint_level = int(state.get("hint_level") or 0)
         answer_requests = int(state.get("answer_requests") or 0)
@@ -207,7 +206,9 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
                 # 从第 0 层开场提问慢慢爬是浪费 —— 直接给方向性提示更接近其 ZPD。
                 # 上限 _START_LEVEL_CEILING < _MAX_HINT_LEVEL: 无论多熟练, 首轮都不
                 # 得跳到完整解答, 否则苏格拉底式辅导的结构性防线 (F4-A1) 形同虚设。
-                hint_level = max(hint_level, _START_LEVEL_BY_BAND.get(state.get("mastery_band") or "", 0))
+                hint_level = max(
+                    hint_level, _START_LEVEL_BY_BAND.get(state.get("mastery_band") or "", 0)
+                )
             updates["hint_level"] = hint_level
             event = "hint_advanced"
         updates["trace"] = [
@@ -220,10 +221,10 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
         ]
         return updates
 
-    def route_after_policy(state: TutorGraphState) -> str:
+    def route_after_policy(state: TutorWorkflowState) -> str:
         return "summarize" if state.get("solved") else "respond"
 
-    async def respond(state: TutorGraphState) -> dict:
+    async def respond(state: TutorWorkflowState) -> dict:
         hint_level = min(int(state.get("hint_level") or 0), _MAX_HINT_LEVEL)
         stuck_type = state.get("stuck_type") or "unknown"
         persist = bool(state.get("persist_gently"))
@@ -231,7 +232,9 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
         system = (
             _load_prompt(f"tutor_respond_hint{hint_level}.md")
             .replace("{{PROBLEM}}", state.get("problem", ""))
-            .replace("{{STUCK_GUIDANCE}}", _STUCK_GUIDANCE.get(stuck_type, _STUCK_GUIDANCE["unknown"]))
+            .replace(
+                "{{STUCK_GUIDANCE}}", _STUCK_GUIDANCE.get(stuck_type, _STUCK_GUIDANCE["unknown"])
+            )
             .replace("{{PERSIST_NOTE}}", _PERSIST_NOTE if persist else "")
             .replace("{{PROFILE_SECTION}}", profile_section)
         )
@@ -272,7 +275,7 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
             ],
         }
 
-    async def summarize(state: TutorGraphState) -> dict:
+    async def summarize(state: TutorWorkflowState) -> dict:
         prompt = (
             _load_prompt("tutor_summarize.md")
             .replace("{{PROBLEM}}", state.get("problem", ""))
@@ -298,16 +301,9 @@ def build_tutor_graph(deps: GraphDeps) -> StateGraph:
             "trace": [{"node": "summarize", "event": event}],
         }
 
-    graph = StateGraph(TutorGraphState)
-    graph.add_node("classify", classify)
-    graph.add_node("policy", policy)
-    graph.add_node("respond", respond)
-    graph.add_node("summarize", summarize)
-    graph.add_edge(START, "classify")
-    graph.add_edge("classify", "policy")
-    graph.add_conditional_edges(
-        "policy", route_after_policy, {"respond": "respond", "summarize": "summarize"}
+    return Workflow(
+        entry="classify",
+        phases={"classify": classify, "policy": policy, "respond": respond, "summarize": summarize},
+        transitions={"classify": "policy", "policy": route_after_policy},
+        gateway=deps.gateway,
     )
-    graph.add_edge("respond", END)
-    graph.add_edge("summarize", END)
-    return graph

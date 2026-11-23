@@ -1,4 +1,4 @@
-"""qa 子图 — Agentic RAG 自省环 (§5.3)。
+"""qa 工作流 — Agentic RAG 自省环 (§5.3)。
 
 router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → retrieve(多查询 RRF 融合)
   → 置信度门控(confident 快路径跳过 grade) → grade(cheap 批量相关性)
@@ -6,11 +6,11 @@ router(规则先行, 命中即不调 LLM) → query_plan(多查询改写) → re
   → followups(cheap 追问建议, 失败降级为空)
 research 网页模式改由独立有界工具循环收集资料，再进入 generate/verify/followups。
 全路径 trace 事件可观测 (API 层转发为 SSE trace_event); 检索/网络文本经 sanitize
-过滤指令性内容 (§8 第二层防线)。deps 由构图闭包捕获, 不进 state (state 需可序列化)。
+过滤指令性内容 (§8 第二层防线)。deps 由工作流闭包捕获, 不进 state (state 需可序列化)。
 
-图内真流式 (包A): generate 经 langgraph get_stream_writer() 逐 token 写自定义流,
+工作流流式输出 (包A): generate 经 DSH 事件桥逐 token 写自定义流,
 事件形如 {"type":"token","text":...,"attempt":n} (attempt=重生成序号, verify 触发
-二次生成时前端按 attempt 清空重排, 防拼接双答案)。ainvoke 场景 writer 为 no-op。
+二次生成时前端按 attempt 清空重排, 防拼接双答案)。ainvoke 场景不向外发送事件。
 """
 
 from __future__ import annotations
@@ -20,9 +20,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from langgraph.config import get_stream_writer
-from langgraph.graph import END, START, StateGraph
-
 from ..gateway.base import (
     BudgetExceeded,
     ChatMessage,
@@ -31,17 +28,18 @@ from ..gateway.base import (
     StreamDelta,
     Tier,
 )
+from ..harness.workflow import Workflow, get_stream_writer
 from ..json_utils import parse_json_object
 from ..logging import get_logger
 from ..moderation import get_moderator, minor_system_guard
 from ..retrieval.base import rrf_fuse
 from ..retrieval.sanitize import sanitize_retrieved_text
 from .research_harness import run_web_research
-from .state import GraphDeps, QaState
+from .state import QaState, WorkflowDeps
 
-log = get_logger("qa_graph")
+log = get_logger("qa_workflow")
 
-# 本文件位于 packages/core/src/eduagents_core/graphs/ -> parents[5] 为仓库根
+# 本文件位于 packages/core/src/eduagents_core/workflows/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_RETRY = 2  # 查询改写重检硬上限 (§5.3)
 _EVIDENCE_SNIPPET_CHARS = 600  # grade/verify 摘要单条截断长度
@@ -98,8 +96,8 @@ PROFILE_SECTION_TEMPLATE = (
 )
 
 
-class _QaGraphState(QaState, total=False):
-    """构图私有扩展通道: 多查询计划与 verify 重生成控制, 不进 QaState 公共契约。"""
+class _QaWorkflowState(QaState, total=False):
+    """工作流私有扩展: 多查询计划与 verify 重生成控制, 不进 QaState 公共契约。"""
 
     queries: list[str]  # query_plan 产出的检索查询列表 (rewrite 后重置为单条)
     web_queries: list[str]  # 结合对话上下文消解后的独立网页搜索词
@@ -206,12 +204,17 @@ def _rule_route(query: str, has_kb: bool, web_ok: bool) -> tuple[str, str] | Non
     return "direct", "规则: 未绑定知识库且无时效性需求"
 
 
-def build_qa_graph(deps: GraphDeps) -> StateGraph:
-    """构建 qa 子图 (未编译)。deps 经闭包捕获, 不进 state。"""
+def build_qa_workflow(deps: WorkflowDeps) -> Workflow:
+    """构建 qa 工作流。deps 经闭包捕获, 不进 state。"""
 
     async def _chat_json(
-        state: _QaGraphState, *, feature: str, prompt: str, temperature: float = 0.2,
-        system_prompt: str = "", max_tokens: int | None = None,
+        state: _QaWorkflowState,
+        *,
+        feature: str,
+        prompt: str,
+        temperature: float = 0.2,
+        system_prompt: str = "",
+        max_tokens: int | None = None,
     ) -> dict[str, Any] | None:
         """cheap 档 json_mode 辅助调用; 网关错误与解析失败统一返回 None (调用方降级)。"""
         req = ChatRequest(
@@ -241,7 +244,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
 
     # ---- 节点 ----
 
-    async def router(state: _QaGraphState) -> dict:
+    async def router(state: _QaWorkflowState) -> dict:
         query = state.get("query", "")
         has_kb = bool(state.get("kb_id")) and deps.retrieval is not None
         web_ok = deps.web_search is not None
@@ -278,9 +281,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             return {
                 "route": route,
                 "route_reason": reason,
-                "trace": [
-                    {"type": "router", "route": route, "reason": reason, "rule_hit": True}
-                ],
+                "trace": [{"type": "router", "route": route, "reason": reason, "rule_hit": True}],
             }
         prompt = (
             _load_prompt("qa_router.md")
@@ -303,7 +304,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             "trace": [{"type": "router", "route": route, "reason": reason, "rule_hit": False}],
         }
 
-    async def query_plan(state: _QaGraphState) -> dict:
+    async def query_plan(state: _QaWorkflowState) -> dict:
         query = state.get("query", "")
         # UI 的“极速”是显式延迟策略，而非下方由检索置信度决定的 fast_path。
         # 这里只短路首轮多查询 LLM 规划；retrieve 后的 grade 置信度门控、rewrite
@@ -338,7 +339,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             "trace": [{"type": "query_plan", "queries": queries, "degraded": degraded}],
         }
 
-    async def web_query_plan(state: _QaGraphState) -> dict:
+    async def web_query_plan(state: _QaWorkflowState) -> dict:
         """显式联网时结合最近对话消解指代，产出可独立搜索的查询。"""
         query = state.get("query", "")
         if state.get("requested_route") != "web":
@@ -369,12 +370,10 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         queries = queries[:_MAX_WEB_QUERIES]
         return {
             "web_queries": queries,
-            "trace": [
-                {"type": "web_query_plan", "queries": queries, "degraded": degraded}
-            ],
+            "trace": [{"type": "web_query_plan", "queries": queries, "degraded": degraded}],
         }
 
-    async def retrieve(state: _QaGraphState) -> dict:
+    async def retrieve(state: _QaWorkflowState) -> dict:
         # Wave3 联合检索: kb_ids/owner_ids 存在时多库单次查询 (Qdrant MatchAny);
         # 旧单库路径 (仅 kb_id/tenant_id) 原样兼容
         tenant_ref = state.get("owner_ids") or state.get("tenant_id", "")
@@ -402,9 +401,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             fused = rrf_fuse([[c.chunk_id for c in r.chunks] for r in valid])
             ordered_ids = sorted(chunk_map, key=lambda cid: -fused.get(cid, 0.0))
         else:
-            ordered_ids = list(
-                dict.fromkeys(c.chunk_id for r in valid for c in r.chunks)
-            )
+            ordered_ids = list(dict.fromkeys(c.chunk_id for r in valid for c in r.chunks))
         evidences = []
         sanitized_count = 0
         for cid in ordered_ids:
@@ -413,9 +410,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             clean_text, hits = sanitize_retrieved_text(c.text)
             if hits:
                 sanitized_count += 1
-                log.warning(
-                    "qa_retrieved_text_sanitized", chunk_id=c.chunk_id, patterns=hits
-                )
+                log.warning("qa_retrieved_text_sanitized", chunk_id=c.chunk_id, patterns=hits)
             evidences.append(
                 {
                     "chunk_id": c.chunk_id,
@@ -446,7 +441,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             trace_event["errors"] = errors
         return {"evidences": evidences, "confident": confident, "trace": [trace_event]}
 
-    async def grade(state: _QaGraphState) -> dict:
+    async def grade(state: _QaWorkflowState) -> dict:
         evidences = state.get("evidences") or []
         if not evidences:
             return {
@@ -493,7 +488,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             trace_event["parse_failed"] = True
         return {"grade_passed": passed, "trace": [trace_event]}
 
-    async def rewrite(state: _QaGraphState) -> dict:
+    async def rewrite(state: _QaWorkflowState) -> dict:
         query = state.get("query", "")
         retry = state.get("retry_count", 0) + 1
         # 复用 query_plan 提示词: 取第一个与当前查询不同的候选作为改写
@@ -509,9 +504,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             "query": new_query,
             "queries": [new_query],
             "retry_count": retry,
-            "trace": [
-                {"type": "rewrite", "from": query, "to": new_query, "retry_count": retry}
-            ],
+            "trace": [{"type": "rewrite", "from": query, "to": new_query, "retry_count": retry}],
         }
 
     async def _search_web_queries(
@@ -550,7 +543,9 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             raise invalid or errors[0]
         return _dedupe_web_results(combined), from_cache
 
-    def _moderate_web_results(state: _QaGraphState, raw_results: list[dict]) -> tuple[list[dict], int]:
+    def _moderate_web_results(
+        state: _QaWorkflowState, raw_results: list[dict]
+    ) -> tuple[list[dict], int]:
         # 外部内容过审 (P0-5): web 结果与模型输出同标准 (check_output), 命中整条丢弃 —
         # sanitize 只防指令注入, 不防违法/成人内容被"洗"成带引用的可信答案。
         moderator = get_moderator()
@@ -565,9 +560,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 "url": str(r.get("url", "")),
                 "content": str(r.get("content", "")),
             }
-            verdict = moderator.check_output(
-                f"{item['title']}\n{item['content']}", strict=strict
-            )
+            verdict = moderator.check_output(f"{item['title']}\n{item['content']}", strict=strict)
             if not verdict.allowed:
                 dropped += 1
                 log.warning(
@@ -582,7 +575,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             results.append(item)
         return results, dropped
 
-    async def web_fallback(state: _QaGraphState) -> dict:
+    async def web_fallback(state: _QaWorkflowState) -> dict:
         explicit = state.get("requested_route") == "web"
         queries = state.get("web_queries") or [state.get("query", "")]
         raw_results, from_cache = await _search_web_queries(
@@ -607,25 +600,23 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         # 全部被丢弃时 web_results 为空, after_web_fallback 按原空结果路径走拒答
         return {"web_results": results, "trace": trace_events}
 
-    async def research(state: _QaGraphState) -> dict:
-        """One graph boundary around a model-directed, bounded tool loop."""
+    async def research(state: _QaWorkflowState) -> dict:
+        """Host evidence boundary around the native DSH tool loop."""
         writer = get_stream_writer()
-
-        async def decide(observation: str) -> dict | None:
-            return await _chat_json(
-                state, feature="qa_research_action", prompt=observation,
-                system_prompt=_load_prompt("qa_research_action.md"), max_tokens=600,
-            )
 
         async def search(queries: list[str]) -> tuple[list[dict], bool]:
             return await _search_web_queries(
-                queries, required=True, search_depth="advanced", max_results=5,
+                queries,
+                required=True,
+                search_depth="advanced",
+                max_results=5,
             )
 
         def prepare(raw: list[dict]) -> tuple[list[dict], int]:
             items, dropped = _moderate_web_results(state, raw)
             usable = [
-                item for item in items
+                item
+                for item in items
                 if item["content"].strip() and item["url"].startswith(("https://", "http://"))
             ]
             return usable, dropped
@@ -638,7 +629,9 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         result = await run_web_research(
             query=state.get("query", ""),
             history=_web_history(state.get("messages") or [], state.get("query", "")),
-            decide=decide,
+            gateway=deps.gateway,
+            context=state,
+            system_prompt=_load_prompt("qa_research_action.md"),
             search=search,
             prepare=prepare,
             merge=merge,
@@ -652,7 +645,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             "trace": result.trace,
         }
 
-    def _gen_path(state: _QaGraphState) -> str:
+    def _gen_path(state: _QaWorkflowState) -> str:
         """生成路径判定: web_results 优先 (kb 路径 grade 失败后 web 兜底也走此分支)。"""
         if state.get("web_results"):
             return "web"
@@ -660,7 +653,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             return "kb"
         return "direct"
 
-    async def generate(state: _QaGraphState) -> dict:
+    async def generate(state: _QaWorkflowState) -> dict:
         query = state.get("query", "")
         path = _gen_path(state)
         attempt = state.get("regen_count", 0)  # 重生成序号: 首次 0, verify 重生成 1
@@ -708,7 +701,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             user_id=state.get("user_id", ""),
             request_id=state.get("request_id", ""),
         )
-        # 图内真流式: 逐 token 写自定义流 (stub/replay 网关的 stream_chat 也按录制
+        # 工作流流式输出: 逐 token 写自定义流 (stub/replay 网关的 stream_chat 也按录制
         # 文本分块产出 StreamDelta, 同样经此路径); astream 之外 writer 为 no-op。
         writer = get_stream_writer()
         stream = getattr(deps.gateway, "stream_chat", None)
@@ -756,7 +749,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         )
         return {"answer": answer, "trace": trace}
 
-    async def verify_support(state: _QaGraphState) -> dict:
+    async def verify_support(state: _QaWorkflowState) -> dict:
         answer = state.get("answer", "")
         web_research = _gen_path(state) == "web" and "research_stop_reason" in state
         evidences = (
@@ -764,16 +757,15 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
                 {"text": item.get("content", ""), "heading_path": item.get("title", "")}
                 for item in state.get("web_results") or []
             ]
-            if web_research else state.get("evidences") or []
+            if web_research
+            else state.get("evidences") or []
         )
         prompt = (
             _load_prompt("qa_verify.md")
             .replace("{{SOURCES}}", _evidence_digest(evidences))
             .replace("{{ANSWER}}", answer)
         )
-        data = await _chat_json(
-            state, feature="qa_verify_support", prompt=prompt, temperature=0.0
-        )
+        data = await _chat_json(state, feature="qa_verify_support", prompt=prompt, temperature=0.0)
         parse_failed = data is None or not isinstance(data.get("supported"), bool)
         supported = True if parse_failed else bool(data["supported"])
         claims: list[str] = []
@@ -806,7 +798,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
         update["trace"] = [trace_event]
         return update
 
-    async def followups(state: _QaGraphState) -> dict:
+    async def followups(state: _QaWorkflowState) -> dict:
         """轻量末节点: 同一次运行内用 cheap 档 json_mode 产 3 条递进追问建议。
 
         任何失败 (网关错误/解析失败/字段缺失) 降级为空列表, 绝不阻塞主回答;
@@ -817,9 +809,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             .replace("{{QUERY}}", state.get("query", ""))
             .replace("{{ANSWER}}", (state.get("answer") or "")[:_FOLLOWUP_ANSWER_CHARS])
         )
-        data = await _chat_json(
-            state, feature="qa_followups", prompt=prompt, temperature=0.5
-        )
+        data = await _chat_json(state, feature="qa_followups", prompt=prompt, temperature=0.5)
         degraded = data is None or not isinstance(data.get("followups"), list)
         items: list[str] = []
         if not degraded:
@@ -832,7 +822,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             "trace": [{"type": "followups", "count": len(items), "degraded": degraded}],
         }
 
-    async def refuse(state: _QaGraphState) -> dict:
+    async def refuse(state: _QaWorkflowState) -> dict:
         if state.get("route") == "web":
             return {
                 "answer": WEB_NO_RESULTS_ANSWER,
@@ -847,7 +837,7 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
 
     # ---- 条件边 ----
 
-    def after_router(state: _QaGraphState) -> str:
+    def after_router(state: _QaWorkflowState) -> str:
         if state.get("route") == "web" and (
             state.get("response_mode") == "research"
             or (state.get("requested_route") == "web" and state.get("answer_tier") == "strong")
@@ -855,84 +845,70 @@ def build_qa_graph(deps: GraphDeps) -> StateGraph:
             return "research"
         return state.get("route", "direct")
 
-    def after_retrieve(state: _QaGraphState) -> str:
+    def after_retrieve(state: _QaWorkflowState) -> str:
         # 置信度门控：高置信走快路径跳过 grade，降低延迟。
         if state.get("confident") and state.get("evidences"):
             return "generate"
         return "grade"
 
-    def after_grade(state: _QaGraphState) -> str:
+    def after_grade(state: _QaWorkflowState) -> str:
         if state.get("grade_passed"):
             return "generate"
         if state.get("retry_count", 0) < _MAX_RETRY:
             return "rewrite"
         return "web_fallback" if deps.web_search is not None else "refuse"
 
-    def after_web_fallback(state: _QaGraphState) -> str:
+    def after_web_fallback(state: _QaWorkflowState) -> str:
         if not state.get("web_results"):
             return "refuse"
         return "generate"
 
-    def after_generate(state: _QaGraphState) -> str:
-        return "verify" if (
-            _gen_path(state) == "kb" or "research_stop_reason" in state
-        ) else "followups"
+    def after_generate(state: _QaWorkflowState) -> str:
+        return (
+            "verify"
+            if (_gen_path(state) == "kb" or "research_stop_reason" in state)
+            else "followups"
+        )
 
-    def after_verify(state: _QaGraphState) -> str:
+    def after_verify(state: _QaWorkflowState) -> str:
         return "generate" if state.get("verify_action") == "regen" else "followups"
 
-    # ---- 组图 ----
+    # ---- 工作流组装 ----
 
-    graph = StateGraph(_QaGraphState)
-    graph.add_node("router", router)
-    graph.add_node("query_plan", query_plan)
-    graph.add_node("web_query_plan", web_query_plan)
-    graph.add_node("retrieve", retrieve)
-    graph.add_node("grade", grade)
-    graph.add_node("rewrite", rewrite)
-    graph.add_node("web_fallback", web_fallback)
-    graph.add_node("research", research)
-    graph.add_node("generate", generate)
-    graph.add_node("verify_support", verify_support)
-    graph.add_node("followups", followups)
-    graph.add_node("refuse", refuse)
-
-    graph.add_edge(START, "router")
-    graph.add_conditional_edges(
-        "router",
-        after_router,
-        {"kb": "query_plan", "web": "web_query_plan", "direct": "generate", "research": "research"},
-    )
-    graph.add_edge("web_query_plan", "web_fallback")
-    graph.add_edge("query_plan", "retrieve")
-    graph.add_conditional_edges(
-        "retrieve", after_retrieve, {"generate": "generate", "grade": "grade"}
-    )
-    graph.add_conditional_edges(
-        "grade",
-        after_grade,
-        {
-            "generate": "generate",
-            "rewrite": "rewrite",
-            "web_fallback": "web_fallback",
-            "refuse": "refuse",
+    return Workflow(
+        entry="router",
+        phases={
+            "router": router,
+            "query_plan": query_plan,
+            "web_query_plan": web_query_plan,
+            "retrieve": retrieve,
+            "grade": grade,
+            "rewrite": rewrite,
+            "web_fallback": web_fallback,
+            "research": research,
+            "generate": generate,
+            "verify_support": verify_support,
+            "followups": followups,
+            "refuse": refuse,
         },
+        transitions={
+            "router": lambda s: {
+                "kb": "query_plan",
+                "web": "web_query_plan",
+                "direct": "generate",
+                "research": "research",
+            }[after_router(s)],
+            "web_query_plan": "web_fallback",
+            "query_plan": "retrieve",
+            "retrieve": after_retrieve,
+            "grade": after_grade,
+            "rewrite": "retrieve",
+            "web_fallback": after_web_fallback,
+            "research": after_web_fallback,
+            "generate": lambda s: {"verify": "verify_support", "followups": "followups"}[
+                after_generate(s)
+            ],
+            "verify_support": after_verify,
+        },
+        gateway=deps.gateway,
     )
-    graph.add_edge("rewrite", "retrieve")
-    graph.add_conditional_edges(
-        "web_fallback",
-        after_web_fallback,
-        {"generate": "generate", "refuse": "refuse"},
-    )
-    graph.add_conditional_edges(
-        "research", after_web_fallback, {"generate": "generate", "refuse": "refuse"},
-    )
-    graph.add_conditional_edges(
-        "generate", after_generate, {"verify": "verify_support", "followups": "followups"}
-    )
-    graph.add_conditional_edges(
-        "verify_support", after_verify, {"generate": "generate", "followups": "followups"}
-    )
-    graph.add_edge("followups", END)
-    graph.add_edge("refuse", END)
-    return graph

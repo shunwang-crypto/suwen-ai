@@ -12,16 +12,15 @@ import json
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import BudgetExceeded, ChatRequest, ChatResult, Tier
-from eduagents_core.graphs.quiz_graph import (
+from eduagents_core.harness.workflow import MemoryStore, Resume
+from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
+from eduagents_core.workflows.quiz import (
     QUESTION_SCHEMA,
-    build_quiz_graph,
+    build_quiz_workflow,
     grade_objective,
     quiz_generation_max_tokens,
 )
-from eduagents_core.graphs.state import GraphDeps
-from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
+from eduagents_core.workflows.state import WorkflowDeps
 
 # --- fakes ---
 
@@ -143,8 +142,8 @@ def base_state(**over) -> dict:
 
 
 def make_app(gateway: FakeGateway, retrieval: FakeRetrieval | None = None):
-    deps = GraphDeps(settings=Settings(), gateway=gateway, retrieval=retrieval)
-    return build_quiz_graph(deps).compile(checkpointer=MemorySaver())
+    deps = WorkflowDeps(settings=Settings(), gateway=gateway, retrieval=retrieval)
+    return build_quiz_workflow(deps).with_store(MemoryStore())
 
 
 def cfg(thread_id: str) -> dict:
@@ -194,7 +193,7 @@ async def test_happy_path_interrupt_resume_bad_schema_retry_then_pass():
     assert len(payload["blueprint"]["items"]) == 2
     assert "questions" not in first  # 挂起时尚未生成
 
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
     assert final["blueprint_confirmed"] is True
     assert final["validation_errors"] == []
     assert final["retry_count"] == 1  # 恰好打回一轮
@@ -230,7 +229,7 @@ async def test_reject_blueprint_ends_without_questions():
 
     first = await app.ainvoke(base_state(), config)
     assert "__interrupt__" in first
-    final = await app.ainvoke(Command(resume={"approved": False}), config)
+    final = await app.ainvoke(Resume(resume={"approved": False}), config)
 
     assert final["blueprint_confirmed"] is False
     assert final["terminal_outcome"] == "cancelled_by_user"
@@ -249,7 +248,7 @@ async def test_resume_with_modified_blueprint_overrides_and_renumbers():
     await app.ainvoke(base_state(), config)
     modified = {"items": [bp_item(kc="拉格朗日余项", qtype="blank", difficulty="mid")], "summary": "改小"}
     final = await app.ainvoke(
-        Command(resume={"approved": True, "blueprint": modified}), config
+        Resume(resume={"approved": True, "blueprint": modified}), config
     )
 
     assert final["num_questions"] == 1  # 跟随修改后蓝图条数
@@ -266,7 +265,7 @@ async def test_validation_retry_exhausted_ends_with_errors():
     config = cfg("exhaust")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["retry_count"] == 3  # 首轮 + 2 次重试全失败
     assert final["validation_errors"]
@@ -284,7 +283,7 @@ async def test_three_empty_generation_rounds_are_generation_failed_with_bounded_
     config = cfg("empty-generation")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["terminal_outcome"] == "generation_failed"
     assert final["generation_status"] == "empty"
@@ -304,7 +303,7 @@ async def test_truncated_generation_retries_and_succeeds_with_diagnostic_flag():
     config = cfg("truncated-generation")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["terminal_outcome"] == "succeeded"
     assert final["retry_count"] == 1
@@ -322,7 +321,7 @@ async def test_nonempty_invalid_questions_are_validation_failed():
     config = cfg("invalid-generation")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["terminal_outcome"] == "validation_failed"
     assert final["ever_generated_nonempty"] is True
@@ -342,7 +341,7 @@ async def test_nonempty_question_array_with_non_object_items_is_validation_faile
     config = cfg("invalid-question-array")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["terminal_outcome"] == "validation_failed"
     assert final["ever_generated_nonempty"] is True
@@ -382,7 +381,7 @@ async def test_blueprint_truncated_when_llm_returns_too_many():
     items = first["__interrupt__"][0].value["blueprint"]["items"]
     assert len(items) == 2
     assert [it["kc_name"] for it in items] == ["kc0", "kc1"]
-    state = app.get_state(config).values
+    state = (await app.aget_state(config)).values
     assert any(e["node"] == "make_blueprint" and e["corrected"] for e in state["trace"])
 
 
@@ -436,7 +435,7 @@ async def test_kb_materials_and_source_hint_mapping():
     config = cfg("kb")
 
     await app.ainvoke(base_state(kb_id="kb1"), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert retrieval.calls == [
         ("t1", "kb1", "泰勒公式"),
@@ -475,7 +474,7 @@ async def test_critic_major_issue_retries_generate_once_then_passes():
     config = cfg("critic-major")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["critic_retry_count"] == 1
     assert final["critic_issues"] == []
@@ -506,7 +505,7 @@ async def test_critic_minor_issue_does_not_trigger_rework():
     config = cfg("critic-minor")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final.get("critic_retry_count", 0) == 0
     assert [request.feature for request in gateway.requests] == [
@@ -535,7 +534,7 @@ async def test_critic_retry_exhaustion_is_explicit_and_does_not_loop():
     config = cfg("critic-exhausted")
 
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-    final = await app.ainvoke(Command(resume={"approved": True}), config)
+    final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
     assert final["critic_retry_count"] == 1
     assert final["critic_issues"] == []
@@ -558,7 +557,7 @@ async def test_critic_invalid_response_and_gateway_error_degrade_to_valid_questi
         app = make_app(gateway)
         config = cfg(f"critic-degraded-{suffix}")
         await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
-        final = await app.ainvoke(Command(resume={"approved": True}), config)
+        final = await app.ainvoke(Resume(resume={"approved": True}), config)
 
         assert len(final["questions"]) == 1
         event = [event for event in final["trace"] if event["node"] == "critic_review"][-1]
@@ -576,7 +575,7 @@ async def test_critic_budget_exceeded_is_not_swallowed():
     await app.ainvoke(base_state(num_questions=1, difficulty_mix={"easy": 1}), config)
 
     with pytest.raises(BudgetExceeded):
-        await app.ainvoke(Command(resume={"approved": True}), config)
+        await app.ainvoke(Resume(resume={"approved": True}), config)
 
 
 # --- grade_objective 纯函数 ---

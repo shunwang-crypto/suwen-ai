@@ -4,11 +4,10 @@ import json
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.plan_graph import build_plan_graph
-from eduagents_core.graphs.state import GraphDeps
+from eduagents_core.harness.workflow import MemoryStore, Resume
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
+from eduagents_core.workflows.plan import build_plan_workflow
+from eduagents_core.workflows.state import WorkflowDeps
 
 
 class FakeGateway:
@@ -80,8 +79,8 @@ GOOD_DRAFT = {
 }
 
 
-def make_deps(gateway, retrieval=None, web=None) -> GraphDeps:
-    return GraphDeps(
+def make_deps(gateway, retrieval=None, web=None) -> WorkflowDeps:
+    return WorkflowDeps(
         settings=Settings(_env_file=None), gateway=gateway, retrieval=retrieval, web_search=web
     )
 
@@ -107,8 +106,8 @@ def make_script(draft=GOOD_DRAFT) -> dict:
 
 async def run_to_interrupt(script, *, retrieval=None, web=None, input_overrides=None):
     gateway = FakeGateway(script)
-    graph = build_plan_graph(make_deps(gateway, retrieval, web)).compile(
-        checkpointer=MemorySaver()
+    graph = build_plan_workflow(make_deps(gateway, retrieval, web)).with_store(
+        MemoryStore()
     )
     config = {"configurable": {"thread_id": "plan-t1"}}
     state = await graph.ainvoke(base_input(**(input_overrides or {})), config)
@@ -146,7 +145,7 @@ async def test_flow_hits_interrupt_then_approve_confirms():
     assert any(e.get("event") == "web_skipped_course_bound" for e in state["trace"])
     assert retrieval.queries == ["极限", "导数"]
 
-    final = await graph.ainvoke(Command(resume={"approved": True}), config)
+    final = await graph.ainvoke(Resume(resume={"approved": True}), config)
     assert final["plan_confirmed"] is True
     assert final["plan"]["stages"]
     assert "__interrupt__" not in final
@@ -180,7 +179,7 @@ async def test_goal_only_plan_ignores_stale_kb_scope():
 async def test_reject_leaves_plan_unconfirmed():
     _, graph, config, state = await run_to_interrupt(make_script())
     assert "__interrupt__" in state
-    final = await graph.ainvoke(Command(resume={"approved": False}), config)
+    final = await graph.ainvoke(Resume(resume={"approved": False}), config)
     assert final.get("plan_confirmed") is not True
     assert any(e.get("event") == "plan_rejected" for e in final["trace"])
 
@@ -221,7 +220,7 @@ async def test_approve_with_edited_plan_takes_user_version():
             }
         ]
     }
-    final = await graph.ainvoke(Command(resume={"approved": True, "plan": edited}), config)
+    final = await graph.ainvoke(Resume(resume={"approved": True, "plan": edited}), config)
     assert final["plan_confirmed"] is True
     days = flat_days(final["plan"])
     assert len(days) == 3
@@ -272,7 +271,7 @@ async def test_approve_with_empty_edited_day_fills_task():
             }
         ]
     }
-    final = await graph.ainvoke(Command(resume={"approved": True, "plan": edited}), config)
+    final = await graph.ainvoke(Resume(resume={"approved": True, "plan": edited}), config)
     days = flat_days(final["plan"])
     assert days[0]["tasks"][0]["title"] == "自主复习"
     assert days[0]["tasks"][0]["objective"]
@@ -291,7 +290,7 @@ async def test_approve_with_invalid_edited_plan_keeps_hardened_draft():
     _, graph, config, state = await run_to_interrupt(make_script())
     original = state["plan"]
     final = await graph.ainvoke(
-        Command(resume={"approved": True, "plan": {"stages": []}}), config
+        Resume(resume={"approved": True, "plan": {"stages": []}}), config
     )
     assert final["plan_confirmed"] is True
     assert final["plan"] == original

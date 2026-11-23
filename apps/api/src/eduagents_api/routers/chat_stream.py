@@ -109,7 +109,7 @@ async def _persist_assistant(c: _ChatStreamContext, text: str,
 
 async def _event_stream(c: _ChatStreamContext):
     request, ctx, body = c.request, c.ctx, c.body
-    gateway, settings, runtime, request_id = c.gateway, c.settings, c.runtime, c.request_id
+    settings, runtime, request_id = c.settings, c.runtime, c.request_id
     chat_mode, kb_ids = c.chat_mode, c.kb_ids
     owner_ids, kb_names, kb_versions = c.owner_ids, c.kb_names, c.kb_versions
     session_id, turn_seq = c.session_id, c.turn_seq
@@ -688,7 +688,7 @@ async def _event_stream(c: _ChatStreamContext):
         mod_buf = _new_mod_buffer(strict=minor)
         blocked = False
         try:
-            async for item in gateway.stream_chat(gw_req):
+            async for item in runtime.stream_chat(gw_req, gateway=c.gateway):
                 if isinstance(item, StreamDelta):
                     if mod_buf is None:
                         answer_parts.append(item.text)

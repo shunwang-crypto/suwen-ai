@@ -12,9 +12,9 @@ import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway import BudgetExceeded, GatewayError, Tier
 from eduagents_core.gateway.openai_gateway import _DEGRADE, _TIER_RANK, _warn_if_upcost
-from eduagents_core.graphs.qa_graph import build_qa_graph
-from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
+from eduagents_core.workflows.qa import build_qa_workflow
+from eduagents_core.workflows.state import WorkflowDeps
 
 # ---------- worker 网关单例 (P0-2a / P1-15) ----------
 
@@ -152,13 +152,13 @@ def _kb_state() -> dict:
 
 async def test_budget_exceeded_propagates_out_of_cheap_helper():
     gateway = _BudgetBlownGateway(BudgetExceeded(retry_after_seconds=3600))
-    deps = GraphDeps(
+    deps = WorkflowDeps(
         settings=Settings(_env_file=None),
         gateway=gateway,
         retrieval=_OneShotRetrieval(),
         web_search=None,
     )
-    graph = build_qa_graph(deps).compile()
+    graph = build_qa_workflow(deps)
     with pytest.raises(BudgetExceeded):
         await graph.ainvoke(_kb_state())
     assert gateway.calls == 1  # 第一笔 cheap 调用即熔断, 不再继续烧后续节点
@@ -167,13 +167,13 @@ async def test_budget_exceeded_propagates_out_of_cheap_helper():
 async def test_other_gateway_errors_still_degrade():
     # 非预算类网关错误维持旧语义: cheap 辅助调用失败只降级, 图继续跑
     gateway = _BudgetBlownGateway(GatewayError("ALL_PROVIDERS_FAILED", "x"))
-    deps = GraphDeps(
+    deps = WorkflowDeps(
         settings=Settings(_env_file=None),
         gateway=gateway,
         retrieval=_OneShotRetrieval(),
         web_search=None,
     )
-    graph = build_qa_graph(deps).compile()
+    graph = build_qa_workflow(deps)
     # generate 节点也会失败 (同一个 gateway), 但那不是 cheap 辅助调用的静默吞没路径:
     # 它以 GatewayError 直接冒头 — 断言不是 BudgetExceeded 即可
     with pytest.raises(GatewayError) as exc_info:

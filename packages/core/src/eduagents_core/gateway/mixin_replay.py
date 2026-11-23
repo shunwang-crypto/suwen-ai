@@ -31,8 +31,9 @@ class GatewayReplayMixin:
             {
                 "tier": req.tier.value,
                 "model": req.model_override or self._s.tier(req.tier.value).model,
-                "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+                "messages": [m.to_wire() for m in req.messages],
                 "json_mode": req.json_mode,
+                **({"tools": list(req.tools)} if req.tools else {}),
                 "temperature": req.temperature,
                 "max_tokens": req.max_tokens,
                 "enable_thinking": self._s.tier(req.tier.value).enable_thinking,
@@ -48,6 +49,19 @@ class GatewayReplayMixin:
     def _stub_result(self, req: ChatRequest, started: float) -> ChatResult:
         text = stub_text(req)
         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
+        tool_calls = ()
+        if req.tools:
+            import json
+            if any(m.role == "tool" for m in req.messages):
+                text = "finished"
+            else:
+                try:
+                    observation = json.loads(message_text(req.messages[-1].content))
+                    query = observation.get("question") or "学习资料"
+                except (ValueError, TypeError):
+                    query = "学习资料"
+                tool_calls = ({"id": "stub-search", "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"queries": [query]}, ensure_ascii=False)}},)
+                text = ""
         c_tok = estimate_tokens(text)
         return ChatResult(
             text=text,
@@ -58,6 +72,7 @@ class GatewayReplayMixin:
             cost_cny=0.0,
             latency_ms=int((perf_counter() - started) * 1000),
             mode="stub",
+            tool_calls=tool_calls,
         )
 
     def _replay_result(self, req: ChatRequest, started: float) -> ChatResult:
@@ -80,4 +95,6 @@ class GatewayReplayMixin:
             latency_ms=int((perf_counter() - started) * 1000),
             mode="replay",
             finish_reason=hit.get("finish_reason"),
+            tool_calls=tuple(hit.get("tool_calls") or []),
+            reasoning_content=hit.get("reasoning_content"),
         )

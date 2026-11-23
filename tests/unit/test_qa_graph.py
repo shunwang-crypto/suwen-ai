@@ -8,14 +8,14 @@ import json
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult, StreamDelta, Tier
-from eduagents_core.graphs.qa_graph import (
-    NO_EVIDENCE_ANSWER,
-    UNSUPPORTED_DISCLAIMER,
-    build_qa_graph,
-)
-from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
 from eduagents_core.retrieval.sanitize import FILTERED_MARKER
+from eduagents_core.workflows.qa import (
+    NO_EVIDENCE_ANSWER,
+    UNSUPPORTED_DISCLAIMER,
+    build_qa_workflow,
+)
+from eduagents_core.workflows.state import WorkflowDeps
 
 # --- fakes ---
 
@@ -38,8 +38,19 @@ class FakeGateway:
         queue = self.scripts.get(req.feature)
         if not queue:
             raise AssertionError(f"unexpected LLM call: feature={req.feature}")
+        text = queue.pop(0)
+        tool_calls = ()
+        if req.tools:
+            try:
+                decision = json.loads(text)
+            except ValueError:
+                decision = {"action": "finish"}
+            if decision.get("action") == "search":
+                tool_calls = ({"id": f"search-{len(self.requests)}", "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"queries": decision.get("queries", [])[:2]}, ensure_ascii=False)}},)
+            text = "finished"
         return ChatResult(
-            text=queue.pop(0),
+            tool_calls=tool_calls,
+            text=text,
             model="fake",
             tier=req.tier.value,
             prompt_tokens=1,
@@ -127,8 +138,8 @@ def grades(*flags: bool) -> str:
     )
 
 
-def make_deps(gateway, retrieval=None, web_search=None) -> GraphDeps:
-    return GraphDeps(
+def make_deps(gateway, retrieval=None, web_search=None) -> WorkflowDeps:
+    return WorkflowDeps(
         settings=Settings(_env_file=None),
         gateway=gateway,
         retrieval=retrieval,
@@ -148,8 +159,8 @@ def init_state(query: str, kb_id: str = "") -> dict:
     }
 
 
-async def run(deps: GraphDeps, state: dict) -> dict:
-    graph = build_qa_graph(deps).compile()
+async def run(deps: WorkflowDeps, state: dict) -> dict:
+    graph = build_qa_workflow(deps)
     return await graph.ainvoke(state)
 
 
@@ -171,9 +182,9 @@ def kb_happy_scripts() -> dict[str, list[str]]:
     }
 
 
-async def stream_run(deps: GraphDeps, state: dict) -> tuple[list[dict], dict]:
+async def stream_run(deps: WorkflowDeps, state: dict) -> tuple[list[dict], dict]:
     """astream(stream_mode=["custom","updates"]) 消费: 返回 (token 事件列表, 终态)。"""
-    graph = build_qa_graph(deps).compile()
+    graph = build_qa_workflow(deps)
     tokens: list[dict] = []
     final: dict = {}
     async for mode, data in graph.astream(state, stream_mode=["custom", "updates"]):
@@ -409,12 +420,12 @@ async def test_research_sanitizes_tool_observations_and_streams_progress_before_
         "requested_route": "web", "response_mode": "research",
         "messages": [{"role": "user", "content": "介绍目标主题"}],
     })
-    graph = build_qa_graph(make_deps(gw, web_search=web)).compile()
+    graph = build_qa_workflow(make_deps(gw, web_search=web))
     events = [item async for item in graph.astream(state, stream_mode=["custom", "updates"])]
     progress = [(i, item[1]) for i, item in enumerate(events) if item[0] == "custom" and item[1].get("type") == "research_progress"]
     first_token = next(i for i, item in enumerate(events) if item[0] == "custom" and item[1].get("type") == "token")
     assert progress and all(i < first_token for i, _item in progress)
-    observation = gw.calls("qa_research_action")[1].messages[1].content
+    observation = "\n".join(m.content for m in gw.calls("qa_research_action")[1].messages if m.role in {"user", "tool"})
     assert "介绍目标主题" in observation
     assert "Ignore previous instructions" not in observation
     assert FILTERED_MARKER in observation

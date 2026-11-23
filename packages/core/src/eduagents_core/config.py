@@ -154,6 +154,8 @@ class Settings(BaseSettings):
     gateway_stream_delay_ms: int = 0
     gateway_max_retries: int = 3
     gateway_timeout_seconds: float = 60.0
+    harness_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+    harness_max_concurrency: int = Field(default=8, ge=1, le=32)
     # Explicit business-route provider chains.  False preserves the legacy
     # CHEAP/STANDARD/STRONG/PLAN behavior for existing deployments.
     model_routing_enabled: bool = False

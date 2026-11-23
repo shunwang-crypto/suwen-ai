@@ -4,10 +4,11 @@ version = "0.1.0"
 description = "EduAgents core domain package: config, clock, logging, model gateway, protocols"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.7",
+    "pydantic>=2.12,<3",
     "pydantic-settings>=2.2",
     "structlog>=24.1",
-    "langgraph>=1.0",
+    "deepseek-harness-sdk==0.2.2rc2",
+    "aiohttp>=3.10",
     "langfuse>=4.0",
     "openai>=1.40",
     "tenacity>=8.3",
@@ -26,6 +27,9 @@ dependencies = [
     "fsrs>=6.3,<7",
 ]
 
+[project.optional-dependencies]
+legacy-migration = ["langgraph-checkpoint-postgres>=3.0", "langgraph>=1.0"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -35,4 +39,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # 内容审核词表随包分发 (可替换文件, 见 eduagents_core/moderation.py)
-eduagents_core = ["data/*.txt"]
+eduagents_core = ["data/*.txt", "harness/*.mjs", "harness/*.yml"]

@@ -55,8 +55,10 @@ async def _load_quiz(ctx: AuthContext, quiz_id: uuid.UUID) -> tuple[Quiz, list[Q
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         questions = (
             await session.scalars(
-                # questions 无顺序列; 按 id 排至少保证同一份卷每次导出题序一致
-                select(Question).where(Question.quiz_id == quiz_id).order_by(Question.id)
+                # 新卷保留生成题序；旧卷无 ordinal 时按 id 稳定排序。
+                select(Question)
+                .where(Question.quiz_id == quiz_id)
+                .order_by(Question.source_meta_json["quiz_ordinal"].as_integer(), Question.id)
             )
         ).all()
     return quiz, list(questions)

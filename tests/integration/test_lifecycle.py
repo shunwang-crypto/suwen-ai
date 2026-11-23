@@ -252,16 +252,11 @@ async def test_account_deletion_wipes_all_tables(client):
         )
         session_id = sess.id
 
-    # checkpoint 残留 (LangGraph 三表不在 ORM): 造一行验证 LIKE 删除
-    async with plain_session() as s:
-        await s.execute(
-            text(
-                "INSERT INTO checkpoints "
-                "(thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) "
-                "VALUES (:t, '', 'ck-1', '{}'::jsonb, '{}'::jsonb)"
-            ),
-            {"t": f"qa:{user_id}:{session_id}"},
-        )
+    # Harness checkpoint contains plaintext learning state and must be deleted too.
+    async with tenant_session(uid) as session:
+        from eduagents_api.models import HarnessSession
+        session.add(HarnessSession(thread_id=f"qa:{user_id}:{session_id}", tenant_id=uid, user_id=uid,
+                                   kind="qa", state={"query": "private learning question"}))
 
     # 密码错误 -> 403, 不销号
     r = await client.request(
@@ -334,8 +329,9 @@ async def test_account_deletion_wipes_all_tables(client):
     async with plain_session() as s:
         row = await s.get(PendingCleanup, outbox_id)
         assert row.done is True and row.attempts == 1
+    async with tenant_session(uid) as s:
         leftover = await s.scalar(
-            text("SELECT count(*) FROM checkpoints WHERE thread_id LIKE :p"),
+            text("SELECT count(*) FROM harness_sessions WHERE thread_id LIKE :p"),
             {"p": f"%:{user_id}:%"},
         )
         assert leftover == 0

@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-import operator
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, TypedDict
+from typing import Any, TypedDict
 
 from ..config import Settings
 from ..gateway.base import ModelGateway
 
 
-def append_messages(left: list[dict], right: list[dict]) -> list[dict]:
-    """messages reducer: 追加式合并。消息 dict: {role, content}。"""
-    return [*left, *right]
-
-
 @dataclass
-class GraphDeps:
-    """子图外部依赖注入 (构图时闭包捕获, 不进 state — state 必须可序列化进 checkpointer)。
+class WorkflowDeps:
+    """工作流外部依赖注入 (闭包捕获, 不进 state — state 必须可序列化为快照)。
 
     web_search: async (query, required, search_depth, max_results)
         -> list[{title, url, content}] | (list, from_cache) | None
@@ -30,9 +24,9 @@ class GraphDeps:
 
 
 class QaState(TypedDict, total=False):
-    """qa 子图状态 (§5.3 Agentic RAG 自省环)。trace 事件由 API 层转发为 SSE trace_event。"""
+    """qa 工作流状态 (§5.3 Agentic RAG 自省环)。trace 事件由 API 层转发为 SSE trace_event。"""
 
-    messages: Annotated[list[dict], append_messages]
+    messages: list[dict]
     query: str
     tenant_id: str
     user_id: str
@@ -58,11 +52,11 @@ class QaState(TypedDict, total=False):
     profile_summary: str  # 学生画像摘要 (≤300 字, API 层 profile_summary.py 产出; 空=无画像)
     profile_weak_points: list[str]  # 上述摘要中的薄弱 KC 名 (进 trace, 供前端可见)
     minor: bool  # 未成年模式 (P0-5): generate 追加安全约束段, web 结果过审用 strict 阈值
-    trace: Annotated[list[dict], operator.add]
+    trace: list[dict]
 
 
 class QuizState(TypedDict, total=False):
-    """quiz 子图 (§5.4): blueprint → interrupt 确认 → 生成 → schema 校验重试 → 入库。"""
+    """quiz 工作流 (§5.4): blueprint → interrupt 确认 → 生成 → schema 校验重试 → 入库。"""
 
     tenant_id: str
     user_id: str
@@ -80,18 +74,18 @@ class QuizState(TypedDict, total=False):
     kc_names: list[str]  # 定向薄弱点 (M4 画像接入后自动填充)
     blueprint: dict  # {items: [{kc_name, type, difficulty}], summary}
     blueprint_confirmed: bool
-    questions: list[dict]  # 严格 schema 见 quiz_graph.QUESTION_SCHEMA
+    questions: list[dict]  # 严格 schema 见 quiz.QUESTION_SCHEMA
     validation_errors: list[str]
     retry_count: int
     terminal_outcome: str  # succeeded | cancelled_by_user | generation_failed | validation_failed
     generation_status: str  # ok | empty | invalid_json | invalid_shape
     ever_generated_nonempty: bool
     failure_code: str
-    trace: Annotated[list[dict], operator.add]
+    trace: list[dict]
 
 
 class PlanState(TypedDict, total=False):
-    """planner 子图: 目标解析 → (摸底题由 quiz 复用) → 检索资源 → 生成计划 → interrupt 确认。"""
+    """planner 工作流: 目标解析 → (摸底题由 quiz 复用) → 检索资源 → 生成计划 → interrupt 确认。"""
 
     tenant_id: str
     user_id: str
@@ -113,13 +107,13 @@ class PlanState(TypedDict, total=False):
         dict  # executable tasks; resource_ref is transient until finalize_plan assigns resource_id
     )
     plan_confirmed: bool
-    trace: Annotated[list[dict], operator.add]
+    trace: list[dict]
 
 
 class TutorState(TypedDict, total=False):
-    """tutor 子图 (F4 苏格拉底): 三层提示状态机, hint_level 0..3, 3 之前禁止完整答案。"""
+    """tutor 工作流 (F4 苏格拉底): 三层提示状态机, hint_level 0..3, 3 之前禁止完整答案。"""
 
-    messages: Annotated[list[dict], append_messages]
+    messages: list[dict]
     tenant_id: str
     user_id: str
     request_id: str
@@ -132,11 +126,11 @@ class TutorState(TypedDict, total=False):
     problem_page_no: int | None
     hint_level: int  # 0=开场提问 1=方向性 2=关键步骤 3=展开讲解(完整解答)
     # 题目命中 KC 的掌握度定性档 (mastered/near/reinforce/weak/""), 由路由层按
-    # p_mastery 算好注入 —— 子图内不查库 (GraphDeps 无 session)。只用于决定**起始**
+    # p_mastery 算好注入 —— 工作流内不查库 (WorkflowDeps 无 session)。只用于决定**起始**
     # hint_level: 已经会的人不该从第 0 层开场提问慢慢爬。空串=无画像, 保持原行为。
     mastery_band: str
     answer_requests: int  # 学生索要答案次数: 第1次温和坚持, 第2次给答案
     stuck_type: str  # concept | calculation | misread | unknown
     reply: str
     session_summary: str  # 辅导小结 (写入画像, M4)
-    trace: Annotated[list[dict], operator.add]
+    trace: list[dict]

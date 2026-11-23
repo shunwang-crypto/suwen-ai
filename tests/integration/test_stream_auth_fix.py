@@ -456,8 +456,8 @@ async def test_answer_cache_scope_is_kb_owner():
 
 async def test_delete_session_purges_qa_checkpoints(app_client):
     app, client = app_client
-    if getattr(app.state, "graphs", None) is None:
-        pytest.skip("graph runtime 不可用 (langgraph/checkpointer 未就绪)")
+    if getattr(app.state, "harness", None) is None:
+        pytest.skip("graph runtime 不可用 (DSH/runtime 未就绪)")
     token, user_id = await _register_login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -477,13 +477,13 @@ async def test_delete_session_purges_qa_checkpoints(app_client):
     assert sessions, "提问后应已创建会话"
     session_id = sessions[0]["id"]
 
-    from eduagents_api.db import get_sessionmaker
+    from eduagents_api.db import tenant_session
     from sqlalchemy import text as sql_text
 
     pattern = f"qa:{user_id}:{session_id}:%"
 
     async def _count(table: str) -> int:
-        async with get_sessionmaker()() as s:
+        async with tenant_session(user_id) as s:
             return (
                 await s.scalar(
                     sql_text(
@@ -493,11 +493,11 @@ async def test_delete_session_purges_qa_checkpoints(app_client):
                 )
             ) or 0
 
-    assert await _count("checkpoints") > 0, "qa 提问后必须有会话前缀的 checkpoint"
+    assert await _count("harness_sessions") > 0, "qa 提问后必须有会话前缀的 checkpoint"
     # thread_id 形如 qa:{uid}:{sid}:{turn_seq}, 首问 turn_seq=1
-    async with get_sessionmaker()() as s:
+    async with tenant_session(user_id) as s:
         exact = await s.scalar(
-            sql_text("SELECT count(*) FROM checkpoints WHERE thread_id = :t"),
+            sql_text("SELECT count(*) FROM harness_sessions WHERE thread_id = :t"),
             {"t": f"qa:{user_id}:{session_id}:1"},
         )
     assert exact and exact > 0, "thread_id 必须绑定 session 且按 turn 分隔"
@@ -505,5 +505,5 @@ async def test_delete_session_purges_qa_checkpoints(app_client):
     r = await client.delete(f"/api/chat/sessions/{session_id}", headers=headers)
     assert r.status_code == 204, r.text
 
-    for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+    for table in ("harness_sessions",):
         assert await _count(table) == 0, f"删会话后 {table} 必须零残留 (P0-4)"

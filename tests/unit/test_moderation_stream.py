@@ -12,8 +12,6 @@ from datetime import date
 import pytest
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.qa_graph import WEB_NO_RESULTS_ANSWER, build_qa_graph
-from eduagents_core.graphs.state import GraphDeps
 from eduagents_core.moderation import (
     SAFE_MESSAGE_BLOCKED,
     SAFE_MESSAGE_CRISIS,
@@ -22,6 +20,8 @@ from eduagents_core.moderation import (
     is_minor,
     minor_system_guard,
 )
+from eduagents_core.workflows.qa import WEB_NO_RESULTS_ANSWER, build_qa_workflow
+from eduagents_core.workflows.state import WorkflowDeps
 
 
 def _buf(strict: bool = False) -> StreamModerationBuffer:
@@ -238,7 +238,7 @@ class FakeGateway:
         )
 
 
-def _web_deps(gateway: FakeGateway, results: list[dict]) -> GraphDeps:
+def _web_deps(gateway: FakeGateway, results: list[dict]) -> WorkflowDeps:
     async def _search(
         query: str,
         *,
@@ -248,7 +248,7 @@ def _web_deps(gateway: FakeGateway, results: list[dict]) -> GraphDeps:
     ):
         return list(results)
 
-    return GraphDeps(
+    return WorkflowDeps(
         settings=Settings(_env_file=None), gateway=gateway, web_search=_search
     )
 
@@ -277,7 +277,7 @@ async def test_web_fallback_drops_moderated_results_and_traces_count():
             "qa_followups": [json.dumps({"followups": []})],
         }
     )
-    out = await build_qa_graph(_web_deps(gw, [_CLEAN_WEB, _DIRTY_WEB])).compile().ainvoke(
+    out = await build_qa_workflow(_web_deps(gw, [_CLEAN_WEB, _DIRTY_WEB])).ainvoke(
         _state("搜索最新的量子计算进展")  # 命中时效性关键词 -> 规则路由 web
     )
     assert [r["url"] for r in out["web_results"]] == ["http://a"]  # 命中条被整条丢弃
@@ -288,7 +288,7 @@ async def test_web_fallback_drops_moderated_results_and_traces_count():
 
 async def test_web_fallback_all_dropped_refuses():
     gw = FakeGateway({})  # 全丢 -> 拒答, 不该有任何 LLM 调用
-    out = await build_qa_graph(_web_deps(gw, [_DIRTY_WEB])).compile().ainvoke(
+    out = await build_qa_workflow(_web_deps(gw, [_DIRTY_WEB])).ainvoke(
         _state("搜索最新的资源")
     )
     assert out["web_results"] == []
@@ -305,7 +305,7 @@ async def test_minor_state_appends_guard_to_generate_system():
             "qa_followups": [json.dumps({"followups": []})],
         }
     )
-    deps = GraphDeps(settings=Settings(_env_file=None), gateway=gw)
-    await build_qa_graph(deps).compile().ainvoke(_state("什么是导数", minor=True))
+    deps = WorkflowDeps(settings=Settings(_env_file=None), gateway=gw)
+    await build_qa_workflow(deps).ainvoke(_state("什么是导数", minor=True))
     system = gw.requests[0].messages[0].content
     assert system.endswith(minor_system_guard())

@@ -117,10 +117,10 @@ async def lifespan(app: FastAPI):
         app.state.retrieval = None
         log.exception("retrieval_stack_unavailable")
     try:
-        from eduagents_core.graphs.state import GraphDeps
         from eduagents_core.tools.web_search import TavilySearch
+        from eduagents_core.workflows.state import WorkflowDeps
 
-        from .graph_runtime import GraphRuntime
+        from .harness_runtime import HarnessRuntime
 
         tavily = TavilySearch(settings)
 
@@ -139,17 +139,17 @@ async def lifespan(app: FastAPI):
             )
             return (results, from_cache) if results else None
 
-        deps = GraphDeps(
+        deps = WorkflowDeps(
             settings=settings,
             gateway=app.state.gateway,
             retrieval=app.state.retrieval,
             web_search=_web_search if tavily.available else None,
         )
-        app.state.graphs = GraphRuntime(settings, deps)
-        await app.state.graphs.start()
-    except Exception:  # noqa: BLE001 — 图运行时缺失时基础问答仍可用
-        app.state.graphs = None
-        log.exception("graph_runtime_unavailable")
+        app.state.harness = HarnessRuntime(settings, deps)
+        await app.state.harness.start()
+    except Exception:  # noqa: BLE001 — 运行时初始化失败时 AI 接口返回服务不可用
+        app.state.harness = None
+        log.exception("harness_runtime_unavailable")
     log.info(
         "app_started",
         env=settings.app_env,
@@ -157,10 +157,10 @@ async def lifespan(app: FastAPI):
         registration_mode_source=settings.registration_mode_source,
     )
     yield
-    # 先停止仍在后台生成的对话，再关闭其依赖的图运行时/Redis/数据库连接。
+    # 先停止仍在后台生成的对话，再关闭其依赖的 Harness/Redis/数据库连接。
     await chat.shutdown_chat_runs()
-    if getattr(app.state, "graphs", None) is not None:
-        await app.state.graphs.stop()
+    if getattr(app.state, "harness", None) is not None:
+        await app.state.harness.stop()
     await app.state.arq.aclose()
     await app.state.redis.aclose()
     await dispose_engine()

@@ -1,6 +1,6 @@
 """LLM JSON 输出的容错解析 (唯一实现)。
 
-此前同一逻辑存在六份逐字重复 (core: kc/extraction、graphs/qa_graph、quiz_graph;
+此前同一逻辑存在六份逐字重复 (core: kc/extraction、workflows/qa、quiz_graph;
 api: routers/reviews; worker: study_guide、reflection), 漂移风险与维护成本同源 ——
 收敛到本模块, 调用方一律 import 公共名 parse_json_object。
 

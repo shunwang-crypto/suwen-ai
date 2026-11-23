@@ -56,7 +56,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/health/live | 进程存活探针 `{status: "ok"}`；不探依赖，失败处理由重启/编排器负责 |
-| GET | /api/health/ready | 就绪探针 `{status,gateway_mode,checks:{postgres,redis,qdrant,worker[,graph,vector_audit]},vector_audit}`；PG/Redis/Qdrant 失败返回 503，worker/审计异常可为 degraded |
+| GET | /api/health/ready | 就绪探针 `{status,gateway_mode,checks:{postgres,redis,qdrant,worker[,harness,vector_audit]},vector_audit}`；PG/Redis/Qdrant 失败返回 503，worker/审计异常可为 degraded |
 | GET | /api/health | 旧兼容路径，OpenAPI 标为 deprecated 并返回 `Deprecation: true` 与 successor `Link`；只检查 PG/Redis。仓库调用已切换，外部 monitor 仍需观察期确认后再移除兼容 |
 | GET | /api/docs | OpenAPI 文档 |
 
@@ -475,7 +475,7 @@ MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt�
 状态为 `uploaded -> recognizing -> review -> confirmed`，任何解析/模型错误进入 `failed`，
 但原件、选页和手工草稿均保留。`POST /api/tutor` 带 `tutor_draft_id` 时忽略客户端
 `problem`，只使用服务端确认快照，并校验快照绑定的 thread。未确认草稿和单纯确认操作不会
-写 `Attempt/ErrorItem/MasteryLog/LearnerInsight/Report`；只有原有 tutor graph 完成
+写 `Attempt/ErrorItem/MasteryLog/LearnerInsight/Report`；只有原有 tutor 工作流完成
 `tutor_summary` 后只将误解原文写入可删除的 `learner_insights`，不写
 `MasteryRecord/MasteryLog`。辅导任务完成也不是掌握度证据。
 
@@ -494,3 +494,11 @@ worker job 只携带 `tenant_id/draft_id`；图像 Base64 只在一次平台视�
 视觉/OCR 请求完全不读写共享 cassette；解析到用户 BYOK 的文本请求在 record/live fallback/
 replay 各路径也不读写共享 cassette，即使用户允许失败后回退平台。cassette key 不包含 Key、
 Key 哈希、密文或 nonce。
+
+
+DSH 接入保持出题/计划的 `interrupt` 与 `/api/threads/{thread_id}/resume` 契约。
+完成后的重复确认返回相同持久化结果，不再重复调用模型、生成题目或重建计划。
+AI 运行错误支持 `HARNESS_TIMEOUT`、`HARNESS_STEP_LIMIT`、`HARNESS_PHASE_LIMIT`、
+`HARNESS_TOOL_DENIED`、`HARNESS_PROTOCOL_ERROR`、`HARNESS_NOT_PAUSED` 和
+`HARNESS_CONFIRMATION_REQUIRED`，均有中文提示；预算/BYOK 的既有错误码继续保留。
+历史 `GRAPHS_UNAVAILABLE` 错误码为 API 兼容继续保留，表示 AI 运行服务不可用。

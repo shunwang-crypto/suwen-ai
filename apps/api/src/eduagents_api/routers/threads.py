@@ -243,7 +243,7 @@ async def resume_thread(
     request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    runtime = getattr(request.app.state, "graphs", None)
+    runtime = getattr(request.app.state, "harness", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     try:

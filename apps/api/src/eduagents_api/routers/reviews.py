@@ -20,10 +20,10 @@ from datetime import datetime, timedelta
 from eduagents_core.gateway import ChatMessage as GwMessage
 from eduagents_core.gateway import ChatRequest as GwRequest
 from eduagents_core.gateway import Tier
-from eduagents_core.graphs.quiz_graph import QuestionModel, grade_objective
 from eduagents_core.json_utils import parse_json_object
 from eduagents_core.logging import get_logger
 from eduagents_core.mastery import scheduler
+from eduagents_core.workflows.quiz import QuestionModel, grade_objective
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator

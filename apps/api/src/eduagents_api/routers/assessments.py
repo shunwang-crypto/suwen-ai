@@ -6,8 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from math import isfinite
 
-from eduagents_core.graphs.quiz_graph import grade_objective
 from eduagents_core.mastery.scheduler import new_card_json
+from eduagents_core.workflows.quiz import grade_objective
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select

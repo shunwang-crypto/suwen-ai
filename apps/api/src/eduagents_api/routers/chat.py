@@ -43,8 +43,8 @@ from .chat_support import (  # noqa: F401 — 部分名称供本模块端点与 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 log = get_logger("chat")
 
-# kb 路径的 RAG 防注入/引用/拒答文案由 qa 子图内联维护 (graphs/qa_graph.py)
-_HISTORY_LIMIT = 20  # M3 接入 LangGraph checkpointer 后由滚动摘要接管
+# kb 路径的 RAG 防注入/引用/拒答文案由 qa 子图内联维护 (workflows/qa.py)
+_HISTORY_LIMIT = 20  # 对话历史按轮次限定长度
 
 
 
@@ -57,7 +57,9 @@ async def chat(
 ):
     gateway = request.app.state.gateway
     settings = request.app.state.settings
-    runtime = getattr(request.app.state, "graphs", None)
+    runtime = getattr(request.app.state, "harness", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     request_id = getattr(request.state, "request_id", "")
     # Wave3 联合检索: kb_ids 为准; 旧单值 kb_id 向后兼容 (等价 kb_ids=[kb_id])
     requested_kb_ids: list[uuid.UUID] = list(

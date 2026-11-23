@@ -453,7 +453,7 @@ async def create_plan(
     body: PlanCreate, request: Request, ctx: AuthContext = Depends(api_rate_limited)
 ):
     """学习规划: 目标解析→诊断→检索资源→草案→interrupt 确认 (F3)。"""
-    runtime = getattr(request.app.state, "graphs", None)
+    runtime = getattr(request.app.state, "harness", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     if body.plan_mode == "course_bound" and body.kb_id is not None:
@@ -1100,12 +1100,12 @@ async def get_tutor_session(
     request: Request,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """从 LangGraph checkpoint 恢复当前用户的一次辅导现场。"""
-    runtime = getattr(request.app.state, "graphs", None)
+    """从 Harness checkpoint 恢复当前用户的一次辅导现场。"""
+    runtime = getattr(request.app.state, "harness", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), str(thread_local_id))
-    graph = runtime.graph("tutor")
+    graph = runtime.workflow("tutor")
     state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
     values = dict(state.values)
     if not values:
@@ -1142,7 +1142,7 @@ async def tutor_turn(
     body: TutorTurn, request: Request, ctx: AuthContext = Depends(api_rate_limited)
 ):
     """苏格拉底辅导单轮 (F4): 同 thread 多轮推进三层提示状态机。"""
-    runtime = getattr(request.app.state, "graphs", None)
+    runtime = getattr(request.app.state, "harness", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     local_id = str(body.thread_local_id or uuid.uuid4())
@@ -1172,7 +1172,7 @@ async def tutor_turn(
             attachment_id = str(draft.resource_id or "")
             problem_page_no = draft.confirmed_page_no
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
-    graph = runtime.graph("tutor")
+    graph = runtime.workflow("tutor")
     config = {"configurable": {"thread_id": thread_id}}
     checkpoint = await graph.aget_state(config)
     existing = dict(checkpoint.values)

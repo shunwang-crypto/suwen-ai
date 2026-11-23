@@ -20,10 +20,10 @@ from eduagents_api.routers.plans import (
 )
 from eduagents_core.config import Settings
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.graphs.plan_graph import build_plan_graph
-from eduagents_core.graphs.state import GraphDeps
-from eduagents_core.graphs.tutor_graph import build_tutor_graph
-from langgraph.checkpoint.memory import MemorySaver
+from eduagents_core.harness.workflow import MemoryStore
+from eduagents_core.workflows.plan import build_plan_workflow
+from eduagents_core.workflows.state import WorkflowDeps
+from eduagents_core.workflows.tutor import build_tutor_workflow
 from pydantic import ValidationError
 
 
@@ -56,8 +56,8 @@ class FakeGateway:
         )
 
 
-def make_deps(gateway) -> GraphDeps:
-    return GraphDeps(settings=Settings(_env_file=None), gateway=gateway)
+def make_deps(gateway) -> WorkflowDeps:
+    return WorkflowDeps(settings=Settings(_env_file=None), gateway=gateway)
 
 
 # ---------------------------------------------------------------- ① 真实掌握度注入 (G1)
@@ -98,7 +98,7 @@ DRAFT = {
 
 async def run_plan_to_interrupt(script: dict, input_overrides: dict | None = None):
     gateway = FakeGateway(script)
-    graph = build_plan_graph(make_deps(gateway)).compile(checkpointer=MemorySaver())
+    graph = build_plan_workflow(make_deps(gateway)).with_store(MemoryStore())
     config = {"configurable": {"thread_id": "plan-p1"}}
     payload = {
         "tenant_id": "t-1",
@@ -283,7 +283,7 @@ def classify(stuck="concept", asked=False, solved=False) -> dict:
 
 def make_tutor_graph():
     gateway = FakeGateway({"tutor_classify": [classify()], "tutor_respond": ["回复"]})
-    graph = build_tutor_graph(make_deps(gateway)).compile(checkpointer=MemorySaver())
+    graph = build_tutor_workflow(make_deps(gateway)).with_store(MemoryStore())
     config = {"configurable": {"thread_id": "tutor-p1"}}
     return gateway, graph, config
 
@@ -371,7 +371,7 @@ async def test_tutor_empty_profile_leaves_no_section_or_placeholder():
 
 def test_render_diagnosis_qualitative_no_decimals():
     """P2-7: DIAGNOSIS 出境只给定性档, 精确概率与小数一律不出现。"""
-    from eduagents_core.graphs.plan_graph import _render_diagnosis
+    from eduagents_core.workflows.plan import _render_diagnosis
 
     text = _render_diagnosis(
         {
@@ -392,7 +392,7 @@ def test_render_diagnosis_qualitative_no_decimals():
 
 def test_render_diagnosis_relevance_first_and_capped():
     """目标相关条目排最前; 超过 20 条截断 (防跨学科全量膨胀 prompt)。"""
-    from eduagents_core.graphs.plan_graph import _DIAGNOSIS_LIMIT, _render_diagnosis
+    from eduagents_core.workflows.plan import _DIAGNOSIS_LIMIT, _render_diagnosis
 
     diagnosis = {
         f"无关KC{i:02d}": {"evidence_state": "observed", "mastery_band": "待巩固"}
@@ -406,7 +406,7 @@ def test_render_diagnosis_relevance_first_and_capped():
 
 def test_fallback_plan_ignores_unrelated_mastery():
     """降级计划以目标主题为准, 跨学科掌握度记录不得污染 (审查 P2 场景: 日语计划出现导数)。"""
-    from eduagents_core.graphs.plan_graph import _fallback_plan
+    from eduagents_core.workflows.plan import _fallback_plan
 
     state = {
         "goal": "两周入门日语",
@@ -424,7 +424,7 @@ def test_fallback_plan_ignores_unrelated_mastery():
 
 def test_fallback_plan_keeps_related_mastery_topics():
     """目标相关的掌握度 KC 仍进降级计划轮转池 (绑库数学计划不丢 KC 覆盖)。"""
-    from eduagents_core.graphs.plan_graph import _fallback_plan
+    from eduagents_core.workflows.plan import _fallback_plan
 
     state = {
         "goal": "补齐微积分",
@@ -440,7 +440,7 @@ def test_fallback_plan_keeps_related_mastery_topics():
 
 def test_fix_kc_order_matches_normalized_variants():
     """真实模型输出全角/空格/大小写变体时先修约束仍生效 (匹配走 normalize_kc_name)。"""
-    from eduagents_core.graphs.plan_graph import _fix_kc_order
+    from eduagents_core.workflows.plan import _fix_kc_order
 
     plan = {
         "stages": [
@@ -482,7 +482,7 @@ def test_fix_kc_order_matches_normalized_variants():
 
 def test_fix_kc_order_unmatched_is_visible():
     """先修序一个任务都没挂上: 必须写 kc_order_unmatched, 不许静默失效 (F3-A2 可审计)。"""
-    from eduagents_core.graphs.plan_graph import _fix_kc_order
+    from eduagents_core.workflows.plan import _fix_kc_order
 
     plan = {
         "stages": [
@@ -524,7 +524,7 @@ def test_diagnosis_from_rows_conservative_on_name_collision():
 
 
 def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative():
-    from eduagents_core.graphs.plan_graph import skill_gap_analysis
+    from eduagents_core.workflows.plan import skill_gap_analysis
 
     skills = [
         {"name": "极限 运算", "required_level": 2, "reason": "是导数基础"},
@@ -549,7 +549,7 @@ def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative(
 
 
 def test_skill_gap_analysis_rejects_non_intersection_and_invalid_level():
-    from eduagents_core.graphs.plan_graph import skill_gap_analysis
+    from eduagents_core.workflows.plan import skill_gap_analysis
 
     assert skill_gap_analysis([], [{"name": "导数", "zone": "较弱"}]) == []
     assert skill_gap_analysis([{"name": "矩阵", "required_level": 3}], []) == []
@@ -647,7 +647,7 @@ async def test_old_parse_output_falls_back_to_topics_and_empty_weakness_is_compa
 
 
 def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
-    from eduagents_core.graphs.plan_graph import _fallback_plan
+    from eduagents_core.workflows.plan import _fallback_plan
 
     state = {
         "goal": "补齐微积分",

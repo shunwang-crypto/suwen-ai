@@ -401,7 +401,7 @@ async def test_checkpoint_inspector_uses_select_count_only():
             return "public.checkpoints" if "to_regclass" in sql else 3
 
     count, error = await diagnostic._checkpoint_count(FakeConnection(), TENANT)
-    assert (count, error) == (9, None)
+    assert (count, error) == (12, None)
     assert statements
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
 

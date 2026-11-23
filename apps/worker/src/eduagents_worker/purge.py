@@ -6,7 +6,7 @@ PG 业务行已在注销事务内删除 (FK 级联 + 显式删个人库), 这里
 3. Redis 前缀: profile_summary:{uid}* / budget:{uid}:* / reflect:{sid} (会话 id
    随注销事务收进 payload, 会话行删后无法反查) / orgs:{uid} / export:{uid}
 4. LangGraph checkpoint 三表 (不在 ORM/Alembic, 明文问答): thread_id 约定
-   "{kind}:{user_id}:{local_id}" (graph_runtime.py), 按 LIKE '%:{uid}:%' 删,
+   "{kind}:{user_id}:{local_id}" (harness_runtime.py), 按 LIKE '%:{uid}:%' 删,
    直连 SQLAlchemy text (checkpoint 表由迁移账户建, edu_app 走默认授权 DML)。
 
 全部操作可重放 (幂等), 供 outbox 失败重试。
@@ -101,6 +101,9 @@ async def purge_tenant(
 
     # 4) checkpoint 三表 (明文问答, P0-4)
     async def _purge_checkpoints() -> None:
+        from eduagents_api.db import tenant_session
+        async with tenant_session(tenant_id) as session:
+            await session.execute(text("DELETE FROM harness_sessions WHERE tenant_id = :tid"), {"tid": tenant_id})
         async with plain_session() as session:
             for table in _CHECKPOINT_TABLES:
                 exists = await session.scalar(

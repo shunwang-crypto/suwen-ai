@@ -1577,3 +1577,17 @@ class PaymentOrder(Base):
 
 # (password_reset_tokens 的 ORM 定义在上方 RefreshToken 之后 — 认证线先落盘,
 #  计费线 0006 引用同一定义建表; 此处不再重复定义, 见该类 docstring 协调注释。)
+
+
+class HarnessSession(Base):
+    """Durable host state; model keys and inline attachment data are excluded."""
+    __tablename__ = "harness_sessions"
+    __table_args__ = (CheckConstraint("kind IN ('qa', 'quiz', 'plan', 'tutor')", name="ck_harness_kind"),)
+    thread_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    next_phase: Mapped[str | None] = mapped_column(Text)
+    pending: Mapped[dict | None] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)

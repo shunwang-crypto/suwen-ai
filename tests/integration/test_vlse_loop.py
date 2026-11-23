@@ -92,7 +92,7 @@ class FakeRetrieval:
 
 
 class RecordingRuntime:
-    """GraphRuntime 代理: 记录进图的 payload (断言 profile_summary 确实注入)。"""
+    """HarnessRuntime 代理: 记录进图的 payload (断言 profile_summary 确实注入)。"""
 
     def __init__(self, inner):
         self.inner = inner
@@ -274,15 +274,15 @@ def _qa_gateway() -> FakeGateway:
 
 
 async def _qa_runtime(app, gateway, doc_id: str):
-    """装载 FakeGateway + FakeRetrieval 的 qa GraphRuntime (Checkpointer 走真实 PG)。"""
-    from eduagents_api.graph_runtime import GraphRuntime
+    """装载 FakeGateway + FakeRetrieval 的 qa HarnessRuntime (Checkpointer 走真实 PG)。"""
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(
+        WorkflowDeps(
             settings=settings, gateway=gateway,
             retrieval=FakeRetrieval(doc_id), web_search=None,
         ),
@@ -303,8 +303,8 @@ async def test_profile_injected_into_qa(client):
     gateway = _qa_gateway()
     runtime = await _qa_runtime(app, gateway, ids["doc_id"])
     recording = RecordingRuntime(runtime)
-    old_runtime, old_cache = app.state.graphs, app.state.answer_cache
-    app.state.graphs = recording
+    old_runtime, old_cache = app.state.harness, app.state.answer_cache
+    app.state.harness = recording
     app.state.answer_cache = None  # 缓存路径单独在 ④ 验证
     try:
         events = await _sse(
@@ -312,7 +312,7 @@ async def test_profile_injected_into_qa(client):
             {"message": "导数的定义是什么?", "kb_ids": [ids["kb_id"]]},
         )
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         app.state.answer_cache = old_cache
         await runtime.stop()
 
@@ -352,8 +352,8 @@ async def test_no_profile_no_injection(client):
     gateway = _qa_gateway()
     runtime = await _qa_runtime(app, gateway, ids["doc_id"])
     recording = RecordingRuntime(runtime)
-    old_runtime, old_cache = app.state.graphs, app.state.answer_cache
-    app.state.graphs = recording
+    old_runtime, old_cache = app.state.harness, app.state.answer_cache
+    app.state.harness = recording
     app.state.answer_cache = None
     try:
         events = await _sse(
@@ -361,7 +361,7 @@ async def test_no_profile_no_injection(client):
             {"message": "导数的定义是什么?", "kb_ids": [ids["kb_id"]]},
         )
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         app.state.answer_cache = old_cache
         await runtime.stop()
 
@@ -396,19 +396,19 @@ async def test_quiz_from_weak_points(client):
     }
     gateway = FakeGateway({"quiz_blueprint": [blueprint]})
 
-    from eduagents_api.graph_runtime import GraphRuntime
+    from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.graphs.state import GraphDeps
+    from eduagents_core.workflows.state import WorkflowDeps
 
     app = client._transport.app
     settings = get_settings()
-    runtime = GraphRuntime(
+    runtime = HarnessRuntime(
         settings,
-        GraphDeps(settings=settings, gateway=gateway, retrieval=None, web_search=None),
+        WorkflowDeps(settings=settings, gateway=gateway, retrieval=None, web_search=None),
     )
     await runtime.start()
-    old_runtime = app.state.graphs
-    app.state.graphs = runtime
+    old_runtime = app.state.harness
+    app.state.harness = runtime
     try:
         events = await _sse(
             client, "POST", "/api/quiz", headers,
@@ -419,7 +419,7 @@ async def test_quiz_from_weak_points(client):
             },
         )
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
 
     # trace 先行下发选中的薄弱点 ("这卷题为什么是这些知识点"可核对)
@@ -624,7 +624,7 @@ async def test_reflect_session_stub_gateway_skipped(client):
 
 async def test_answer_cache_disabled_when_profile_present(client):
     app = client._transport.app
-    old_runtime = app.state.graphs
+    old_runtime = app.state.harness
     old_cache, old_embedder = app.state.answer_cache, app.state.embedder
 
     # 有画像的用户: 答案已按其薄弱点个性化 -> 缓存整条链路都不该被触碰
@@ -634,7 +634,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
     spy = SpyCache()
     gateway = _qa_gateway()
     runtime = await _qa_runtime(app, gateway, ids["doc_id"])
-    app.state.graphs = runtime
+    app.state.harness = runtime
     app.state.answer_cache = spy
     app.state.embedder = object()  # 仅需非 None (cacheable 判据)
     try:
@@ -643,7 +643,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
             {"message": "导数的定义是什么?", "kb_ids": [ids["kb_id"]]},
         )
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         await runtime.stop()
     assert (spy.gets, spy.puts) == (0, 0)
 
@@ -653,7 +653,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
     spy2 = SpyCache()
     gateway2 = _qa_gateway()
     runtime2 = await _qa_runtime(app, gateway2, ids2["doc_id"])
-    app.state.graphs = runtime2
+    app.state.harness = runtime2
     app.state.answer_cache = spy2
     try:
         events2 = await _sse(
@@ -661,7 +661,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
             {"message": "导数的定义是什么?", "kb_ids": [ids2["kb_id"]]},
         )
     finally:
-        app.state.graphs = old_runtime
+        app.state.harness = old_runtime
         app.state.answer_cache = old_cache
         app.state.embedder = old_embedder
         await runtime2.stop()

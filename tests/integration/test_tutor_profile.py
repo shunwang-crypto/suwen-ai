@@ -93,8 +93,8 @@ async def test_tutor_summary_records_insight_without_mastery(client):
     ids = await _seed_kcs(uid)
 
     app = client._transport.app
-    runtime = app.state.graphs
-    assert runtime is not None, "集成环境应有 GraphRuntime"
+    runtime = app.state.harness
+    assert runtime is not None, "集成环境应有 HarnessRuntime"
 
     solved = {"stuck_type": "concept", "asked_for_answer": False, "solved": True}
     unsolved = {"stuck_type": "concept", "asked_for_answer": False, "solved": False}
@@ -113,8 +113,8 @@ async def test_tutor_summary_records_insight_without_mastery(client):
             "tutor_summarize": [summary],
         }
     )
-    original = runtime._deps.gateway
-    runtime._deps.gateway = fake
+    original = runtime.deps.gateway.gateway
+    runtime.deps.gateway.gateway = fake
     try:
         # 第 1 轮: solved -> summarize -> 小结落画像
         r = await client.post(
@@ -160,7 +160,7 @@ async def test_tutor_summary_records_insight_without_mastery(client):
         assert restored_body["pending"] is False
         assert json.loads(restored_body["session_summary"])["misconceptions"]
     finally:
-        runtime._deps.gateway = original
+        runtime.deps.gateway.gateway = original
 
     # DB 核对: 只有 insight，无 mastery 事实。
     from eduagents_api.db import tenant_session
@@ -178,7 +178,7 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
     _, uid, headers = await _register(client, "tutn")
 
     app = client._transport.app
-    runtime = app.state.graphs
+    runtime = app.state.harness
     assert runtime is not None
 
     fake = FakeGateway(
@@ -189,8 +189,8 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
             ],
         }
     )
-    original = runtime._deps.gateway
-    runtime._deps.gateway = fake
+    original = runtime.deps.gateway.gateway
+    runtime.deps.gateway.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -198,7 +198,7 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
             json={"problem": "任意题目", "message": "我明白了, 谢谢!"},
         )
     finally:
-        runtime._deps.gateway = original
+        runtime.deps.gateway.gateway = original
     assert r.status_code == 200, r.text
     assert r.json()["learner_insights"] == []
 
