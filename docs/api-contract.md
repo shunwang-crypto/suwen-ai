@@ -131,6 +131,9 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 
 `mode` 为 `fast | think | web | research`：`think` 固定走 strong 模型且只返回最终答案；
 `web` 强制进入网页搜索路径，`research` 同时启用 strong 思考模型与网页检索。
+`research` 根据资料缺口决定补查或结束：最多 3 轮、5 次查询，每轮最多 2 条；资料足够
+时提前结束。`trace_event` 实时报告 `research/web_search` 进度；来源编号与最终引用一致。
+最终回答经资料支持核验，失败时最多重生成一次；核验不可用或仍无支持时明确提示。
 `kb_ids` 是独立资料范围，可与 `fast/think` 组合；`web/research` 使用网页范围。
 旧客户端的 `kb` 模式及“未发送 mode 但携带知识库 ID”仍兼容。助手消息的 `meta.chat_mode`
 记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。

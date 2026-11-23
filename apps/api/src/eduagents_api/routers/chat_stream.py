@@ -1,4 +1,4 @@
-"""chat 流式生成协程 (从 routers/chat.py 拆出, 纯搬移零行为变更)。
+"""Chat streaming, including incremental research progress.
 
 _event_stream 以显式 _ChatStreamContext 取代闭包捕获 (函数顶部统一重绑定,
 内部逻辑逐字保留); _persist_assistant 为半独立落库协程。生成/审核/缓存/
@@ -255,12 +255,15 @@ async def _event_stream(c: _ChatStreamContext):
                 "minor": minor,
             }
             state: dict = {}
+            streamed_trace_ids: set[str] = set()
             attempt = 0
             mod_buf = _new_mod_buffer(strict=minor)
             blocked = False
             try:
                 initial_node = (
-                    "retrieve"
+                    "research"
+                    if chat_mode == "research"
+                    else "retrieve"
                     if chat_mode == "fast" and kb_ids
                     else "web_query_plan"
                     if chat_mode in {"web", "research"}
@@ -303,6 +306,8 @@ async def _event_stream(c: _ChatStreamContext):
                             "data": _sse({"node": ev["node"], "status": "done"}),
                         }
                         for tr in delta.get("trace") or []:
+                            if tr.get("trace_id") in streamed_trace_ids:
+                                continue
                             yield {"event": "trace_event", "data": _sse(tr)}
                         evidences = delta.get("evidences") or []
                         if evidences:
@@ -359,9 +364,17 @@ async def _event_stream(c: _ChatStreamContext):
                                 if web_key not in seen_web_citations:
                                     seen_web_citations.add(web_key)
                                     yield {"event": "citation", "data": _sse(citation)}
+                    elif ev["kind"] == "custom":
+                        custom = ev.get("payload") or {}
+                        if isinstance(custom, dict) and custom.get("type") == "research_progress":
+                            tr = custom.get("trace") or {}
+                            trace_id = tr.get("trace_id") if isinstance(tr, dict) else None
+                            if isinstance(trace_id, str) and trace_id not in streamed_trace_ids:
+                                streamed_trace_ids.add(trace_id)
+                                yield {"event": "trace_event", "data": _sse(tr)}
                     elif ev["kind"] == "end":
                         state = ev["state"]
-                    # 其余 kind (custom 等) 向前兼容: 忽略
+                    # Unknown event kinds remain forward-compatible.
             except InsufficientCredits as exc:
                 # 0006: 余额不足 (子类须先于 BudgetExceeded 捕获) — SSE 已发首字节,
                 # 无法回 402, 以 event:error 下发同 code + balance (前端弹充值引导)

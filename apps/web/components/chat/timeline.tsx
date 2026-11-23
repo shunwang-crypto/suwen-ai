@@ -15,6 +15,9 @@ const NODE_LABELS: Record<string, string> = {
   cache: "缓存匹配",
   cache_lookup: "缓存匹配",
   query_plan: "整理问题",
+  research: "研究资料",
+  web_query_plan: "整理搜索问题",
+  web_fallback: "网页搜索",
   retrieve: "检索",
   retrieval: "检索",
   rerank: "重排",
@@ -63,6 +66,7 @@ const TRACE_LABELS: Record<string, string> = {
   profile: "学情画像",
   web_query_plan: "整理搜索问题",
   web_search: "网页搜索",
+  research: "研究进度",
 };
 
 /** 已知 trace 事件的一句话描述；未知类型回退到 reason 字段。 */
@@ -81,7 +85,13 @@ function traceDetail(data: TraceEventData): string | null {
   }
   if (data.type === "generate") return "已生成回答";
   if (data.type === "verify" || data.type === "verify_support") {
+    if (data.parse_failed === true) return "回答依据暂未完成核验";
     return data.supported === false ? "部分内容需要进一步核验" : "已核验回答依据";
+  }
+  if (data.type === "web_search") {
+    return data.degraded === true
+      ? "补充搜索暂不可用，保留已有资料"
+      : `第 ${Number(data.round) || 1} 轮搜索：共找到 ${Number(data.total) || 0} 条资料`;
   }
   if (data.type === "profile") {
     const raw = Array.isArray(data.weak_points) ? data.weak_points : [];
@@ -124,6 +134,7 @@ const STAGE_ICON_PATHS: Record<string, string> = {
   profile: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0",
   web_query_plan: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
   web_search: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
+  research: "m21 21-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
   verify: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
   verify_support: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-4",
   followups: "m8 10 4-4 4 4m-4-4v12M5 21h14",
