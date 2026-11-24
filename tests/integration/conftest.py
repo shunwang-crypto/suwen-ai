@@ -139,8 +139,8 @@ def _isolated_services():
         app_url = make_url(source_settings.database_url).set(database=database_name)
         migration_url = source_migration_url.set(database=database_name)
         redis_container, redis_url = _start_isolated_redis()
-        os.environ["DATABASE_URL"] = str(app_url)
-        os.environ["MIGRATION_DATABASE_URL"] = str(migration_url)
+        os.environ["DATABASE_URL"] = app_url.render_as_string(hide_password=False)
+        os.environ["MIGRATION_DATABASE_URL"] = migration_url.render_as_string(hide_password=False)
         os.environ["REDIS_URL"] = redis_url
         # Keep the normal dev semantics for integration tests (some tests
         # explicitly switch to APP_ENV=test to verify that channel).
