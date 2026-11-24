@@ -39,6 +39,21 @@ class MemoryTaskStore:
             yield
 
 
+async def refresh_memory_context(deps, record):
+    if deps.memory is None:
+        return False
+    current = await deps.memory.snapshot(record.state)
+    previous = record.state.get("_memory_context")
+    changed = current != previous
+    if changed and record.native_archive:
+        # A native archive can contain recalled tool results or compaction
+        # summaries. Start a new archive after a user memory control changes.
+        record.native_archive = {}
+        record.native_session_id = uuid.uuid4().hex
+    record.state["_memory_context"] = current
+    return changed
+
+
 class AgentTask:
     """Submit one task turn to DSH; domain tools decide which results are valid."""
 
@@ -70,10 +85,12 @@ class AgentTask:
 
             request_id = incoming.get("request_id")
             duplicate = bool(request_id and request_id == record.state.get("_active_request"))
-            if duplicate and record.status in {"completed", "cancelled"} and resume is None:
-                return record
             messages = incoming.pop("messages", [])
             record.state.update(incoming)
+            if await refresh_memory_context(self.deps, record):
+                duplicate = False
+            if duplicate and record.status in {"completed", "cancelled"} and resume is None:
+                return record
             if messages and not duplicate:
                 record.state["messages"] = [*(record.state.get("messages") or []), *messages]
             record.state["_active_request"] = (

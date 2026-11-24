@@ -4,7 +4,7 @@ PIP := $(PY_ENV)/bin/pip
 # conda libstdc++ 优先 (pymupdf/qdrant ABI 冲突, 见 tests/conftest.py 注释)
 export LD_LIBRARY_PATH := $(PY_ENV)/lib
 
-.PHONY: env-check install dev-infra migrate migrate-legacy migration-check test-migration api worker compile test test-backend test-unit test-integration test-integration-isolated test-web lint docs-check gen-corpus seed eval-retrieval eval-prompts-smoke time-travel
+.PHONY: env-check install dev-infra migrate migrate-legacy migration-check test-migration api worker compile test test-backend test-unit test-integration test-integration-isolated test-web lint docs-check gen-corpus seed eval-retrieval eval-prompts-smoke eval-memory time-travel
 
 env-check:
 	@test -x "$(PY)" || { echo "ERROR: project Python not found: $(PY)" >&2; exit 1; }
@@ -76,3 +76,6 @@ time-travel: env-check   ## make time-travel DAYS=3
 
 eval-prompts-smoke: env-check  ## 原生 Harness + 桩模型；不写应用数据库
 	$(PY) eval/run_prompt_evolution.py --smoke --repetitions 1 --output /tmp/eduagents-prompt-smoke.json
+
+eval-memory: env-check  ## 合成记忆回归；零付费模型，零应用历史
+	$(PY) eval/run_memory_eval.py --output /tmp/eduagents-memory-eval.json

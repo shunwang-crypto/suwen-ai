@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_redis
+from ..learner_memory import lock_memory, revise_memory
 from ..models import UserPreference
 from ..profile_summary import (
     EXPLANATION_STYLES,
@@ -161,6 +162,8 @@ async def set_personalization(
     关闭不删除任何画像数据 (关闭 ≠ 删除, 同 ChatGPT 语义)。
     """
     async with tenant_session(ctx.tenant_id) as session:
+        await lock_memory(session, ctx.user_id)
+        await revise_memory(session, ctx)
         row = await session.get(UserPreference, ctx.user_id)
         if row is None:
             row = UserPreference(

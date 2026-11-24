@@ -134,6 +134,10 @@ async def _event_stream(c: _ChatStreamContext):
             cacheable = bool(kb_ids) and chat_mode == "fast" and _cache_admissible(
                 kb_ids, history, cache, cache_embedder, profile
             )
+            memory = getattr(getattr(runtime, "deps", None), "memory", None)
+            if cacheable and memory is not None:
+                memory_context = await memory.snapshot({"tenant_id": str(ctx.tenant_id), "user_id": str(ctx.user_id)})
+                cacheable = not (memory_context["enabled"] and memory_context["has_memories"])
             # P1-11: 缓存作用域 = 该 kb 的 owner (个人库 owner=本人语义不变;
             # 机构库 owner=org id, 成员间即共享命中)。cacheable 已限单库,
             # owner_ids 恰一个元素。
@@ -708,7 +712,8 @@ async def _event_stream(c: _ChatStreamContext):
         blocked = False
         try:
             async for item in runtime.stream_chat(
-                gw_req, thread_id=runtime.thread_id("chat", str(ctx.user_id), str(session_id)), gateway=c.gateway
+                gw_req, thread_id=runtime.thread_id("chat", str(ctx.user_id), str(session_id)), gateway=c.gateway,
+                kb_ids=[str(k) for k in kb_ids],
             ):
                 if isinstance(item, StreamDelta):
                     if mod_buf is None:

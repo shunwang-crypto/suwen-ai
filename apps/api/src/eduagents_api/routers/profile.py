@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from eduagents_core.mastery import scheduler
 from eduagents_core.mastery.thresholds import (
@@ -28,13 +28,14 @@ from eduagents_core.mastery.thresholds import (
     evidence_strength,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited, get_redis
 from ..kc_hierarchy import resolve_kc_meta
+from ..learner_memory import insight_payload, lock_memory, revise_memory
 from ..models import (
     ErrorItem,
     KnowledgeComponent,
@@ -51,7 +52,7 @@ _RECENT_LOG_LIMIT = 10
 _LOG_SCAN_LIMIT = 50
 # BKT 极小步进 (高掌握度下证据只挪 p 万分位) 在 UI 上是"0.82→0.82"噪声行
 NOOP_EPS = 0.01
-_INSIGHTS_LIMIT = 50  # 记忆条目读取上限 (库内本就每用户 ≤100, 见 services)
+_INSIGHTS_LIMIT = 100  # Show all retained memories so every record is editable.
 # 遗忘快照 (P2-7) 的第二个时刻点: 现在 + 3 天 ("再不复习, 3 天后…" 的产品口径)
 _RETENTION_HORIZON = timedelta(days=3)
 
@@ -277,7 +278,7 @@ async def get_weak_points(
 
 @router.get("/insights")
 async def list_insights(ctx: AuthContext = Depends(api_rate_limited)):
-    """长期记忆条目 (P2-1): 最近 50 条, join KC 名 (kc_id 可空故 outerjoin)。
+    """本人全部保留记忆 (最多 100 条), join KC 名与引用状态。
 
     text 是学生自己的原话/误解描述, 只回给本人 (RLS 限租户 + user_id 限本人),
     是 F8-A2"上次你在 X 卡住"开场卡的数据源。
@@ -294,28 +295,39 @@ async def list_insights(ctx: AuthContext = Depends(api_rate_limited)):
                 .limit(_INSIGHTS_LIMIT)
             )
         ).all()
-    return {
-        "insights": [
-            {
-                "id": str(r.id),
-                "kc_id": str(r.kc_id) if r.kc_id else None,
-                "kc_name": name or "",
-                "source": r.source,
-                "kind": r.kind,
-                "text": r.text,
-                "session_id": str(r.session_id) if r.session_id else None,
-                "suppressed": bool(r.suppressed),
-                "created_at": r.created_at,
-            }
-            for r, name in rows
-        ]
-    }
+    from eduagents_core.education.memory import effective_status, latest_observations
+
+    items = [insight_payload(r, name) for r, name in rows]
+    current_ids = {item["id"] for item in latest_observations(items)}
+    for item in items:
+        status = effective_status(item, datetime.now(UTC))
+        item["effective_status"] = "historical" if status == "active" and item["id"] not in current_ids and item["kind"] != "preference_signal" else status
+        item.pop("aliases", None)
+    return {"insights": items}
 
 
 class InsightPatch(BaseModel):
-    """软抑制开关 (0031): True = "不要再提及" (保留原文, 注入侧过滤)。"""
+    """本人纠正、暂停引用和标记过时；条目版本防止覆盖并发修改。"""
 
-    suppressed: bool
+    suppressed: bool | None = None
+    text: str | None = Field(default=None, min_length=1, max_length=600)
+    kind: str | None = None
+    status: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_patch(self):
+        if self.kind is not None and self.kind not in {"confused", "understood", "misconception"}:
+            raise ValueError("Invalid memory kind")
+        if self.status is not None and self.status not in {"active", "obsolete"}:
+            raise ValueError("Invalid memory status")
+        if self.text is not None:
+            self.text = self.text.strip()
+            if not self.text:
+                raise ValueError("Memory text cannot be blank")
+        if all(getattr(self, key) is None for key in ("suppressed", "text", "kind", "status")):
+            raise ValueError("An update is required")
+        return self
 
 
 @router.patch("/insights/{insight_id}")
@@ -324,17 +336,33 @@ async def patch_insight(
     body: InsightPatch,
     ctx: AuthContext = Depends(api_rate_limited),
 ):
-    """切换一条记忆条目的软抑制 (用户纠正权; 与 DELETE 的物理删除互补)。"""
+    """修改本人记忆，同时失效旧提取与原生工具归档。"""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        await lock_memory(session, ctx.user_id)
         row = await session.get(LearnerInsight, insight_id)
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
-        row.suppressed = body.suppressed
+        if body.expected_revision is not None and body.expected_revision != row.revision:
+            raise HTTPException(status_code=409, detail="MEMORY_REVISION_CONFLICT")
+        correction = body.text is not None or body.kind is not None
+        if correction and row.kind == "preference_signal":
+            raise HTTPException(status_code=422, detail="PREFERENCE_SUGGESTION_NOT_EDITABLE")
+        await revise_memory(session, ctx, rejected_text=row.text,
+                            stop_old_extraction=True)
+        if body.suppressed is not None:
+            row.suppressed = body.suppressed
+        if body.status is not None:
+            row.status = body.status
+        if correction:
+            row.text = body.text if body.text is not None else row.text
+            row.kind = body.kind if body.kind is not None else row.kind
+            row.user_corrected = True
+            row.observed_at = datetime.now(UTC)
+            row.expires_at = None
+        row.updated_at = datetime.now(UTC)
+        row.revision += 1
         await session.flush()
-        return {
-            "id": str(row.id),
-            "suppressed": bool(row.suppressed),
-        }
+        return insight_payload(row)
 
 
 @router.get("/memory/preview")
@@ -366,7 +394,9 @@ async def delete_insight(
     不存在或不属于本人一律 404, 不泄露他人条目存在性。
     """
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        await lock_memory(session, ctx.user_id)
         row = await session.get(LearnerInsight, insight_id)
         if row is None or row.user_id != ctx.user_id:
             raise HTTPException(status_code=404, detail="INSIGHT_NOT_FOUND")
+        await revise_memory(session, ctx, rejected_text=row.text, stop_old_extraction=True)
         await session.delete(row)

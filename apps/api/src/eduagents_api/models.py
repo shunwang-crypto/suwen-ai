@@ -1229,24 +1229,13 @@ class UsageLog(Base):
 
 
 class LearnerInsight(Base):
-    """学习者长期记忆条目 (P2-1, G10): 补上"他在什么语境下困惑"。
+    """历史学习观察，不是掌握度证据。本人可纠正、停用、导出或删除。
 
-    现状缺口: Reflection 与 tutor 小结只往 BKT 留数字, 学生原话/误解描述全被丢弃 —
-    本表把匹配上 KC 词表的洞察证据落库, 是 F8-A2"新会话主动关联历史卡点"的地基。
-    - source: chat_reflection (对话洞察, kind=confused|understood, text=学生原话)
-            | tutor_summary (辅导小结, kind=misconception, text=误解描述)
-    - text ≤600 字, 写入口统一截断 (services.persist_learner_insights);
-    - 每用户只保留最近 INSIGHTS_KEEP_PER_USER=100 条, 超出删最旧 (同一写入口);
-    - kc_id 可空: tutor 误解文本匹配不上词表也如实保留原文 (不新建 KC, F5-A2)。
-    - 用户可见可删 (GET/DELETE /api/profile/insights, 用户纠正权);
-    - suppressed (0031 "不要再提及"): 软抑制保留原文, 注入侧读路径 (next_actions
-      resume 卡) 过滤, 记忆管理页可随时恢复;
-    - kind=preference_signal + source=ai_inferred (0031 M3): 评分统计生成的
-      讲解风格建议, 只在记忆页展示并待用户确认, 不自动改偏好;
-    - PIPL: user_id FK CASCADE 随注销级联删; 导出纳入 worker/export.py。
-    新表可直接在 ORM 声明外键: 0001 的建表范围已冻结, 本表只由 0005 create_all
-    建出, 不存在 0003 注释里"重复建约束"的问题。
-    索引: 0005 建 (user_id, created_at DESC) 复合索引, 前缀即覆盖 user_id 查询。
+    对话记忆记录学生原话和来源消息；辅导小结是模型观察，保留会话归因。
+    单条 ≤600 字，每用户 ≤100 条；自动观察 90 天到期，用户纠正优先。
+    KC 归因不明确时保留空外键，不新建 KC。偏好信号只供本人确认。
+    0005 使用 ORM 子集建表，0041 增列迁移需同时兼容从零重放。
+    user_id FK CASCADE 支持注销；普通读取受本人租户 FORCE RLS 保护。
     """
 
     __tablename__ = "learner_insights"
@@ -1270,7 +1259,34 @@ class LearnerInsight(Base):
     suppressed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = _created_at()
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    user_corrected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
     created_at: Mapped[datetime] = _created_at()
+
+
+class LearnerMemoryPolicy(Base):
+    """User control watermark. Rejected content is hashed, never copied here."""
+
+    __tablename__ = "learner_memory_policies"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    extraction_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocked_fingerprints: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    updated_at: Mapped[datetime] = _created_at()
 
 
 class AnswerRating(Base):

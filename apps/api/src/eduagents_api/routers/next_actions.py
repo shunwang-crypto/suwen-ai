@@ -31,6 +31,7 @@ from sqlalchemy import select
 from .. import timectl
 from ..db import tenant_session
 from ..deps import AuthContext, api_rate_limited
+from ..learner_memory import insight_payload
 from ..models import KnowledgeBase, KnowledgeComponent, LearnerInsight
 from ..plan_adjust import (
     active_plan,
@@ -249,24 +250,25 @@ async def _load_snapshots(
         # 到期数 = len(全量到期集合), 与 reviews.today 的 total_due 同一函数 (B3)
         due_count = len(await due_error_items(session, ctx.user_id, now_dt))
 
-        insight_row = (
+        insight_rows = (
             await session.execute(
                 select(LearnerInsight, KnowledgeComponent.canonical_name)
                 .outerjoin(KnowledgeComponent, KnowledgeComponent.id == LearnerInsight.kc_id)
                 .where(
                     LearnerInsight.user_id == ctx.user_id,
-                    LearnerInsight.kind.in_(_RESUME_KINDS),
-                    # 0031 软抑制: "不要再提及"的条目不再进入开场卡
-                    LearnerInsight.suppressed.is_(False),
                 )
                 .order_by(LearnerInsight.created_at.desc(), LearnerInsight.id.desc())
-                .limit(1)
+                .limit(100)
             )
-        ).first()
+        ).all()
         insight = None
-        if insight_row is not None:
-            row, kc_name = insight_row
-            insight = {"kc_name": kc_name or "", "kind": row.kind, "text": row.text}
+        from eduagents_core.education.memory import effective_status, latest_observations
+
+        current = latest_observations([insight_payload(row, name) for row, name in insight_rows])
+        eligible = [item for item in current if item["kind"] in _RESUME_KINDS and effective_status(item, now_dt) == "active"]
+        if eligible:
+            chosen = max(eligible, key=lambda item: (item["observed_at"] or item["created_at"], item["id"]))
+            insight = {key: chosen[key] for key in ("kc_name", "kind", "text")}
 
         plan_row = await active_plan(session, uuid.UUID(str(ctx.tenant_id)), uuid.UUID(str(ctx.user_id)))
         plan = (

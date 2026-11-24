@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import defaultdict
+from datetime import UTC, datetime
 from typing import Literal
 
 from eduagents_core.kc.dag import add_edge_safe, topological_order, validate_acyclic
@@ -1174,6 +1175,14 @@ async def tutor_turn(
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
     record = await runtime.load_task(thread_id)
     existing = dict(record.state)
+    memory_source_at = existing.get("_memory_source_at")
+    if memory_source_at is None:
+        if existing:
+            async with tenant_session(ctx.tenant_id) as session:
+                source_session = await session.get(ChatSession, uuid.UUID(local_id))
+                memory_source_at = source_session.created_at.isoformat() if source_session else None
+        else:
+            memory_source_at = datetime.now(UTC).isoformat()
     stored_plan_id = str(existing.get("plan_id") or "")
     stored_task_id = str(existing.get("task_id") or "")
     requested_plan_id = str(body.plan_id or "")
@@ -1229,6 +1238,7 @@ async def tutor_turn(
         "user_id": str(ctx.user_id),
         "request_id": getattr(request.state, "request_id", ""),
         "problem": problem,
+        "_memory_source_at": memory_source_at,
         "tutor_draft_id": draft_id,
         "attachment_id": attachment_id,
         "problem_page_no": problem_page_no,
@@ -1256,7 +1266,11 @@ async def tutor_turn(
         except ValueError:
             summary = None
         if isinstance(summary, dict):
-            learner_insights = await apply_tutor_summary(ctx, summary)
+            learner_insights = await apply_tutor_summary(
+                ctx, summary, session_id=local_id,
+                observed_at=datetime.fromisoformat(memory_source_at) if memory_source_at else None,
+                memory_revision=(state.get("_memory_context") or {}).get("revision"),
+            )
         if plan_id and task_id:
             try:
                 async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:

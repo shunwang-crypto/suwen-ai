@@ -91,7 +91,7 @@ SDK 处于预览阶段，升级时同时验证 profile patch、原生日志、�
 make migrate
 ~~~
 
-`make migrate` 只应用 Alembic，包括 `0040` 原生任务迁移。已有旧 LangGraph checkpoint
+`make migrate` 只应用 Alembic，包括 `0040` 原生任务和 `0041` 记忆迁移。已有旧 LangGraph checkpoint
 且需要恢复其待确认业务状态时，停 API/Worker 后显式执行离线导入：
 
 ~~~bash
@@ -128,6 +128,17 @@ $HOME/miniforge3/envs/eduagents/bin/python eval/run_prompt_evolution.py \
 `--live` 的费用上限覆盖主 Agent、压缩、独立评审和候选反思；达到上限后停止新调用，
 最后一个在途调用仍按实际费用计入。CLI 在固定合成资料上比较教学策略，不访问应用数据库。
 已有候选可用 `--candidate /tmp/edu-v2.json` 代替 `--propose-version` 和 `--candidate-output`。
+
+记忆回归使用合成数据，不调用真实模型、不写应用历史：
+
+~~~bash
+make eval-memory
+make test-migration TEST=tests/integration/test_migration_0041.py
+~~~
+
+13 个本地案例覆盖跨会话召回、知识更新、用户纠正、过期、抑制和无证据时返回空。
+这不是 LongMemEval 官方分数，也不能证明真实模型提取或讲解质量；数据库集成测试验证
+本人/课程隔离和后台删除竞态，原生 Harness 测试验证记忆工具与归档失效。
 比较前校验候选声明的父版本；调优和留出输入不得重复。真实费用、按任务质量及失败原因
 写入 JSON 报告，桩模型不会生成有效质量分数。质量比较仍需要教师检查实际教学表现。
 

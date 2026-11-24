@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { MemoryCorrectionForm } from "@/components/settings/memory-correction-form";
 
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
+import type { InsightItem } from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 
 interface Preferences {
@@ -17,16 +19,6 @@ interface Preferences {
   goal: string | null;
   personalization_enabled: boolean;
   updated_at: string | null;
-}
-
-interface InsightItem {
-  id: string;
-  kc_name: string;
-  source: string;
-  kind: string;
-  text: string;
-  suppressed: boolean;
-  created_at: string;
 }
 
 interface MemoryPreview {
@@ -294,6 +286,7 @@ export default function SettingsPage() {
   const [verbosity, setVerbosity] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [displayName, setDisplayName] = useState(() => user?.display_name ?? "");
@@ -432,7 +425,7 @@ export default function SettingsPage() {
     try {
       await apiJson(`/api/profile/insights/${item.id}`, {
         method: "PATCH",
-        body: { suppressed: !item.suppressed },
+        body: { suppressed: !item.suppressed, expected_revision: item.revision },
       });
       insightsRes.setData((current) =>
         current
@@ -440,8 +433,27 @@ export default function SettingsPage() {
           : current,
       );
       setSaved(item.suppressed ? "已恢复该条记忆的引用" : "已暂停引用该条记忆（原文保留，可随时恢复）");
+      insightsRes.reload();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "操作失败，请重试");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const updateMemory = async (item: InsightItem, patch: { text?: string; kind?: string; status?: string }) => {
+    setDeletingId(item.id);
+    setError(null);
+    try {
+      await apiJson(`/api/profile/insights/${item.id}`, {
+        method: "PATCH", body: { ...patch, expected_revision: item.revision },
+      });
+      setEditingId(null);
+      insightsRes.reload();
+      setSaved(patch.text ? "已保存你的纠正，后续讲解会优先参考" : patch.status === "obsolete" ? "已标记过时，后续不再引用" : "已恢复这条记忆");
+    } catch (caught) {
+      setError(caught instanceof ApiError && caught.status === 409 ? "这条记忆已更新，请刷新后再修改" : "保存失败，请重试");
+      insightsRes.reload();
     } finally {
       setDeletingId(null);
     }
@@ -623,7 +635,7 @@ export default function SettingsPage() {
 
           {section === "memory" && (
             <section>
-              <SettingsHeader title="AI 记住的你" description="管理个性化记忆：总开关、AI 生成的摘要、学习洞察与讲解风格建议。" />
+              <SettingsHeader title="AI 记住的你" description="按当前问题参考历史观察；你可以纠正、暂停引用或删除。删除记忆后，原会话记录仍保留。" />
               <SettingRow
                 label="启用记忆"
                 value={memoryEnabled ? "开启" : "关闭"}
@@ -688,12 +700,20 @@ export default function SettingsPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-ink">{item.kc_name || "学习洞察"}</span>
-                        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-caption text-ink-muted">{item.suppressed ? "已暂停引用" : "引用中"}</span>
+                        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-caption text-ink-muted">{{active: "按需参考", suppressed: "已暂停引用", obsolete: "已过时", expired: "已到期", historical: "已有新记录"}[item.effective_status] ?? "按需参考"}</span>
+                        {item.user_corrected && <span className="text-caption text-brand-600">已由你纠正</span>}
                       </div>
-                      <div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div>
-                      <p className="mt-2 text-caption text-ink-muted">{dateLabel(item.created_at)} · {item.source === "tutor_summary" ? "辅导小结" : "对话洞察"}</p>
+                      {editingId === item.id ? (
+                        <MemoryCorrectionForm key={item.id} id={item.id} text={item.text} kind={item.kind}
+                          busy={deletingId === item.id} onSave={(patch) => void updateMemory(item, patch)}
+                          onCancel={() => setEditingId(null)} />
+                      ) : <div className="mt-2 text-[13px] leading-6 text-ink-secondary"><MathText text={item.text} /></div>}
+                      <p className="mt-2 text-caption text-ink-muted">{dateLabel(item.observed_at ?? item.created_at)} · {item.source === "tutor_summary" ? "辅导小结（AI 观察）" : "对话中的学生原话"}{item.source_message_id ? " · 已核对原话" : ""}</p>
+                      {item.session_id && <Link href={`/chat?session=${item.session_id}`} className="mt-1 inline-block text-xs text-brand-600">查看来源会话</Link>}
                     </div>
                     <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                      <button type="button" disabled={deletingId === item.id} onClick={() => setEditingId(item.id)} className="text-xs font-medium text-brand-600 disabled:opacity-50">纠正</button>
+                      <button type="button" disabled={deletingId === item.id} onClick={() => void updateMemory(item, { status: item.status === "obsolete" ? "active" : "obsolete" })} className="text-xs font-medium text-ink-secondary disabled:opacity-50">{item.status === "obsolete" ? "恢复这条记忆" : "已过时"}</button>
                       <button type="button" disabled={deletingId === item.id} onClick={() => void toggleSuppress(item)} className="text-xs font-medium text-ink-secondary hover:text-ink disabled:opacity-50">{item.suppressed ? "恢复引用" : "不要再提及"}</button>
                       <button type="button" disabled={deletingId === item.id} onClick={() => deleteInsight(item.id)} className="text-xs font-medium text-danger-600 disabled:opacity-50">{deletingId === item.id ? "删除中…" : "删除"}</button>
                     </div>

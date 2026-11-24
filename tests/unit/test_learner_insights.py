@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from eduagents_api.services import (
@@ -103,11 +104,15 @@ class _FakeSession:
         self.scalar_stmts.append(stmt)
         return _FakeScalarResult(self.scalars_results.pop(0) if self.scalars_results else [])
 
-    async def execute(self, stmt):
+    async def execute(self, stmt, params=None):
         self.executed.append(stmt)
+        if "pg_advisory_xact_lock" in str(stmt):
+            return _FakeScalarResult([])
         return _FakeScalarResult(self.execute_results.pop(0) if self.execute_results else [])
 
     async def get(self, model, pk):  # reflect_session 首个块用
+        if model.__name__ == "LearnerMemoryPolicy":
+            return None
         return getattr(self, "get_result", None)
 
 
@@ -130,7 +135,7 @@ async def test_persist_truncates_text_and_drops_empty():
         session_id=sid,
     )
     assert pruned == 0
-    assert len(session.executed) == 1  # 仅去重预查, 未超额无 DELETE
+    assert len(session.executed) == 2  # User lock and dedup lookup.
     assert len(session.added) == 1
     row = session.added[0]
     assert row.text == "原" * INSIGHT_TEXT_MAX  # ≤600 截断
@@ -150,8 +155,8 @@ async def test_persist_prunes_oldest_beyond_100():
     )
     assert pruned == 3
     # executed[0] = 内容级去重预查 (审查修复轮新增), executed[1] = DELETE ... WHERE id IN (stale)
-    assert len(session.executed) == 2
-    delete_sql = str(session.executed[1])
+    assert len(session.executed) == 3
+    delete_sql = str(session.executed[2])
     assert "DELETE FROM learner_insights" in delete_sql
     # 裁剪的查询从第 101 条起 (保留最近 100 条)
     assert INSIGHTS_KEEP_PER_USER == 100
@@ -233,8 +238,9 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
     def _fresh_scalars():
         # 每次 reflect_session 消费两个 scalars: 消息 + KC 词表
         fake.scalars_results = [
-            [SimpleNamespace(role="user", content=_EVIDENCE)],
-            [SimpleNamespace(id=kc_id, canonical_name="导数定义", aliases=[])],
+            [SimpleNamespace(role="user", content=_EVIDENCE, id=uuid.uuid4(), created_at=datetime.now(UTC))],
+            [],  # No org memberships.
+            [SimpleNamespace(id=kc_id, kb_id=uuid.uuid4(), canonical_name="导数定义", aliases=[])],
         ]
 
     @asynccontextmanager
@@ -243,8 +249,9 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
 
     persisted = []
 
-    async def fake_persist(session, ctx, rows, *, source, session_id=None):
+    async def fake_persist(session, ctx, rows, *, source, session_id=None, memory_revision=None, report=None):
         persisted.append({"rows": rows, "source": source, "session_id": session_id})
+        report["inserted"] = len(rows)
         return 0
 
     monkeypatch.setattr(db_mod, "tenant_session", fake_tenant_session)
@@ -262,9 +269,13 @@ async def test_reflect_session_writes_student_words_once(monkeypatch):
     call = persisted[0]
     assert call["source"] == "chat_reflection"
     assert call["session_id"] == str(session_id)
-    assert call["rows"] == [
-        {"kc_id": str(kc_id), "kc_name": "导数定义", "kind": "confused", "text": _EVIDENCE}
-    ]
+    assert len(call["rows"]) == 1
+    row = call["rows"][0]
+    assert {k: row[k] for k in ("kc_id", "kc_name", "kind", "text")} == {
+        "kc_id": str(kc_id), "kc_name": "导数定义", "kind": "confused", "text": _EVIDENCE,
+    }
+    assert uuid.UUID(row["source_message_id"])
+    assert row["observed_at"].tzinfo is not None
 
 
 def test_retention_constants():

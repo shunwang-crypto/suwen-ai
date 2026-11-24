@@ -96,6 +96,7 @@ async def test_account_deletion_wipes_all_tables(client):
         KnowledgeBase,
         KnowledgeComponent,
         LearnerInsight,
+        LearnerMemoryPolicy,
         LearningResource,
         MasteryLog,
         MasteryRecord,
@@ -190,6 +191,8 @@ async def test_account_deletion_wipes_all_tables(client):
             )
         )
         s.add(UserPreference(user_id=uid, tenant_id=uid, interests=["天文"]))
+        s.add(LearnerMemoryPolicy(user_id=uid, tenant_id=uid, revision=1,
+                                  blocked_fingerprints=["a" * 64]))
         s.add(
             UsageLog(
                 tenant_id=uid, request_id="req-del", user_id=uid,
@@ -276,7 +279,7 @@ async def test_account_deletion_wipes_all_tables(client):
         MetacognitionPrediction, Plan, PlanAdjustment,
         Quiz, Question, ResourceQuestion,
         KnowledgeBase, Document, Chunk, KnowledgeComponent,
-        LearnerInsight, UserPreference,
+        LearnerInsight, LearnerMemoryPolicy, UserPreference,
     ]
     async with tenant_session(uid) as s:
         for model in models_zero:

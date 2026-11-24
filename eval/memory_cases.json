@@ -1,0 +1,358 @@
+[
+  {
+    "id": "cross_session",
+    "category": "recall",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": [
+      "old"
+    ]
+  },
+  {
+    "id": "updates",
+    "category": "knowledge_update",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      },
+      {
+        "id": "new",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "understood",
+        "text": "我能按极限求导数了",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "observed_at": "2026-11-23T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": [
+      "new"
+    ]
+  },
+  {
+    "id": "explicit_correction",
+    "category": "knowledge_update",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "corrected",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "understood",
+        "text": "纠正：我只是没看清题，不是不会导数定义",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "user_corrected": true,
+        "observed_at": "2026-11-21T00:00:00+00:00"
+      },
+      {
+        "id": "new",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "understood",
+        "text": "我能按极限求导数了",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "observed_at": "2026-11-23T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": [
+      "corrected"
+    ]
+  },
+  {
+    "id": "suppression",
+    "category": "forgetting",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      },
+      {
+        "id": "new",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "understood",
+        "text": "我能按极限求导数了",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "observed_at": "2026-11-23T00:00:00+00:00",
+        "suppressed": true
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "obsolete",
+    "category": "forgetting",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "status": "obsolete"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "expired",
+    "category": "temporal",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "expires_at": "2026-11-23T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "expired_latest_does_not_resurrect",
+    "category": "temporal",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      },
+      {
+        "id": "new",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "understood",
+        "text": "我能按极限求导数了",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00",
+        "observed_at": "2026-11-23T00:00:00+00:00",
+        "expires_at": "2026-11-23T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "old_unbounded_memory_expires",
+    "category": "temporal",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-01-01T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "absent_evidence",
+    "category": "abstention",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "细胞分裂",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "generic_question",
+    "category": "abstention",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "现在怎么理解这个",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  },
+  {
+    "id": "kc_alias",
+    "category": "recall",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "",
+    "kc_names": [
+      "导数的定义"
+    ],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": [
+      "old"
+    ]
+  },
+  {
+    "id": "unlinked_text",
+    "category": "recall",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": null,
+        "kc_name": "",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "confused",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": [
+      "old"
+    ]
+  },
+  {
+    "id": "preference_signal_not_a_fact",
+    "category": "abstention",
+    "now": "2026-11-24T04:00:00+00:00",
+    "query": "导数定义",
+    "kc_names": [],
+    "memories": [
+      {
+        "id": "old",
+        "kc_id": "calculus-kc",
+        "kc_name": "导数定义",
+        "aliases": [
+          "导数的定义"
+        ],
+        "kind": "preference_signal",
+        "text": "导数定义里不能直接代入吗",
+        "source": "chat_reflection",
+        "created_at": "2026-11-20T00:00:00+00:00"
+      }
+    ],
+    "expected_ids": []
+  }
+]

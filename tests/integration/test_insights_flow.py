@@ -86,7 +86,8 @@ async def _seed_kc_and_chat(uid: uuid.UUID):
         await s.flush()
         s.add(
             ChatMessage(
-                tenant_id=uid, session_id=chat.id, role="user", content=_EVIDENCE
+                tenant_id=uid, session_id=chat.id, role="user", content=_EVIDENCE,
+                meta_json={"kb_ids": [str(kb.id)]},
             )
         )
         return str(kc.id), str(chat.id)
@@ -117,7 +118,7 @@ async def test_reflection_insight_crud_and_isolation(client):
     # 重复入队 (worker 重试): BKT 与原话都不重复落
     assert (
         await reflect_session({}, user_id, user_id, session_id, gateway=gateway)
-        == "recorded:1"
+        == "recorded:0"
     )
 
     # 本人可见: join KC 名 + 学生原话 + 会话回链
@@ -251,10 +252,10 @@ async def test_insights_capped_at_100_per_user(client):
     assert "最新误解" in texts
     assert {"旧误解-000", "旧误解-001", "旧误解-002"} & texts == set()  # 最旧被裁
 
-    # 读 API 上限 50 条
+    # All retained memories are visible/editable.
     r = await client.get("/api/profile/insights", headers=headers)
     items = r.json()["insights"]
-    assert len(items) == 50
+    assert len(items) == 100
     assert items[0]["text"] == "最新误解"  # 倒序: 最新在前
 
 
@@ -293,7 +294,7 @@ async def test_export_includes_memory_tables(client):
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     names = set(zf.namelist())
-    assert {"tables/learner_insights.json", "tables/user_preferences.json"} <= names
+    assert {"tables/learner_insights.json", "tables/learner_memory_policies.json", "tables/user_preferences.json"} <= names
 
     insights = json.loads(zf.read("tables/learner_insights.json"))
     assert any(row["text"] == "把导数定义当成了普通代入求值" for row in insights)

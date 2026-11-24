@@ -121,6 +121,7 @@ async def lifespan(app: FastAPI):
         from eduagents_core.tools.web_search import TavilySearch
 
         from .harness_runtime import HarnessRuntime
+        from .learner_memory import LearnerMemoryService
 
         tavily = TavilySearch(settings)
 
@@ -144,6 +145,7 @@ async def lifespan(app: FastAPI):
             gateway=app.state.gateway,
             retrieval=app.state.retrieval,
             web_search=_web_search if tavily.available else None,
+            memory=LearnerMemoryService(),
         )
         app.state.harness = HarnessRuntime(settings, deps)
         await app.state.harness.start()

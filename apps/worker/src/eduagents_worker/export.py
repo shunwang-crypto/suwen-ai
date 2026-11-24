@@ -93,6 +93,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         KcExplanation,
         KnowledgeBase,
         LearnerInsight,
+        LearnerMemoryPolicy,
         LearningEvent,
         LearningReportSnapshot,
         LearningResource,
@@ -144,6 +145,7 @@ async def export_user_data(ctx: dict, tenant_id: str) -> str:
         "explain_backs": ExplainBack,
         # 0005 (P2-1): 长期记忆与偏好 — 个性化数据同属个保法可携带权范围
         "learner_insights": LearnerInsight,
+        "learner_memory_policies": LearnerMemoryPolicy,
         "user_preferences": UserPreference,
         # 0031: 回答评分遥测 (含画像指纹) 同属可携带范围
         "answer_ratings": AnswerRating,

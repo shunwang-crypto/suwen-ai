@@ -28,7 +28,7 @@ import { MasteryRadarPanel } from "@/components/mastery-radar";
 import { ProgressRing, masteryColor } from "@/components/ui/progress-ring";
 import { ApiError, apiJson } from "@/lib/api";
 import { MathText } from "@/lib/katex";
-import type { MasteryItem, ProfileResponse } from "@/lib/types";
+import type { InsightItem, MasteryItem, ProfileResponse } from "@/lib/types";
 import { useApiResource } from "@/lib/use-api-resource";
 
 const CAUSE_LABELS: Record<string, string> = {
@@ -118,18 +118,6 @@ type MasteryWithMeta = MasteryItem & {
   chapter?: string | null;
   aliases?: string[] | null;
 };
-
-/** 记忆条目（P2-1，对齐 GET /api/profile/insights；共享 types.ts 不改，局部定义）。 */
-interface InsightItem {
-  id: string;
-  kc_id: string | null;
-  kc_name: string;
-  source: string;
-  kind: string;
-  text: string;
-  session_id: string | null;
-  created_at: string;
-}
 
 interface InsightsResponse {
   insights: InsightItem[];
@@ -690,7 +678,7 @@ export function CurrentLearningState() {
       {/* AI 记住的你（P2-1）：长期记忆可见可删 */}
       <Card
         title="AI 记住的你"
-        extra={<span className="text-caption text-ink-muted">来自对话与辅导的长期记忆 · 可逐条删除</span>}
+        extra={<Link href="/settings?section=memory" className="text-caption text-brand-600">管理与纠正记忆</Link>}
       >
         {insights === null ? (
           <SkeletonList rows={3} />
@@ -716,6 +704,7 @@ export function CurrentLearningState() {
                     <p className="mt-0.5 text-caption text-ink-muted">
                       {it.kc_name && <span className="mr-1.5">{it.kc_name}</span>}
                       {SOURCE_LABELS[it.source] ?? it.source} · {fmtDateTime(it.created_at)}
+                      {it.user_corrected ? " · 已由你纠正" : it.effective_status !== "active" ? " · 暂不引用" : ""}
                     </p>
                   </div>
                   <button

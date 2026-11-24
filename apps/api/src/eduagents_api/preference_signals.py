@@ -21,7 +21,8 @@ from eduagents_core.logging import get_logger
 from sqlalchemy import delete, select
 
 from .db import tenant_session
-from .models import AnswerRating, LearnerInsight, UserPreference
+from .learner_memory import lock_memory
+from .models import AnswerRating, LearnerInsight, LearnerMemoryPolicy, UserPreference
 from .profile_summary import STYLE_LABELS
 
 log = get_logger("preference_signals")
@@ -91,6 +92,10 @@ async def _run(tenant_id: str, uid: uuid.UUID) -> str:
     now = datetime.now(UTC)
     window_start = now - _STATS_WINDOW
     async with tenant_session(tenant_id) as session:
+        await lock_memory(session, uid)
+        policy = await session.get(LearnerMemoryPolicy, uid)
+        if policy and policy.extraction_after:
+            window_start = max(window_start, policy.extraction_after)
         pref_row = await session.get(UserPreference, uid)
         current_style = pref_row.explanation_style if pref_row else None
 
@@ -163,6 +168,8 @@ async def _run(tenant_id: str, uid: uuid.UUID) -> str:
                 kind="preference_signal",
                 text=text,
                 session_id=None,
+                observed_at=now,
+                expires_at=now + timedelta(days=90),
             )
         )
         # 上限裁剪: 未删除的 preference_signal 只保留最近 3 条

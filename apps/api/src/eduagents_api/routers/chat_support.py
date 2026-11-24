@@ -273,7 +273,7 @@ def _cache_admissible(
 
 
 async def _maybe_enqueue_reflection(request: Request, ctx: AuthContext, session_id) -> bool:
-    """本轮结束计数; 满 _REFLECT_EVERY_TURNS 轮则入队 reflect_session 并归零。
+    """每五轮入队一次。累积轮次保证后续任务不会复用同一个 ARQ ID。
 
     任何失败 (Redis/arq 不可用) 只记日志: 画像洞察是增强项, 绝不影响已完成的问答。
     """
@@ -286,9 +286,9 @@ async def _maybe_enqueue_reflection(request: Request, ctx: AuthContext, session_
         turns = await redis.incr(key)
         if turns == 1:
             await redis.expire(key, _REFLECT_COUNTER_TTL)
-        if turns < _REFLECT_EVERY_TURNS:
+        if turns % _REFLECT_EVERY_TURNS:
             return False
-        await redis.set(key, 0, ex=_REFLECT_COUNTER_TTL)
+        await redis.expire(key, _REFLECT_COUNTER_TTL)
         # P1-7: _job_id 天然去重 — 同会话同轮次的重复投递被 ARQ 拒绝, 防重复扣费/重复写画像
         await arq.enqueue_job(
             "reflect_session",

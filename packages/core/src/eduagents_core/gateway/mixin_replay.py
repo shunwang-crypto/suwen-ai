@@ -53,6 +53,16 @@ class GatewayReplayMixin:
         if req.feature.startswith("agent_"):
             from .agent_stub import agent_stub
             text, tool_calls = agent_stub(req)
+        elif req.tools and {tool["function"]["name"] for tool in req.tools} == {"search_learning_memories"}:
+            # Ordinary chat has no artifact submission tool. Exercise recall,
+            # then return the normal clearly labelled development response.
+            if not any(m.role == "tool" for m in req.messages):
+                import json
+                tool_calls = ({"id": "stub-memory", "type": "function", "function": {
+                    "name": "search_learning_memories",
+                    "arguments": json.dumps({"query": message_text(req.messages[-1].content)[:500]}, ensure_ascii=False),
+                }},)
+                text = ""
         elif req.tools:
             import json
             if any(m.role == "tool" for m in req.messages):

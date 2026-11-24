@@ -14,6 +14,7 @@ export type TimelineItem =
 const NODE_LABELS: Record<string, string> = {
   agent: "处理学习任务",
   read_learning_context: "读取学情",
+  search_learning_memories: "查找学习记录",
   search_knowledge_base: "检索知识库",
   web_search: "搜索网页",
   read_material: "阅读资料",
@@ -79,6 +80,7 @@ const TRACE_LABELS: Record<string, string> = {
   sanitizer: "注入过滤",
   confidence: "置信度",
   profile: "学情画像",
+  memory: "历史学习记录",
   web_query_plan: "整理搜索问题",
   web_search: "网页搜索",
   research: "研究进度",
@@ -86,6 +88,10 @@ const TRACE_LABELS: Record<string, string> = {
 
 /** 已知 trace 事件的一句话描述；未知类型回退到 reason 字段。 */
 function traceDetail(data: TraceEventData): string | null {
+  if (data.type === "memory") {
+    const count = Number(data.count) || 0;
+    return count ? `找到 ${count} 条相关记录` : "没有相关记录";
+  }
   if (data.type === "cache" || data.type === "cache_lookup") {
     const source = typeof data.source === "string" ? data.source.toUpperCase() : "";
     return source ? `已命中 ${source} 缓存` : "已完成缓存匹配";

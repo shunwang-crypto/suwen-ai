@@ -320,6 +320,8 @@ async def persist_learner_insights(
     *,
     source: str,
     session_id: str | None = None,
+    memory_revision: int | None = None,
+    report: dict | None = None,
 ) -> int:
     """洞察条目入长期记忆表 (P2-1 唯一写入口, G10: 补上"他在什么语境下困惑")。
 
@@ -327,10 +329,26 @@ async def persist_learner_insights(
     "text": 学生原话或误解描述}]; text 统一截断 ≤ INSIGHT_TEXT_MAX, 空文本如实丢弃。
     写入后按 (created_at, id) 倒序裁剪, 每用户只保留最近 INSIGHTS_KEEP_PER_USER 条;
     返回裁掉的旧行数 (供日志)。
-    幂等: reflection 侧由调用方复用 mastery_log 去重; 此外本函数自带内容级去重 ——
-    同批次与保留窗口内已有相同 (kind, kc_id, text) 的条目跳过不插。记忆条目直接
-    面向用户可见可删, summarize 轮被重试/重放时不得出现一字不差的重复行。
+    同用户写入和控制操作通过事务锁串行化；版本、水位和内容指纹拦截旧来源回写。
+    同批次与保留窗口内相同 (kind, kc_id, text) 去重。可选 report 返回实际插入数
+    和知识点 ID；返回值仍是裁剪数。普通聊天/辅导观察从不写掌握度证据。
     """
+    from datetime import UTC, datetime
+
+    from eduagents_core.education.memory import MEMORY_TTL, fingerprint
+
+    from .learner_memory import lock_memory
+    from .models import LearnerMemoryPolicy
+
+    if report is not None:
+        report.update(inserted=0, kc_ids=[])
+    if not any(str(row.get("text") or "").strip() for row in rows):
+        return 0
+    await lock_memory(session, ctx.user_id)
+    policy = await session.get(LearnerMemoryPolicy, ctx.user_id)
+    if memory_revision is not None and memory_revision != (policy.revision if policy else 0):
+        return 0
+    blocked = set(policy.blocked_fingerprints or []) if policy else set()
     existing = {
         (kind, str(kc) if kc else None, text)
         for kind, kc, text in (
@@ -350,6 +368,14 @@ async def persist_learner_insights(
         text_value = str(row.get("text") or "").strip()[:INSIGHT_TEXT_MAX]
         if not text_value:
             continue  # 无原话支撑的条目不入库 (与 match_insights 的丢弃口径一致)
+        if fingerprint(text_value) in blocked:
+            continue
+        observed_at = row.get("observed_at")
+        if policy and policy.extraction_after and (
+            observed_at is None or observed_at <= policy.extraction_after
+        ):
+            continue
+        observed_at = observed_at or datetime.now(UTC)
         kc_id = row.get("kc_id")
         key = (row["kind"], str(kc_id) if kc_id else None, text_value)
         if key in existing:
@@ -364,9 +390,16 @@ async def persist_learner_insights(
                 kind=row["kind"],
                 text=text_value,
                 session_id=uuid.UUID(str(session_id)) if session_id else None,
+                source_message_id=uuid.UUID(str(row["source_message_id"])) if row.get("source_message_id") else None,
+                observed_at=observed_at,
+                expires_at=observed_at + MEMORY_TTL,
             )
         )
         inserted += 1
+        if report is not None and kc_id:
+            report["kc_ids"].append(str(kc_id))
+    if report is not None:
+        report["inserted"] = inserted
     if not inserted:
         return 0
     await session.flush()
@@ -1218,7 +1251,9 @@ def match_misconception_insights(
     return matched, name_by_id, kc_by_text
 
 
-async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
+async def apply_tutor_summary(
+    ctx: AuthContext, summary: dict, *, session_id=None, observed_at=None, memory_revision=None
+) -> list[dict]:
     """Persist tutor misconceptions as learner insight only.
 
     匹配规则: KC canonical/alias 归一化后作为子串出现在误解文本中即命中;
@@ -1232,7 +1267,8 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
     ]
     if not raw_texts:
         return []
-    async with tenant_session(ctx.tenant_id) as session:
+    report = {}
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         rows = (
             await session.scalars(
                 select(KnowledgeComponent).order_by(KnowledgeComponent.created_at)
@@ -1240,18 +1276,27 @@ async def apply_tutor_summary(ctx: AuthContext, summary: dict) -> list[dict]:
         ).all()
         vocab = [(str(r.id), r.canonical_name, list(r.aliases or [])) for r in rows]
         matched, name_by_id, kc_by_text = match_misconception_insights(raw_texts, vocab)
+        # A summary without an explicit course must not guess between same-name
+        # concepts. Preserve its text unlinked when attribution is ambiguous.
+        for i, value in enumerate(raw_texts):
+            ids, _, _ = match_misconception_insights([value], vocab)
+            if len(ids) > 1:
+                kc_by_text[i] = None
         await persist_learner_insights(
             session,
             ctx,
             [
-                {"kc_id": kc_by_text[i], "kind": "misconception", "text": text}
+                {"kc_id": kc_by_text[i], "kind": "misconception", "text": text, "observed_at": observed_at}
                 for i, text in enumerate(raw_texts)
             ],
             source="tutor_summary",
+            session_id=session_id,
+            memory_revision=memory_revision,
+            report=report,
         )
     return [
         {"kc_id": kc_id, "name": name_by_id.get(kc_id, ""), "recorded": True}
-        for kc_id in matched
+        for kc_id in matched if kc_id in report.get("kc_ids", [])
     ]
 
 

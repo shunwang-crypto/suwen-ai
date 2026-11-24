@@ -41,6 +41,7 @@ from .base import (
     message_text,
 )
 from .routing import BusinessRoute, route_candidates
+from .stream_metadata import StreamMetadata
 from .stub import estimate_tokens
 from .thought_filter import ThoughtFilter, strip_thought
 
@@ -374,6 +375,7 @@ class GatewayLiveCallsMixin:
             reserved_tier: str | None = None
             parts: list[str] = []
             started = perf_counter()
+            metadata = StreamMetadata()
             try:
                 candidate_req = req
                 if not candidate.free:
@@ -386,6 +388,7 @@ class GatewayLiveCallsMixin:
                 tf = ThoughtFilter()
                 p_tok = c_tok = 0
                 async for chunk in stream:
+                    metadata.feed(chunk)
                     if chunk.usage:
                         p_tok = chunk.usage.prompt_tokens
                         c_tok = chunk.usage.completion_tokens
@@ -399,7 +402,7 @@ class GatewayLiveCallsMixin:
                 text = "".join(parts)
                 if not p_tok:
                     p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
-                    c_tok = estimate_tokens(text)
+                    c_tok = estimate_tokens(text + metadata.cost_text)
                 cost = self._cost(candidate, p_tok, c_tok)
                 result = ChatResult(
                     text=text,
@@ -416,6 +419,7 @@ class GatewayLiveCallsMixin:
                     route=route.value,
                     platform_billed_cost_cny=cost,
                     reserved_tier=reserved_tier,
+                    **metadata.result_fields(),
                 )
                 await self._emit_usage(req, result, reserved_tier=reserved_tier)
                 yield result
@@ -424,14 +428,14 @@ class GatewayLiveCallsMixin:
                 raise
             except BaseException as exc:
                 # Once a delta escaped, retrying would duplicate visible text.
-                if parts:
+                if parts or metadata.received:
                     if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
                         breaker.record(False)
                         self._candidate_failures[candidate.id] = self._failure_code(exc)
                     if reserved_tier is not None:
                         await self._refund_reservation(req, reserved_tier)
                     await self._settle_partial_candidate(
-                        req, candidate, "".join(parts), started, reserved_tier=None
+                        req, candidate, "".join(parts) + metadata.cost_text, started, reserved_tier=None
                     )
                     if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
                         raise
@@ -738,6 +742,8 @@ class GatewayLiveCallsMixin:
                 enable_thinking=None,
             )
             parts: list[str] = []
+            metadata = StreamMetadata()
+            usage_done = False
             try:
                 async for attempt in AsyncRetrying(
                     stop=stop_after_attempt(self._s.gateway_max_retries),
@@ -755,6 +761,7 @@ class GatewayLiveCallsMixin:
                 tf = ThoughtFilter()
                 p_tok = c_tok = 0
                 async for chunk in stream:
+                    metadata.feed(chunk)
                     if chunk.usage:
                         p_tok = chunk.usage.prompt_tokens
                         c_tok = chunk.usage.completion_tokens
@@ -765,7 +772,7 @@ class GatewayLiveCallsMixin:
                             yield StreamDelta(delta)
                 if not p_tok:
                     p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
-                    c_tok = estimate_tokens("".join(parts))
+                    c_tok = estimate_tokens("".join(parts) + metadata.cost_text)
                 result = ChatResult(
                     text=strip_thought("".join(parts)),
                     model=model,
@@ -779,14 +786,17 @@ class GatewayLiveCallsMixin:
                     credential_source=CredentialSource.user.value,
                     provider=credential.provider,
                     platform_billed_cost_cny=0.0,
+                    **metadata.result_fields(),
                 )
                 await self._emit_usage(req, result)
+                usage_done = True
                 yield result
                 return
             except (AuthenticationError, RateLimitError, APIStatusError, APITimeoutError, APIConnectionError, InternalServerError, GatewayError) as exc:
                 error = self._byok_error(exc)
-                if parts:
-                    await self._emit_user_partial(req, credential, model, parts, started)
+                if parts or metadata.received:
+                    await self._emit_user_partial(req, credential, model, [*parts, metadata.cost_text], started)
+                    usage_done = True
                     raise error from exc
                 if model_index + 1 < len(models):
                     continue
@@ -803,6 +813,14 @@ class GatewayLiveCallsMixin:
                     yield item
                 return
             finally:
+                if not usage_done and (parts or metadata.received):
+                    settlement = asyncio.ensure_future(self._emit_user_partial(
+                        req, credential, model, [*parts, metadata.cost_text], started
+                    ))
+                    try:
+                        await asyncio.shield(settlement)
+                    except BaseException:  # noqa: BLE001 — finish accounting while cancellation propagates
+                        pass
                 await client.close()
 
         # The loop always returns or raises.  Keep a defensive error in case a
@@ -865,6 +883,7 @@ class GatewayLiveCallsMixin:
         settled = False
         streaming_tier: Tier | None = None
         parts: list[str] = []
+        metadata = StreamMetadata()
         try:
             tiers = _DEGRADE[req.tier] if req.allow_tier_fallback else (req.tier,)
             for tier in tiers:
@@ -882,10 +901,12 @@ class GatewayLiveCallsMixin:
                         stream=True, stream_options={"include_usage": True}, **kwargs
                     )
                     parts = []
+                    metadata = StreamMetadata()
                     streaming_tier = tier
                     tf = ThoughtFilter()
                     p_tok = c_tok = 0
                     async for chunk in stream:
+                        metadata.feed(chunk)
                         if chunk.usage:
                             p_tok = chunk.usage.prompt_tokens
                             c_tok = chunk.usage.completion_tokens
@@ -901,7 +922,7 @@ class GatewayLiveCallsMixin:
                     text = "".join(parts)
                     if not p_tok:
                         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
-                        c_tok = estimate_tokens(text)
+                        c_tok = estimate_tokens(text + metadata.cost_text)
                     cost = self._cost(cfg, p_tok, c_tok)
                     result = ChatResult(
                         text=text,
@@ -916,6 +937,7 @@ class GatewayLiveCallsMixin:
                         credential_source=CredentialSource.platform.value,
                         provider="platform",
                         platform_billed_cost_cny=cost,
+                        **metadata.result_fields(),
                     )
                     if self._s.gateway_mode == "record" and allow_record:
                         self._cassette.put(
@@ -925,6 +947,7 @@ class GatewayLiveCallsMixin:
                                 "model": result.model,
                                 "prompt_tokens": p_tok,
                                 "completion_tokens": c_tok,
+                                **metadata.result_fields(),
                             },
                         )
                     await self._emit_usage(req, result, reserved_tier=reserved_tier)
@@ -938,9 +961,9 @@ class GatewayLiveCallsMixin:
                         tier=tier.value,
                         failure_code=self._failure_code(exc),
                     )
-                    if parts:
+                    if parts or metadata.received:
                         await self._settle_partial_stream(
-                            req, tier, "".join(parts), started, reserved_tier
+                            req, tier, "".join(parts) + metadata.cost_text, started, reserved_tier
                         )
                         settled = True
                         raise GatewayError(
@@ -972,7 +995,7 @@ class GatewayLiveCallsMixin:
                 if streaming_tier is not None:
                     # 半途中断 (断网/切后台/切会话): 按已收内容估算结算, 不再漏计费。
                     coro = self._settle_partial_stream(
-                        req, streaming_tier, "".join(parts), started, reserved_tier
+                        req, streaming_tier, "".join(parts) + metadata.cost_text, started, reserved_tier
                     )
                 else:
                     # 中断发生在降级兜底分块输出期间 (无真实消耗): 只返还预扣

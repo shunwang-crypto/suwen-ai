@@ -205,10 +205,21 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
   `/api/chat` 不再注入画像摘要、`/api/quiz from_weak_points` 与 `weak-points` 预览返回空、
   开场卡不再引用软抑制条目；**豁免清单**：未成年判定、内容审核、掌握度计算永不受此开关
   影响；关闭不删除任何数据（关闭 ≠ 删除）。切换即失效画像缓存。
-- `GET /api/profile/insights` 每条新增 `suppressed`；`PATCH /api/profile/insights/{id}`
-  `{suppressed: bool}` 软抑制（"不要再提及"）：保留原文只停注入，与 DELETE 物理删除互补。
+- `GET /api/profile/insights` 返回最多 100 条（全部保留记录），含 `session_id`、
+  `source_message_id`、`observed_at`、`expires_at`、`updated_at`、`revision`、
+  `user_corrected`、`status: active|obsolete`、`suppressed` 与
+  `effective_status: active|suppressed|obsolete|expired|historical`。
+- `PATCH /api/profile/insights/{id}` 接受 `suppressed?`、`text?`（非空、最多 600 字）、
+  `kind?`（confused/understood/misconception）、`status?`、`expected_revision?`；至少提供
+  一个修改字段。版本不一致返回 `409 MEMORY_REVISION_CONFLICT`，不存在或非本人返回 404。
+  纠正内容或类型后 `user_corrected=true`、条目版本递增。偏好建议不能当作学习事实编辑。
+  暂停引用保留原文；标记过时保留条目并停用；DELETE 物理删除条目。
+  控制操作同时阻止旧来源重新提取、清除原生记忆工具归档，原聊天记录仍保留。
+- 教育 Agent 的 `search_learning_memories(query?, kc_names?, limit?)` 是宿主工具，不是
+  任意身份查询的 HTTP 接口。`limit` 为 1–4，返回来源和时间；关闭个性化、无证据或无匹配
+  返回空记录。对话观察不能推进 BKT 或影响判分。
 - `GET /api/profile/memory/preview` → `{summary, weak_points, mastered}`：与问答注入同源
-  同缓存的摘要预览（设置页"AI 眼中的你"），所见即 AI 所得。
+  同缓存的结构化学情摘要预览；任务相关的记忆由 Agent 另行检索，不包含在此固定摘要中。
 - `GET /api/next-actions` → `{items:[{type,title,reason_code,reason_params,reason,href}]}`：
   今日页唯一决策源（确定性聚合，零 LLM）。**推荐理由走稳定码**：`reason_code` 是后端
   `ReasonCode` 枚举值（snake_case），`reason_params` 只含计数（int）、定性档位枚举词与

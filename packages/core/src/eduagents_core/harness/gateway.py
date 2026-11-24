@@ -330,8 +330,7 @@ class HarnessGateway:
             text = ""
             await emit({"type": "block-start", "index": 0, "blockType": "text"})
             if (
-                req.tools
-                or compaction
+                compaction
                 or not self._streaming
                 or not hasattr(self.gateway, "stream_chat")
             ):
@@ -526,12 +525,15 @@ class HarnessGateway:
         self.context_window = context_window
         return await self._run(req)
 
-    def configure_chat(self, req, *, session_id, archive, checkpoint, context_window):
+    def configure_chat(self, req, *, session_id, archive, checkpoint, context_window,
+                       schemas=(), handlers=None, extra_policy=""):
         self.native_session_id = session_id
         self.native_archive = dict(archive)
         self._checkpoint = checkpoint
         self.context_window = context_window
-        self._policy = lambda: "\n".join(m.content for m in req.messages if m.role == "system")
+        self._schemas = list(schemas)
+        self._tools = handlers or {}
+        self._policy = lambda: "\n".join(m.content for m in req.messages if m.role == "system") + extra_policy
         self._chat_overlay = req.messages[-1]
         self._chat_seed = (
             tuple(m for m in req.messages[:-1] if m.role != "system") if not archive else ()

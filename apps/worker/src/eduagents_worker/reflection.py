@@ -102,6 +102,34 @@ def match_insights(
     return confused, understood, names
 
 
+def grounded_insight_rows(insights, vocab, messages, *, extraction_after=None, kc_scopes=None):
+    """Accept only exact quotes from a real, current student source message."""
+    latest = {}
+    for item in insights[:_MAX_INSIGHTS]:
+        evidence = item.get("evidence") if isinstance(item, dict) else None
+        if not isinstance(evidence, str) or not evidence.strip():
+            continue
+        evidence = evidence.strip()
+        sources = [m for m in messages if m.role == "user"
+                   and evidence in m.content[:_MAX_MSG_CHARS]
+                   and (extraction_after is None or m.created_at > extraction_after)]
+        if not sources:
+            continue
+        source = max(sources, key=lambda m: (m.created_at, str(m.id)))
+        source_kbs = (getattr(source, "meta_json", None) or {}).get("kb_ids") or []
+        source_vocab = [kc for kc in vocab if not source_kbs or kc_scopes is None
+                        or kc_scopes.get(kc[0]) in source_kbs]
+        matches = [row for kc in source_vocab for row in match_insight_rows([item], [kc])]
+        if len(matches) != 1:
+            continue  # A same-name KC across courses requires an attributed source.
+        row = matches[0]
+        row.update(source_message_id=str(source.id), observed_at=source.created_at)
+        prior = latest.get(row["kc_id"])
+        if prior is None or (row["observed_at"], row["source_message_id"]) > (prior["observed_at"], prior["source_message_id"]):
+            latest[row["kc_id"]] = row
+    return list(latest.values())
+
+
 async def reflect_session(
     ctx: dict,
     tenant_id: str,
@@ -113,7 +141,7 @@ async def reflect_session(
     parse_failed/no_match/applied:{n}。任何失败只降级, 不重试轰炸 LLM。"""
     from eduagents_api.db import tenant_session
     from eduagents_api.models import ChatMessage as ChatMessageRow
-    from eduagents_api.models import ChatSession, KnowledgeComponent
+    from eduagents_api.models import ChatSession, KnowledgeComponent, LearnerMemoryPolicy, OrgMember
     from eduagents_api.services import persist_learner_insights
 
     from .enrichment import get_worker_gateway
@@ -131,6 +159,9 @@ async def reflect_session(
         if chat_session is None or str(chat_session.user_id) != str(user_id):
             log.warning("reflect_session_not_found", session_id=session_id)
             return "no_messages"
+        policy = await session.get(LearnerMemoryPolicy, uuid.UUID(user_id))
+        memory_revision = policy.revision if policy else 0
+        extraction_after = policy.extraction_after if policy else None
         rows = (
             await session.scalars(
                 select(ChatMessageRow)
@@ -139,12 +170,19 @@ async def reflect_session(
                 .limit(MAX_TURNS)
             )
         ).all()
+        org_ids = tuple(str(v) for v in (await session.scalars(
+            select(OrgMember.org_id).where(OrgMember.user_id == uuid.UUID(user_id))
+        )).all())
+
+    async with tenant_session(tenant_id, org_ids=org_ids) as session:
         kc_rows = (
             await session.scalars(
-                select(KnowledgeComponent).order_by(KnowledgeComponent.created_at)
+                select(KnowledgeComponent).where(KnowledgeComponent.superseded_by_id.is_(None))
+                .order_by(KnowledgeComponent.created_at)
             )
         ).all()
         vocab = [(str(r.id), r.canonical_name, list(r.aliases or [])) for r in kc_rows]
+        kc_scopes = {str(r.id): str(r.kb_id) for r in kc_rows}
 
     messages = list(reversed(rows))
     if not messages:
@@ -181,21 +219,29 @@ async def reflect_session(
         log.warning("reflect_parse_failed", session_id=session_id)
         return "parse_failed"
 
-    insight_rows = match_insight_rows(insights, vocab)
+    insight_rows = grounded_insight_rows(insights, vocab, messages,
+                                        extraction_after=extraction_after, kc_scopes=kc_scopes)
     if not insight_rows:
         return "no_match"
 
     from eduagents_api.deps import AuthContext
 
     auth = AuthContext(user_id=uuid.UUID(str(user_id)), tenant_id=uuid.UUID(str(tenant_id)), role="student", jti="")
+    report = {}
     async with tenant_session(tenant_id) as session:
+        # A conversation can be deleted while the cheap model is working.
+        owner = await session.get(ChatSession, uuid.UUID(session_id))
+        if owner is None or str(owner.user_id) != str(user_id):
+            return "no_messages"
         await persist_learner_insights(
-            session, auth, insight_rows, source="chat_reflection", session_id=session_id
+            session, auth, insight_rows, source="chat_reflection", session_id=session_id,
+            memory_revision=memory_revision,
+            report=report,
         )
     log.info(
         "reflect_done",
         session_id=session_id,
-        insights=len(insight_rows),
+        insights=report.get("inserted", 0),
         kcs=[row["kc_name"] for row in insight_rows],
     )
-    return f"recorded:{len(insight_rows)}"
+    return f"recorded:{report.get('inserted', 0)}"

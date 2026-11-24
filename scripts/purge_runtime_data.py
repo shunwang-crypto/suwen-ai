@@ -67,6 +67,7 @@ RUNTIME_TABLES = (
     "usage_log",
     "feedback",
     "learner_insights",
+    "learner_memory_policies",
     "answer_ratings",
     "metacognition_predictions",
     "explain_backs",

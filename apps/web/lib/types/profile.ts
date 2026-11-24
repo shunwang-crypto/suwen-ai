@@ -2,6 +2,26 @@
 
 // ---- 画像（F8，对齐 routers/profile.py）----
 
+export interface InsightItem {
+  id: string;
+  kc_id: string | null;
+  kc_name: string;
+  source: string;
+  kind: string;
+  text: string;
+  session_id: string | null;
+  source_message_id: string | null;
+  observed_at: string | null;
+  expires_at: string | null;
+  updated_at: string;
+  revision: number;
+  user_corrected: boolean;
+  status: "active" | "obsolete";
+  effective_status: "active" | "suppressed" | "obsolete" | "expired" | "historical";
+  suppressed: boolean;
+  created_at: string;
+}
+
 export interface MasteryItem {
   kc_id: string;
   name: string;

@@ -24,6 +24,8 @@ class EducationDeps:
     web_search: Callable[..., Any] | None = None
     # Offline evaluation can inject a candidate without changing deployment.
     prompt_bundle: PromptBundle | None = None
+    # Host service: snapshot(state), search(state, query, kc_names, limit).
+    memory: Any = None
 
 
 class QaState(TypedDict, total=False):
