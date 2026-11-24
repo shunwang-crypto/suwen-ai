@@ -22,8 +22,8 @@ class TierConfig(BaseModel):
     # CNY per 1M tokens; used for usage_log cost attribution
     input_price_per_m: float = 0.0
     output_price_per_m: float = 0.0
-    # Provider-specific Qwen switch. None omits the extension entirely so
-    # non-SiliconFlow OpenAI-compatible providers remain compatible.
+    # The gateway encodes this with DeepSeek's thinking object or Qwen's
+    # enable_thinking flag. None preserves the provider's default mode.
     enable_thinking: bool | None = None
 
 

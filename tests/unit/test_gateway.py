@@ -49,7 +49,7 @@ def test_thinking_switch_is_sent_only_when_explicitly_configured(tmp_path):
     plan_kwargs = gw._completion_kwargs(req(tier=Tier.plan), settings.tier("plan"))
 
     assert cheap_kwargs["extra_body"] == {"enable_thinking": False}
-    assert strong_kwargs["extra_body"] == {"enable_thinking": True}
+    assert strong_kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "extra_body" not in plan_kwargs
 
 
@@ -58,6 +58,64 @@ def test_cassette_key_distinguishes_thinking_mode(tmp_path):
     thinking = OpenAIGateway(make_settings(tmp_path, standard_enable_thinking=True))
 
     assert plain._cassette_key(req()) != thinking._cassette_key(req())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_deepseek_flash_disables_thinking_in_http_request(tmp_path, streaming):
+    import json
+
+    import httpx
+    from openai import AsyncOpenAI
+
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        usage = {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+        if body.get("stream"):
+            chunks = [
+                {"id": "test", "object": "chat.completion.chunk", "created": 1,
+                 "model": "deepseek-flash", "choices": [{"index": 0,
+                 "delta": {"role": "assistant", "content": "2"}, "finish_reason": None}]},
+                {"id": "test", "object": "chat.completion.chunk", "created": 1,
+                 "model": "deepseek-flash", "choices": [{"index": 0,
+                 "delta": {}, "finish_reason": "stop"}], "usage": usage},
+            ]
+            data = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=data + "data: [DONE]\n\n")
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 1,
+            "model": "deepseek-flash", "usage": usage,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "2"},
+                         "finish_reason": "stop"}],
+        })
+
+    settings = make_settings(
+        tmp_path, gateway_mode="live", standard_api_key="test-key",
+        standard_base_url="https://api.deepseek.com/v1", standard_model="deepseek-flash",
+        standard_enable_thinking=False,
+    )
+    gateway = OpenAIGateway(settings)
+    client = AsyncOpenAI(
+        api_key="test-key", base_url=settings.standard_base_url,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    gateway._clients[Tier.standard] = client
+    try:
+        if streaming:
+            items = [item async for item in gateway.stream_chat(req("1+1?"))]
+            result = items[-1]
+        else:
+            result = await gateway.chat(req("1+1?"))
+        assert result.text == "2" and result.mode == "live"
+        assert len(requests) == 1
+        assert requests[0]["model"] == "deepseek-flash"
+        assert requests[0]["thinking"] == {"type": "disabled"}
+        assert "enable_thinking" not in requests[0]
+    finally:
+        await client.close()
 
 
 async def test_stub_mode_is_deterministic_and_banner_marked(tmp_path):

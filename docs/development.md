@@ -79,6 +79,13 @@ npm run dev
 
 stub 输出不能用来判断模型质量。真实模型、嵌入、重排和联网搜索变量见 `.env.example`。
 
+使用官方 DeepSeek Flash 时，将相应档位的 `*_BASE_URL` 设为 `https://api.deepseek.com`、
+`*_MODEL` 设为 `deepseek-flash`，并通过 `*_ENABLE_THINKING=false` 关闭默认开启的思考模式。
+网关为官方接口发送 `thinking: {type: disabled}`，其他已配置的双模式接口继续使用
+`enable_thinking`。需要让所有教学任务使用同一 Flash 模型时，配置 cheap、standard、strong
+和 plan 四个档位，并关闭可选的 `MODEL_ROUTING_ENABLED` 路由。密钥只保存在本地 `.env`；
+token 单价用于预算估算，实际费用以模型提供方账单为准。
+
 ## Harness 运行与旧会话迁移
 
 教育任务由原生 DSH 运行，领域工具定义教学规则；单次评分/评审服务仍可直接使用网关。

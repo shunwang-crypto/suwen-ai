@@ -110,6 +110,7 @@ class HarnessGateway:
         self._native_prompt = ""
         self._checkpoint = None
         self._policy = None
+        self._task_complete: Callable[[], bool] | None = None
         self.context_window = 32768
         self._workspace = None
         self._chat_overlay = None
@@ -316,12 +317,14 @@ class HarnessGateway:
                     messages = tuple(projected)
             else:
                 messages = self._req.messages + messages
+            tools = () if compaction or (
+                self._task_complete is not None and self._task_complete()
+            ) else tuple({"type": "function", "function": s} for s in self._schemas)
             req = replace(
                 self._req,
                 messages=messages,
-                tools=()
-                if compaction
-                else tuple({"type": "function", "function": s} for s in self._schemas),
+                tools=tools,
+                tool_choice="required" if tools and self._task_complete is not None else None,
                 billing_reference=f"{self._req.request_id}:dsh:{self._activity_id}:{self._calls}",
                 feature="harness_compaction" if compaction else self._req.feature,
                 json_mode=False if compaction else self._req.json_mode,
@@ -513,6 +516,7 @@ class HarnessGateway:
         policy=None,
         checkpoint=None,
         context_window=32768,
+        is_complete: Callable[[], bool] | None = None,
     ):
         """Run one turn of a durable native agent; DSH chooses and dispatches tools."""
         self.native_session_id = session_id
@@ -522,6 +526,7 @@ class HarnessGateway:
         self._tools = handlers
         self._policy = policy
         self._checkpoint = checkpoint
+        self._task_complete = is_complete
         self.context_window = context_window
         return await self._run(req)
 

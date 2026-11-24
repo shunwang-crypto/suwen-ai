@@ -93,6 +93,7 @@ class ChatRequest:
     # The API/worker sets this explicitly for multimodal requests.
     credential_policy: Literal["text", "platform"] = "text"
     tools: tuple[dict[str, Any], ...] = ()
+    tool_choice: Literal["auto", "required", "none"] | None = None
     # Internal per-model-call identity, separate from the public request ID.
     billing_reference: str = ""
 

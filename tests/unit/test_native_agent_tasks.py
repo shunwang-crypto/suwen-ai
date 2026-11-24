@@ -198,6 +198,21 @@ async def test_native_agent_must_submit_result_and_cannot_finish_with_unchecked_
         await AgentTask("qa", deps(model)).run("unchecked", {"query": "hello"})
 
 
+async def test_native_task_requires_tools_until_submission_is_accepted():
+    model = ScriptedModel([
+        ("submit_answer", {"answer": ""}),
+        ("submit_answer", {"answer": "42"}),
+        "finished",
+    ])
+    record = await AgentTask("qa", deps(model)).run("required", {"query": "answer 42"})
+    assert record.status == "completed" and record.state["answer"] == "42"
+    assert [request.tool_choice for request in model.requests] == ["required", "required", None]
+    assert all(request.tools for request in model.requests[:2])
+    assert not model.requests[-1].tools
+    assert any(message.role == "tool" and '"accepted":false' in message.content.replace(" ", "")
+               for message in model.requests[1].messages)
+
+
 async def test_durable_native_chat_restores_text_and_never_archives_image_bytes():
     gateway = Gateway(["first answer", "second answer"])
     request = ChatRequest(

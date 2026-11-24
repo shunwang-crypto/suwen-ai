@@ -34,6 +34,7 @@ class GatewayReplayMixin:
                 "messages": [m.to_wire() for m in req.messages],
                 "json_mode": req.json_mode,
                 **({"tools": list(req.tools)} if req.tools else {}),
+                **({"tool_choice": req.tool_choice} if req.tool_choice is not None else {}),
                 "temperature": req.temperature,
                 "max_tokens": req.max_tokens,
                 "enable_thinking": self._s.tier(req.tier.value).enable_thinking,

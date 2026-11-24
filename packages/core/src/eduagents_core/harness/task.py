@@ -152,6 +152,7 @@ class AgentTask:
                         policy=tools.policy,
                         checkpoint=checkpoint,
                         context_window=self.deps.settings.harness_context_window_tokens,
+                        is_complete=lambda: record.status != "running",
                     )
                 if record.status == "running":
                     raise GatewayError("HARNESS_RESULT_REQUIRED", "AI 未提交经过校验的任务结果")

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from time import perf_counter
+from urllib.parse import urlparse
 
 from openai import (
     AsyncOpenAI,
@@ -398,20 +399,23 @@ class OpenAIGateway(
         }
         if req.tools:
             kwargs["tools"] = list(req.tools)
+            if req.tool_choice is not None:
+                kwargs["tool_choice"] = req.tool_choice
         if req.max_tokens:
             kwargs["max_tokens"] = req.max_tokens
         if req.json_mode and (candidate is None or candidate.supports_json):
             kwargs["response_format"] = {"type": "json_object"}
-        if candidate is None and cfg.enable_thinking is not None:
-            # SiliconFlow exposes Qwen's dual-mode switch as an extension to
-            # the OpenAI-compatible request body. Omit it for other providers.
-            kwargs["extra_body"] = {"enable_thinking": cfg.enable_thinking}
-        elif (
-            candidate is not None
-            and candidate.supports_thinking
-            and candidate.enable_thinking is not None
-        ):
-            kwargs["extra_body"] = {"enable_thinking": candidate.enable_thinking}
+        thinking = cfg.enable_thinking if candidate is None else (
+            candidate.enable_thinking if candidate.supports_thinking else None
+        )
+        if thinking is not None:
+            base_url = candidate.base_url if candidate is not None else cfg.base_url
+            if urlparse(base_url).hostname == "api.deepseek.com":
+                kwargs["extra_body"] = {
+                    "thinking": {"type": "enabled" if thinking else "disabled"}
+                }
+            else:
+                kwargs["extra_body"] = {"enable_thinking": thinking}
         return kwargs
 
     @staticmethod
