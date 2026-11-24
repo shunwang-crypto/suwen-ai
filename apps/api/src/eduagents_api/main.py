@@ -117,8 +117,8 @@ async def lifespan(app: FastAPI):
         app.state.retrieval = None
         log.exception("retrieval_stack_unavailable")
     try:
+        from eduagents_core.education.context import EducationDeps
         from eduagents_core.tools.web_search import TavilySearch
-        from eduagents_core.workflows.state import WorkflowDeps
 
         from .harness_runtime import HarnessRuntime
 
@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
             )
             return (results, from_cache) if results else None
 
-        deps = WorkflowDeps(
+        deps = EducationDeps(
             settings=settings,
             gateway=app.state.gateway,
             retrieval=app.state.retrieval,

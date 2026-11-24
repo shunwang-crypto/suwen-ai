@@ -18,7 +18,7 @@ class EndRuntime:
         kind, user_id, local_id = thread_id.split(":", 2)
         return kind, user_id, local_id
 
-    async def astream_updates(self, kind, thread_id, payload, resume=None):
+    async def stream_task(self, kind, thread_id, payload, resume=None):
         yield {"kind": "end", "state": self.state}
 
 
@@ -52,7 +52,7 @@ async def test_quiz_failure_done_v2_classifies_user_cancellation_at_confirmation
         "failure_code": "QUIZ_CANCELLED_BY_USER",
         "retry_count": 0,
     }
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime(state),
         "quiz",
         "quiz:user:local",
@@ -76,7 +76,7 @@ async def test_quiz_failure_done_v2_classifies_user_cancellation_at_confirmation
 
 @pytest.mark.asyncio
 async def test_quiz_selection_trace_is_qualitative_and_bounded():
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime({
             "terminal_outcome": "generation_failed",
             "retry_count": 3,
@@ -128,7 +128,7 @@ async def test_quiz_failure_done_v2_has_non_empty_classification(outcome, code, 
         "retry_count": 3,
         "ever_generated_nonempty": outcome == "validation_failed",
     }
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime(state),
         "quiz",
         "quiz:user:local",
@@ -158,7 +158,7 @@ async def test_quiz_success_done_v2_contains_persisted_result(monkeypatch):
         "terminal_outcome": "succeeded",
         "questions": [{"safe": True}],
     }
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime(state),
         "quiz",
         "quiz:user:local",
@@ -188,7 +188,7 @@ async def test_quiz_success_never_emits_done_when_finalize_returns_empty_result(
         "terminal_outcome": "succeeded",
         "questions": [{"stem": "safe test payload"}],
     }
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime(state),
         "quiz",
         "quiz:user:local",
@@ -210,7 +210,7 @@ async def test_quiz_kc_business_error_keeps_its_stable_sse_code(monkeypatch):
         raise QuizKCError("QUIZ_KC_NOT_READY")
 
     monkeypatch.setattr(threads, "finalize_quiz", reject_finalize)
-    response = await threads.stream_graph_run(
+    response = await threads.stream_task_run(
         EndRuntime(
             {
                 "blueprint_confirmed": True,

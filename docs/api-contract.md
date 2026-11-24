@@ -131,9 +131,9 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 
 `mode` 为 `fast | think | web | research`：`think` 固定走 strong 模型且只返回最终答案；
 `web` 强制进入网页搜索路径，`research` 同时启用 strong 思考模型与网页检索。
-`research` 根据资料缺口决定补查或结束：最多 3 轮、5 次查询，每轮最多 2 条；资料足够
-时提前结束。`trace_event` 实时报告 `research/web_search` 进度；来源编号与最终引用一致。
-最终回答经资料支持核验，失败时最多重生成一次；核验不可用或仍无支持时明确提示。
+`research` 由原生 Agent 根据资料缺口决定补查或提交，单 turn 最多 8 次新查询，每次工具
+调用最多 3 个查询，资料足够时提前提交。`trace_event` 实时报告 `research/web_search` 进度；来源编号与最终引用一致。
+最终回答经资料支持核验，提交缺少支持时最多要求修正两次；核验不可用或仍无支持时明确提示。
 `kb_ids` 是独立资料范围，可与 `fast/think` 组合；`web/research` 使用网页范围。
 旧客户端的 `kb` 模式及“未发送 mode 但携带知识库 ID”仍兼容。助手消息的 `meta.chat_mode`
 记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。
@@ -154,7 +154,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | GET | /api/kb/{id}/kc-graph | 课程知识图（Learning Map full 模式，只读派生，不落新表）：该库全部存活 KC + 全部 `prerequisite` 边 + 按章聚合 + 本人证据档。节点带 `kc_id/kc_name/chapter/evidence_state/evidence_state_label/band`；**`band` 定性档只在 `evidence_state=observed` 时给出**（未观测/估计中不叙述成薄弱或已掌握），全程不出 `p_mastery`/百分比。章序按 `chapter_sort_key`，节点序 `(created_at, id)`（确定性可重复，同批 enrich 内不等于插入序）；被 `superseded_by_id` 归并的 KC 及其边不出境；他人库 404 |
 | GET · POST | /api/kb/{id}/kc/{kc}/explanation | 按知识点的结构化讲解（0033）。block 只允许 `concept/worked_example/misconception/diagram`，**每块必须引用本人资料里的真实 chunk**（`source_refs` 只能取自本次候选片段，编造 id 的块被丢弃；一块都不剩则 502 `EXPLANATION_UNAVAILABLE`，不写库、不清空已有内容）；`diagram` 过最小结构校验（节点非空、id 唯一；**edges 允许为空** —— 单节点概念图不算错，有边时两端必须存在、无自环、无环）。按 `(kb, kc, 掌握档)` 缓存；掌握档取 `mastery_band`，证据不足（evidence_state≠observed）一律按 `unobserved` 讲。`generator_version` 或 `context_hash` 不匹配 → 返回 `stale=true` 与 `stale_reason`（teaching_contract_changed / material_changed），**内容仍然返回**（过期不等于清空）。该 KC 在资料里没有对应片段 → 409 `NO_SOURCE_MATERIAL`（不生成无出处内容）。讲解不含题目/选项/答案/判分 |
 
-`/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时明确拒答（不调模型）。
+`/api/chat` 已扩展：请求体可带 `kb_id` → 检索过程 trace_event + citation 事件 + 引用块防注入提示词 + 无依据时提交工具返回明确拒答。
 
 PDF 摄取逐页分类为 `native_text/scanned/mixed/failed`。完整可信文本页直接进入现有 chunker；
 扫描页和“少量标题文本 + 图片主体”的 mixed 页整页有界渲染并使用平台视觉模型忠实转写。
@@ -486,7 +486,7 @@ MasteryLog 和原始对象后再清理隐藏 Quiz；不会删除历史 Attempt�
 嵌入图片时返回 `EMBEDDED_IMAGES_NOT_RECOGNIZED`，不得臆造图片内容。
 
 worker job 只携带 `tenant_id/draft_id`；图像 Base64 只在一次平台视觉请求的进程内存中构造，
-不进入 Redis、checkpoint、日志或 trace。Graph state 只保存草稿/资源 ID、确认文本和必要页码。
+不进入 Redis、checkpoint、日志或 trace。任务业务状态只保存草稿/资源 ID、确认文本和必要页码。
 视觉请求固定 `credential_policy=platform`，不会把用户 DeepSeek Key 发送给视觉模型；文本辅导
 仍按 BYOK 配置调用用户 DeepSeek。视觉识别可能消耗平台额度，前端在识别前明确展示此边界。
 
@@ -502,3 +502,9 @@ AI 运行错误支持 `HARNESS_TIMEOUT`、`HARNESS_STEP_LIMIT`、`HARNESS_PHASE_
 `HARNESS_TOOL_DENIED`、`HARNESS_PROTOCOL_ERROR`、`HARNESS_NOT_PAUSED` 和
 `HARNESS_CONFIRMATION_REQUIRED`，均有中文提示；预算/BYOK 的既有错误码继续保留。
 历史 `GRAPHS_UNAVAILABLE` 错误码为 API 兼容继续保留，表示 AI 运行服务不可用。
+
+教育任务内部由原生 DSH 会话驱动，SSE 继续使用 `node_update/trace_event/token/interrupt/done`
+兼容事件信封。完成事件可附 `selected_citations`，按已接受回答的来源顺序替换候选引用。
+`node_update.node` 可以是领域工具名（如 `search_knowledge_base`、
+`submit_quiz`），不再表示固定图节点；前端显示对应中文动作。蓝图和计划的用户确认
+仍由现有恢复接口提交，模型工具不能代替用户批准。

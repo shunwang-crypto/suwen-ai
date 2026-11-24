@@ -1582,12 +1582,17 @@ class PaymentOrder(Base):
 class HarnessSession(Base):
     """Durable host state; model keys and inline attachment data are excluded."""
     __tablename__ = "harness_sessions"
-    __table_args__ = (CheckConstraint("kind IN ('qa', 'quiz', 'plan', 'tutor')", name="ck_harness_kind"),)
+    __table_args__ = (
+        CheckConstraint("kind IN ('qa', 'quiz', 'plan', 'tutor', 'chat')", name="ck_harness_kind"),
+        CheckConstraint("status IN ('idle','running','awaiting_confirmation','completed','failed','cancelled')", name="ck_harness_status"),
+    )
     thread_id: Mapped[str] = mapped_column(Text, primary_key=True)
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    next_phase: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'idle'"))
+    native_session_id: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    native_archive: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     pending: Mapped[dict | None] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)

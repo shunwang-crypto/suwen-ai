@@ -3,9 +3,10 @@
 import json
 import uuid
 
+import pytest
 from eduagents_api.harness_runtime import HarnessRuntime
 from eduagents_core.config import get_settings
-from eduagents_core.workflows.state import WorkflowDeps
+from eduagents_core.education.context import EducationDeps
 
 from .conftest import requires_services
 
@@ -17,6 +18,9 @@ class FakeGateway:
         self.features = []
 
     async def chat(self, req):
+        if req.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, req)
         from eduagents_core.gateway.base import ChatResult
 
         self.features.append(req.feature)
@@ -33,7 +37,7 @@ class FakeGateway:
                     {
                         "type": "single",
                         "stem": "1+1=?",
-                        "options": ["2", "3"],
+                        "options": ['2', '3', '选项三', '选项四'],
                         "answer": "A",
                         "explanation": "两个一相加得二",
                         "kc_names": ["加法"],
@@ -63,13 +67,13 @@ async def test_restart_and_duplicate_resume_do_not_recreate_quiz(client):
     thread = HarnessRuntime.thread_id("quiz", owner, local_id)
     settings = get_settings()
     gateway = FakeGateway()
-    deps = WorkflowDeps(settings=settings, gateway=gateway)
+    deps = EducationDeps(settings=settings, gateway=gateway)
     first = HarnessRuntime(settings, deps)
     await first.start()
     try:
         events = [
             event
-            async for event in first.astream_updates(
+            async for event in first.stream_task(
                 "quiz",
                 thread,
                 {
@@ -93,7 +97,7 @@ async def test_restart_and_duplicate_resume_do_not_recreate_quiz(client):
     try:
         events = [
             event
-            async for event in second.astream_updates(
+            async for event in second.stream_task(
                 "quiz", thread, None, resume={"approved": True}
             )
         ]
@@ -104,7 +108,7 @@ async def test_restart_and_duplicate_resume_do_not_recreate_quiz(client):
         model_calls = len(gateway.features)
         replay = [
             event
-            async for event in second.astream_updates(
+            async for event in second.stream_task(
                 "quiz", thread, None, resume={"approved": True}
             )
         ]
@@ -176,3 +180,31 @@ async def test_quiz_read_export_and_finalize_preserve_generated_order(client):
     state = {"questions": [{"type": "single", "stem": "旧快照", "answer": "A"}]}
     replay = await finalize_quiz(ctx, str(quiz_id), state)
     assert replay["questions"] == detail["questions"]
+
+async def test_parallel_api_runtimes_share_confirmation_lock_and_native_archive(client):
+    import asyncio
+
+    from eduagents_core.gateway.base import GatewayError
+    registered = await client.post("/api/auth/register", json={
+        "email": f"native-lock-{uuid.uuid4().hex[:10]}@test.eduagents.cn", "password": "pass-12345"})
+    owner = registered.json()["id"]
+    settings, gateway = get_settings(), FakeGateway()
+    deps = EducationDeps(settings=settings, gateway=gateway)
+    first, second = HarnessRuntime(settings, deps), HarnessRuntime(settings, deps)
+    await first.start()
+    await second.start()
+    thread = first.thread_id("quiz", owner, str(uuid.uuid4()))
+    try:
+        await first.run_task("quiz", thread, {"user_id": owner, "tenant_id": owner,
+            "request_id": "lock-request", "topic": "加法", "num_questions": 1,
+            "difficulty_mix": {"easy": 1}, "confirmation_mode": "required"})
+        a, b = await asyncio.gather(first.run_task("quiz", thread, resume={"approved": True}),
+                                   second.run_task("quiz", thread, resume={"approved": True}))
+        assert a.status == b.status == "completed"
+        assert a.state == b.state and a.native_archive == b.native_archive
+        assert gateway.features.count("quiz_generate") == 1
+        with pytest.raises(GatewayError, match="HARNESS_OWNER_MISMATCH"):
+            await second.run_task("quiz", thread, {"user_id": str(uuid.uuid4())})
+    finally:
+        await first.stop()
+        await second.stop()

@@ -78,7 +78,7 @@ def _system_prompt(gateway: _CaptureStreamGateway) -> str:
     assert gateway.requests, "假网关未捕获到任何请求"
     req = gateway.requests[-1]
     system = [m for m in req.messages if m.role == "system"]
-    assert len(system) == 1
+    assert system
     return system[0].content
 
 

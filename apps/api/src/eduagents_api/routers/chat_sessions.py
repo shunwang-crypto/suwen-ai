@@ -122,7 +122,8 @@ async def delete_session(
         # P0-4 (checkpoint 绑定): qa thread_id = "qa:{uid}:{sid}:{turn}", 删会话
         # 同事务按前缀清 LangGraph 三表, 明文问答不残留。表由 checkpointer.setup()
         # 建 (不在 Alembic), 环境未启用图运行时可能不存在 — to_regclass 先探。
-        await session.execute(text("DELETE FROM harness_sessions WHERE thread_id LIKE :pat"), {"pat": f"qa:{ctx.user_id}:{session_id}:%"})
+        await session.execute(text("DELETE FROM harness_sessions WHERE thread_id LIKE :pat OR thread_id=:native"),
+                              {"pat": f"qa:{ctx.user_id}:{session_id}:%", "native": f"chat:{ctx.user_id}:{session_id}"})
         has_ckpt = await session.scalar(
             text("SELECT to_regclass('public.checkpoints') IS NOT NULL")
         )

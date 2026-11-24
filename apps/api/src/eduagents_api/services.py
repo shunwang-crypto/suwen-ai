@@ -744,7 +744,7 @@ async def finalize_plan(ctx: AuthContext, local_id: str, state: dict) -> dict:
     Invalid or stale references degrade to an executable task without a
     resource; they can never attach another tenant's material.
     """
-    from eduagents_core.workflows.plan import is_safe_public_url
+    from eduagents_core.education.plan import is_safe_public_url
 
     try:
         plan_id = uuid.UUID(local_id)
@@ -1327,8 +1327,8 @@ async def record_attempts(
 
     now_dt: 业务时间 (路由层从 timectl 虚拟时钟取, §9); 缺省回退系统时间保持向后兼容。
     """
+    from eduagents_core.education.quiz import grade_objective
     from eduagents_core.mastery.scheduler import new_card_json
-    from eduagents_core.workflows.quiz import grade_objective
 
     from .assessment_submissions import prepare_submission, save_submission_result, submission_key
     from .grading import grade_short

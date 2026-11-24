@@ -262,7 +262,7 @@ export function useChatStream(options: UseChatStreamOptions) {
             case "done": {
               const d = msg.data as DoneData;
               patchMsg(asstId, (m) => {
-                const normalized = normalizeAnswerCitations(m.content, m.citations);
+                const normalized = normalizeAnswerCitations(m.content, d.selected_citations ?? m.citations);
                 return {
                   ...m,
                   content: normalized.content,

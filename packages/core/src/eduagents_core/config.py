@@ -156,6 +156,8 @@ class Settings(BaseSettings):
     gateway_timeout_seconds: float = 60.0
     harness_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
     harness_max_concurrency: int = Field(default=8, ge=1, le=32)
+    harness_max_model_calls: int = Field(default=16, ge=2, le=40)
+    harness_context_window_tokens: int = Field(default=32768, ge=4096, le=262144)
     # Explicit business-route provider chains.  False preserves the legacy
     # CHEAP/STANDARD/STRONG/PLAN behavior for existing deployments.
     model_routing_enabled: bool = False

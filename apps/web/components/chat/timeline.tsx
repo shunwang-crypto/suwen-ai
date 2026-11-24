@@ -12,6 +12,19 @@ export type TimelineItem =
   | { kind: "trace"; data: TraceEventData };
 
 const NODE_LABELS: Record<string, string> = {
+  agent: "处理学习任务",
+  read_learning_context: "读取学情",
+  search_knowledge_base: "检索知识库",
+  web_search: "搜索网页",
+  read_material: "阅读资料",
+  analyze_learning_goal: "分析学习目标",
+  submit_answer: "校验并提交回答",
+  submit_blueprint: "准备练习蓝图",
+  submit_quiz: "校验并提交题卷",
+  submit_plan_draft: "准备学习计划",
+  publish_plan: "发布已确认计划",
+  assess_student_turn: "分析学习卡点",
+  submit_tutor_reply: "提交辅导回复",
   cache: "缓存匹配",
   cache_lookup: "缓存匹配",
   query_plan: "整理问题",
@@ -37,6 +50,8 @@ const NODE_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   running: "进行中",
   pending: "等待中",
+  awaiting_confirmation: "等待确认",
+  cancelled: "已取消",
   done: "已完成",
   success: "已完成",
   completed: "已完成",

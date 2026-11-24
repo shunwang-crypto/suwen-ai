@@ -81,22 +81,27 @@ stub 输出不能用来判断模型质量。真实模型、嵌入、重排和联
 
 ## Harness 运行与旧会话迁移
 
-普通/附件问答、辅导、出题和计划都通过 DSH，再进入现有模型网关。
-`HARNESS_TIMEOUT_SECONDS` 默认 180 秒，`HARNESS_MAX_CONCURRENCY` 默认 8；超时和显式
-停止取消模型工作并回收子进程。SDK 处于预览阶段，升级时须同时验证 profile patch、
-原生工具历史和协议。
-
-升级已有本地数据库时，先停止 API/Worker，再安装仅用于旧数据导入的可选依赖：
+教育任务由原生 DSH 运行，领域工具定义教学规则；单次评分/评审服务仍可直接使用网关。
+`HARNESS_TIMEOUT_SECONDS` 默认 180 秒，`HARNESS_MAX_CONCURRENCY` 默认 8，
+`HARNESS_MAX_MODEL_CALLS` 默认 16，`HARNESS_CONTEXT_WINDOW_TOKENS` 默认 32768。
+自动压缩请求也计入模型调用上限。超时和取消回收子进程并保存可用原生检查点。
+SDK 处于预览阶段，升级时同时验证 profile patch、原生日志、压缩及工具协议。
 
 ~~~bash
-"$HOME/miniforge3/envs/eduagents/bin/pip" install -e 'packages/core[legacy-migration]'
 make migrate
 ~~~
 
-`make migrate` 应用 `0039` 并导入旧会话；新库跳过旧数据读取，不需要上述可选依赖。
-导入器不执行旧图，不删除旧表，不覆盖已有新会话。导入完成后 API 和 Worker 只运行 DSH。
-`make migrate-legacy` 可单独幂等重跑导入。`test_dsh_runtime.py` 使用真实配套二进制和
-测试模型网关，不向真实模型发送请求；其结果不能用于宣称模型质量或成本改善。
+`make migrate` 只应用 Alembic，包括 `0040` 原生任务迁移。已有旧 LangGraph checkpoint
+且需要恢复其待确认业务状态时，停 API/Worker 后显式执行离线导入：
+
+~~~bash
+"$HOME/miniforge3/envs/eduagents/bin/pip" install -e 'packages/core[legacy-migration]'
+make migrate-legacy
+~~~
+
+新库无需旧依赖。导入器不执行旧图、不删除旧表、不覆盖新会话。`test_dsh_runtime.py`
+和 `test_native_agent_tasks.py` 使用真实配套二进制，验证工具执行、确认权限、原生恢复、
+压缩、取消、BYOK 与计量。测试替身生成的内容明确标记为开发桩，不能用于模型质量结论。
 
 ## 验证命令
 

@@ -504,7 +504,7 @@ async def problem_mastery_band(
 ) -> str:
     """题目文本命中的 KC 的掌握度档 (weak/reinforce/near/mastered), 无命中返回 ""。
 
-    tutor 子图内不查库 (WorkflowDeps 无 session), 因此这里在路由层算好后注入 state,
+    tutor 子图内不查库 (EducationDeps 无 session), 因此这里在路由层算好后注入 state,
     由 policy 决定**起始** hint_level (§18: 讲解先适应"会不会")。
 
     匹配口径与 tutor_graph._render_profile_section 的开场关联一致: 归一化后做子串

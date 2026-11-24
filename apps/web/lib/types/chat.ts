@@ -63,6 +63,7 @@ export interface InterruptData {
 
 export interface DoneData {
   session_id: string;
+  selected_citations?: CitationData[];
   refused?: boolean;
   usage?: {
     cost_cny?: number;

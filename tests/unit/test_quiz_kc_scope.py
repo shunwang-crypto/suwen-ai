@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import json
 
-from eduagents_core.config import Settings
+from eduagents_core.education.quiz import validate_questions
 from eduagents_core.gateway.base import ChatResult
-from eduagents_core.harness.workflow import MemoryStore
-from eduagents_core.workflows.quiz import build_quiz_workflow
-from eduagents_core.workflows.state import WorkflowDeps
 
 
 class _Gateway:
@@ -20,9 +17,7 @@ class _Gateway:
         if request.feature == "quiz_blueprint":
             text = json.dumps(
                 {
-                    "items": [
-                        {"kc_name": "章节 A", "type": "single", "difficulty": "mid"}
-                    ],
+                    "items": [{"kc_name": "章节 A", "type": "single", "difficulty": "mid"}],
                     "summary": "范围测试",
                 },
                 ensure_ascii=False,
@@ -56,28 +51,24 @@ class _Gateway:
         )
 
 
-async def test_generated_kc_must_match_target_scope_after_retries():
-    gateway = _Gateway()
-    app = build_quiz_workflow(
-        WorkflowDeps(settings=Settings(), gateway=gateway)
-    ).with_store(MemoryStore())
-
-    final = await app.ainvoke(
-        {
-            "tenant_id": "tenant",
-            "user_id": "user",
-            "request_id": "request",
-            "thread_id": "quiz:tenant:user:scope",
-            "confirmation_mode": "auto",
-            "topic": "章节 A",
-            "num_questions": 1,
-            "difficulty_mix": {"easy": 0, "mid": 1, "hard": 0},
-            "kc_names": ["章节 A"],
-        },
-        {"configurable": {"thread_id": "scope"}},
-    )
-
-    assert final["terminal_outcome"] == "validation_failed"
-    assert final["ever_generated_nonempty"] is True
-    assert any("KC 白名单" in error for error in final["validation_errors"])
-
+def test_generated_kc_must_match_target_scope_after_bounded_retries():
+    state = {
+        "num_questions": 1,
+        "kc_names": ["章节 A"],
+        "ever_generated_nonempty": True,
+        "questions": [
+            {
+                "type": "single",
+                "stem": "题目",
+                "options": ["A", "B", "C", "D"],
+                "answer": "A",
+                "explanation": "解析",
+                "difficulty": "mid",
+                "kc_names": ["越界"],
+            }
+        ],
+    }
+    for _ in range(3):
+        state.update(validate_questions(state))
+    assert state["terminal_outcome"] == "validation_failed"
+    assert any("KC 白名单" in e for e in state["validation_errors"])

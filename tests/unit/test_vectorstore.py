@@ -124,3 +124,7 @@ async def test_scan_point_refs_is_metadata_only_and_handles_missing_collection(s
     await store.upsert([second])
     with pytest.raises(RuntimeError, match="page limit"):
         await store.scan_point_refs(page_size=1, max_pages=1)
+
+async def test_uninitialized_vector_collection_returns_empty_evidence(store):
+    assert await store.search_dense("owner", "kb", [0.0] * DIM, 5) == []
+    assert await store.search_sparse("owner", "kb", {0: 1.0}, 5) == []

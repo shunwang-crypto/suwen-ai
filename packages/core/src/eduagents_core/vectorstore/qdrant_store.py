@@ -309,6 +309,8 @@ class QdrantStore:
         flt: models.Filter,
         limit: int,
     ) -> list[SearchHit]:
+        if not await asyncio.to_thread(self._client.collection_exists, self._collection):
+            return []
         response = await asyncio.to_thread(
             self._client.query_points,
             self._collection,

@@ -139,6 +139,9 @@ async def _sse(client, url: str, headers: dict[str, str], body: dict) -> dict[st
 
 class _LoopGateway:
     async def chat(self, request):
+        if request.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, request)
         from eduagents_core.gateway import ChatResult
 
         if request.feature == "quiz_blueprint":
@@ -435,13 +438,13 @@ async def test_stub_three_question_quiz_uses_one_kc_batch_through_profile(client
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     app = client._transport.app
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     old_runtime = app.state.harness
@@ -617,6 +620,9 @@ async def test_real_stub_ingestion_bootstrap_quiz_submit_and_profile_loop(client
 
     class GeneratedKcGateway:
         async def chat(self, request):
+            if request.feature.startswith("agent_"):
+                from native_model import native_fixture_reply
+                return await native_fixture_reply(self, request)
             from eduagents_core.gateway import ChatResult
 
             if request.feature == "quiz_blueprint":
@@ -658,13 +664,13 @@ async def test_real_stub_ingestion_bootstrap_quiz_submit_and_profile_loop(client
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     app = client._transport.app
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=GeneratedKcGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=GeneratedKcGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     old_runtime = app.state.harness

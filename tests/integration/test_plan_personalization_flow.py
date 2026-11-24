@@ -39,6 +39,9 @@ class FakeGateway:
         ]
 
     async def chat(self, req):
+        if req.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, req)
         from eduagents_core.gateway import ChatResult
 
         self.requests.append(req)
@@ -228,8 +231,8 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             ],
         }
     )
-    original = runtime.deps.gateway.gateway
-    runtime.deps.gateway.gateway = fake
+    original = runtime.deps.gateway
+    runtime.deps.gateway = fake
     try:
         events = await _sse(
             client,
@@ -248,7 +251,7 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             },
         )
     finally:
-        runtime.deps.gateway.gateway = original
+        runtime.deps.gateway = original
 
     # 计划流走到 interrupt 确认 (F3), 计划已生成
     assert events.get("interrupt"), events
@@ -262,26 +265,17 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
     # G1: diagnose 已改为确定性证据边界，不再调用模型估算未知主题。
     assert fake.prompts("plan_diagnose") == []
 
-    # 真实 BKT 进 draft 的 DIAGNOSIS, 但只以定性档出境 (P2-7 脱敏: 精确概率不发第三方 LLM)
-    draft_prompt = fake.prompts("plan_draft")[0]
-    assert "导数定义: 较弱（真实作答证据充分）" in draft_prompt
-    assert "泰勒公式: 已掌握（真实作答证据充分）" in draft_prompt
-    assert "级数: 尚未验证，先安排基线练习" in draft_prompt
-    for decimal in ("0.24", "0.31", "0.92"):
-        assert decimal not in draft_prompt, "精确掌握度小数不得出境第三方 LLM"
-    assert "级数" in draft_prompt
+    # Native goal analysis supplies qualitative evidence and skill gaps to the model.
+    draft_request=next(r for r in fake.requests if r.feature=="plan_draft")
+    analyzed=next(json.loads(m.content) for m in draft_request.messages if m.role=="tool" and "baseline_topics" in m.content)
+    assert analyzed["diagnosis"]["导数定义"]["mastery_band"]=="较弱"
+    assert analyzed["diagnosis"]["泰勒公式"]["mastery_band"]=="已掌握"
+    assert "级数" in analyzed["baseline_topics"]
+    assert analyzed["kc_order"]==["导数定义","极值判定","泰勒公式"]
+    assert any(gap["skill"]=="导数定义" for gap in analyzed["skill_gaps"])
+    assert all(gap["skill"] not in {"极值判定","泰勒公式"} for gap in analyzed["skill_gaps"])
+    assert "p_mastery" not in json.dumps(analyzed)
 
-    # 目标技能 ∩ weak_point_kcs 的定性差距独立进 prompt；目标外薄弱 KC
-    # (极值判定) 不得混入。区段中不含精确概率或内部 ID。
-    gap_section = draft_prompt.split("技能差距（目标要求与当前定性状态）>", 1)[1].split(
-        "</技能差距", 1
-    )[0]
-    assert "导数定义：目标灵活迁移，当前较弱" in gap_section
-    assert "极值判定" not in gap_section and "泰勒公式" not in gap_section
-    assert all(decimal not in gap_section for decimal in ("0.24", "0.31", "0.92"))
-
-    # G2: 先修 DAG 拓扑序注入 KC_ORDER (kc_edges -> dag.topological_order)
-    assert "导数定义 -> 极值判定 -> 泰勒公式" in draft_prompt
 
 
 # ---------- ② tutor 画像注入 + 开场关联卡点 (G9) ----------
@@ -295,8 +289,8 @@ async def test_tutor_prompt_receives_profile_with_opening_weak_kc(client):
     runtime = app.state.harness
     unsolved = {"stuck_type": "concept", "asked_for_answer": False, "solved": False}
     fake = FakeGateway({"tutor_classify": [unsolved], "tutor_respond": ["我们先从定义本身说起?"]})
-    original = runtime.deps.gateway.gateway
-    runtime.deps.gateway.gateway = fake
+    original = runtime.deps.gateway
+    runtime.deps.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -322,9 +316,9 @@ async def test_tutor_prompt_receives_profile_with_opening_weak_kc(client):
         )
         assert r.status_code == 200, r.text
     finally:
-        runtime.deps.gateway.gateway = original
+        runtime.deps.gateway = original
 
-    systems = fake.prompts("tutor_respond")
+    systems = [r.messages[0].content for r in fake.requests if r.feature == "tutor_respond"]
     assert len(systems) == 2
     # 画像段实收 (P2-7 脱敏: 定性词 + KC 名, 无掌握度小数)
     assert "学生画像" in systems[0]
@@ -346,8 +340,8 @@ async def test_tutor_without_profile_has_no_section(client):
     runtime = app.state.harness
     unsolved = {"stuck_type": "unknown", "asked_for_answer": False, "solved": False}
     fake = FakeGateway({"tutor_classify": [unsolved], "tutor_respond": ["说说你的思路?"]})
-    original = runtime.deps.gateway.gateway
-    runtime.deps.gateway.gateway = fake
+    original = runtime.deps.gateway
+    runtime.deps.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -356,9 +350,9 @@ async def test_tutor_without_profile_has_no_section(client):
         )
         assert r.status_code == 200, r.text
     finally:
-        runtime.deps.gateway.gateway = original
+        runtime.deps.gateway = original
 
-    system = fake.prompts("tutor_respond")[0]
+    system = [r.messages[0].content for r in fake.requests if r.feature == "tutor_respond"][0]
     assert "学生画像" not in system
     assert "{{PROFILE_SECTION}}" not in system
     assert BAN in system

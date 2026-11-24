@@ -1,32 +1,21 @@
-"""planner 工作流 (F3 学习规划, M3 简版)。
-
-流程: parse_goal → diagnose (摸底简版) → gather_resources → draft_plan (硬校验) → confirm_plan (interrupt)。
-
-设计要点:
-- 全部 LLM 调用经 deps.gateway (json_mode), 解析失败重试一次, 仍失败走确定性降级并写 trace,
-  阶段不向工作流外抛裸异常 (降级不是冒充: trace 里明确记录 fallback 事件);
-- 计划合规性 (总天数 / 每日分钟预算 / resource_ref 越界 / KC 先后顺序) 由程序硬校验修正,
-  不依赖模型自觉; 每项修正都以 event="fix" 写入 trace (F3-A1/A2);
-- confirm_plan 通过服务端 interrupt() 挂起, 等前端确认后由宿主 Resume(...) 继续执行。
-"""
+"""Educational domain policies and tools for the native agent runtime."""
 
 from __future__ import annotations
 
 import ipaddress
+import json
 import uuid
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
-from ..gateway.base import ChatMessage, ChatRequest, Tier
-from ..harness.workflow import Workflow, interrupt
+from ..gateway.base import Tier
+from ..kc.types import normalize_kc_name
+from .context import PlanState
+from .toolkit import OBJECT, EducationTools, schema
 
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与全仓共用 json_utils.parse_json_object
-from ..json_utils import parse_json_object
-from ..kc.types import normalize_kc_name
-from .state import PlanState, WorkflowDeps
 
-# 本文件位于 packages/core/src/eduagents_core/workflows/ -> parents[5] 为仓库根
+# 本文件位于 packages/core/src/eduagents_core/education/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
 _DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
@@ -108,14 +97,14 @@ def _render_diagnosis(
     return "\n".join(lines) or "(暂无真实学习证据，先安排基线任务)"
 
 
-class PlanWorkflowState(PlanState, total=False):
-    """PlanState 的工作流内部扩展 (契约 state.py 不动)。
+class PlanTaskContext(PlanState, total=False):
+    """PlanState 的任务内部扩展 (契约 state.py 不动)。
 
     parsed_goal: parse_goal 节点产物
         {"subject", "key_topics", "level_hint", "skills"};
     kc_order: 主题先后约束 (list[str], KC 名)。来自真实先修 DAG: API 层
         (routers/plans.py) 预查 kc_edges 先修边, 经 kc.dag.topological_order
-        计算拓扑序后注入 —— WorkflowDeps 无 kc_edges 字段, 工作流内不查库,
+        计算拓扑序后注入 —— EducationDeps 无 kc_edges 字段, 任务内不查库,
         故沿用 state 直接注入通道 (F3-A2)。
     """
 
@@ -298,7 +287,7 @@ def _coerce_text_list(raw: object, *, limit: int = _GOAL_ANALYSIS_ITEM_LIMIT) ->
     return result
 
 
-def _coerce_goal_analysis(data: object, state: PlanWorkflowState) -> dict:
+def _coerce_goal_analysis(data: object, state: PlanTaskContext) -> dict:
     """把目标解析收紧为可展示、可进 checkpoint 的安全契约。
 
     明确表单字段优先于模型提取；未提供验收标准时保持空列表，
@@ -426,34 +415,6 @@ def is_safe_public_url(value: object) -> bool:
         return True
     except ValueError:
         return False
-
-
-async def _chat_json(
-    deps: WorkflowDeps,
-    state: dict,
-    *,
-    feature: str,
-    prompt: str,
-    tier: Tier,
-    temperature: float = 0.2,
-) -> dict[str, Any] | None:
-    """计划专用档 json_mode 调用: 解析失败自动重试一次, 仍失败返回 None (调用方降级)。"""
-    request = ChatRequest(
-        messages=(ChatMessage(role="user", content=prompt),),
-        tier=tier,
-        temperature=temperature,
-        json_mode=True,
-        feature=feature,
-        tenant_id=state.get("tenant_id", ""),
-        user_id=state.get("user_id", ""),
-        request_id=state.get("request_id", ""),
-    )
-    for _ in range(_MAX_ATTEMPTS):
-        result = await deps.gateway.chat(request)
-        data = parse_json_object(result.text)
-        if data is not None:
-            return data
-    return None
 
 
 # ---------------------------------------------------------------- 计划硬校验 (纯函数, 可单测)
@@ -837,334 +798,329 @@ def _harden_plan(
     _fix_day_minutes(plan, budget_minutes, fixes)
 
 
-# ---------------------------------------------------------------- 工作流构建
+# ---------------------------------------------------------------- 任务构建
 
 
-def build_plan_workflow(deps: WorkflowDeps) -> Workflow:
-    """构建 planner 工作流；依赖由闭包捕获，宿主通过 with_store 注入持久化存储。"""
+class PlanTools(EducationTools):
+    feature = "agent_plan"
+    tier = Tier.plan
+    max_tokens = 10000
 
-    async def parse_goal(state: PlanWorkflowState) -> dict:
-        goal = state.get("goal", "")
-        prompt = (
-            _load_prompt("plan_parse_goal.md")
-            .replace("{{GOAL}}", goal)
-            .replace("{{CURRENT_LEVEL}}", state.get("current_level") or "(未提供)")
-            .replace("{{TARGET_OUTCOME}}", state.get("target_outcome") or "(未提供)")
-            .replace("{{SUCCESS_CRITERIA}}", state.get("success_criteria") or "(未提供)")
-        )
-        data = await _chat_json(
-            deps, state, feature="plan_parse_goal", prompt=prompt, tier=Tier.plan, temperature=0.0
-        )
-        parsed = {"subject": "", "key_topics": [], "level_hint": "", "skills": []}
-        degraded = data is None
-        if data is not None:
-            subject = data.get("subject")
-            parsed["subject"] = subject.strip()[:120] if isinstance(subject, str) else ""
-            topics = data.get("key_topics")
-            if isinstance(topics, list):
-                seen_topics: set[str] = set()
-                for topic in topics:
-                    if len(parsed["key_topics"]) >= _GOAL_TOPIC_LIMIT:
-                        break
-                    if not isinstance(topic, str) or not topic.strip():
-                        continue
-                    clean_topic = topic.strip()[:_SKILL_NAME_LIMIT]
-                    normalized = normalize_kc_name(clean_topic)
-                    if normalized and normalized not in seen_topics:
-                        parsed["key_topics"].append(clean_topic)
-                        seen_topics.add(normalized)
-            hint = data.get("level_hint")
-            parsed["level_hint"] = hint.strip()[:160] if isinstance(hint, str) else ""
-        if state.get("current_level"):
-            # 用户明确自报的基础比模型归纳更权威。
-            parsed["level_hint"] = str(state["current_level"]).strip()[:160]
-        if not parsed["key_topics"] and goal.strip():
-            # 兜底: 目标本身充当唯一主题, 保证后续节点仍有输入
-            parsed["key_topics"] = [goal.strip()[:30]]
-        parsed["skills"] = _coerce_goal_skills(
-            data.get("skills") if isinstance(data, dict) else None,
-            parsed["key_topics"],
-        )
-        goal_analysis = _coerce_goal_analysis(data, state)
-        skill_gaps = skill_gap_analysis(parsed["skills"], state.get("weak_kcs") or [])
-        event = "llm_parse_failed_fallback" if degraded else "parsed"
-        return {
-            "parsed_goal": parsed,
-            "goal_analysis": goal_analysis,
-            "skill_gaps": skill_gaps,
-            "trace": [
-                {
-                    "node": "parse_goal",
-                    "event": event,
-                    "parsed_goal": parsed,
-                    "goal_quality": goal_analysis["quality"],
-                    "skill_gap_count": len(skill_gaps),
-                }
-            ],
-        }
-
-    async def diagnose(state: PlanWorkflowState) -> dict:
-        # Only verified evidence may supply a mastery band. Unobserved topics
-        # are scheduled for a baseline check; the planner never asks an LLM to
-        # invent a probability for them.
-        raw_diagnosis = state.get("diagnosis") or {}
-        existing: dict[str, dict[str, str]] = {}
-        for key, value in raw_diagnosis.items():
-            if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
-                continue
-            evidence = value.get("evidence_state")
-            band = value.get("mastery_band")
-            if evidence not in {"unobserved", "estimated", "observed"}:
-                continue
-            item = {"evidence_state": str(evidence)}
-            if evidence == "observed" and band in {"较弱", "待巩固", "接近掌握", "已掌握"}:
-                item["mastery_band"] = str(band)
-            existing[key.strip()] = item
-        observed_keys = {
-            normalize_kc_name(name)
-            for name, item in existing.items()
-            if item.get("evidence_state") == "observed"
-        }
-        parsed = state.get("parsed_goal") or {}
-        topics = parsed.get("key_topics") or []
-        baseline = [
-            topic
-            for topic in topics
-            if isinstance(topic, str)
-            and topic.strip()
-            and normalize_kc_name(topic) not in observed_keys
-        ]
-        return {
-            "diagnosis": existing,
-            "baseline_topics": baseline,
-            "trace": [
-                {
-                    "node": "diagnose",
-                    "event": "evidence_state_used",
-                    "kc_count": len(existing),
-                    "observed_count": len(observed_keys),
-                    "baseline_count": len(baseline),
-                }
-            ],
-        }
-
-    async def gather_resources(state: PlanWorkflowState) -> dict:
-        parsed = state.get("parsed_goal") or {}
-        topics = (parsed.get("key_topics") or list(state.get("diagnosis") or {}))[:_TOPIC_LIMIT]
-        resources: list[dict] = []
-        trace: list[dict] = []
-        kb_id = state.get("kb_id", "")
-        plan_mode = state.get("plan_mode") or ("course_bound" if kb_id else "goal_only")
-        if plan_mode == "course_bound" and kb_id and deps.retrieval is not None:
-            seen_chunks: set[str] = set()
-            for topic in topics:
-                try:
-                    result = await deps.retrieval.retrieve(state.get("tenant_id", ""), kb_id, topic)
-                except Exception as exc:  # 单 topic 检索失败不阻断规划
-                    trace.append(
-                        {
-                            "node": "gather_resources",
-                            "event": "kb_error",
-                            "topic": topic,
-                            "error": str(exc),
-                        }
-                    )
-                    continue
-                for chunk in result.chunks[:_KB_TOP_K]:
-                    if chunk.chunk_id in seen_chunks:
-                        continue
-                    seen_chunks.add(chunk.chunk_id)
-                    resources.append(
-                        {
-                            "type": "kb",
-                            "title": (chunk.heading_path or chunk.text[:30])[:512],
-                            "kb_id": kb_id,
-                            "doc_id": chunk.doc_id,
-                            "chunk_id": chunk.chunk_id,
-                        }
-                    )
-        if plan_mode == "goal_only" and kb_id:
-            trace.append(
-                {
-                    "node": "gather_resources",
-                    "event": "kb_skipped_goal_only",
-                }
+    def __init__(self, deps, record, emit):
+        super().__init__(deps, record, emit)
+        self.add_learning_context()
+        if self.state.get("plan_confirmed"):
+            self.add(
+                schema(
+                    "publish_plan",
+                    "发布服务端已经校验且用户已经确认的计划，模型不能覆盖已确认内容。",
+                    {},
+                ),
+                self.publish,
             )
-        # A course-bound plan is grounded exclusively in the selected KB.
-        # Keep this guard in the graph as well as in finalize_plan: a graph
-        # checkpoint can outlive a UI selection and must never acquire web
-        # resources by falling through to the generic search path.
-        if plan_mode == "course_bound":
-            if deps.web_search is not None:
-                trace.append(
+        else:
+            course_bound = self.state.get("plan_mode") == "course_bound"
+            self.add_evidence_tools(kb=course_bound, web=not course_bound)
+            self.add(
+                schema(
+                    "analyze_learning_goal",
+                    "分析目标技能与已验证学情的差距，返回未知主题和基线练习建议，不估计掌握概率。",
+                    {"goal_outline": OBJECT},
+                    ("goal_outline",),
+                ),
+                self.analyze_goal,
+            )
+            self.add(
+                schema(
+                    "submit_plan_draft",
+                    "提交目标拆解和可执行计划草案。服务端修正预算、天数、先修顺序及资料引用后等待用户确认。",
+                    {"goal_outline": OBJECT, "plan": OBJECT},
+                    ("plan",),
+                ),
+                self.submit,
+            )
+
+    def prepare_turn(self):
+        checked = verified_diagnosis(self.state)
+        self.state.update({key: value for key, value in checked.items() if key != "trace"})
+
+    def policy(self):
+        return (
+            super().policy()
+            + (
+                "你负责学习规划。读取真实学情，根据目标决定需要哪些资料并调用工具。"
+                "goal_outline 可包含 subject、key_topics、skills、goal_analysis。"
+                "plan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,success_criteria}]}]}。"
+                "必须覆盖用户要求的全部天数，每日任务时长符合预算。缺少学习证据的主题安排基线练习。"
+                "resource_ref 是工具返回 resources 的下标；没有资料时使用 null。"
+                "提交草案后等待用户确认。已确认时只调用 publish_plan，不修改内容。"
+            )
+            + json.dumps(
+                {
+                    "mode": self.state.get("plan_mode"),
+                    "confirmed": bool(self.state.get("plan_confirmed")),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    async def analyze_goal(self, args):
+        self.state.update(
+            {
+                k: v
+                for k, v in normalize_goal(self.state, args["goal_outline"]).items()
+                if k != "trace"
+            }
+        )
+        self.prepare_turn()
+        return {
+            key: self.state.get(key)
+            for key in (
+                "parsed_goal",
+                "goal_analysis",
+                "skill_gaps",
+                "diagnosis",
+                "baseline_topics",
+                "kc_order",
+            )
+        }
+
+    def resources(self):
+        course_bound = self.state.get("plan_mode") == "course_bound"
+        allowed_kbs = set(self.state.get("kb_ids") or [self.state.get("kb_id")])
+        old = self.state.get("resources") or []
+        resources, remap = [], {}
+        for index, resource in enumerate(old):
+            if not isinstance(resource, dict):
+                continue
+            allowed = (
+                course_bound
+                and resource.get("type") == "kb"
+                and resource.get("kb_id") in allowed_kbs
+                and resource.get("chunk_id")
+            ) or (
+                not course_bound
+                and resource.get("type") == "web"
+                and is_safe_public_url(resource.get("url") or "")
+            )
+            if allowed:
+                remap[index] = len(resources)
+                resources.append(resource)
+        for day in _iter_days(self.state.get("plan") or {"stages": []}):
+            for task in day.get("tasks") or []:
+                task["resource_ref"] = remap.get(task.get("resource_ref"))
+        self.state["resources"] = resources
+        known = {r.get("chunk_id") or r.get("url") for r in resources}
+        for item in (self.state.get("evidences") or []) if course_bound else []:
+            if item["chunk_id"] not in known:
+                known.add(item["chunk_id"])
+                resources.append(
                     {
-                        "node": "gather_resources",
-                        "event": "web_skipped_course_bound",
+                        "type": "kb",
+                        "title": item["heading_path"][:512],
+                        "kb_id": item.get("kb_id") or self.state.get("kb_id", ""),
+                        "doc_id": item["doc_id"],
+                        "chunk_id": item["chunk_id"],
                     }
                 )
-        elif plan_mode == "goal_only" and deps.web_search is not None:
-            seen_urls: set[str] = set()
-            for topic in topics:
-                try:
-                    results = await deps.web_search(topic)
-                except Exception as exc:
-                    trace.append(
-                        {
-                            "node": "gather_resources",
-                            "event": "web_error",
-                            "topic": topic,
-                            "error": str(exc),
-                        }
-                    )
-                    continue
-                for item in (results or [])[:_WEB_TOP_K]:
-                    url = item.get("url") if isinstance(item, dict) else None
-                    if not is_safe_public_url(url) or url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    resources.append(
-                        {
-                            "type": "web",
-                            "title": str(item.get("title") or url)[:512],
-                            "url": url,
-                        }
-                    )
-        elif plan_mode not in {"course_bound", "goal_only"}:
-            trace.append(
-                {
-                    "node": "gather_resources",
-                    "event": "web_skipped_invalid_plan_mode",
-                    "plan_mode": str(plan_mode),
-                }
-            )
-        # 知识库与 web 均不可用: 资源标"待补充", 计划仍生成
-        event = "gathered" if resources else "resources_pending"
-        trace.append({"node": "gather_resources", "event": event, "count": len(resources)})
-        return {"resources": resources, "trace": trace}
+        for item in (self.state.get("web_results") or []) if not course_bound else []:
+            if item["url"] not in known and is_safe_public_url(item["url"]):
+                known.add(item["url"])
+                resources.append({"type": "web", "title": item["title"][:512], "url": item["url"]})
+        return resources
 
-    async def draft_plan(state: PlanWorkflowState) -> dict:
-        total_days = max(int(state.get("total_days") or 1), 1)
-        budget_minutes = max(float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0)
-        resources = state.get("resources") or []
-        parsed = state.get("parsed_goal") or {}
-        diagnosis = state.get("diagnosis") or {}
-        kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
-        resources_block = (
-            "\n".join(
-                f"{i}. [{r.get('type', '')}] {r.get('title', '')}"
-                f" (doc_id={r.get('doc_id', '')}, chunk_id={r.get('chunk_id', '')}, url={r.get('url', '')})"
-                for i, r in enumerate(resources)
-            )
-            or "(暂无资源, 所有任务 resource_ref 一律填 null; action_type 使用 practice、tutor 或 mixed)"
-        )
-        prompt = (
-            _load_prompt("plan_draft.md")
-            .replace("{{TOTAL_DAYS}}", str(total_days))
-            .replace("{{BUDGET_MINUTES}}", str(int(round(budget_minutes))))
-            .replace("{{GOAL}}", state.get("goal", ""))
-            .replace("{{GOAL_ANALYSIS}}", _render_goal_analysis(state.get("goal_analysis")))
-            .replace("{{SUBJECT}}", parsed.get("subject") or "(未知)")
-            # P2-7 脱敏: 精确掌握度概率是敏感个人信息, 不随 prompt 出境第三方 LLM;
-            # LLM 排计划只需要定性档, 精确值留在宿主供确定性硬校验使用
-            .replace(
-                "{{DIAGNOSIS}}",
-                _render_diagnosis(
-                    diagnosis,
-                    parsed.get("key_topics") or [],
-                    state.get("baseline_topics") or [],
-                ),
-            )
-            .replace("{{SKILL_GAPS}}", _render_skill_gaps(state.get("skill_gaps")))
-            .replace("{{PROFILE}}", (state.get("profile_summary") or "(无额外画像)"))
-            .replace("{{RESOURCES}}", resources_block)
-            .replace("{{KC_ORDER}}", " -> ".join(kc_order) or "(无硬性先后约束)")
-        )
-        data = await _chat_json(
-            deps, state, feature="plan_draft", prompt=prompt, tier=Tier.plan, temperature=0.4
-        )
-        fixes: list[dict] = []
-        plan = _coerce_plan(data)
+    async def search_kb(self, args):
+        result = await super().search_kb(args)
+        result["resources"] = self.resources()
+        return result
+
+    async def search_web(self, args):
+        result = await super().search_web(args)
+        result["resources"] = self.resources()
+        return result
+
+    async def submit(self, args):
+        outline = args.get("goal_outline") or {}
+        normalized = normalize_goal(self.state, outline if isinstance(outline, dict) else {})
+        self.state.update({key: value for key, value in normalized.items() if key != "trace"})
+        self.prepare_turn()
+        plan = _coerce_plan(args.get("plan"))
         if plan is None:
-            plan = _fallback_plan(state, total_days, budget_minutes)
-            fixes.append({"fix": "draft_fallback", "reason": "llm_json_unparsable_after_retry"})
+            return {
+                "accepted": False,
+                "errors": ["计划结构无效，请按 stages/days/tasks 结构重新提交"],
+            }
+        fixes = []
+        resources = self.resources()
         _harden_plan(
             plan,
-            total_days=total_days,
-            budget_minutes=budget_minutes,
-            kc_order=kc_order,
+            total_days=max(1, int(self.state.get("total_days") or 1)),
+            budget_minutes=max(1.0, float(self.state.get("budget_hours_per_day") or 1) * 60),
+            kc_order=self.state.get("kc_order") or [],
             n_resources=len(resources),
             fixes=fixes,
         )
-        trace = [
-            {
-                "node": "draft_plan",
-                "event": "drafted",
-                "fix_count": len(fixes),
-                "profile_injected": bool(state.get("profile_summary")),
-                "goal_quality": (state.get("goal_analysis") or {}).get("quality", "vague"),
-                "skill_gap_count": len(state.get("skill_gaps") or []),
-            }
-        ]
-        trace.extend({"node": "draft_plan", "event": "fix", **fix} for fix in fixes)
-        return {"plan": plan, "trace": trace}
+        self.state["plan"] = plan
+        self.record.pending = {
+            "kind": "plan_confirm",
+            "plan": plan,
+            "resources": resources,
+            "goal_analysis": self.state.get("goal_analysis") or {},
+            "skill_gaps": self.state.get("skill_gaps") or [],
+            "plan_mode": self.state.get("plan_mode") or "goal_only",
+        }
+        self.record.status = "awaiting_confirmation"
+        self.trace(node="draft_plan", event="drafted", fix_count=len(fixes))
+        for fix in fixes:
+            self.trace(node="draft_plan", event="fix", **fix)
+        return {
+            "accepted": True,
+            "status": "awaiting_confirmation",
+            "instruction": "停止并等待真实用户确认",
+        }
 
-    async def confirm_plan(state: PlanWorkflowState) -> dict:
-        # interrupt 挂起等待前端确认; resume 后本节点从头重放 (前面无副作用)
-        decision = interrupt(
-            {
-                "kind": "plan_confirm",
-                "plan": state.get("plan") or {},
-                "resources": state.get("resources") or [],
-                "goal_analysis": state.get("goal_analysis") or {},
-                "skill_gaps": state.get("skill_gaps") or [],
-                "plan_mode": state.get("plan_mode") or "goal_only",
-            }
-        )
-        approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
-        if not approved:
-            return {"trace": [{"node": "confirm_plan", "event": "plan_rejected"}]}
-        updates: dict[str, Any] = {"plan_confirmed": True}
-        event = "plan_approved"
-        fixes: list[dict] = []
-        if isinstance(decision, dict) and "plan" in decision:
-            edited = _coerce_plan(decision.get("plan"))
-            if edited is None:
-                # resume 是公开 HTTP 输入：非法结构不能覆盖已通过硬校验的原计划。
-                event = "plan_approved_invalid_edits_ignored"
-            else:
-                total_days = max(int(state.get("total_days") or 1), 1)
-                budget_minutes = max(float(state.get("budget_hours_per_day") or 1.0) * 60.0, 1.0)
-                resources = state.get("resources") or []
-                kc_order = [k for k in (state.get("kc_order") or []) if isinstance(k, str)]
-                _harden_plan(
-                    edited,
-                    total_days=total_days,
-                    budget_minutes=budget_minutes,
-                    kc_order=kc_order,
-                    n_resources=len(resources),
-                    fixes=fixes,
-                )
-                updates["plan"] = edited
-                event = "plan_approved_with_edits"
-        trace = [{"node": "confirm_plan", "event": event, "fix_count": len(fixes)}]
-        trace.extend({"node": "confirm_plan", "event": "fix", **fix} for fix in fixes)
-        updates["trace"] = trace
-        return updates
+    def confirm(self, decision):
+        self.resources()
+        self.record.pending = None
+        if not isinstance(decision, dict) or decision.get("approved") is not True:
+            self.record.status = "cancelled"
+            self.state["plan_confirmed"] = False
+            return
+        modified = _coerce_plan(decision.get("plan")) if "plan" in decision else None
+        if modified is not None:
+            _harden_plan(
+                modified,
+                total_days=max(1, int(self.state.get("total_days") or 1)),
+                budget_minutes=max(1.0, float(self.state.get("budget_hours_per_day") or 1) * 60),
+                kc_order=self.state.get("kc_order") or [],
+                n_resources=len(self.state.get("resources") or []),
+                fixes=[],
+            )
+            self.state["plan"] = modified
+        self.state["plan_confirmed"] = True
 
-    return Workflow(
-        entry="parse_goal",
-        phases={
-            "parse_goal": parse_goal,
-            "diagnose": diagnose,
-            "gather_resources": gather_resources,
-            "draft_plan": draft_plan,
-            "confirm_plan": confirm_plan,
-        },
-        transitions={
-            "parse_goal": "diagnose",
-            "diagnose": "gather_resources",
-            "gather_resources": "draft_plan",
-            "draft_plan": "confirm_plan",
-        },
-        gateway=deps.gateway,
+    async def publish(self, _args):
+        if not self.state.get("plan_confirmed"):
+            return {"accepted": False, "errors": ["计划尚未获得用户确认"]}
+        self.resources()
+        self.record.status = "completed"
+        self.trace(node="confirm_plan", event="plan_approved")
+        return {"accepted": True, "status": "completed"}
+
+
+def verified_diagnosis(state: PlanTaskContext) -> dict:
+    # Only verified evidence may supply a mastery band. Unobserved topics
+    # are scheduled for a baseline check; the planner never asks an LLM to
+    # invent a probability for them.
+    raw_diagnosis = state.get("diagnosis") or {}
+    existing: dict[str, dict[str, str]] = {}
+    for key, value in raw_diagnosis.items():
+        if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+            continue
+        evidence = value.get("evidence_state")
+        band = value.get("mastery_band")
+        if evidence not in {"unobserved", "estimated", "observed"}:
+            continue
+        item = {"evidence_state": str(evidence)}
+        if evidence == "observed" and band in {"较弱", "待巩固", "接近掌握", "已掌握"}:
+            item["mastery_band"] = str(band)
+        existing[key.strip()] = item
+    observed_keys = {
+        normalize_kc_name(name)
+        for name, item in existing.items()
+        if item.get("evidence_state") == "observed"
+    }
+    parsed = state.get("parsed_goal") or {}
+    topics = parsed.get("key_topics") or []
+    baseline = [
+        topic
+        for topic in topics
+        if isinstance(topic, str)
+        and topic.strip()
+        and normalize_kc_name(topic) not in observed_keys
+    ]
+    return {
+        "diagnosis": existing,
+        "baseline_topics": baseline,
+        "trace": [
+            {
+                "node": "diagnose",
+                "event": "evidence_state_used",
+                "kc_count": len(existing),
+                "observed_count": len(observed_keys),
+                "baseline_count": len(baseline),
+            }
+        ],
+    }
+
+
+def qualitative_weak_kcs(items):
+    selected, seen = [], set()
+    for item in items[:100]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:120]
+        key = normalize_kc_name(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        clean = {"name": name}
+        if item.get("zone") in {"较弱", "待巩固"}:
+            clean["zone"] = item["zone"]
+        if item.get("mastery_band") in {"较弱", "待巩固", "接近掌握", "已掌握"}:
+            clean["mastery_band"] = item["mastery_band"]
+        if item.get("evidence_state") in {"unobserved", "estimated", "observed"}:
+            clean["evidence_state"] = item["evidence_state"]
+        selected.append(clean)
+    return selected
+
+
+def normalize_goal(state, data):
+    goal = state.get("goal", "")
+    parsed = {"subject": "", "key_topics": [], "level_hint": "", "skills": []}
+    degraded = data is None
+    if data is not None:
+        subject = data.get("subject")
+        parsed["subject"] = subject.strip()[:120] if isinstance(subject, str) else ""
+        topics = data.get("key_topics")
+        if isinstance(topics, list):
+            seen_topics: set[str] = set()
+            for topic in topics:
+                if len(parsed["key_topics"]) >= _GOAL_TOPIC_LIMIT:
+                    break
+                if not isinstance(topic, str) or not topic.strip():
+                    continue
+                clean_topic = topic.strip()[:_SKILL_NAME_LIMIT]
+                normalized = normalize_kc_name(clean_topic)
+                if normalized and normalized not in seen_topics:
+                    parsed["key_topics"].append(clean_topic)
+                    seen_topics.add(normalized)
+        hint = data.get("level_hint")
+        parsed["level_hint"] = hint.strip()[:160] if isinstance(hint, str) else ""
+    if state.get("current_level"):
+        # 用户明确自报的基础比模型归纳更权威。
+        parsed["level_hint"] = str(state["current_level"]).strip()[:160]
+    if not parsed["key_topics"] and goal.strip():
+        # 兜底: 目标本身充当唯一主题, 保证后续节点仍有输入
+        parsed["key_topics"] = [goal.strip()[:30]]
+    parsed["skills"] = _coerce_goal_skills(
+        data.get("skills") if isinstance(data, dict) else None,
+        parsed["key_topics"],
     )
+    goal_analysis = _coerce_goal_analysis(data, state)
+    skill_gaps = skill_gap_analysis(parsed["skills"], state.get("weak_kcs") or [])
+    event = "llm_parse_failed_fallback" if degraded else "parsed"
+    return {
+        "parsed_goal": parsed,
+        "goal_analysis": goal_analysis,
+        "skill_gaps": skill_gaps,
+        "trace": [
+            {
+                "node": "parse_goal",
+                "event": event,
+                "parsed_goal": parsed,
+                "goal_quality": goal_analysis["quality"],
+                "skill_gap_count": len(skill_gaps),
+            }
+        ],
+    }

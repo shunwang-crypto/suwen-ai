@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 from eduagents_core.config import Settings
+from eduagents_core.education.context import EducationDeps
 from eduagents_core.gateway import BudgetExceeded, GatewayError, Tier
 from eduagents_core.gateway.openai_gateway import _DEGRADE, _TIER_RANK, _warn_if_upcost
+from eduagents_core.harness.task import AgentTask
 from eduagents_core.retrieval.base import RetrievalResult, RetrievedChunk
-from eduagents_core.workflows.qa import build_qa_workflow
-from eduagents_core.workflows.state import WorkflowDeps
 
 # ---------- worker 网关单例 (P0-2a / P1-15) ----------
 
@@ -152,34 +152,34 @@ def _kb_state() -> dict:
 
 async def test_budget_exceeded_propagates_out_of_cheap_helper():
     gateway = _BudgetBlownGateway(BudgetExceeded(retry_after_seconds=3600))
-    deps = WorkflowDeps(
+    deps = EducationDeps(
         settings=Settings(_env_file=None),
         gateway=gateway,
         retrieval=_OneShotRetrieval(),
         web_search=None,
     )
-    graph = build_qa_workflow(deps)
+    task = AgentTask("qa", deps)
     with pytest.raises(BudgetExceeded):
-        await graph.ainvoke(_kb_state())
+        await task.run("cost-test", _kb_state())
     assert gateway.calls == 1  # 第一笔 cheap 调用即熔断, 不再继续烧后续节点
 
 
 async def test_other_gateway_errors_still_degrade():
     # 非预算类网关错误维持旧语义: cheap 辅助调用失败只降级, 图继续跑
     gateway = _BudgetBlownGateway(GatewayError("ALL_PROVIDERS_FAILED", "x"))
-    deps = WorkflowDeps(
+    deps = EducationDeps(
         settings=Settings(_env_file=None),
         gateway=gateway,
         retrieval=_OneShotRetrieval(),
         web_search=None,
     )
-    graph = build_qa_workflow(deps)
+    task = AgentTask("qa", deps)
     # generate 节点也会失败 (同一个 gateway), 但那不是 cheap 辅助调用的静默吞没路径:
     # 它以 GatewayError 直接冒头 — 断言不是 BudgetExceeded 即可
     with pytest.raises(GatewayError) as exc_info:
-        await graph.ainvoke(_kb_state())
+        await task.run("cost-test", _kb_state())
     assert not isinstance(exc_info.value, BudgetExceeded)
-    assert gateway.calls > 1  # cheap 辅助调用失败被吞掉降级, 图走到了后续节点
+    assert gateway.calls == 1  # cheap 辅助调用失败被吞掉降级, 图走到了后续节点
 
 
 # ---------- API 信封: 429 + Retry-After (P1-9) 与新错误码 (P2-15) ----------

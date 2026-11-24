@@ -93,7 +93,7 @@ def _sse(data: dict) -> str:
     return orjson.dumps(data).decode()
 
 
-async def stream_graph_run(
+async def stream_task_run(
     runtime,
     kind: str,
     thread_id: str,
@@ -102,10 +102,10 @@ async def stream_graph_run(
     resume=None,
     trace_prelude: list[dict] | None = None,
 ):
-    """图执行 → SSE 事件流 (§6 协议): node_update/trace_event/interrupt/done。
+    """原生任务 → SSE 事件流 (§6 协议): node_update/trace_event/interrupt/done。
     quiz/plan 完成时在 done 前落库并回传结果。M3-D2 的 interrupt→resume 协议载体。
 
-    trace_prelude: 入图前由路由层决策产生的 trace 事件 (如画像定向出题选中的薄弱点),
+    trace_prelude: 任务开始前由路由层决策产生的 trace 事件 (如画像定向出题选中的薄弱点),
     原样先行下发, 让"这卷题为什么是这些知识点"在前端时间线里可核对。
     """
 
@@ -113,7 +113,7 @@ async def stream_graph_run(
         for tr in trace_prelude or []:
             yield {"event": "trace_event", "data": _sse(tr)}
         try:
-            async for ev in runtime.astream_updates(kind, thread_id, payload, resume=resume):
+            async for ev in runtime.stream_task(kind, thread_id, payload, resume=resume):
                 if ev["kind"] == "token":
                     # 图内真流式 token (目前 qa generate 写出; 其余图无 writer 即无此事件)
                     yield {
@@ -122,6 +122,10 @@ async def stream_graph_run(
                             {"text": ev["text"], "attempt": ev.get("attempt", 0)}
                         ),
                     }
+                elif ev["kind"] == "tool":
+                    yield {"event": "node_update", "data": _sse({"node": ev["tool"], "status": ev["status"]})}
+                elif ev["kind"] == "trace":
+                    yield {"event": "trace_event", "data": _sse(ev["payload"])}
                 elif ev["kind"] == "custom":
                     continue  # 未知自定义流事件: 向前兼容忽略
                 elif ev["kind"] == "node":
@@ -216,7 +220,7 @@ async def stream_graph_run(
                 "data": _sse({"code": exc.code, "message": exc.message}),
             }
         except Exception as exc:
-            log.exception("graph_stream_failed", kind=kind)
+            log.exception("agent_task_stream_failed", kind=kind)
             # GatewayError/BudgetExceeded already carry a safe public code;
             # unknown exceptions stay behind the generic infrastructure code.
             code = getattr(exc, "code", None)
@@ -252,4 +256,4 @@ async def resume_thread(
         raise HTTPException(status_code=404, detail="NOT_FOUND") from None
     if user_id != str(ctx.user_id):
         raise HTTPException(status_code=404, detail="NOT_FOUND")  # 不泄漏存在性
-    return await stream_graph_run(runtime, kind, thread_id, ctx, None, resume=body.value)
+    return await stream_task_run(runtime, kind, thread_id, ctx, None, resume=body.value)

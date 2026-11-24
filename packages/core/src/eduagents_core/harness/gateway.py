@@ -1,20 +1,20 @@
 """Native DSH inference and tool execution through the mandatory model gateway.
 
-Each workflow activity owns a subprocess and a private temporary home. Durable
-educational state lives in PostgreSQL; reconstructed prompts resume interrupted
-contracts without retaining provider keys or attachment bytes in a DSH home.
+The native runtime owns the agent loop and conversation history. Its session
+files are checkpointed into the tenant store and restored before a later turn.
+Credentials remain exclusively in ModelGateway.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextvars
+import base64
 import json
+import re
 import secrets
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -46,17 +46,16 @@ def validate_installation():
 
 
 ToolHandler = Callable[[dict], Awaitable[Any]]
-_active: contextvars.ContextVar[HarnessGateway | None] = contextvars.ContextVar(
-    "dsh_activity", default=None
-)
 
 
-def _history(messages: list[dict]) -> tuple[ChatMessage, ...]:
-    """Only DSH-generated assistant/tool history follows the host's original prompt."""
+def _history(messages: list[dict], *, native: bool = False) -> tuple[ChatMessage, ...]:
+    """Project the native model context without rebuilding conversation history."""
     result = []
     for message in messages:
         role = message.get("role")
-        if role not in {"assistant", "tool"}:
+        if role not in (
+            {"system", "user", "assistant", "tool"} if native else {"assistant", "tool"}
+        ):
             continue
         content = message.get("content") or []
         text = "\n".join(
@@ -106,6 +105,37 @@ class HarnessGateway:
         self._failed = asyncio.Event()
         self._token = secrets.token_urlsafe(32)
         self._activity_id = ""
+        self.native_session_id: str | None = None
+        self.native_archive: dict[str, str] = {}
+        self._native_prompt = ""
+        self._checkpoint = None
+        self._policy = None
+        self.context_window = 32768
+        self._workspace = None
+        self._chat_overlay = None
+        self._chat_seed = ()
+
+    def archive(self) -> dict[str, str]:
+        """Copy only runtime-owned session files; never credentials or attachments."""
+        if self._home is None:
+            return dict(self.native_archive)
+        root = Path(self._home.name)
+        archive = {}
+        size = 0
+        for path in (root / "sessions").rglob("*"):
+            if not path.is_file() or path.is_symlink() or ".lock" in path.name:
+                continue
+            data = path.read_bytes()
+            size += len(data)
+            if size > 16 * 1024 * 1024:
+                raise GatewayError("HARNESS_SESSION_LIMIT", "任务会话存储已到上限")
+            archive[str(path.relative_to(root))] = base64.b64encode(data).decode("ascii")
+        return archive
+
+    async def checkpoint(self):
+        if self.native_session_id and self._checkpoint:
+            self.native_archive = self.archive()
+            await self._checkpoint(self.native_archive)
 
     async def __aenter__(self):
         return self
@@ -118,15 +148,21 @@ class HarnessGateway:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-        if self._harness is not None:
-            await asyncio.to_thread(self._harness.close)
-            self._harness = None
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
-        if self._home is not None:
-            self._home.cleanup()
-            self._home = None
+        try:
+            if self._harness is not None:
+                await asyncio.to_thread(self._harness.close)
+                self._harness = None
+                self.native_archive = self.archive()
+        finally:
+            if self._runner is not None:
+                await self._runner.cleanup()
+                self._runner = None
+            if self._home is not None:
+                self._home.cleanup()
+                self._home = None
+            if self._workspace is not None:
+                self._workspace.rmdir()
+                self._workspace = None
 
     async def _start(self):
         if self._harness is not None:
@@ -162,6 +198,34 @@ class HarnessGateway:
         await server.wait_closed()
         await site.start()
         self._home = tempfile.TemporaryDirectory(prefix="eduagents-dsh-")
+        restored_size = 0
+        for name, value in self.native_archive.items():
+            relative = Path(name)
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not relative.parts
+                or relative.parts[0] != "sessions"
+            ):
+                raise GatewayError("HARNESS_SESSION_INVALID", "任务会话存储无效")
+            if (
+                len(relative.parts) < 4
+                or relative.parts[-2] != self.native_session_id
+                or ".lock" in relative.name
+            ):
+                raise GatewayError("HARNESS_SESSION_INVALID", "任务会话归属无效")
+            try:
+                if len(value) > 24 * 1024 * 1024:
+                    raise ValueError("oversized archive")
+                data = base64.b64decode(value, validate=True)
+            except (ValueError, TypeError) as exc:
+                raise GatewayError("HARNESS_SESSION_INVALID", "任务会话存储无效") from exc
+            restored_size += len(data)
+            if restored_size > 16 * 1024 * 1024:
+                raise GatewayError("HARNESS_SESSION_LIMIT", "任务会话存储已到上限")
+            target = Path(self._home.name) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         assets = Path(__file__).parent
         patch = Path(self._home.name) / "education.patch.yml"
         patch.write_text(
@@ -169,11 +233,24 @@ class HarnessGateway:
             .read_text()
             .replace("EDU_DSH_PLUGIN_PATH", json.dumps(str(assets / "bridge.mjs")))
         )
+        cwd = self._home.name
+        if self.native_session_id:
+            if not re.fullmatch(r"[a-f0-9]{32}", self.native_session_id):
+                raise GatewayError("HARNESS_SESSION_INVALID", "任务会话标识无效")
+            self._workspace = (
+                Path(tempfile.gettempdir()) / "eduagents-native-workspaces" / self.native_session_id
+            )
+            if self._workspace.is_symlink():
+                self._workspace = None
+                raise GatewayError("HARNESS_SESSION_INVALID", "任务工作目录无效")
+            self._workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cwd = str(self._workspace)
         self._harness = DeepSeekHarness(
             provider="eduagents",
             model="education",
             profile="sdk-minimal",
-            cwd=self._home.name,
+            cwd=cwd,
+            runtime_cwd=self._home.name,
             dsh_home=self._home.name,
             patches=(str(patch),),
             env={
@@ -184,6 +261,7 @@ class HarnessGateway:
                 "DEEPSEEK_API_KEY": "",
                 "DEEPSEEK_BASE_URL": "",
                 "DSH_SYSTEM_PROMPT": "Educational assistant",
+                "EDU_DSH_CONTEXT_WINDOW": str(self.context_window),
             },
         )
         await asyncio.to_thread(self._harness.start)
@@ -194,7 +272,9 @@ class HarnessGateway:
         if name not in self._tools or not isinstance(args, dict):
             raise web.HTTPForbidden()
         try:
-            return web.json_response(await self._tools[name](args))
+            result = await self._tools[name](args)
+            await self.checkpoint()
+            return web.json_response(result)
         except BaseException as exc:
             self._error = exc
             self._failed.set()
@@ -215,19 +295,50 @@ class HarnessGateway:
                 raise GatewayError("HARNESS_STEP_LIMIT", "AI 工具调用已到上限")
             body = await request.json()
             assert self._req is not None
+            await self.checkpoint()
+            native = self.native_session_id is not None
+            compaction = body.get("purpose") == "compaction"
+            messages = _history(body.get("messages") or [], native=native)
+            if native:
+                # The host contributes current authorization/pedagogical policy;
+                # all user, assistant and tool history comes from the native log.
+                policy = self._policy() if self._policy and not compaction else ""
+                messages = (ChatMessage("system", policy), *messages) if policy else messages
+                if self._chat_overlay and not compaction:
+                    # Images are a request-scoped overlay. Only text enters the
+                    # native transcript, so base64 data never enters checkpoints.
+                    projected = list(messages)
+                    for index in range(len(projected) - 1, -1, -1):
+                        if projected[index].role == "user":
+                            projected[index] = self._chat_overlay
+                            projected[index:index] = self._chat_seed
+                            break
+                    messages = tuple(projected)
+            else:
+                messages = self._req.messages + messages
             req = replace(
                 self._req,
-                messages=self._req.messages + _history(body.get("messages") or []),
-                tools=tuple({"type": "function", "function": s} for s in self._schemas),
+                messages=messages,
+                tools=()
+                if compaction
+                else tuple({"type": "function", "function": s} for s in self._schemas),
                 billing_reference=f"{self._req.request_id}:dsh:{self._activity_id}:{self._calls}",
+                feature="harness_compaction" if compaction else self._req.feature,
+                json_mode=False if compaction else self._req.json_mode,
+                max_tokens=2048 if compaction else self._req.max_tokens,
             )
             text = ""
             await emit({"type": "block-start", "index": 0, "blockType": "text"})
-            if req.tools or not self._streaming or not hasattr(self.gateway, "stream_chat"):
+            if (
+                req.tools
+                or compaction
+                or not self._streaming
+                or not hasattr(self.gateway, "stream_chat")
+            ):
                 result = await self.gateway.chat(req)
                 text = result.text
                 if text:
-                    if self._streaming:
+                    if self._streaming and not compaction:
                         await self._tokens.put(StreamDelta(text))
                     await emit({"type": "text-delta", "index": 0, "text": text})
             else:
@@ -322,9 +433,19 @@ class HarnessGateway:
         # session/prompt deliberately bypasses coding-agent slash commands.
         from deepseek_harness.api import final_response
 
+        if self.native_session_id and self.native_archive:
+            self._harness.client.resume_session(session_id)
         with self._harness.client.subscribe_session_notifications(session_id) as subscription:
             self._harness.client.session_prompt(
-                session_id, [{"type": "text", "text": "Complete the host educational task."}]
+                session_id,
+                [
+                    {
+                        "type": "text",
+                        "text": self._native_prompt
+                        if self.native_session_id
+                        else "Complete the host educational task.",
+                    }
+                ],
             )
             events = []
             while True:
@@ -350,7 +471,9 @@ class HarnessGateway:
         try:
             async with asyncio.timeout(self.timeout):
                 await self._start()
-                prompt = asyncio.create_task(asyncio.to_thread(self._prompt, uuid.uuid4().hex))
+                prompt = asyncio.create_task(
+                    asyncio.to_thread(self._prompt, self.native_session_id or uuid.uuid4().hex)
+                )
                 failed = asyncio.create_task(self._failed.wait())
                 await asyncio.wait([prompt, failed], return_when=asyncio.FIRST_COMPLETED)
                 if self._error:
@@ -378,6 +501,60 @@ class HarnessGateway:
 
     async def chat(self, req: ChatRequest) -> ChatResult:
         return await self._run(req)
+
+    async def run_task(
+        self,
+        req,
+        *,
+        session_id,
+        archive,
+        prompt,
+        schemas,
+        handlers,
+        policy=None,
+        checkpoint=None,
+        context_window=32768,
+    ):
+        """Run one turn of a durable native agent; DSH chooses and dispatches tools."""
+        self.native_session_id = session_id
+        self.native_archive = dict(archive)
+        self._native_prompt = prompt
+        self._schemas = schemas
+        self._tools = handlers
+        self._policy = policy
+        self._checkpoint = checkpoint
+        self.context_window = context_window
+        return await self._run(req)
+
+    def configure_chat(self, req, *, session_id, archive, checkpoint, context_window):
+        self.native_session_id = session_id
+        self.native_archive = dict(archive)
+        self._checkpoint = checkpoint
+        self.context_window = context_window
+        self._policy = lambda: "\n".join(m.content for m in req.messages if m.role == "system")
+        self._chat_overlay = req.messages[-1]
+        self._chat_seed = (
+            tuple(m for m in req.messages[:-1] if m.role != "system") if not archive else ()
+        )
+
+        def text_content(message):
+            if isinstance(message.content, str):
+                return message.content
+            return "\n".join(b.get("text", "") for b in message.content if b.get("type") == "text")
+
+        prior = (
+            [
+                {"role": m.role, "content": text_content(m)}
+                for m in req.messages[:-1]
+                if m.role != "system"
+            ]
+            if not archive
+            else []
+        )
+        self._native_prompt = json.dumps(
+            {"prior_conversation": prior, "message": text_content(req.messages[-1])},
+            ensure_ascii=False,
+        )
 
     async def stream_chat(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
         task = asyncio.create_task(self._run(req, streaming=True))
@@ -414,39 +591,3 @@ class HarnessGateway:
             activity._schemas = schemas
             activity._tools = handlers
             return await activity.chat(req)
-
-
-class ScopedHarnessGateway:
-    """One SDK activity per workflow invocation, isolated across concurrent users."""
-
-    def __init__(self, gateway: ModelGateway, timeout: float = 180, max_concurrency: int = 8):
-        self.gateway = gateway
-        self.timeout = timeout
-        self._slots = asyncio.Semaphore(max_concurrency)
-
-    @asynccontextmanager
-    async def activity(self, gateway=None):
-        async with (
-            self._slots,
-            HarnessGateway(gateway or self.gateway, timeout=self.timeout) as runtime,
-        ):
-            token = _active.set(runtime)
-            try:
-                yield
-            finally:
-                _active.reset(token)
-
-    def _current(self):
-        runtime = _active.get()
-        if runtime is None:
-            raise RuntimeError("DSH requires an owned workflow activity")
-        return runtime
-
-    async def chat(self, req):
-        return await self._current().chat(req)
-
-    def stream_chat(self, req):
-        return self._current().stream_chat(req)
-
-    async def run_tools(self, req, schemas, handlers):
-        return await self._current().run_tools(req, schemas, handlers)

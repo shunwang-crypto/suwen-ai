@@ -8,10 +8,10 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 
 import orjson
+from eduagents_core.education.qa import PROFILE_SECTION_TEMPLATE
 from eduagents_core.gateway import GatewayError
 from eduagents_core.logging import get_logger
 from eduagents_core.retrieval.sanitize import sanitize_retrieved_text
-from eduagents_core.workflows.qa import PROFILE_SECTION_TEMPLATE
 from fastapi import Request
 
 from ..deps import AuthContext

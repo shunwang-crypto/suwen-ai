@@ -480,7 +480,7 @@ async def test_delete_session_purges_qa_checkpoints(app_client):
     from eduagents_api.db import tenant_session
     from sqlalchemy import text as sql_text
 
-    pattern = f"qa:{user_id}:{session_id}:%"
+    pattern = f"chat:{user_id}:{session_id}"
 
     async def _count(table: str) -> int:
         async with tenant_session(user_id) as s:
@@ -498,9 +498,9 @@ async def test_delete_session_purges_qa_checkpoints(app_client):
     async with tenant_session(user_id) as s:
         exact = await s.scalar(
             sql_text("SELECT count(*) FROM harness_sessions WHERE thread_id = :t"),
-            {"t": f"qa:{user_id}:{session_id}:1"},
+            {"t": f"chat:{user_id}:{session_id}"},
         )
-    assert exact and exact > 0, "thread_id 必须绑定 session 且按 turn 分隔"
+    assert exact and exact > 0, "thread_id 必须绑定同一原生聊天 session"
 
     r = await client.delete(f"/api/chat/sessions/{session_id}", headers=headers)
     assert r.status_code == 204, r.text

@@ -28,6 +28,9 @@ class FakeGateway:
         self._script = {k: list(v) for k, v in (script or {}).items()}
 
     async def chat(self, req):
+        if req.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, req)
         from eduagents_core.gateway.base import ChatResult
 
         self.requests.append(req)
@@ -113,8 +116,8 @@ async def test_tutor_summary_records_insight_without_mastery(client):
             "tutor_summarize": [summary],
         }
     )
-    original = runtime.deps.gateway.gateway
-    runtime.deps.gateway.gateway = fake
+    original = runtime.deps.gateway
+    runtime.deps.gateway = fake
     try:
         # 第 1 轮: solved -> summarize -> 小结落画像
         r = await client.post(
@@ -153,6 +156,7 @@ async def test_tutor_summary_records_insight_without_mastery(client):
         assert restored_body["problem"].startswith("用定义求")
         assert [message["role"] for message in restored_body["messages"]] == [
             "user",
+            "assistant",
             "user",
             "assistant",
         ]
@@ -160,7 +164,7 @@ async def test_tutor_summary_records_insight_without_mastery(client):
         assert restored_body["pending"] is False
         assert json.loads(restored_body["session_summary"])["misconceptions"]
     finally:
-        runtime.deps.gateway.gateway = original
+        runtime.deps.gateway = original
 
     # DB 核对: 只有 insight，无 mastery 事实。
     from eduagents_api.db import tenant_session
@@ -189,8 +193,8 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
             ],
         }
     )
-    original = runtime.deps.gateway.gateway
-    runtime.deps.gateway.gateway = fake
+    original = runtime.deps.gateway
+    runtime.deps.gateway = fake
     try:
         r = await client.post(
             "/api/tutor",
@@ -198,7 +202,7 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
             json={"problem": "任意题目", "message": "我明白了, 谢谢!"},
         )
     finally:
-        runtime.deps.gateway.gateway = original
+        runtime.deps.gateway = original
     assert r.status_code == 200, r.text
     assert r.json()["learner_insights"] == []
 

@@ -57,7 +57,7 @@ from ..profile_summary import (
     weak_point_kcs,
 )
 from ..services import _plan_resource_public, apply_tutor_summary
-from .threads import stream_graph_run
+from .threads import stream_task_run
 
 log = get_logger("plans")
 
@@ -524,7 +524,7 @@ async def create_plan(
         "profile_summary": profile.summary,
         "profile_weak_points": profile.weak_points,
     }
-    return await stream_graph_run(runtime, "plan", thread_id, ctx, payload)
+    return await stream_task_run(runtime, "plan", thread_id, ctx, payload)
 
 
 @router.get("")
@@ -1105,9 +1105,8 @@ async def get_tutor_session(
     if runtime is None:
         raise HTTPException(status_code=503, detail="GRAPHS_UNAVAILABLE")
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), str(thread_local_id))
-    graph = runtime.workflow("tutor")
-    state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-    values = dict(state.values)
+    record = await runtime.load_task(thread_id)
+    values = dict(record.state)
     if not values:
         raise HTTPException(status_code=404, detail="NOT_FOUND")
 
@@ -1124,7 +1123,8 @@ async def get_tutor_session(
             continue
         item = {"role": role, "content": content}
         if role == "assistant":
-            item["hint_level"] = next(reply_levels, int(values.get("hint_level") or 0))
+            item["hint_level"] = (int(message["hint_level"]) if "hint_level" in message else
+                                  next(reply_levels, int(values.get("hint_level") or 0)))
         messages.append(item)
     return {
         "thread_local_id": str(thread_local_id),
@@ -1133,7 +1133,7 @@ async def get_tutor_session(
         "hint_level": int(values.get("hint_level") or 0),
         "stuck_type": values.get("stuck_type", ""),
         "session_summary": values.get("session_summary", ""),
-        "pending": bool(state.next),
+        "pending": record.pending is not None,
     }
 
 
@@ -1172,10 +1172,8 @@ async def tutor_turn(
             attachment_id = str(draft.resource_id or "")
             problem_page_no = draft.confirmed_page_no
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
-    graph = runtime.workflow("tutor")
-    config = {"configurable": {"thread_id": thread_id}}
-    checkpoint = await graph.aget_state(config)
-    existing = dict(checkpoint.values)
+    record = await runtime.load_task(thread_id)
+    existing = dict(record.state)
     stored_plan_id = str(existing.get("plan_id") or "")
     stored_task_id = str(existing.get("task_id") or "")
     requested_plan_id = str(body.plan_id or "")
@@ -1244,7 +1242,8 @@ async def tutor_turn(
     if plan_id:
         payload["plan_id"] = plan_id
         payload["task_id"] = task_id
-    state = await graph.ainvoke(payload, config)
+    record = await runtime.run_task("tutor", thread_id, payload)
+    state = record.state
     # F4→F8 联动: 仅当本轮走了 summarize (trace 末项) 才把小结写入画像 —
     # trace/session_summary 会随 checkpointer 跨轮保留, 不能只看非空, 否则同 thread 续聊会重复计分。
     learner_insights: list[dict] = []

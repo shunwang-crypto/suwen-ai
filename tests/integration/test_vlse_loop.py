@@ -47,6 +47,9 @@ class FakeGateway:
         ]
 
     async def chat(self, req):
+        if req.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, req)
         from eduagents_core.gateway import ChatResult
 
         self.requests.append(req)
@@ -104,10 +107,10 @@ class RecordingRuntime:
     def parse_thread_id(self, thread_id):
         return self.inner.parse_thread_id(thread_id)
 
-    def astream_updates(self, kind, thread_id, payload, resume=None):
+    def stream_task(self, kind, thread_id, payload, resume=None):
         if payload is not None:
             self.payloads.append(payload)
-        return self.inner.astream_updates(kind, thread_id, payload, resume=resume)
+        return self.inner.stream_task(kind, thread_id, payload, resume=resume)
 
 
 class SpyCache:
@@ -277,12 +280,12 @@ async def _qa_runtime(app, gateway, doc_id: str):
     """装载 FakeGateway + FakeRetrieval 的 qa HarnessRuntime (Checkpointer 走真实 PG)。"""
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(
+        EducationDeps(
             settings=settings, gateway=gateway,
             retrieval=FakeRetrieval(doc_id), web_search=None,
         ),
@@ -326,7 +329,7 @@ async def test_profile_injected_into_qa(client):
     assert "概念混淆" in summary  # 错因分布进摘要
     assert payload["profile_weak_points"][:2] == ["导数定义", "极值判定"]
     assert payload["response_mode"] == "fast"
-    assert events["node_update"][0] == {"node": "retrieve", "status": "running"}
+    assert events["node_update"][0] == {"node": "agent", "status": "running"}
 
     # trace 可见 (前端时间线渲染"已加载学情画像: N 个薄弱点")
     profile_events = [t for t in events.get("trace_event", []) if t.get("type") == "profile"]
@@ -398,13 +401,13 @@ async def test_quiz_from_weak_points(client):
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     app = client._transport.app
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=gateway, retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=gateway, retrieval=None, web_search=None),
     )
     await runtime.start()
     old_runtime = app.state.harness
@@ -669,7 +672,7 @@ async def test_answer_cache_disabled_when_profile_present(client):
     assert events2["node_update"][:3] == [
         {"node": "cache_lookup", "status": "running"},
         {"node": "cache_lookup", "status": "done"},
-        {"node": "retrieve", "status": "running"},
+        {"node": "agent", "status": "running"},
     ]
 
 

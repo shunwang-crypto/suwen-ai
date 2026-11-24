@@ -44,6 +44,9 @@ _QUESTIONS = {
 
 class FakeQuizGateway:
     async def chat(self, req):
+        if req.feature.startswith("agent_"):
+            from native_model import native_fixture_reply
+            return await native_fixture_reply(self, req)
         from eduagents_core.gateway import ChatResult
 
         payload = _BLUEPRINT if req.feature == "quiz_blueprint" else _QUESTIONS
@@ -73,7 +76,7 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
     # 注入 FakeGateway 的 HarnessRuntime (Checkpointer 走真实 PG)
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     email = f"quiz-{uuid.uuid4().hex[:12]}@test.eduagents.cn"
     await client.post("/api/auth/register", json={"email": email, "password": "pass-12345"})
@@ -84,7 +87,7 @@ async def test_quiz_interrupt_resume_grade_bkt(client):
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=FakeQuizGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=FakeQuizGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     old_runtime = app.state.harness

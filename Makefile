@@ -18,7 +18,6 @@ dev-infra:     ## 启动本机 PostgreSQL、Redis 和 Qdrant
 
 migrate: env-check
 	$(PY) -m alembic upgrade head
-	$(PY) scripts/migrate_legacy_harness.py
 
 migrate-legacy: env-check   ## 导入旧会话 (停 API/worker 后执行, 迁移角色, 幂等)
 	$(PY) scripts/migrate_legacy_harness.py

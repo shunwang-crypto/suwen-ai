@@ -41,15 +41,20 @@ GUC 未设置时策略默认拒绝。应用连接使用 `edu_app`（`NOSUPERUSER
 
 ## Harness 会话与迁移
 
-`0039` 新增 `harness_sessions`，主键 `thread_id={kind}:{user_id}:{local_id}`。
-`tenant_id/user_id/kind` 固定会话归属，`state/next_phase/pending` 保存教育状态和确认载荷，
-`updated_at` 用于 30 天留存清理。应用事务遵守个人租户 RLS，用户外键随账号删除级联；
-只有内部清理事务可跨租户扫描。DSH 临时执行目录在活动结束后回收，真实模型密钥和内联
-图片不进入持久化会话；附件仍按现有授权资料链路管理。
+`0039` 新增 `harness_sessions`；`0040` 将宿主的 `next_phase` 替换为任务生命周期
+`status`，并增加 `native_session_id/native_archive`。主键为
+`thread_id={kind}:{user_id}:{local_id}`，`kind` 支持 chat、qa、quiz、plan、tutor；聊天普通
+模式和检索模式共享 `chat:{user_id}:{session_id}`，其他教育任务按自身 local ID 隔离。
 
-迁移工具将旧 PostgreSQL checkpoints 中的最新状态、下一阶段和中断载荷导入新表，
-不覆盖已有新行、不删除旧表。聊天删除按会话前缀清新旧状态，账号导出包含新会话，
-账号注销和留存清理同时覆盖新表与旧 checkpoint 表。
+`state/pending` 保存业务成果和待确认内容，`native_archive` 保存原生 DSH 会话文件的
+base64 映射。归档只接受 session 目录相对路径并限制大小；真实密钥和内联图片不进入
+归档。归档编码不等同于加密，访问仍由个人租户 FORCE RLS、账号外键和内部清理权限控制。
+`updated_at` 供既有留存任务清理；账号删除级联清除，聊天删除同时清除原生会话和旧状态。
+
+生命周期包含 idle、running、awaiting_confirmation、completed、failed、cancelled。
+升级保留既有业务状态和待确认载荷，不重跑旧图；确认可以在新领域工具中继续。
+旧 checkpoint 表仍保留，离线导入器支持 `0039` 和 `0040`，不会覆盖已有新会话。
+旧依赖仅用于明确执行的历史数据导入；`make migrate` 不再隐式导入旧 checkpoint。
 
 ## 核心关系
 

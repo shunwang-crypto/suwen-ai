@@ -1,6 +1,6 @@
 """Executable-plan task and resource input boundaries."""
 
-from eduagents_core.workflows.plan import _coerce_task, _fix_resource_refs, is_safe_public_url
+from eduagents_core.education.plan import _coerce_task, _fix_resource_refs, is_safe_public_url
 
 
 def test_task_coercion_adds_executable_fields_and_clamps_public_values():

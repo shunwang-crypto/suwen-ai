@@ -29,26 +29,64 @@ class ResearchGateway:
 
         self.requests.append(req)
         tool_calls = ()
-        if req.feature == "qa_research_action":
-            decision = self.decisions.pop(0)
-            if decision["action"] == "search":
-                tool_calls = ({"id": f"call-{len(self.requests)}", "type": "function", "function": {"name": "web_search", "arguments": json.dumps({"queries": decision["queries"]})}},)
-            text = "finished"
-        elif req.feature == "qa_generate":
-            text = "原始资料与独立评测存在差异 [1][2]。"
+        if req.feature == "agent_qa":
+            if self.decisions:
+                decision = self.decisions.pop(0)
+                name = "web_search" if decision["action"] == "search" else "submit_answer"
+                args = (
+                    {"queries": decision["queries"]}
+                    if name == "web_search"
+                    else {
+                        "answer": "原始资料与独立评测存在差异 [1][2]。",
+                        "source_ids": [
+                            "https://example.com/primary",
+                            "https://example.com/independent",
+                        ],
+                    }
+                )
+            else:
+                latest = next((m for m in reversed(req.messages) if m.role == "tool"), None)
+                if latest and json.loads(latest.content).get("accepted") is False:
+                    name = "submit_answer"
+                    args = {
+                        "answer": "原始资料与独立评测存在差异 [1][2]。",
+                        "source_ids": [
+                            "https://example.com/primary",
+                            "https://example.com/independent",
+                        ],
+                    }
+                else:
+                    name = None
+            if name:
+                tool_calls = (
+                    {
+                        "id": f"call-{len(self.requests)}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(args)},
+                    },
+                )
+            text = "finished" if not tool_calls else ""
         elif req.feature == "qa_verify_support":
-            text = json.dumps({
-                "supported": not self.unsupported,
-                "unsupported_claims": ["无法确认差异"] if self.unsupported else [],
-            })
+            text = json.dumps(
+                {
+                    "supported": not self.unsupported,
+                    "unsupported_claims": ["无法确认差异"] if self.unsupported else [],
+                }
+            )
         elif req.feature == "qa_followups":
             text = json.dumps({"followups": []})
         else:
             raise AssertionError(f"Unexpected model call: {req.feature}")
         return ChatResult(
-            tool_calls=tool_calls, text=text, model="research-test", tier=req.tier.value,
-            prompt_tokens=1, completion_tokens=1, cost_cny=0,
-            latency_ms=0, mode="stub",
+            tool_calls=tool_calls,
+            text=text,
+            model="research-test",
+            tier=req.tier.value,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_cny=0,
+            latency_ms=0,
+            mode="stub",
         )
 
     async def stream_chat(self, req):
@@ -73,7 +111,7 @@ async def research_client(monkeypatch):
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            yield app, client
+            yield (app, client)
     get_settings.cache_clear()
 
 
@@ -100,39 +138,52 @@ async def login(client):
 
 async def web_search(query, **options):
     suffix = "primary" if query == "目标原始资料" else "independent"
-    return ([{
-        "url": f"https://example.com/{suffix}", "title": suffix,
-        "content": f"{suffix} 正文：原始资料与独立评测存在差异",
-    }], False)
+    return (
+        [
+            {
+                "url": f"https://example.com/{suffix}",
+                "title": suffix,
+                "content": f"{suffix} 正文：原始资料与独立评测存在差异",
+            }
+        ],
+        False,
+    )
 
 
 @pytest.mark.parametrize("unsupported", [False, True])
 async def test_research_progress_citations_regeneration_and_history(research_client, unsupported):
     app, client = research_client
     gateway = ResearchGateway(unsupported=unsupported)
-    app.state.harness.deps.gateway.gateway = gateway
+    app.state.harness.deps.gateway = gateway
     app.state.harness.deps.web_search = web_search
     headers = await login(client)
     response = await client.post(
-        "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers,
+        "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers
     )
     assert response.status_code == 200, response.text
     parsed = events(response)
     assert not [data for name, data in parsed if name == "error"]
     research = [data for name, data in parsed if name == "trace_event" and "trace_id" in data]
-    assert len(research) == 5
-    assert len({data["trace_id"] for data in research}) == 5
-    first_token = next(i for i, (name, _data) in enumerate(parsed) if name == "token")
-    assert all(i < first_token for i, (name, data) in enumerate(parsed) if name == "trace_event" and "trace_id" in data)
+    assert len(research) == 2
+    assert len({data["trace_id"] for data in research}) == 2
+    first_token = next((i for i, (name, _data) in enumerate(parsed) if name == "token"))
+    assert all(
+        (
+            i < first_token
+            for i, (name, data) in enumerate(parsed)
+            if name == "trace_event" and "trace_id" in data
+        )
+    )
     citations = [data for name, data in parsed if name == "citation"]
     assert [(item["idx"], item["url"]) for item in citations] == [
-        (1, "https://example.com/primary"), (2, "https://example.com/independent"),
+        (1, "https://example.com/primary"),
+        (2, "https://example.com/independent"),
     ]
-    generated = [req for req in gateway.requests if req.feature == "qa_generate"]
-    assert len(generated) == (2 if unsupported else 1)
+    generated = [req for req in gateway.requests if req.feature == "qa_verify_support"]
+    assert len(generated) == (3 if unsupported else 1)
     if unsupported:
-        assert {data["attempt"] for name, data in parsed if name == "token"} == {0, 1}
-    done = next(data for name, data in parsed if name == "done")
+        assert {data["attempt"] for name, data in parsed if name == "token"} == {0}
+    done = next((data for name, data in parsed if name == "done"))
     history = await client.get(f"/api/chat/sessions/{done['session_id']}/messages", headers=headers)
     assert history.status_code == 200, history.text
     assistant = history.json()[-1]
@@ -144,7 +195,7 @@ async def test_research_progress_citations_regeneration_and_history(research_cli
 
 async def test_research_initial_search_outage_reports_search_error(research_client):
     app, client = research_client
-    app.state.harness.deps.gateway.gateway = ResearchGateway()
+    app.state.harness.deps.gateway = ResearchGateway()
 
     async def unavailable(*args, **kwargs):
         raise WebSearchUnavailable("offline")
@@ -152,7 +203,7 @@ async def test_research_initial_search_outage_reports_search_error(research_clie
     app.state.harness.deps.web_search = unavailable
     headers = await login(client)
     response = await client.post(
-        "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers,
+        "/api/chat", json={"message": "比较目标的实际表现", "mode": "research"}, headers=headers
     )
     errors = [data for name, data in events(response) if name == "error"]
     assert errors and errors[0]["code"] == "WEB_SEARCH_FAILED"

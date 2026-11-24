@@ -7,12 +7,15 @@
   disabled: true
 - id: tool-fs
   disabled: true
-- id: compaction-basic
-  disabled: true
 - id: image-offload
   disabled: true
 - id: llm-retry
   disabled: true
+- id: compaction-basic
+  config:
+    headroomTokens: 1024
+    maxTokens: 2048
+    retainRatio: 0.16
 - id: system-prompt
   config:
     includeHarnessIdentity: false

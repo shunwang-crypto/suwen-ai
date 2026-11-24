@@ -72,12 +72,12 @@ async def test_recommended_cold_start_uses_auto_confirmation_and_real_kcs(client
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     app = client._transport.app
     runtime = HarnessRuntime(
         get_settings(),
-        WorkflowDeps(settings=get_settings(), gateway=_LoopGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=get_settings(), gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     previous = app.state.harness
@@ -130,11 +130,14 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
+    from eduagents_core.education.context import EducationDeps
     from eduagents_core.gateway import ChatResult
-    from eduagents_core.workflows.state import WorkflowDeps
 
     class PlanGateway:
         async def chat(self, request):
+            if request.feature.startswith("agent_"):
+                from native_model import native_fixture_reply
+                return await native_fixture_reply(self, request)
             if request.feature == "quiz_blueprint":
                 payload = {
                     "items": [
@@ -146,6 +149,8 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
             elif request.feature == "quiz_verify":
                 payload = {"issues": [], "summary": "题目质量合格"}
             else:
+                from native_model import blueprint_for_fixture
+                blueprint = blueprint_for_fixture(request)
                 payload = {
                     "questions": [
                         {
@@ -155,7 +160,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
                             "answer": "A",
                             "explanation": "章节一基础概念。",
                             "kc_names": ["章节一"],
-                            "difficulty": "mid",
+                            "difficulty": blueprint[index]["difficulty"],
                             "source_hint": None,
                         }
                         for index in range(3)
@@ -177,7 +182,7 @@ async def test_legacy_weak_point_plan_task_keeps_server_owned_attribution(client
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=PlanGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=PlanGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     previous = app.state.harness
@@ -284,7 +289,7 @@ async def test_legacy_plan_context_cannot_silently_switch_after_recommendation_c
     async def unexpected_graph(*_args, **_kwargs):
         pytest.fail("stale legacy plan must be rejected before entering the Quiz graph")
 
-    monkeypatch.setattr("eduagents_api.routers.quiz.stream_graph_run", unexpected_graph)
+    monkeypatch.setattr("eduagents_api.routers.quiz.stream_task_run", unexpected_graph)
     response = await client.post(
         "/api/quiz",
         headers=headers,
@@ -309,7 +314,7 @@ async def test_legacy_non_plan_recommendation_does_not_add_plan_payload(client, 
         captured.update(payload)
         return {"captured": True}
 
-    monkeypatch.setattr("eduagents_api.routers.quiz.stream_graph_run", capture_payload)
+    monkeypatch.setattr("eduagents_api.routers.quiz.stream_task_run", capture_payload)
     response = await client.post(
         "/api/quiz",
         headers=headers,
@@ -399,12 +404,12 @@ async def test_weak_point_preview_recommendation_and_quiz_trace_share_recent_err
 
     from eduagents_api.harness_runtime import HarnessRuntime
     from eduagents_core.config import get_settings
-    from eduagents_core.workflows.state import WorkflowDeps
+    from eduagents_core.education.context import EducationDeps
 
     settings = get_settings()
     runtime = HarnessRuntime(
         settings,
-        WorkflowDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
+        EducationDeps(settings=settings, gateway=_LoopGateway(), retrieval=None, web_search=None),
     )
     await runtime.start()
     previous = app.state.harness

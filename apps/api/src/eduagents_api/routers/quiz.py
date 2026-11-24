@@ -30,7 +30,7 @@ from ..practice_recommendation import (
 from ..profile_summary import build_profile_context
 from ..services import QUIZ_PLAN_MODE_STANDALONE, quiz_kc_readiness, record_attempts
 from .practice import PracticeRequest, load_recommendation
-from .threads import stream_graph_run
+from .threads import stream_task_run
 
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
 log = get_logger("quiz")
@@ -390,7 +390,7 @@ async def create_quiz(
     if effective_plan_id is not None and effective_task_id is not None:
         payload["plan_id"] = str(effective_plan_id)
         payload["task_id"] = effective_task_id
-    return await stream_graph_run(
+    return await stream_task_run(
         runtime, "quiz", thread_id, ctx, payload, trace_prelude=trace_prelude
     )
 

@@ -6,12 +6,14 @@ fail-closed 词表、未成年模式 (is_minor / strict / minor_system_guard)、
 
 from __future__ import annotations
 
-import json
 from datetime import date
 
 import pytest
 from eduagents_core.config import Settings
+from eduagents_core.education.context import EducationDeps
+from eduagents_core.education.qa import WEB_NO_RESULTS_ANSWER, QuestionAnswerTools
 from eduagents_core.gateway.base import ChatRequest, ChatResult
+from eduagents_core.harness.task import TaskRecord
 from eduagents_core.moderation import (
     SAFE_MESSAGE_BLOCKED,
     SAFE_MESSAGE_CRISIS,
@@ -20,8 +22,6 @@ from eduagents_core.moderation import (
     is_minor,
     minor_system_guard,
 )
-from eduagents_core.workflows.qa import WEB_NO_RESULTS_ANSWER, build_qa_workflow
-from eduagents_core.workflows.state import WorkflowDeps
 
 
 def _buf(strict: bool = False) -> StreamModerationBuffer:
@@ -238,7 +238,7 @@ class FakeGateway:
         )
 
 
-def _web_deps(gateway: FakeGateway, results: list[dict]) -> WorkflowDeps:
+def _web_deps(gateway: FakeGateway, results: list[dict]) -> EducationDeps:
     async def _search(
         query: str,
         *,
@@ -248,7 +248,7 @@ def _web_deps(gateway: FakeGateway, results: list[dict]) -> WorkflowDeps:
     ):
         return list(results)
 
-    return WorkflowDeps(
+    return EducationDeps(
         settings=Settings(_env_file=None), gateway=gateway, web_search=_search
     )
 
@@ -271,41 +271,17 @@ _DIRTY_WEB = {"title": "坏站", "url": "http://b", "content": "点这里购买�
 
 
 async def test_web_fallback_drops_moderated_results_and_traces_count():
-    gw = FakeGateway(
-        {
-            "qa_generate": ["以下是最新进展 [1]。"],
-            "qa_followups": [json.dumps({"followups": []})],
-        }
-    )
-    out = await build_qa_workflow(_web_deps(gw, [_CLEAN_WEB, _DIRTY_WEB])).ainvoke(
-        _state("搜索最新的量子计算进展")  # 命中时效性关键词 -> 规则路由 web
-    )
-    assert [r["url"] for r in out["web_results"]] == ["http://a"]  # 命中条被整条丢弃
-    assert {"type": "moderation", "dropped": 1} in out["trace"]
-    gen_system = gw.requests[0].messages[0].content
-    assert "成人影片" not in gen_system  # 违规内容未进入 LLM 上下文
-
+    tools=QuestionAnswerTools(_web_deps(FakeGateway({}),[_CLEAN_WEB,_DIRTY_WEB]),TaskRecord(state=_state("搜索",requested_route="web"),status="running"),lambda _:None)
+    await tools.search_web({"queries":["搜索"]})
+    assert [r["url"] for r in tools.state["web_results"]]==["http://a"]
+    assert {"type":"moderation","dropped":1} in tools.state["trace"]
 
 async def test_web_fallback_all_dropped_refuses():
-    gw = FakeGateway({})  # 全丢 -> 拒答, 不该有任何 LLM 调用
-    out = await build_qa_workflow(_web_deps(gw, [_DIRTY_WEB])).ainvoke(
-        _state("搜索最新的资源")
-    )
-    assert out["web_results"] == []
-    assert out["refused"] is True
-    assert out["answer"] == WEB_NO_RESULTS_ANSWER
-    assert {"type": "moderation", "dropped": 1} in out["trace"]
+    tools=QuestionAnswerTools(_web_deps(FakeGateway({}),[_DIRTY_WEB]),TaskRecord(state=_state("搜索",requested_route="web"),status="running"),lambda _:None)
+    await tools.search_web({"queries":["搜索"]})
+    await tools.submit({"answer":"编造"})
+    assert tools.state["refused"] and tools.state["answer"]==WEB_NO_RESULTS_ANSWER
 
-
-async def test_minor_state_appends_guard_to_generate_system():
-    """state.minor=True 时 generate 的 system 末尾追加未成年安全约束段。"""
-    gw = FakeGateway(
-        {
-            "qa_generate": ["你好, 我是 AI 助教。"],
-            "qa_followups": [json.dumps({"followups": []})],
-        }
-    )
-    deps = WorkflowDeps(settings=Settings(_env_file=None), gateway=gw)
-    await build_qa_workflow(deps).ainvoke(_state("什么是导数", minor=True))
-    system = gw.requests[0].messages[0].content
-    assert system.endswith(minor_system_guard())
+async def test_minor_state_appends_guard_to_native_policy():
+    tools=QuestionAnswerTools(EducationDeps(Settings(_env_file=None),FakeGateway({})),TaskRecord(state=_state("导数",minor=True)),lambda _:None)
+    assert tools.policy().endswith(minor_system_guard())

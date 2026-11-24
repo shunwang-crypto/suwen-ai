@@ -61,7 +61,7 @@ def test_0039_upgrade_legacy_confirmation_rls_and_downgrade():
                 )
 
         asyncio.run(seed())
-        _alembic(database_url, "upgrade", "head")
+        _alembic(database_url, "upgrade", "0039")
 
         async def inspect_import():
             import sys

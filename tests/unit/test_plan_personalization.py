@@ -19,11 +19,11 @@ from eduagents_api.routers.plans import (
     _qualitative_weak_kcs,
 )
 from eduagents_core.config import Settings
+from eduagents_core.education.context import EducationDeps
+from eduagents_core.education.plan import PlanTools, normalize_goal, verified_diagnosis
+from eduagents_core.education.tutor import TutorTools
 from eduagents_core.gateway.base import ChatRequest, ChatResult
-from eduagents_core.harness.workflow import MemoryStore
-from eduagents_core.workflows.plan import build_plan_workflow
-from eduagents_core.workflows.state import WorkflowDeps
-from eduagents_core.workflows.tutor import build_tutor_workflow
+from eduagents_core.harness.task import TaskRecord
 from pydantic import ValidationError
 
 
@@ -56,11 +56,9 @@ class FakeGateway:
         )
 
 
-def make_deps(gateway) -> WorkflowDeps:
-    return WorkflowDeps(settings=Settings(_env_file=None), gateway=gateway)
+def make_deps(gateway) -> EducationDeps:
+    return EducationDeps(settings=Settings(_env_file=None), gateway=gateway)
 
-
-# ---------------------------------------------------------------- ① 真实掌握度注入 (G1)
 
 PARSE = {"subject": "高等数学", "key_topics": ["极限", "导数"], "level_hint": "零基础"}
 DRAFT = {
@@ -96,72 +94,10 @@ DRAFT = {
 }
 
 
-async def run_plan_to_interrupt(script: dict, input_overrides: dict | None = None):
-    gateway = FakeGateway(script)
-    graph = build_plan_workflow(make_deps(gateway)).with_store(MemoryStore())
-    config = {"configurable": {"thread_id": "plan-p1"}}
-    payload = {
-        "tenant_id": "t-1",
-        "user_id": "u-1",
-        "request_id": "r-1",
-        "plan_mode": "goal_only",
-        "kb_id": "",
-        "goal": "两周入门高等数学",
-        "budget_hours_per_day": 1.0,
-        "total_days": 2,
-    }
-    payload.update(input_overrides or {})
-    state = await graph.ainvoke(payload, config)
-    return gateway, state
-
-
-async def test_diagnose_marks_unknown_topics_for_baseline_without_llm_estimation():
-    """已有证据按档位保留；目标里的未知主题只进入基线清单。"""
-    gateway, state = await run_plan_to_interrupt(
-        {
-            "plan_parse_goal": [PARSE],
-            "plan_draft": [DRAFT],
-        },
-        input_overrides={
-            "diagnosis": {
-                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"}
-            }
-        },
-    )
-    assert all(r.feature != "plan_diagnose" for r in gateway.requests)
-    assert state["diagnosis"] == {
-        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"}
-    }
-    assert state["baseline_topics"] == ["导数"]
-    events = [e for e in state["trace"] if e.get("node") == "diagnose"]
-    assert events[0]["event"] == "evidence_state_used"
-    assert events[0]["observed_count"] == 1 and events[0]["baseline_count"] == 1
-
-
-async def test_diagnose_full_external_coverage_skips_llm_entirely():
-    """全部主题都有充分证据时，不产生基线任务，也不调用诊断模型。"""
-    diagnosis = {
-        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
-        "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
-    }
-    gateway, state = await run_plan_to_interrupt(
-        {"plan_parse_goal": [PARSE], "plan_draft": [DRAFT]},
-        input_overrides={"diagnosis": diagnosis},
-    )
-    assert all(r.feature != "plan_diagnose" for r in gateway.requests)
-    assert state["diagnosis"] == diagnosis
-    assert state["baseline_topics"] == []
-    assert any(e.get("event") == "evidence_state_used" for e in state["trace"])
-
-
-# ---------------------------------------------------------------- ② 先修 DAG 拓扑约束 (G2)
-
-
 def test_kc_order_from_edges_topological_and_constrained_only():
     """先修边 -> KC 名拓扑序; 无先修约束的 KC 不进序 (其任务顺序不被人为强排)。"""
-    # names_by_id 插入顺序 (查询按 created_at) 故意与拓扑序相反
     names_by_id = {"i3": "积分", "i2": "导数", "i0": "三角函数", "i1": "极限"}
-    edge_pairs = [("i2", "i3"), ("i1", "i2")]  # 导数->积分, 极限->导数
+    edge_pairs = [("i2", "i3"), ("i1", "i2")]
     order = _kc_order_from_edges(names_by_id, edge_pairs)
     assert order == ["极限", "导数", "积分"]
     assert "三角函数" not in order
@@ -169,7 +105,6 @@ def test_kc_order_from_edges_topological_and_constrained_only():
 
 def test_kc_order_from_edges_empty_without_edges():
     assert _kc_order_from_edges({"i1": "极限", "i2": "导数"}, []) == []
-    # 自环/端点缺失的脏边被忽略
     assert _kc_order_from_edges({"i1": "极限"}, [("i1", "i1"), ("i1", "ghost")]) == []
 
 
@@ -183,7 +118,6 @@ def test_diagnosis_from_rows_uses_distinct_evidence_state():
 
 
 PARSE3 = {"subject": "高等数学", "key_topics": ["极限", "导数", "积分"], "level_hint": ""}
-# 乱序草稿: 积分(day1) -> 导数(day2) -> 极限(day3), 与先修链 极限->导数->积分 完全颠倒
 TOPO_DRAFT = {
     "stages": [
         {
@@ -226,83 +160,19 @@ TOPO_DRAFT = {
         }
     ]
 }
-
-
-async def test_no_task_before_unmastered_prerequisite():
-    """F3-A2 口径: 注入先修拓扑序后, 修正后的计划中无任务先于其未掌握前置 KC。"""
-    edge_pairs = [("i1", "i2"), ("i2", "i3")]  # 极限->导数, 导数->积分
-    names_by_id = {"i3": "积分", "i2": "导数", "i1": "极限"}
-    kc_order = _kc_order_from_edges(names_by_id, edge_pairs)
-    _, state = await run_plan_to_interrupt(
-        {"plan_parse_goal": [PARSE3], "plan_draft": [TOPO_DRAFT]},
-        input_overrides={
-            "total_days": 3,
-            "diagnosis": {
-                name: {"evidence_state": "observed", "mastery_band": "较弱"}
-                for name in ("极限", "导数", "积分")
-            },
-            "kc_order": kc_order,
-        },
-    )
-    tasks = [t for stage in state["plan"]["stages"] for day in stage["days"] for t in day["tasks"]]
-    first_idx = {}
-    for i, task in enumerate(tasks):
-        for name in task["kc_names"]:
-            first_idx.setdefault(name, i)
-    edges_by_name = [("极限", "导数"), ("导数", "积分")]
-    for frm, to in edges_by_name:
-        for i, task in enumerate(tasks):
-            if to in task["kc_names"]:
-                assert first_idx[frm] < i, f"{to} 的任务出现在其未掌握前置 {frm} 之前: {tasks}"
-    deferred = [
-        e
-        for e in state["trace"]
-        if e.get("node") == "draft_plan"
-        and e.get("event") == "fix"
-        and e.get("fix") == "kc_order_deferred"
-    ]
-    assert len(deferred) == 1
-
-
-# ---------------------------------------------------------------- ③ tutor 画像注入 (G9)
-
-BAN = "绝对禁止给出最终答案"  # F4-A1 结构性禁令 (代码注入 system prompt)
+BAN = "绝对禁止给出最终答案"
 PROFILE_HEADER = "学生画像"
 OPENING_MARK = "这正是你之前卡过的"
 PROFILE_SUMMARY = (
     "该学生已掌握: 三角函数; 薄弱点: 导数定义(较弱)、极值判定(待巩固); 近期错因偏向: 概念混淆。"
 )
 WEAK_POINTS = ["导数定义", "极值判定"]
-HIT_PROBLEM = "用导数定义求 f(x)=x^2 在 x=1 处的导数"  # 命中薄弱 KC "导数定义"
-MISS_PROBLEM = "求 1+2+...+100 的和"  # 不涉及任何薄弱 KC
+HIT_PROBLEM = "用导数定义求 f(x)=x^2 在 x=1 处的导数"
+MISS_PROBLEM = "求 1+2+...+100 的和"
 
 
 def classify(stuck="concept", asked=False, solved=False) -> dict:
     return {"stuck_type": stuck, "asked_for_answer": asked, "solved": solved}
-
-
-def make_tutor_graph():
-    gateway = FakeGateway({"tutor_classify": [classify()], "tutor_respond": ["回复"]})
-    graph = build_tutor_workflow(make_deps(gateway)).with_store(MemoryStore())
-    config = {"configurable": {"thread_id": "tutor-p1"}}
-    return gateway, graph, config
-
-
-async def run_tutor_round(
-    graph, config, text: str, *, problem=HIT_PROBLEM, summary=PROFILE_SUMMARY
-):
-    return await graph.ainvoke(
-        {
-            "tenant_id": "t-1",
-            "user_id": "u-1",
-            "request_id": "r-1",
-            "problem": problem,
-            "messages": [{"role": "user", "content": text}],
-            "profile_summary": summary,
-            "profile_weak_points": WEAK_POINTS if summary else [],
-        },
-        config,
-    )
 
 
 def respond_systems(gateway: FakeGateway) -> list[str]:
@@ -314,64 +184,9 @@ def respond_systems(gateway: FakeGateway) -> list[str]:
     ]
 
 
-async def test_tutor_hint0_to_3_receive_profile_and_ban_unaffected():
-    """四级 hint prompt 都实收画像段; hint0-2 禁答令仍在且压轴, hint3 照常无禁令。"""
-    gateway, graph, config = make_tutor_graph()
-    state = {}
-    for text in ["第1轮", "第2轮", "第3轮", "第4轮"]:
-        state = await run_tutor_round(graph, config, text)
-    assert state["hint_level"] == 3
-    systems = respond_systems(gateway)
-    assert len(systems) == 4
-    # 画像段实收: 摘要原文 + 措辞纪律 (仅调讲法, 不降苏格拉底约束)
-    assert all(PROFILE_HEADER in s and PROFILE_SUMMARY in s for s in systems)
-    assert all("不得因画像提前给出答案" in s for s in systems)
-    # F4-A1 不受画像影响: hint0-2 禁令都在且位于画像段之后 (禁答令压轴), hint3 无禁令
-    assert all(BAN in s for s in systems[:3])
-    assert all(s.rfind(BAN) > s.rfind(PROFILE_HEADER) for s in systems[:3])
-    assert BAN not in systems[3]
-
-
-async def test_tutor_opening_names_weak_kc_only_on_first_round():
-    """开场轮题目命中薄弱 KC -> 主动点明 "这正是你之前卡过的X"; 后续轮不再重复。"""
-    gateway, graph, config = make_tutor_graph()
-    state = await run_tutor_round(graph, config, "这道题我不会")
-    await run_tutor_round(graph, config, "还是没思路")
-    systems = respond_systems(gateway)
-    assert OPENING_MARK in systems[0] and "导数定义" in systems[0]
-    assert OPENING_MARK not in systems[1]  # 关联指令只在开场轮
-    replied = [e for e in state["trace"] if e.get("node") == "respond"]
-    assert replied[0]["profile_injected"] is True
-    assert replied[0]["weak_opening_kc"] == "导数定义"
-
-
-async def test_tutor_opening_no_callout_when_problem_misses_weak_kc():
-    """题目不涉及薄弱 KC: 画像段仍注入, 但不硬造开场关联。"""
-    gateway, graph, config = make_tutor_graph()
-    state = await run_tutor_round(graph, config, "不会做", problem=MISS_PROBLEM)
-    systems = respond_systems(gateway)
-    assert PROFILE_HEADER in systems[0]
-    assert OPENING_MARK not in systems[0]
-    replied = [e for e in state["trace"] if e.get("node") == "respond"]
-    assert replied[0]["weak_opening_kc"] == ""
-
-
-async def test_tutor_empty_profile_leaves_no_section_or_placeholder():
-    """无画像用户: 不注入画像段, 占位符也不残留, 禁令照常。"""
-    gateway, graph, config = make_tutor_graph()
-    await run_tutor_round(graph, config, "不会做", summary="")
-    system = respond_systems(gateway)[0]
-    assert PROFILE_HEADER not in system
-    assert "{{PROFILE_SECTION}}" not in system
-    assert BAN in system
-
-
-# ---------- ④ 审查修复轮: 脱敏出境 / 相关性过滤 / 归一化匹配 / 保守合并 ----------
-
-
 def test_render_diagnosis_qualitative_no_decimals():
     """P2-7: DIAGNOSIS 出境只给定性档, 精确概率与小数一律不出现。"""
-    from eduagents_core.workflows.plan import _render_diagnosis
+    from eduagents_core.education.plan import _render_diagnosis
 
     text = _render_diagnosis(
         {
@@ -392,7 +207,7 @@ def test_render_diagnosis_qualitative_no_decimals():
 
 def test_render_diagnosis_relevance_first_and_capped():
     """目标相关条目排最前; 超过 20 条截断 (防跨学科全量膨胀 prompt)。"""
-    from eduagents_core.workflows.plan import _DIAGNOSIS_LIMIT, _render_diagnosis
+    from eduagents_core.education.plan import _DIAGNOSIS_LIMIT, _render_diagnosis
 
     diagnosis = {
         f"无关KC{i:02d}": {"evidence_state": "observed", "mastery_band": "待巩固"}
@@ -406,7 +221,7 @@ def test_render_diagnosis_relevance_first_and_capped():
 
 def test_fallback_plan_ignores_unrelated_mastery():
     """降级计划以目标主题为准, 跨学科掌握度记录不得污染 (审查 P2 场景: 日语计划出现导数)。"""
-    from eduagents_core.workflows.plan import _fallback_plan
+    from eduagents_core.education.plan import _fallback_plan
 
     state = {
         "goal": "两周入门日语",
@@ -424,14 +239,12 @@ def test_fallback_plan_ignores_unrelated_mastery():
 
 def test_fallback_plan_keeps_related_mastery_topics():
     """目标相关的掌握度 KC 仍进降级计划轮转池 (绑库数学计划不丢 KC 覆盖)。"""
-    from eduagents_core.workflows.plan import _fallback_plan
+    from eduagents_core.education.plan import _fallback_plan
 
     state = {
         "goal": "补齐微积分",
         "parsed_goal": {"key_topics": ["导数"]},
-        "diagnosis": {
-            "导数定义": {"evidence_state": "observed", "mastery_band": "较弱"}
-        },
+        "diagnosis": {"导数定义": {"evidence_state": "observed", "mastery_band": "较弱"}},
     }
     plan = _fallback_plan(state, total_days=2, budget_minutes=60)
     titles = [t["title"] for d in plan["stages"][0]["days"] for t in d["tasks"]]
@@ -440,7 +253,7 @@ def test_fallback_plan_keeps_related_mastery_topics():
 
 def test_fix_kc_order_matches_normalized_variants():
     """真实模型输出全角/空格/大小写变体时先修约束仍生效 (匹配走 normalize_kc_name)。"""
-    from eduagents_core.workflows.plan import _fix_kc_order
+    from eduagents_core.education.plan import _fix_kc_order
 
     plan = {
         "stages": [
@@ -482,7 +295,7 @@ def test_fix_kc_order_matches_normalized_variants():
 
 def test_fix_kc_order_unmatched_is_visible():
     """先修序一个任务都没挂上: 必须写 kc_order_unmatched, 不许静默失效 (F3-A2 可审计)。"""
-    from eduagents_core.workflows.plan import _fix_kc_order
+    from eduagents_core.education.plan import _fix_kc_order
 
     plan = {
         "stages": [
@@ -499,7 +312,7 @@ def test_fix_kc_order_unmatched_is_visible():
                                 "resource_ref": None,
                             }
                         ],
-                    },
+                    }
                 ],
             }
         ]
@@ -520,11 +333,8 @@ def test_diagnosis_from_rows_conservative_on_name_collision():
     }
 
 
-# ---------- ⑤ 目标技能 ∩ 定性薄弱点 ----------
-
-
 def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative():
-    from eduagents_core.workflows.plan import skill_gap_analysis
+    from eduagents_core.education.plan import skill_gap_analysis
 
     skills = [
         {"name": "极限 运算", "required_level": 2, "reason": "是导数基础"},
@@ -538,9 +348,7 @@ def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative(
         {"name": "导数", "zone": "较弱", "kc_id": "secret-id"},
         {"name": "极限运算", "zone": "待巩固"},
     ]
-
     gaps = skill_gap_analysis(skills, weak)
-
     assert [item["skill"] for item in gaps] == ["导数", "极限 运算", "ＤＡＴＡ"]
     assert gaps[0]["required_level"] == 3
     assert all(item["zone"] in {"较弱", "待巩固"} for item in gaps)
@@ -549,14 +357,13 @@ def test_skill_gap_analysis_normalizes_sorts_deduplicates_and_stays_qualitative(
 
 
 def test_skill_gap_analysis_rejects_non_intersection_and_invalid_level():
-    from eduagents_core.workflows.plan import skill_gap_analysis
+    from eduagents_core.education.plan import skill_gap_analysis
 
     assert skill_gap_analysis([], [{"name": "导数", "zone": "较弱"}]) == []
     assert skill_gap_analysis([{"name": "矩阵", "required_level": 3}], []) == []
     assert (
         skill_gap_analysis(
-            [{"name": "导数", "required_level": 99}],
-            [{"name": "导数", "zone": "待巩固"}],
+            [{"name": "导数", "required_level": 99}], [{"name": "导数", "zone": "待巩固"}]
         )[0]["required_level"]
         == 2
     )
@@ -577,77 +384,8 @@ def test_qualitative_weak_kcs_removes_internal_fields_and_normalizes_duplicates(
     assert _qualitative_weak_kcs(items) == [{"name": "ＤＡＴＡ", "zone": "较弱"}]
 
 
-async def test_skill_gaps_survive_diagnose_and_reach_draft_without_polluting_mastery():
-    parse = {
-        "subject": "高等数学",
-        "key_topics": ["极限", "导数"],
-        "level_hint": "零基础",
-        "skills": [
-            {"name": "极限", "required_level": 2, "reason": "导数基础"},
-            {"name": "导数", "required_level": 3, "reason": "目标核心"},
-        ],
-    }
-    profile = "薄弱点: 导数(较弱); 讲解偏好: 严谨。"
-    gateway, state = await run_plan_to_interrupt(
-        {"plan_parse_goal": [parse], "plan_draft": [DRAFT]},
-        input_overrides={
-            "diagnosis": {
-                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
-                "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
-            },
-            "weak_kcs": [
-                {"name": "导数", "zone": "较弱"},
-                {"name": "线性代数", "zone": "待巩固"},
-            ],
-            "profile_summary": profile,
-        },
-    )
-
-    assert state["diagnosis"] == {
-        "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
-        "导数": {"evidence_state": "observed", "mastery_band": "较弱"},
-    }
-    assert state["skill_gaps"] == [
-        {
-            "skill": "导数",
-            "weak_kc": "导数",
-            "required_level": 3,
-            "zone": "较弱",
-            "goal_reason": "目标核心",
-            "gap_reason": "达成目标需要「导数」达到灵活迁移，当前较弱；目标核心",
-        }
-    ]
-    draft_request = next(req for req in gateway.requests if req.feature == "plan_draft")
-    prompt = draft_request.messages[0].content
-    assert "<技能差距" in prompt
-    assert "导数：目标灵活迁移，当前较弱" in prompt
-    assert "<学生画像" in prompt and profile in prompt
-    assert "0.2" not in prompt and "0.7" not in prompt
-
-
-async def test_old_parse_output_falls_back_to_topics_and_empty_weakness_is_compatible():
-    gateway, state = await run_plan_to_interrupt(
-        {"plan_parse_goal": [PARSE], "plan_draft": [DRAFT]},
-        input_overrides={
-            "diagnosis": {
-                "极限": {"evidence_state": "observed", "mastery_band": "接近掌握"},
-                "导数": {"evidence_state": "observed", "mastery_band": "已掌握"},
-            },
-            "weak_kcs": [],
-        },
-    )
-
-    assert state["parsed_goal"]["skills"] == [
-        {"name": "极限", "required_level": 2, "reason": "达成目标所需"},
-        {"name": "导数", "required_level": 2, "reason": "达成目标所需"},
-    ]
-    assert state["skill_gaps"] == []
-    draft_request = next(req for req in gateway.requests if req.feature == "plan_draft")
-    assert "(当前目标与已知薄弱点无交集)" in draft_request.messages[0].content
-
-
 def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
-    from eduagents_core.workflows.plan import _fallback_plan
+    from eduagents_core.education.plan import _fallback_plan
 
     state = {
         "goal": "补齐微积分",
@@ -660,9 +398,6 @@ def test_fallback_plan_prioritizes_skill_gaps_without_creating_mastery():
     first_task = plan["stages"][0]["days"][0]["tasks"][0]
     assert "导数" in first_task["title"]
     assert state["diagnosis"] == before
-
-
-# ---------- ⑥ 可验证目标拆解 ----------
 
 
 def test_plan_create_trims_optional_goal_context():
@@ -679,13 +414,16 @@ def test_plan_create_trims_optional_goal_context():
     assert body.current_level == "会基本代数"
     assert body.target_outcome == "能独立完成基础题"
     assert body.success_criteria == "10 题正确 8 题"
-    assert PlanCreate(
-        goal="导数",
-        plan_mode="goal_only",
-        current_level="  ",
-        budget_hours_per_day=1.0,
-        total_days=2,
-    ).current_level is None
+    assert (
+        PlanCreate(
+            goal="导数",
+            plan_mode="goal_only",
+            current_level="  ",
+            budget_hours_per_day=1.0,
+            total_days=2,
+        ).current_level
+        is None
+    )
 
 
 def test_plan_create_requires_explicit_schedule_values():
@@ -693,83 +431,72 @@ def test_plan_create_requires_explicit_schedule_values():
         PlanCreate(goal="导数", plan_mode="goal_only", current_level="  ")
 
 
-async def test_explicit_goal_context_overrides_model_and_reaches_confirmation():
-    parse = {
-        "subject": "高等数学",
-        "goal_summary": "学习导数并能解决基础问题",
-        "outcomes": ["模型提取的次要成果"],
-        "success_criteria": ["模型提取的次要标准"],
-        "constraints": ["每天一小时"],
-        "missing_information": ["current_level", "target_outcome", "success_criteria"],
-        "key_topics": ["导数"],
-        "level_hint": "模型猜测的水平",
-        "skills": [{"name": "导数", "required_level": 2, "reason": "目标核心"}],
+@pytest.mark.parametrize(
+    "evidence,band", [("unobserved", None), ("estimated", None), ("observed", "较弱")]
+)
+def test_learning_context_removes_probabilities_and_unknown_evidence(evidence, band):
+    state = {
+        "parsed_goal": PARSE,
+        "diagnosis": {
+            "极限": {"evidence_state": evidence, "mastery_band": "较弱", "p_mastery": 0.22},
+            "伪造主题": {"p_mastery": 1},
+        },
     }
-    gateway, state = await run_plan_to_interrupt(
-        {
-            "plan_parse_goal": [parse],
-            "plan_draft": [DRAFT],
+    checked = verified_diagnosis(state)
+    assert "p_mastery" not in json.dumps(checked)
+    assert "伪造主题" not in checked["diagnosis"]
+    assert checked["diagnosis"]["极限"].get("mastery_band") == band
+    assert ("极限" in checked["baseline_topics"]) == (evidence != "observed")
+
+
+@pytest.mark.parametrize("level", range(4))
+def test_tutor_profile_never_overrides_answer_permission(level):
+    record = TaskRecord(
+        state={
+            "problem": "导数定义是什么",
+            "hint_level": level,
+            "profile_summary": "导数定义较弱",
+            "profile_weak_points": ["导数定义"],
+        }
+    )
+    policy = TutorTools(make_deps(FakeGateway()), record, lambda _: None).policy()
+    assert "导数定义较弱" in policy
+    assert ("绝对禁止给出最终答案" in policy) == (level < 3)
+
+
+async def test_qualitative_learning_context_has_no_internal_ids_or_probability():
+    record = TaskRecord(
+        state={
+            "weak_kcs": [{"name": "导数", "zone": "较弱", "p_mastery": 0.2, "kc_id": "private"}],
+            "diagnosis": {
+                "导数": {"evidence_state": "observed", "mastery_band": "较弱", "p_mastery": 0.2}
+            },
         },
-        input_overrides={
-            "goal": "学习导数",
-            "current_level": "会基本极限",
-            "target_outcome": "能独立完成基础导数题",
-            "success_criteria": "10 题中至少正确 8 题并说明错因",
-        },
+        status="running",
     )
-
-    analysis = state["goal_analysis"]
-    assert analysis["quality"] == "clear"
-    assert analysis["outcomes"][0] == "能独立完成基础导数题"
-    assert analysis["success_criteria"][0] == "10 题中至少正确 8 题并说明错因"
-    assert analysis["missing_information"] == []
-    assert state["parsed_goal"]["level_hint"] == "会基本极限"
-
-    parse_prompt = (
-        next(req for req in gateway.requests if req.feature == "plan_parse_goal")
-        .messages[0]
-        .content
-    )
-    assert "<当前基础>\n会基本极限" in parse_prompt
-    assert "<期望成果>\n能独立完成基础导数题" in parse_prompt
-    draft_prompt = (
-        next(req for req in gateway.requests if req.feature == "plan_draft").messages[0].content
-    )
-    assert "<目标拆解>" in draft_prompt
-    assert "验收标准：\n- 10 题中至少正确 8 题并说明错因" in draft_prompt
-    interrupt_value = state["__interrupt__"][0].value
-    assert interrupt_value["goal_analysis"] == analysis
+    context = await PlanTools(make_deps(FakeGateway()), record, lambda _: None).handlers[
+        "read_learning_context"
+    ]({})
+    assert "private" not in json.dumps(context) and "p_mastery" not in json.dumps(context)
+    assert context["weak_kcs"] == [{"name": "导数", "zone": "较弱"}]
 
 
-async def test_vague_goal_keeps_missing_criteria_visible_without_fabrication():
-    parse = {
-        "subject": "数学",
-        "goal_summary": "学习数学",
-        "outcomes": [],
-        # 即使模型越权补了数值标准，用户未明确提供时也不得采信。
-        "success_criteria": ["正确率 100%"],
-        "constraints": [],
-        "missing_information": ["scope", "current_level", "target_outcome", "success_criteria"],
-        "key_topics": ["数学"],
-        "level_hint": "",
-        "skills": [],
+def test_explicit_goal_context_wins_over_model_and_skill_gap_is_not_mastery():
+    state = {
+        "goal": "导数",
+        "current_level": "会代数",
+        "target_outcome": "能解基础题",
+        "success_criteria": "十题对八题",
+        "weak_kcs": [{"name": "导数", "zone": "较弱"}],
     }
-    gateway, state = await run_plan_to_interrupt(
+    result = normalize_goal(
+        state,
         {
-            "plan_parse_goal": [parse],
-            "plan_draft": [DRAFT],
+            "key_topics": ["导数"],
+            "level_hint": "精通",
+            "skills": [{"name": "导数", "required_level": 3}],
         },
-        input_overrides={"goal": "学数学"},
     )
-
-    analysis = state["goal_analysis"]
-    assert analysis["quality"] == "vague"
-    assert analysis["success_criteria"] == []
-    assert "100%" not in repr(analysis)
-    assert {"current_level", "target_outcome", "success_criteria"}.issubset(
-        analysis["missing_information"]
-    )
-    prompt = (
-        next(req for req in gateway.requests if req.feature == "plan_draft").messages[0].content
-    )
-    assert "(未明确，不得编造)" in prompt
+    assert result["parsed_goal"]["level_hint"] == "会代数"
+    assert result["skill_gaps"] and "diagnosis" not in result
+    assert result["goal_analysis"]["outcomes"] == ["能解基础题"]

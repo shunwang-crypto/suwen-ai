@@ -40,6 +40,9 @@ async def migrate(pool):
         ).fetchone()
         if not exists["name"]:
             return 0
+        native = await (await connection.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name='harness_sessions' AND column_name='status'"
+        )).fetchone()
         rows = await (
             await connection.execute(
                 "SELECT DISTINCT thread_id FROM checkpoints WHERE checkpoint_ns = ''"
@@ -67,19 +70,23 @@ async def migrate(pool):
             raise ValueError("legacy checkpoint owner mismatch")
         async with pool.connection() as connection, connection.transaction():
             await connection.execute("SELECT set_config('app.tenant_id', %s, true)", (user_id,))
-            result = await connection.execute(
-                """
+            statement = """
                 INSERT INTO harness_sessions (thread_id, tenant_id, user_id, kind, state, next_phase, pending, updated_at)
                 SELECT %s, %s::uuid, id, %s, %s::jsonb, %s, %s::jsonb, %s::timestamptz
                 FROM users WHERE id = %s::uuid
                 ON CONFLICT (thread_id) DO NOTHING
-            """,
+            """
+            lifecycle = "awaiting_confirmation" if pending is not None else "completed" if phase is None else "idle"
+            if native:
+                statement = statement.replace("next_phase", "status")
+            result = await connection.execute(
+                statement,
                 (
                     thread_id,
                     user_id,
                     parts[0],
                     json.dumps(state),
-                    phase,
+                    lifecycle if native else phase,
                     json.dumps(pending) if pending is not None else None,
                     saved.checkpoint["ts"],
                     user_id,

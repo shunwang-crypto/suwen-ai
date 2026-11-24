@@ -1,34 +1,36 @@
+"""Tenant storage and native task admission; DSH owns agent execution."""
+
 from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from contextlib import asynccontextmanager
-from dataclasses import replace
 
-from eduagents_core.config import Settings
-from eduagents_core.harness.gateway import ScopedHarnessGateway, validate_installation
-from eduagents_core.harness.workflow import Resume, Snapshot
-from eduagents_core.workflows.state import WorkflowDeps
+from eduagents_core.gateway.base import ChatResult, StreamDelta
+from eduagents_core.harness.gateway import HarnessGateway, validate_installation
+from eduagents_core.harness.task import AgentTask, TaskRecord
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import text
 
 from .db import tenant_session
 
-_KINDS = ("qa", "quiz", "plan", "tutor")
+_KINDS = ("qa", "quiz", "plan", "tutor", "chat")
 
 
-class PostgresStore:
+class PostgresTaskStore:
     def __init__(self, pool):
         self.pool = pool
 
     async def load(self, thread_id):
-        _kind, user_id, _local = HarnessRuntime.parse_thread_id(thread_id)
+        _, user_id, _ = HarnessRuntime.parse_thread_id(thread_id)
         async with tenant_session(user_id) as session:
             row = (
                 (
                     await session.execute(
                         text(
-                            "SELECT state, next_phase, pending FROM harness_sessions WHERE thread_id = :id AND user_id = :uid"
+                            "SELECT state,status,pending,native_session_id,native_archive FROM harness_sessions "
+                            "WHERE thread_id=:id AND user_id=:uid"
                         ),
                         {"id": thread_id, "uid": user_id},
                     )
@@ -37,45 +39,48 @@ class PostgresStore:
                 .first()
             )
         return (
-            Snapshot(
+            TaskRecord(
                 dict(row["state"]),
-                (row["next_phase"],) if row["next_phase"] else (),
+                row["status"],
                 row["pending"],
+                row["native_session_id"],
+                dict(row["native_archive"]),
             )
             if row
-            else Snapshot()
+            else TaskRecord()
         )
 
-    async def save(self, thread_id, snapshot):
-        kind, user_id, _local = HarnessRuntime.parse_thread_id(thread_id)
-        # Request identities are bound by the authenticated router, never by model output.
-        if snapshot.values.get("user_id", user_id) != user_id:
+    async def save(self, thread_id, record):
+        kind, user_id, _ = HarnessRuntime.parse_thread_id(thread_id)
+        if record.state.get("user_id", user_id) != user_id:
             raise ValueError("harness owner mismatch")
         async with tenant_session(user_id) as session:
             await session.execute(
                 text("""
-                INSERT INTO harness_sessions (thread_id, tenant_id, user_id, kind, state, next_phase, pending)
-                VALUES (:id, :uid, :uid, :kind, CAST(:state AS jsonb), :next, CAST(:pending AS jsonb))
-                ON CONFLICT (thread_id) DO UPDATE SET state = EXCLUDED.state,
-                    next_phase = EXCLUDED.next_phase, pending = EXCLUDED.pending, updated_at = now()
-                WHERE harness_sessions.user_id = EXCLUDED.user_id
+                INSERT INTO harness_sessions
+                    (thread_id,tenant_id,user_id,kind,state,status,pending,native_session_id,native_archive)
+                VALUES (:id,:uid,:uid,:kind,CAST(:state AS jsonb),:status,CAST(:pending AS jsonb),:native_id,CAST(:archive AS jsonb))
+                ON CONFLICT (thread_id) DO UPDATE SET state=EXCLUDED.state,status=EXCLUDED.status,
+                    pending=EXCLUDED.pending,native_session_id=EXCLUDED.native_session_id,
+                    native_archive=EXCLUDED.native_archive,updated_at=now()
+                WHERE harness_sessions.user_id=EXCLUDED.user_id
             """),
                 {
                     "id": thread_id,
                     "uid": user_id,
                     "kind": kind,
-                    "state": json.dumps(snapshot.values, ensure_ascii=False),
-                    "next": snapshot.next[0] if snapshot.next else None,
-                    "pending": json.dumps(snapshot.pending, ensure_ascii=False)
-                    if snapshot.pending is not None
+                    "state": json.dumps(record.state, ensure_ascii=False),
+                    "status": record.status,
+                    "pending": json.dumps(record.pending, ensure_ascii=False)
+                    if record.pending is not None
                     else None,
+                    "native_id": record.native_session_id,
+                    "archive": json.dumps(record.native_archive),
                 },
             )
 
     @asynccontextmanager
     async def lock(self, thread_id):
-        # Session advisory lock serializes a thread across API processes. State writes
-        # use short RLS transactions, not a transaction spanning model generation.
         async with self.pool.connection() as connection:
             try:
                 await connection.execute(
@@ -83,8 +88,6 @@ class PostgresStore:
                 )
                 yield
             except asyncio.CancelledError:
-                # Cancellation during acquisition must not return a connection
-                # with a session lock to the shared pool.
                 await connection.close()
                 raise
             finally:
@@ -95,18 +98,11 @@ class PostgresStore:
 
 
 class HarnessRuntime:
-    """Four educational DSH workflows with durable host confirmations and state."""
-
-    def __init__(self, settings: Settings, deps: WorkflowDeps):
-        self.settings = settings
-        self.deps = replace(
-            deps,
-            gateway=ScopedHarnessGateway(
-                deps.gateway, settings.harness_timeout_seconds, settings.harness_max_concurrency
-            ),
-        )
+    def __init__(self, settings, deps):
+        self.settings, self.deps = settings, deps
         self._pool = None
-        self._workflows = {}
+        self._slots = asyncio.Semaphore(settings.harness_max_concurrency)
+        self._store = None
 
     async def start(self):
         validate_installation()
@@ -118,68 +114,90 @@ class HarnessRuntime:
             kwargs={"autocommit": True},
         )
         await self._pool.open()
+        self._store = PostgresTaskStore(self._pool)
 
     async def stop(self):
         if self._pool:
             await self._pool.close()
 
-    def workflow(self, kind):
-        if kind not in _KINDS:
-            raise ValueError(f"unknown workflow kind: {kind}")
-        if kind not in self._workflows:
-            from eduagents_core.workflows.plan import build_plan_workflow
-            from eduagents_core.workflows.qa import build_qa_workflow
-            from eduagents_core.workflows.quiz import build_quiz_workflow
-            from eduagents_core.workflows.tutor import build_tutor_workflow
+    async def load_task(self, thread_id):
+        return await self._store.load(thread_id)
 
-            factory = {
-                "qa": build_qa_workflow,
-                "quiz": build_quiz_workflow,
-                "plan": build_plan_workflow,
-                "tutor": build_tutor_workflow,
-            }[kind]
-            self._workflows[kind] = factory(self.deps).with_store(PostgresStore(self._pool))
-        return self._workflows[kind]
+    async def run_task(self, kind, thread_id, payload=None, *, resume=None):
+        async with self._slots:
+            return await AgentTask(kind, self.deps, self._store).run(
+                thread_id, payload, resume=resume
+            )
 
-    async def stream_chat(self, req, gateway=None):
-        async with self.deps.gateway.activity(gateway):
-            async for item in self.deps.gateway.stream_chat(req):
-                yield item
+    async def stream_task(self, kind, thread_id, payload=None, *, resume=None):
+        async with self._slots:
+            async for event in AgentTask(kind, self.deps, self._store).stream(
+                thread_id, payload, resume=resume
+            ):
+                yield event
+
+    async def stream_chat(self, req, *, thread_id, gateway=None):
+        async with self._slots, self._store.lock(thread_id):
+            record = await self._store.load(thread_id)
+            if record.state.get("user_id", req.user_id) != req.user_id:
+                raise ValueError("harness owner mismatch")
+            if (
+                record.status == "completed"
+                and record.state.get("request_id") == req.request_id
+                and record.state.get("result")
+            ):
+                yield StreamDelta(record.state["answer"])
+                yield ChatResult(**record.state["result"])
+                return
+            record.state.update(
+                user_id=req.user_id, request_id=req.request_id, _active_request=req.request_id
+            )
+            record.status = "running"
+            record.native_session_id = (
+                record.native_session_id
+                or uuid.uuid5(uuid.NAMESPACE_URL, f"eduagents:{thread_id}").hex
+            )
+
+            async def checkpoint(archive):
+                record.native_archive = archive
+                await self._store.save(thread_id, record)
+
+            async with HarnessGateway(
+                gateway or self.deps.gateway,
+                timeout=self.settings.harness_timeout_seconds,
+                max_calls=self.settings.harness_max_model_calls,
+            ) as runtime:
+                runtime.configure_chat(
+                    req,
+                    session_id=record.native_session_id,
+                    archive=record.native_archive,
+                    checkpoint=checkpoint,
+                    context_window=self.settings.harness_context_window_tokens,
+                )
+                try:
+                    async for item in runtime.stream_chat(req):
+                        if isinstance(item, ChatResult):
+                            from dataclasses import asdict
+
+                            record.status = "completed"
+                            record.state.update(answer=item.text, result=asdict(item))
+                        yield item
+                finally:
+                    await runtime.close()
+                    record.native_archive = runtime.native_archive or record.native_archive
+                    if record.status == "running":
+                        record.status = "failed"
+                    await self._store.save(thread_id, record)
 
     @staticmethod
     def thread_id(kind, user_id, local_id):
+        if kind not in _KINDS:
+            raise ValueError("unknown task kind")
         return f"{kind}:{user_id}:{local_id}"
 
     @staticmethod
     def parse_thread_id(thread_id):
         parts = thread_id.split(":", 2)
-        if len(parts) != 3 or parts[0] not in _KINDS:
+        if len(parts) != 3 or parts[0] not in _KINDS or not parts[1] or not parts[2]:
             raise ValueError("bad thread_id")
         return tuple(parts)
-
-    async def astream_updates(self, kind, thread_id, payload, resume=None):
-        workflow = self.workflow(kind)
-        config = {"configurable": {"thread_id": thread_id}}
-        pending = None
-        async for mode, data in workflow.astream(
-            Resume(resume) if resume is not None else payload, config
-        ):
-            if mode == "custom":
-                if isinstance(data, dict) and data.get("type") == "token":
-                    yield {
-                        "kind": "token",
-                        "text": str(data.get("text", "")),
-                        "attempt": int(data.get("attempt") or 0),
-                    }
-                else:
-                    yield {"kind": "custom", "payload": data}
-            elif "__interrupt__" in data:
-                pending = data["__interrupt__"][0].value
-            else:
-                for phase, delta in data.items():
-                    yield {"kind": "node", "node": phase, "delta": delta or {}}
-        if pending is not None:
-            yield {"kind": "interrupt", "payload": pending}
-        else:
-            snapshot = await workflow.aget_state(config)
-            yield {"kind": "end", "state": snapshot.values}

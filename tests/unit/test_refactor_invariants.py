@@ -89,7 +89,7 @@ def test_plan_tasks_use_one_status_field() -> None:
     sources = [
         ROOT / "apps" / "api" / "src" / "eduagents_api" / "plan_adjust.py",
         ROOT / "apps" / "api" / "src" / "eduagents_api" / "routers" / "plans.py",
-        ROOT / "packages" / "core" / "src" / "eduagents_core" / "workflows" / "plan.py",
+        ROOT / "packages" / "core" / "src" / "eduagents_core" / "education" / "plan.py",
         WEB / "app" / "plans" / "page.tsx",
         WEB / "components" / "plans" / "plan-task-drawer.tsx",
     ]

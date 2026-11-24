@@ -9,8 +9,8 @@ from ..gateway.base import ModelGateway
 
 
 @dataclass
-class WorkflowDeps:
-    """工作流外部依赖注入 (闭包捕获, 不进 state — state 必须可序列化为快照)。
+class EducationDeps:
+    """任务外部依赖注入 (闭包捕获, 不进 state — state 必须可序列化为快照)。
 
     web_search: async (query, required, search_depth, max_results)
         -> list[{title, url, content}] | (list, from_cache) | None
@@ -24,7 +24,7 @@ class WorkflowDeps:
 
 
 class QaState(TypedDict, total=False):
-    """qa 工作流状态 (§5.3 Agentic RAG 自省环)。trace 事件由 API 层转发为 SSE trace_event。"""
+    """qa 任务状态 (§5.3 Agentic RAG 自省环)。trace 事件由 API 层转发为 SSE trace_event。"""
 
     messages: list[dict]
     query: str
@@ -56,7 +56,7 @@ class QaState(TypedDict, total=False):
 
 
 class QuizState(TypedDict, total=False):
-    """quiz 工作流 (§5.4): blueprint → interrupt 确认 → 生成 → schema 校验重试 → 入库。"""
+    """quiz 任务 (§5.4): blueprint → interrupt 确认 → 生成 → schema 校验重试 → 入库。"""
 
     tenant_id: str
     user_id: str
@@ -85,7 +85,7 @@ class QuizState(TypedDict, total=False):
 
 
 class PlanState(TypedDict, total=False):
-    """planner 工作流: 目标解析 → (摸底题由 quiz 复用) → 检索资源 → 生成计划 → interrupt 确认。"""
+    """planner 任务: 目标解析 → (摸底题由 quiz 复用) → 检索资源 → 生成计划 → interrupt 确认。"""
 
     tenant_id: str
     user_id: str
@@ -111,7 +111,7 @@ class PlanState(TypedDict, total=False):
 
 
 class TutorState(TypedDict, total=False):
-    """tutor 工作流 (F4 苏格拉底): 三层提示状态机, hint_level 0..3, 3 之前禁止完整答案。"""
+    """tutor 任务 (F4 苏格拉底): 三层提示状态机, hint_level 0..3, 3 之前禁止完整答案。"""
 
     messages: list[dict]
     tenant_id: str
@@ -126,7 +126,7 @@ class TutorState(TypedDict, total=False):
     problem_page_no: int | None
     hint_level: int  # 0=开场提问 1=方向性 2=关键步骤 3=展开讲解(完整解答)
     # 题目命中 KC 的掌握度定性档 (mastered/near/reinforce/weak/""), 由路由层按
-    # p_mastery 算好注入 —— 工作流内不查库 (WorkflowDeps 无 session)。只用于决定**起始**
+    # p_mastery 算好注入 —— 任务内不查库 (EducationDeps 无 session)。只用于决定**起始**
     # hint_level: 已经会的人不该从第 0 层开场提问慢慢爬。空串=无画像, 保持原行为。
     mastery_band: str
     answer_requests: int  # 学生索要答案次数: 第1次温和坚持, 第2次给答案

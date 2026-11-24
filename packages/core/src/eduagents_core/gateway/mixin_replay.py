@@ -50,7 +50,10 @@ class GatewayReplayMixin:
         text = stub_text(req)
         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
         tool_calls = ()
-        if req.tools:
+        if req.feature.startswith("agent_"):
+            from .agent_stub import agent_stub
+            text, tool_calls = agent_stub(req)
+        elif req.tools:
             import json
             if any(m.role == "tool" for m in req.messages):
                 text = "finished"

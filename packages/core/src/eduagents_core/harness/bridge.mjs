@@ -20,7 +20,7 @@ export async function apply(ctx) {
     imageRequestPricing: () => undefined,
     imageRequestTarget: (_provider, _model, image) => ({ width: image.width, height: image.height, maxImageBytes: image.bytes, imageTargetBytes: image.bytes }),
     listModels: async provider => [{ provider, id: 'education', name: 'Education' }],
-    resolveModel: async (provider, id) => ({ provider, id, name: id, context: { contextWindow: 1000000 } }),
+    resolveModel: async (provider, id) => ({ provider, id, name: id, context: { contextWindow: Number(process.env.EDU_DSH_CONTEXT_WINDOW || 32768) } }),
     async prepareCall(provider, model) {
       return { model: await this.resolveModel(provider, model), stream: options => this.stream(options) };
     },
