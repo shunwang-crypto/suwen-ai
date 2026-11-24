@@ -114,6 +114,28 @@ make compile
 make test-unit
 ~~~
 
+提示词版本和离线进化：
+
+~~~bash
+make eval-prompts-smoke
+# 显式调用已配置的真实模型；候选与报告保存在临时目录。
+$HOME/miniforge3/envs/eduagents/bin/python eval/run_prompt_evolution.py \
+  --live --propose-version edu-v2 --candidate-output /tmp/edu-v2.json \
+  --repetitions 2 --max-calls 600 --max-cost-cny 10 \
+  --output /tmp/eduagents-prompt-comparison.json
+~~~
+
+`--live` 的费用上限覆盖主 Agent、压缩、独立评审和候选反思；达到上限后停止新调用，
+最后一个在途调用仍按实际费用计入。CLI 在固定合成资料上比较教学策略，不访问应用数据库。
+已有候选可用 `--candidate /tmp/edu-v2.json` 代替 `--propose-version` 和 `--candidate-output`。
+比较前校验候选声明的父版本；调优和留出输入不得重复。真实费用、按任务质量及失败原因
+写入 JSON 报告，桩模型不会生成有效质量分数。质量比较仍需要教师检查实际教学表现。
+
+采纳候选时将经过审查的 JSON 放入 core 的 `education/prompt_versions/`，新增版本而不覆盖
+旧版本，完成检查后用 `EDUCATION_PROMPT_VERSION` 选择它。原任务固定旧教学版本，当前权限
+规则仍重新计算；恢复所需的旧版本缺失或内容被修改时明确报错。回滚选择旧版本即可。
+修改工具协议或权限需另改业务代码和相应测试，不通过候选教学提示词改变。
+
 集成测试：
 
 ~~~bash

@@ -5,7 +5,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import uuid
-from pathlib import Path
 from urllib.parse import urlparse
 
 from ..gateway.base import Tier
@@ -15,8 +14,6 @@ from .toolkit import OBJECT, EducationTools, schema
 
 # 容错 JSON 解析 (整体 -> 截取首尾大括号), 与全仓共用 json_utils.parse_json_object
 
-# 本文件位于 packages/core/src/eduagents_core/education/ -> parents[5] 为仓库根
-_PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
 _DAY_MIN_RATIO = 0.85  # F3-A1: 每日任务分钟和与预算误差严格小于 15%
 _DAY_MAX_RATIO = 1.15  # 上限 = 1.15 * 预算
@@ -118,10 +115,6 @@ class PlanTaskContext(PlanState, total=False):
     # 可操作的目标拆解；只保留用户提供或从目标中忠实提取的文本。
     goal_analysis: dict
     baseline_topics: list[str]
-
-
-def _load_prompt(filename: str) -> str:
-    return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
 
 def _required_level(value: object) -> int:
@@ -846,11 +839,12 @@ class PlanTools(EducationTools):
 
     def policy(self):
         return (
-            super().policy()
+            self.teaching_policy("plan")
+            + super().policy()
             + (
                 "你负责学习规划。读取真实学情，根据目标决定需要哪些资料并调用工具。"
                 "goal_outline 可包含 subject、key_topics、skills、goal_analysis。"
-                "plan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,success_criteria}]}]}。"
+                "plan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,instructions,completion_criteria}]}]}。"
                 "必须覆盖用户要求的全部天数，每日任务时长符合预算。缺少学习证据的主题安排基线练习。"
                 "resource_ref 是工具返回 resources 的下标；没有资料时使用 null。"
                 "提交草案后等待用户确认。已确认时只调用 publish_plan，不修改内容。"

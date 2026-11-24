@@ -6,6 +6,7 @@ from typing import Any, TypedDict
 
 from ..config import Settings
 from ..gateway.base import ModelGateway
+from .prompts import PromptBundle
 
 
 @dataclass
@@ -21,6 +22,8 @@ class EducationDeps:
     gateway: ModelGateway
     retrieval: Any = None
     web_search: Callable[..., Any] | None = None
+    # Offline evaluation can inject a candidate without changing deployment.
+    prompt_bundle: PromptBundle | None = None
 
 
 class QaState(TypedDict, total=False):

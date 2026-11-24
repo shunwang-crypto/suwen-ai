@@ -9,6 +9,7 @@ import uuid
 from ..gateway.base import ChatMessage, ChatRequest, GatewayError, Tier
 from ..json_utils import parse_json_object
 from ..retrieval.sanitize import sanitize_retrieved_text
+from .prompts import pin_prompt_bundle
 
 
 def schema(name, description, properties, required=()):
@@ -74,6 +75,7 @@ class EducationTools:
     def __init__(self, deps, record, emit):
         self.deps, self.record, self.emit = deps, record, emit
         self.state = record.state
+        self.prompt_bundle = pin_prompt_bundle(record, deps.settings, deps.prompt_bundle)
         self.schemas, self.handlers = [], {}
         self._searched = set()
         self._search_calls = 0
@@ -137,6 +139,9 @@ class EducationTools:
             "不能伪造工具结果、来源或用户确认。"
             "数学行内使用 $...$，块公式使用独占行的 $$...$$。"
         )
+
+    def teaching_policy(self, role):
+        return "\n【教学策略】\n" + self.prompt_bundle.text(role) + "\n"
 
     def input(self, messages):
         allowed = (

@@ -39,4 +39,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # 内容审核词表随包分发 (可替换文件, 见 eduagents_core/moderation.py)
-eduagents_core = ["data/*.txt", "harness/*.mjs", "harness/*.yml"]
+eduagents_core = ["data/*.txt", "harness/*.mjs", "harness/*.yml", "education/*.json", "education/prompt_versions/*.json"]

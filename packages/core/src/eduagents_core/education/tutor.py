@@ -35,7 +35,7 @@ _PERSIST_NOTE = (
     "对他的学习不利, 本轮仍然不给出答案, 然后继续用一个引导性问题帮助他前进一步。"
 )
 
-# F4-A1 结构性防线: hint_level < 3 时由 respond 节点代码强制追加到 system prompt 末尾。
+# hint_level < 3 时，服务端在教学策略后追加禁答约束。
 # 是否追加完全由 policy 状态机产出的 hint_level 决定, 与提示词文件内容、模型自觉无关。
 _ANSWER_BAN = (
     "\n\n【结构性硬约束】绝对禁止给出最终答案、最终结论的数值/表达式或完整解题过程; "
@@ -163,7 +163,9 @@ class TutorTools(EducationTools):
         hint = min(int(self.state.get("hint_level") or 0), _MAX_HINT_LEVEL)
         profile, _ = _render_profile_section(self.state, hint)
         prompt = (
-            super().policy()
+            self.teaching_policy("tutor")
+            + self.teaching_policy(f"tutor_hint{hint}")
+            + super().policy()
             + _MATH_FORMAT
             + profile
             + (

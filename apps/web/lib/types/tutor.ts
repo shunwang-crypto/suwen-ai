@@ -70,7 +70,7 @@ export interface TutorSessionState {
   pending: boolean;
 }
 
-/** session_summary 的解析结构（tutor_summarize.md 契约） */
+/** 服务端 submit_tutor_reply 保存的定性辅导小结。 */
 export interface TutorSessionSummary {
   misconceptions: string[];
   review_suggestions: string[];

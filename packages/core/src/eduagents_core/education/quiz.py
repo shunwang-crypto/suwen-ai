@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -14,10 +13,9 @@ from ..json_utils import parse_json_object
 from ..kc.types import normalize_kc_name
 from ..logging import get_logger
 from .context import QuizState
+from .prompts import load_review_prompt
 from .toolkit import OBJECT, EducationTools, schema
 
-# 本文件位于 packages/core/src/eduagents_core/education/ -> parents[5] 为仓库根
-_PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 MAX_RETRIES = 2  # 校验失败最多打回 generate 修复 2 轮
 MAX_CRITIC_RETRIES = 1  # 独立评审最多返工 1 轮，避免无限增加成本
 MAX_CRITIC_ISSUES = 5
@@ -159,10 +157,6 @@ def grade_objective(question: dict, response: str) -> bool:
 
 
 # --- 内部工具 ---
-
-
-def _load_prompt(filename: str) -> str:
-    return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
 
 def _diagnostic_top_level_keys(raw: dict[str, Any] | None) -> list[str]:
@@ -320,7 +314,8 @@ class QuizTools(EducationTools):
 
     def policy(self):
         return (
-            super().policy()
+            self.teaching_policy("quiz")
+            + super().policy()
             + (
                 "你负责生成教育练习。蓝图条目包含 kc_name、type(single/multi/blank/short)、difficulty(easy/mid/hard)。"
                 "题目包含 type、stem、options、answer、explanation、kc_names、difficulty；选择题必须四个选项。"
@@ -590,7 +585,7 @@ async def review_questions(deps, state: _QuizTaskContext) -> dict:
         result = await deps.gateway.chat(
             ChatRequest(
                 messages=(
-                    ChatMessage(role="system", content=_load_prompt("quiz_verify.md")),
+                    ChatMessage(role="system", content=load_review_prompt("quiz")),
                     ChatMessage(role="user", content=critic_input),
                 ),
                 tier=Tier.cheap,

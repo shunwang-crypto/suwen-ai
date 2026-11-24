@@ -53,6 +53,8 @@ class AgentTask:
         async with self.store.lock(thread_id):
             record = await self.store.load(thread_id)
             incoming = dict(payload or {})
+            if "_prompt_bundle" in incoming:
+                raise GatewayError("HARNESS_PROMPT_OVERRIDE_DENIED", "请求不能修改教学提示词版本")
             old_owner = record.state.get("user_id")
             if old_owner and incoming.get("user_id", old_owner) != old_owner:
                 raise GatewayError("HARNESS_OWNER_MISMATCH", "任务归属不匹配")

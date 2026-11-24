@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from ..gateway.base import (
@@ -13,12 +12,11 @@ from ..logging import get_logger
 from ..moderation import get_moderator, minor_system_guard
 from ..retrieval.sanitize import sanitize_retrieved_text
 from .context import QaState
+from .prompts import load_review_prompt
 from .toolkit import STRINGS, TEXT, EducationTools, schema
 
 log = get_logger("qa_tools")
 
-# 本文件位于 packages/core/src/eduagents_core/education/ -> parents[5] 为仓库根
-_PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_WEB_RESULTS = 14
 
 # 触发 web 补充倾向的时效性/搜索意图关键词 (规则路由, 命中即不调 LLM)
@@ -58,10 +56,6 @@ PROFILE_SECTION_TEMPLATE = (
     "画像含兴趣标签时，举例与应用情境可自然贴合其兴趣（用其熟悉的场景讲概念），"
     "不得生硬堆砌兴趣词，也不得因此改变知识点本身。"
 )
-
-
-def _load_prompt(filename: str) -> str:
-    return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
 
 def _normalize_web_url(url: str) -> str:
@@ -158,7 +152,7 @@ class QuestionAnswerTools(EducationTools):
             )
 
     def policy(self):
-        prompt = super().policy() + DIRECT_SYSTEM_PROMPT
+        prompt = self.teaching_policy("qa") + super().policy() + DIRECT_SYSTEM_PROMPT
         prompt += "引用在正文标注 [来源 N]，N 与 submit_answer 的 source_ids 列表顺序一致，只列实际支撑结论的资料。"
         if self.state.get("profile_summary"):
             prompt += PROFILE_SECTION_TEMPLATE.replace(
@@ -212,7 +206,7 @@ class QuestionAnswerTools(EducationTools):
             try:
                 checked = await self.review(
                     "qa_verify_support",
-                    _load_prompt("qa_verify.md"),
+                    load_review_prompt("qa"),
                     {"sources": sources, "answer": answer},
                 )
             except BudgetExceeded:

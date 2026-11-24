@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     harness_max_concurrency: int = Field(default=8, ge=1, le=32)
     harness_max_model_calls: int = Field(default=16, ge=2, le=40)
     harness_context_window_tokens: int = Field(default=32768, ge=4096, le=262144)
+    # Immutable prompt resources: select a new version for new tasks; existing
+    # sessions keep the version and digest saved in their checkpoint.
+    education_prompt_version: str = Field(default="edu-v1", pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
     # Explicit business-route provider chains.  False preserves the legacy
     # CHEAP/STANDARD/STRONG/PLAN behavior for existing deployments.
     model_routing_enabled: bool = False
