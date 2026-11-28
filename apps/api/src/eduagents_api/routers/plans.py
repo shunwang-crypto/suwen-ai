@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Literal
 
+from eduagents_core.gateway import BudgetExceeded, GatewayError
 from eduagents_core.kc.dag import add_edge_safe, topological_order, validate_acyclic
 from eduagents_core.kc.types import PrereqEdge, normalize_kc_name
 from eduagents_core.logging import get_logger
@@ -1085,6 +1086,21 @@ async def list_adjustments(
 
 tutor_router = APIRouter(prefix="/api/tutor", tags=["tutor"])
 
+_TUTOR_GATEWAY_ERRORS = {
+    "HARNESS_TIMEOUT": 504,
+    "HARNESS_STEP_LIMIT": 502,
+    "HARNESS_PHASE_LIMIT": 409,
+    "HARNESS_TOOL_DENIED": 502,
+    "HARNESS_PROTOCOL_ERROR": 502,
+    "HARNESS_RESULT_REQUIRED": 502,
+    "HARNESS_NOT_PAUSED": 409,
+    "HARNESS_CONFIRMATION_REQUIRED": 409,
+    "MODEL_ROUTE_UNAVAILABLE": 503,
+    "MODEL_REQUEST_INVALID": 422,
+    "MODEL_BALANCE_INSUFFICIENT": 502,
+    "MODEL_STREAM_INTERRUPTED": 502,
+}
+
 
 @tutor_router.get("/entrypoints")
 async def tutor_entrypoints(request: Request, ctx: AuthContext = Depends(api_rate_limited)):
@@ -1220,6 +1236,8 @@ async def tutor_turn(
     thread_id = runtime.thread_id("tutor", str(ctx.user_id), local_id)
     record = await runtime.load_task(thread_id)
     existing = dict(record.state)
+    if not problem.strip():
+        problem = existing.get("problem") or ""
     memory_source_at = existing.get("_memory_source_at")
     if memory_source_at is None:
         if existing:
@@ -1297,7 +1315,17 @@ async def tutor_turn(
     if plan_id:
         payload["plan_id"] = plan_id
         payload["task_id"] = task_id
-    record = await runtime.run_task("tutor", thread_id, payload)
+    try:
+        record = await runtime.run_task("tutor", thread_id, payload)
+    except BudgetExceeded:
+        raise
+    except GatewayError as exc:
+        if exc.code == "HARNESS_OWNER_MISMATCH":
+            raise HTTPException(status_code=404, detail="NOT_FOUND") from None
+        status = _TUTOR_GATEWAY_ERRORS.get(exc.code)
+        code = exc.code if status is not None else "GENERATION_FAILED"
+        log.warning("tutor_turn_gateway_failed", code=code)
+        raise HTTPException(status_code=status or 502, detail=code) from None
     state = record.state
     # F4→F8 联动: 仅当本轮走了 summarize (trace 末项) 才把小结写入画像 —
     # trace/session_summary 会随 checkpointer 跨轮保留, 不能只看非空, 否则同 thread 续聊会重复计分。

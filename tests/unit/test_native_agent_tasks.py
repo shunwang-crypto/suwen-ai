@@ -192,6 +192,69 @@ async def test_native_tutor_session_keeps_history_and_advances_hint_only_once_pe
     )
 
 
+async def test_local_tutor_recovers_prose_through_assessment_and_checked_submission():
+    store = MemoryTaskStore()
+    classification = {"stuck_type": "concept", "asked_for_answer": False, "solved": False}
+    first_reply = "你打算从已知条件中的哪一项开始？"
+    model = ScriptedModel([
+        "未经检查的首轮文字",
+        json.dumps(classification),
+        json.dumps({"reply": first_reply}),
+        "finished",
+    ])
+    tutor = AgentTask(
+        "tutor", EducationDeps(Settings(_env_file=None, ollama_chat_model="local-4b"), model), store
+    )
+    first = await tutor.run("tutor-repair", {
+        "problem": "如何确定三角形的面积？",
+        "request_id": "turn-1",
+        "messages": [{"role": "user", "content": "不知道怎么开始"}],
+    })
+    assert first.status == "completed"
+    assert first.state["reply"] == first_reply and first.state["hint_level"] == 0
+    assessment, submission = [req for req in model.requests if req.json_mode]
+    assert not assessment.tools and not submission.tools
+    assert set(assessment.response_schema["required"]) == set(classification)
+    assert submission.response_schema["additionalProperties"] is False
+    assert submission.response_schema["required"] == ["reply"]
+    assert "绝对禁止给出最终答案" in submission.messages[0].content
+    assert "不知道怎么开始" in assessment.messages[-1].content
+    assert "未经检查的首轮文字" not in submission.messages[-1].content
+
+    before = len(model.requests)
+    second_reply = "底边和对应的高分别是哪一段？"
+    model.steps = [
+        ("assess_student_turn", classification),
+        "未经检查的次轮文字",
+        json.dumps({"reply": second_reply}),
+        "finished",
+    ]
+    second = await tutor.run("tutor-repair", {
+        "request_id": "turn-2",
+        "messages": [{"role": "user", "content": "我找到了底边，还是不会"}],
+    })
+    assert second.native_session_id == first.native_session_id
+    assert second.status == "completed" and second.state["hint_level"] == 1
+    assert [m["content"] for m in second.state["messages"] if m["role"] == "assistant"] == [
+        first_reply, second_reply,
+    ]
+    [repair] = [req for req in model.requests[before:] if req.json_mode]
+    assert repair.response_schema["required"] == ["reply"]
+    regular = next(
+        json.loads(message.content)["input"]
+        for message in model.requests[before].messages
+        if message.role == "user" and '"student_request": "我找到了底边，还是不会"' in message.content
+    )
+    recovered = json.loads(repair.messages[-1].content)["input"]
+    for context in (regular, recovered):
+        assert context["problem"] == "如何确定三角形的面积？"
+        assert context["student_request"] == "我找到了底边，还是不会"
+        assert context["previous_tutor_reply"] == first_reply
+    assert "assess_student_turn" in regular["hint_strategy"]
+    assert recovered["hint_level"] == 1 and "方向性反问" in recovered["hint_strategy"]
+    assert "下一步" in repair.messages[0].content and "已经回答过的问题" in repair.messages[0].content
+
+
 async def test_native_agent_must_submit_result_and_cannot_finish_with_unchecked_text():
     model = ScriptedModel(["I am done"])
     with pytest.raises(GatewayError, match="HARNESS_RESULT_REQUIRED"):

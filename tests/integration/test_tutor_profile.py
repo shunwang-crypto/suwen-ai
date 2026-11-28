@@ -9,6 +9,8 @@ FakeGateway 脚本驱动 tutor 图到 summarize, 断言:
 import json
 import uuid
 
+import pytest
+from eduagents_core.gateway import BudgetExceeded, GatewayError
 from sqlalchemy import select
 
 from .conftest import requires_services
@@ -99,7 +101,8 @@ async def test_tutor_summary_records_insight_without_mastery(client):
     runtime = app.state.harness
     assert runtime is not None, "集成环境应有 HarnessRuntime"
 
-    solved = {"stuck_type": "concept", "asked_for_answer": False, "solved": True}
+    solution = "令增量为 $h$，差商是 $((1+h)^2-1)/h=2+h$，令 $h$ 趋于零，得到在 $x=1$ 处导数为 $2$。"
+    solved = {"stuck_type": "concept", "asked_for_answer": False, "solved": True, "student_solution": solution}
     unsolved = {"stuck_type": "concept", "asked_for_answer": False, "solved": False}
     summary = {
         "misconceptions": [
@@ -114,6 +117,7 @@ async def test_tutor_summary_records_insight_without_mastery(client):
             "tutor_classify": [solved, unsolved],
             "tutor_respond": ["我们再看看这一步?"],
             "tutor_summarize": [summary],
+            "tutor_verify_solution": [{"complete": True, "correct": True, "independent": True}],
         }
     )
     original = runtime.deps.gateway
@@ -125,7 +129,7 @@ async def test_tutor_summary_records_insight_without_mastery(client):
             headers=headers,
             json={
                 "problem": "用定义求 f(x)=x^2 在 x=1 处的导数",
-                "message": "我懂了, 答案是 2, 谢谢老师!",
+                "message": solution,
             },
         )
         assert r.status_code == 200, r.text
@@ -142,7 +146,6 @@ async def test_tutor_summary_records_insight_without_mastery(client):
             "/api/tutor",
             headers=headers,
             json={
-                "problem": "用定义求 f(x)=x^2 在 x=1 处的导数",
                 "message": "再帮我看一道类似的?",
                 "thread_local_id": thread_local_id,
             },
@@ -185,12 +188,15 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
     runtime = app.state.harness
     assert runtime is not None
 
+    solution = "三角形的面积是同底同高平行四边形的一半，等于 $4\\times3/2=6$。"
     fake = FakeGateway(
         {
-            "tutor_classify": [{"stuck_type": "concept", "asked_for_answer": False, "solved": True}],
+            "tutor_classify": [{"stuck_type": "concept", "asked_for_answer": False, "solved": True,
+                                "student_solution": solution}],
             "tutor_summarize": [
                 {"misconceptions": ["对超纲概念的误解"], "review_suggestions": ["复习基础"]}
             ],
+            "tutor_verify_solution": [{"complete": True, "correct": True, "independent": True}],
         }
     )
     original = runtime.deps.gateway
@@ -199,12 +205,13 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
         r = await client.post(
             "/api/tutor",
             headers=headers,
-            json={"problem": "任意题目", "message": "我明白了, 谢谢!"},
+            json={"problem": "底边长4、高为3的三角形面积是多少？说明理由。", "message": solution},
         )
     finally:
         runtime.deps.gateway = original
     assert r.status_code == 200, r.text
     assert r.json()["learner_insights"] == []
+    assert r.json()["session_summary"]
 
     from eduagents_api.db import tenant_session
     from eduagents_api.models import MasteryLog
@@ -212,3 +219,29 @@ async def test_tutor_summary_without_kc_match_no_mastery_rows(client):
     async with tenant_session(uid) as s:
         logs = (await s.scalars(select(MasteryLog))).all()
     assert logs == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (GatewayError("HARNESS_RESULT_REQUIRED", "provider debugging details"), 502, "HARNESS_RESULT_REQUIRED"),
+        (GatewayError("HARNESS_TIMEOUT", "provider debugging details"), 504, "HARNESS_TIMEOUT"),
+        (BudgetExceeded(retry_after_seconds=17), 429, "BUDGET_EXCEEDED"),
+    ],
+)
+async def test_tutor_reports_runtime_failure_in_domain_error_envelope(client, monkeypatch, failure, status, code):
+    _, _, headers = await _register(client, "tutor-runtime-error")
+
+    async def fail_turn(*args, **kwargs):
+        raise failure
+
+    runtime = client._transport.app.state.harness
+    monkeypatch.setattr(runtime, "run_task", fail_turn)
+    request_id = uuid.uuid4().hex
+    response = await client.post("/api/tutor", headers={**headers, "X-Request-ID": request_id},
+                                 json={"problem": "如何计算面积？", "message": "不知道"})
+    assert response.status_code == status, response.text
+    assert response.json()["code"] == code and response.json()["request_id"] == request_id
+    assert "provider debugging details" not in response.json()["message"]
+    if status == 429:
+        assert response.headers["Retry-After"] == "17"
