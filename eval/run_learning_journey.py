@@ -7,10 +7,13 @@ import asyncio
 import hashlib
 import mimetypes
 import os
+import re
 import time
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
+from fractions import Fraction
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -47,6 +50,31 @@ _STEPS = (
     ("evidence_audit", ("review", "reinforcement_proposal")),
     ("model_usage", ("authenticate",)),
 )
+
+
+def normalize_fact_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).casefold()
+    text = re.sub(r"\\(?:[dt]?frac)\s*\{(\d+)\}\s*\{(\d+)\}", r"\1/\2", text)
+    text = text.translate(str.maketrans("", "", "$"))
+    text = re.sub(r"(?<=\d)\s+(?=[^\W\d_])", "", text)
+
+    def exact_number(match: re.Match) -> str:
+        numeral = match.group()
+        try:
+            return str(Fraction(numeral))
+        except (ValueError, ZeroDivisionError):
+            return numeral
+
+    return re.sub(r"\d{1,20}/\d{1,20}|\d{1,20}\.\d{1,20}", exact_number, text)
+
+
+def fact_matches(term: str, normalized_answer: str) -> bool:
+    needle = normalize_fact_text(term)
+    if not needle:
+        return False
+    left = r"(?<![\d./])" if needle[0].isdigit() else ""
+    right = r"(?![\d./])" if needle[-1].isdigit() else ""
+    return re.search(left + re.escape(needle) + right, normalized_answer) is not None
 
 
 def match_topic(requested: str, aliases: list[str], nodes: list[dict]) -> tuple[dict, str]:
@@ -383,15 +411,15 @@ class Journey:
             ),
             "QA citations miss the pre-registered textbook section",
         )
-        normalized = answer.casefold()
+        normalized = normalize_fact_text(answer)
         matched = [
-            next((term for term in group if term.casefold() in normalized), None)
+            next((term for term in group if fact_matches(term, normalized)), None)
             for group in case.terms
         ]
         self.details["matched_terms"] = matched
         require(all(matched), "QA answer misses a pre-registered fact")
         require(
-            not any(term.casefold() in normalized for term in case.contradictions),
+            not any(fact_matches(term, normalized) for term in case.contradictions),
             "QA answer contains a pre-registered contradiction",
         )
 

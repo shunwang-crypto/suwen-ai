@@ -65,3 +65,13 @@ def test_serialization_failure_preserves_previous_atomic_report(tmp_path):
         save_report(path, {"status": object()})
     assert json.loads(path.read_text()) == {"status": "running"}
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_qa_facts_compare_exact_fractions_and_units():
+    from eval.run_learning_journey import fact_matches, normalize_fact_text
+
+    observed = normalize_fact_text(r"延长 $\frac{1}{2}$ 拍，其他选项是 15 米和 0.25 拍。")
+    assert fact_matches("0.5拍", observed)
+    assert fact_matches("1/4拍", observed)
+    assert not fact_matches("5米", observed)
+    assert not fact_matches("2拍", observed)
