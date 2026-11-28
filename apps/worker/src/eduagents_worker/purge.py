@@ -32,6 +32,7 @@ async def purge_tenant(
     *,
     progress=None,
 ) -> str:
+    from eduagents_api.budget import purge_budget_calls
     from eduagents_api.db import plain_session
     from eduagents_core.storage import create_storage
     from eduagents_core.vectorstore.qdrant_store import _get_client
@@ -53,8 +54,8 @@ async def purge_tenant(
     )
 
     def _purge_vectors() -> None:
-        for collection in (settings.qdrant_collection, "answer_cache"):
-            if client.collection_exists(collection):
+        for collection in (settings.qdrant_collection, settings.retired_chunk_collection, "answer_cache"):
+            if collection and client.collection_exists(collection):
                 client.delete(
                     collection,
                     points_selector=qmodels.FilterSelector(filter=tenant_filter),
@@ -93,6 +94,7 @@ async def purge_tenant(
                     keys.append(key)
             if keys:
                 await redis.delete(*keys)
+            await purge_budget_calls(redis, tenant_id)
         finally:
             if owns_redis:
                 await redis.aclose()

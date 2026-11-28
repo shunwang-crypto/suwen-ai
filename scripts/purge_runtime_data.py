@@ -242,7 +242,7 @@ def _qdrant_snapshot(settings: Settings) -> dict[str, int]:
     client = _qdrant_client(settings)
     try:
         names = {item.name for item in client.get_collections().collections}
-        wanted = (settings.qdrant_collection, *APP_COLLECTION_SUFFIXES)
+        wanted = tuple(filter(None, (settings.qdrant_collection, settings.retired_chunk_collection, *APP_COLLECTION_SUFFIXES)))
         return {
             name: int(client.get_collection(name).points_count or 0)
             for name in wanted
@@ -338,7 +338,7 @@ def _delete_qdrant(settings: Settings) -> int:
     deleted = 0
     try:
         names = {item.name for item in client.get_collections().collections}
-        for name in (settings.qdrant_collection, *APP_COLLECTION_SUFFIXES):
+        for name in tuple(filter(None, (settings.qdrant_collection, settings.retired_chunk_collection, *APP_COLLECTION_SUFFIXES))):
             if name not in names:
                 continue
             offset = None

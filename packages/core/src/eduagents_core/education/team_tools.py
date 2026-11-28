@@ -203,12 +203,12 @@ class PlanCoordinatorTools(PlanTools):
         EducationTools.__init__(self, deps, record, emit)
         self.collaboration = collaboration
         self.add_learning_context()
-        self.add(schema("delegate_agents", "委派有独立 DSH 会话的教育 Agent，可并行研究。", {
+        self.add(schema("delegate_agents", "先委派 researcher 并 collect，再将返回的研究 id 放入 planner.input_task_ids；收集草案后，将草案 id 放入 reviewer.input_task_ids。同一批仅可并行无依赖子任务。", {
             "tasks": {"type": "array", "minItems": 1, "maxItems": 3, "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {"role": {"type": "string", "enum": ["researcher", "planner", "reviewer"]},
                                "name": {"type": "string", "maxLength": 64}, "instructions": TEXT,
-                               "input_task_ids": STRINGS}, "required": ["role", "name", "instructions"]}},
+                               "input_task_ids": {**STRINGS, "description": "已收集交付物的任务 id。首次研究传 []，规划传研究 id，审查传一个草案 id。"}}, "required": ["role", "name", "instructions"]}},
         }, ("tasks",)), collaboration.delegate)
         self.add(schema("collect_agent_results", "等待指定子任务结束并读取交付物。", {"task_ids": STRINGS}, ("task_ids",)), collaboration.collect)
         self.add(schema("report_team_failure", "有限返工仍不能得到合格成果时如实结束任务。", {"message": TEXT}, ("message",)), self.failure)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 from ..gateway.base import (
@@ -39,10 +40,6 @@ NO_EVIDENCE_ANSWER = (
 )
 
 WEB_NO_RESULTS_ANSWER = "网页搜索暂未返回可用结果。请换一种问法或稍后重试。"
-
-UNSUPPORTED_DISCLAIMER = "⚠️ 以下回答部分内容未能在知识库中找到直接依据"
-UNSUPPORTED_WEB_DISCLAIMER = "⚠️ 以下回答部分内容未能在网页资料中找到直接依据"
-
 
 # 画像注入 (F8-A2 "新会话主动关联历史卡点" + "回答深度由画像调制")。
 # 摘要文本由 API 层 profile_summary.py 确定性拼装 (不经 LLM), 空串即不注入。
@@ -127,22 +124,60 @@ class QuestionAnswerTools(EducationTools):
         super().__init__(deps, record, emit)
         self.tier = Tier.strong if self.state.get("answer_tier") == "strong" else Tier.standard
         self.add_learning_context()
-        self.add_evidence_tools()
+        self.add_evidence_tools(web=self.state.get("requested_route") != "kb")
         self.add(
             schema(
                 "submit_answer",
                 "提交最终回答、已检索来源 id 和至多三个追问建议；校验失败后修正。",
-                {"answer": TEXT, "source_ids": STRINGS, "followups": STRINGS},
+                {"answer": TEXT, "source_ids": STRINGS, "followups": STRINGS,
+                 "insufficient_evidence": {"type": "boolean", "description": "已实际检索，但资料不能回答此问题时设为 true。"}},
                 ("answer",),
             ),
             self.submit,
         )
         self._submissions = 0
 
+    def repair_tool_call(self):
+        """Reconstruct the authorized KB evidence after a local model ends in prose."""
+        if self.state.get("requested_route") != "kb" or "search_knowledge_base" not in self.handlers:
+            return None
+        if not self.state.get("kb_searched"):
+            return "search_knowledge_base", {"question": self.state["query"]}, {
+                "type": "object", "additionalProperties": False, "required": ["queries"],
+                "properties": {"queries": {"type": "array", "minItems": 1, "maxItems": 2,
+                                           "items": {"type": "string"}}},
+            }
+        sources = [
+            {"id": e["chunk_id"], "heading": e["heading_path"], "text": e["text"][:700]}
+            for e in self.state.get("evidences", [])[:8]
+        ]
+        source_list = {
+            "type": "array", "maxItems": min(3, len(sources)),
+            "items": {"type": "string", "enum": [s["id"] for s in sources]} if sources else {"type": "string"},
+        }
+        parameters = {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "insufficient_evidence": {"type": "boolean"},
+                "source_ids": source_list,
+                "answer": {"type": "string"},
+            },
+            "required": ["insufficient_evidence", "source_ids", "answer"],
+        }
+        return "submit_answer", {
+            "question": self.state["query"],
+            "sources": sources,
+            "instructions": (
+                "挑选直接支持答案的最少来源，优先选一条。仅选一条时正文标 [来源 1]。用两三句话回答。"
+                "资料不足时填写简短说明、insufficient_evidence=true、source_ids=[]。"
+            ),
+        }, parameters
+
     def prepare_turn(self):
         for key in ("evidences", "web_results", "web_queries", "followups"):
             self.state[key] = []
         self.state["refused"] = False
+        self.state.pop("refusal_reason", None)
         self.state["kb_searched"] = False
         if self.state.get("profile_summary"):
             self.trace(
@@ -154,6 +189,7 @@ class QuestionAnswerTools(EducationTools):
     def policy(self):
         prompt = self.teaching_policy("qa") + super().policy() + DIRECT_SYSTEM_PROMPT
         prompt += "引用在正文标注 [来源 N]，N 与 submit_answer 的 source_ids 列表顺序一致，只列实际支撑结论的资料。"
+        prompt += "已检索到片段但内容无法回答时，提交 insufficient_evidence=true 和空 source_ids。"
         if self.state.get("profile_summary"):
             prompt += PROFILE_SECTION_TEMPLATE.replace(
                 "{{PROFILE}}", self.state["profile_summary"][:3000]
@@ -161,7 +197,7 @@ class QuestionAnswerTools(EducationTools):
         if self.state.get("requested_route") == "web":
             prompt += "用户明确要求联网，必须先调用 web_search，不能用知识库代替联网。"
         elif self.state.get("kb_id") or self.state.get("kb_ids"):
-            prompt += "先检索授权知识库；依据不足时可补充网页或明确说明资料不足。"
+            prompt += "先调用 search_knowledge_base。阅读后调用 submit_answer 提交结果；资料不足也通过该工具提交。"
         if self.state.get("minor"):
             prompt += minor_system_guard()
         return prompt
@@ -184,51 +220,68 @@ class QuestionAnswerTools(EducationTools):
         if bound and not evidence and not web:
             if "search_knowledge_base" not in self.handlers or self.state.get("kb_searched"):
                 answer = NO_EVIDENCE_ANSWER
-                self.state["refused"] = True
+                self.state.update(refused=True, refusal_reason="no_evidence")
             else:
                 return {"accepted": False, "errors": ["请先检索授权知识库"]}
         if explicit_web and not web:
             answer = WEB_NO_RESULTS_ANSWER
-            self.state["refused"] = True
+            self.state.update(refused=True, refusal_reason="no_web_results")
+        if args.get("insufficient_evidence") and not self.state["refused"]:
+            if not self.state.get("kb_searched") and not self.state.get("web_queries"):
+                return {"accepted": False, "errors": ["请先实际检索资料并检查相关性"]}
+            answer = "已检索的资料不足以回答这个问题。请补充相关章节，或缩小问题范围。"
+            self.state.update(refused=True, refusal_reason="insufficient_evidence")
         if available and not ids and not self.state["refused"]:
             return {"accepted": False, "errors": ["请附上实际引用的来源 id"]}
         if available and not self.state["refused"]:
-            sources = [
-                {"text": item["text"], "heading_path": item["heading_path"]}
+            for index, source in enumerate(ids, 1):
+                answer = answer.replace(f"[{source}]", f"[来源 {index}]")
+            refs = re.findall(r"\[来源\s*(\d+)\]", answer)
+            if any(not 1 <= int(index) <= len(ids) for index in refs):
+                return {"accepted": False, "errors": ["正文的来源编号必须对应本次提交的来源顺序"]}
+            by_id = {
+                item["chunk_id"]: {"text": item["text"], "heading_path": item["heading_path"]}
                 for item in evidence
-                if item["chunk_id"] in ids
-            ]
-            sources.extend(
-                {"text": item["content"], "heading_path": item["title"]}
+            }
+            by_id.update({
+                item["url"]: {"text": item["content"], "heading_path": item["title"]}
                 for item in web
-                if item["url"] in ids
-            )
+            })
+            # Preserve the order of [来源 N] in the submitted answer.
+            sources = [by_id[source_id] for source_id in ids]
             try:
                 checked = await self.review(
                     "qa_verify_support",
                     load_review_prompt("qa"),
-                    {"sources": sources, "answer": answer},
+                    {"question": self.state.get("query", ""), "sources": sources, "answer": answer},
                 )
             except BudgetExceeded:
                 raise
             except Exception:
                 checked = None
-            if checked and checked.get("supported") is False:
+            if checked and (checked.get("supported") is False or checked.get("unsupported_claims")):
                 if self._submissions < 3:
                     return {
                         "accepted": False,
                         "errors": checked.get("unsupported_claims") or ["回答缺少来源支撑"],
                     }
-                answer += "\n\n" + (UNSUPPORTED_WEB_DISCLAIMER if web else UNSUPPORTED_DISCLAIMER)
+                answer = "当前资料无法支持这个回答。请补充相关章节，或缩小问题范围。"
+                self.state.update(refused=True, refusal_reason="unsupported_answer")
             elif not checked or checked.get("supported") is not True:
-                answer += "\n\n回答依据暂未完成核验，请结合引用原文确认。"
+                answer = "回答依据暂未完成核验，请稍后重试。"
+                self.state.update(refused=True, refusal_reason="verification_unavailable")
+        if self.state["refused"]:
+            ids = []
+        elif ids:
+            # The chat renderer links [N] to the selected source at position N.
+            answer = re.sub(r"\[来源\s*(\d+)\]", r"[\1]", answer)
         self.state.update(
             answer=answer,
             source_ids=ids,
             route="web" if web or explicit_web else "kb" if evidence or bound else "direct",
             followups=list(
                 dict.fromkeys(v.strip()[:120] for v in (args.get("followups") or []) if v.strip())
-            )[:3],
+            )[:3] if not self.state["refused"] else [],
         )
         self.record.status = "completed"
         self.trace(type="generate", path=self.state["route"], regen=False)

@@ -73,6 +73,10 @@ async def lifespan(app: FastAPI):
     # 公开注册必须能真正投递邮箱验证码；否则启动失败，不得静默切换到开发替身。
     assert_public_registration_email_config(settings)
     configure_logging(settings.log_level)
+    from eduagents_core.gateway.ollama import verify_ollama_gpu
+
+    if gpu_models := await verify_ollama_gpu(settings):
+        log.info("ollama_gpu_verified", models=gpu_models)
     app.state.settings = settings
     get_engine()
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
@@ -142,7 +146,7 @@ async def lifespan(app: FastAPI):
             return (results, from_cache) if results else None
 
         memory_embedder = getattr(app.state, "embedder", None)
-        semantic_enabled = settings.embedding_mode == "live" and settings.memory_semantic_mode != "disabled"
+        semantic_enabled = settings.embedding_mode in {"live", "ollama"} and settings.memory_semantic_mode != "disabled"
         if settings.memory_semantic_mode == "local":
             try:
                 from eduagents_core.embedding.memory_local import LocalMemoryEmbedder

@@ -76,7 +76,7 @@ class AgentCollaboration:
             "type": "agent", "node": "agent_collaboration", "event": event,
             "agent_name": task["name"], "agent_role": task["role"],
             "task_id": task["id"], "parent_task_id": self.thread_id,
-            "summary": summary[:600], "sequence": len(self.events) + 1, **extra,
+            "summary": summary[:600], "sequence": (self.events[-1]["sequence"] if self.events else 0) + 1, **extra,
         }
         self.events.append(payload)
         del self.events[:-200]
@@ -94,6 +94,19 @@ class AgentCollaboration:
             result["artifact"] = copy.deepcopy(task["artifact"])
         return result
 
+    def _handoff_error(self, message):
+        return {
+            "accepted": False,
+            "errors": [message],
+            "available_inputs": [
+                {"id": item["id"], "role": item["role"]} for item in self.tasks.values()
+                if item["status"] == "completed"
+            ],
+            "awaiting_collection": [
+                item["id"] for item in self.tasks.values() if item["status"] in {"queued", "running"}
+            ],
+        }
+
     async def delegate(self, args):
         specs = args["tasks"]
         if not specs:
@@ -110,11 +123,11 @@ class AgentCollaboration:
             try:
                 sources = [self.resolve(value) for value in inputs]
             except GatewayError as exc:
-                return {"accepted": False, "errors": [exc.message]}
+                return self._handoff_error(exc.message)
             if role == "planner" and not any(s["role"] == "researcher" for s in sources):
-                return {"accepted": False, "errors": ["规划子任务必须接收已完成研究报告；修订时也应带上研究任务"]}
+                return self._handoff_error("先收集 researcher，再将研究任务 id 传入 planner 的 input_task_ids。")
             if role == "reviewer" and len([s for s in sources if s["role"] in {"planner", "user"}]) != 1:
-                return {"accepted": False, "errors": ["审查子任务必须指定一个已完成草案"]}
+                return self._handoff_error("先收集 planner，再将一个草案任务 id 传入 reviewer 的 input_task_ids。")
             identity = uuid.uuid5(uuid.NAMESPACE_URL, self.thread_id + ":" + name).hex
             task_id = f"{role}:{identity}"
             old = self.tasks.get(task_id)

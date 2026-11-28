@@ -158,6 +158,7 @@ class Settings(BaseSettings):
     harness_max_concurrency: int = Field(default=8, ge=1, le=32)
     harness_max_model_calls: int = Field(default=16, ge=2, le=40)
     harness_context_window_tokens: int = Field(default=32768, ge=4096, le=262144)
+    worker_max_jobs: int = Field(default=10, ge=1, le=64)
     agent_collaboration_enabled: bool = True
     agent_collaboration_max_agents: int = Field(default=8, ge=3, le=24)
     agent_collaboration_max_parallel: int = Field(default=3, ge=1, le=8)
@@ -365,12 +366,43 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
 
     # --- embeddings / rerank (M2) ---
-    # stub: 确定性哈希向量 (开发/CI, 零网络); live: SiliconFlow BGE-M3
-    embedding_mode: Literal["live", "stub"] = "stub"
+    # stub: 离线确定性向量。live: SiliconFlow。ollama: 本地 BGE-M3。
+    embedding_mode: Literal["live", "stub", "ollama"] = "stub"
     embedding_api_key: str = ""
     embedding_base_url: str = "https://api.siliconflow.cn/v1"
     embedding_model: str = "BAAI/bge-m3"
-    embedding_dim: int = 1024
+    embedding_dim: int = Field(default=1024, ge=1)
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_chat_model: str = ""
+    ollama_require_gpu: bool = False
+
+    @property
+    def retired_chunk_collection(self) -> str | None:
+        if self.embedding_mode == "ollama":
+            return self.qdrant_collection.removesuffix("_ollama_bge_m3_v1")
+        return None
+
+    @model_validator(mode="after")
+    def configure_ollama_embeddings(self):
+        if self.ollama_chat_model:
+            self.model_routing_enabled = False
+            self.gateway_replay_fallback_stub = False
+            for tier in ("cheap", "standard", "strong", "plan"):
+                setattr(self, f"{tier}_model", self.ollama_chat_model)
+                setattr(self, f"{tier}_base_url", self.ollama_base_url.rstrip("/") + "/v1")
+                setattr(self, f"{tier}_api_key", "ollama")
+                setattr(self, f"{tier}_input_price_per_m", 0.0)
+                setattr(self, f"{tier}_output_price_per_m", 0.0)
+                setattr(self, f"{tier}_enable_thinking", None)
+        if self.embedding_mode == "ollama":
+            # A different embedding space needs its own index even at the same dimension.
+            self.embedding_model = "bge-m3:latest"
+            self.embedding_dim = 1024
+            suffix = "_ollama_bge_m3_v1"
+            if not self.qdrant_collection.endswith(suffix):
+                self.qdrant_collection += suffix
+        return self
+
     rerank_mode: Literal["live", "stub"] = "stub"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
 

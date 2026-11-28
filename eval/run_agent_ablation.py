@@ -10,6 +10,7 @@ import time
 from importlib.metadata import version
 from pathlib import Path
 
+import httpx
 from eduagents_core.config import get_settings
 from eduagents_core.education.plan import _coerce_plan
 from eduagents_core.education.plan_checks import plan_issues
@@ -27,6 +28,11 @@ from eduagents_core.education.prompts import load_prompt_bundle
 from eduagents_core.gateway import OpenAIGateway
 from eduagents_core.gateway.base import ChatMessage, ChatRequest, GatewayError, Tier
 from eduagents_core.json_utils import parse_json_object
+
+if __package__:
+    from .local_model import prepare_ollama
+else:
+    from local_model import prepare_ollama
 
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ("direct", "single", "team")
@@ -116,6 +122,10 @@ def summarize(rows):
             "judge_mean": sum(scores) / len(scores) if scores else None,
             "judge_scored": len(scores), "quality_violations": sum(bool(r["violations"]) for r in selected),
             "tool_error_cases": sum(bool(r["tool_errors"]) for r in selected),
+            "generation_calls": sum(r.get("generation_calls", 0) for r in selected),
+            "generation_cost_cny": sum(r.get("generation_cost_cny", 0.) for r in selected),
+            "generation_mean_wall_ms": sum(r.get("generation_wall_ms", 0) for r in selected) / len(selected) if selected else None,
+            "judge_cost_cny": sum(r.get("judge_cost_cny", 0.) for r in selected),
             "calls": sum(r["model_calls"] for r in selected),
             "cost_cny": sum(r["cost_cny"] for r in selected),
             "mean_wall_ms": sum(r["wall_ms"] for r in selected) / len(selected) if selected else None,
@@ -142,9 +152,12 @@ async def run(args):
         raise ValueError("reports must use an absolute output path outside the repository")
     if args.output.resolve() == args.golden.resolve():
         raise ValueError("report cannot overwrite the golden input")
+    runtime_info = {}
+    if args.ollama_model:
+        settings, runtime_info = await prepare_ollama(settings, args.ollama_model)
     gateway = EvaluationGateway(OpenAIGateway(settings), max_calls=args.max_calls, max_cost_cny=args.max_cost_cny)
     report = {
-        "schema_version": 1, "mode": "smoke" if args.smoke else "live", "prompt": bundle.identity,
+        "schema_version": 2, "mode": "smoke" if args.smoke else ("ollama" if args.ollama_model else "live"), "prompt": bundle.identity,
         "golden_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "judge_sha256": hashlib.sha256(JUDGE_POLICY.encode()).hexdigest(),
         "harness_sdk": version("deepseek-harness-sdk"), "repetitions": args.repetitions,
@@ -154,11 +167,15 @@ async def run(args):
                         "Smoke models prove wiring only. Logical call/cost limits include judges; provider retries can add HTTP attempts."],
         "outcomes": [],
     }
+    report.update(runtime_info)
     try:
         for repetition in range(args.repetitions):
             for index, case in enumerate(cases):
                 offset = (index + repetition) % len(MODES)
                 for mode in MODES[offset:] + MODES[:offset]:
+                    prior_judge_calls = gateway.judge_calls
+                    prior_judge_cost = gateway.judge_cost_cny
+                    prior_judge_seconds = gateway.judge_seconds
                     started = time.monotonic()
                     if mode == "direct":
                         outcome = await direct_case(case, bundle, gateway, repetition=repetition, judge=not args.smoke)
@@ -168,6 +185,12 @@ async def run(args):
                     gateway.clear_trace()
                     row = outcome.to_dict()
                     row.update(architecture=mode, wall_ms=round((time.monotonic() - started) * 1000), contract_errors=[])
+                    judge_ms = round(1000 * (gateway.judge_seconds - prior_judge_seconds))
+                    row.update(judge_calls=gateway.judge_calls - prior_judge_calls,
+                               judge_cost_cny=gateway.judge_cost_cny - prior_judge_cost, judge_wall_ms=judge_ms)
+                    row.update(generation_calls=outcome.model_calls - row["judge_calls"],
+                               generation_cost_cny=max(0.0, outcome.cost_cny - row["judge_cost_cny"]),
+                               generation_wall_ms=max(0, row["wall_ms"] - judge_ms))
                     if case.task == "plan" and isinstance(outcome.artifact, dict):
                         row["contract_errors"] = [v["code"] for v in plan_issues(outcome.artifact, case.payload)]
                     report["outcomes"].append(row)
@@ -189,6 +212,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--smoke", action="store_true")
     mode.add_argument("--live", action="store_true")
+    mode.add_argument("--ollama-model", help="evaluate all model tiers locally with this installed tool-capable model")
     parser.add_argument("--golden", type=Path, default=ROOT / "eval/golden_set/education-v2.jsonl")
     parser.add_argument("--prompt-version", default="edu-v2")
     parser.add_argument("--case-id", action="append")
@@ -202,7 +226,7 @@ def main():
         asyncio.run(run(args))
     except GatewayError as exc:
         parser.exit(2, f"agent evaluation stopped: {exc.code}\n")
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, httpx.HTTPError) as exc:
         parser.exit(2, f"agent evaluation failed: {exc}\n")
 
 

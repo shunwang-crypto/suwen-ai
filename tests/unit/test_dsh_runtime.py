@@ -346,3 +346,48 @@ async def test_native_byok_tool_rounds_do_not_use_platform_key_or_shared_cassett
     assert len(events) == 2 and all(event.credential_source == "user" for event in events)
     assert all(event.platform_billed_cost_cny == 0 for event in events)
     assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.parametrize("repairs", [True, False])
+async def test_required_tool_allows_one_native_continuation(repairs):
+    import uuid
+
+    gateway = Gateway(["finished in prose", call(), "submitted"] if repairs else ["prose", "more prose"])
+    executed = []
+
+    async def search(args):
+        executed.append(args)
+        return {"accepted": True}
+
+    async with HarnessGateway(gateway, max_calls=3) as harness:
+        await harness.run_task(
+            request(), session_id=uuid.uuid4().hex, archive={}, prompt="use the education tool",
+            schemas=SCHEMA, handlers={"web_search": search}, is_complete=lambda: bool(executed),
+        )
+    assert len(executed) == int(repairs)
+    assert len(gateway.requests) == (3 if repairs else 2)
+    assert any(message.role == "assistant" and "prose" in message.content
+               for message in gateway.requests[1].messages)
+    assert len({req.billing_reference for req in gateway.requests}) == len(gateway.requests)
+
+
+async def test_local_repair_dispatches_json_through_the_native_tool():
+    import uuid
+
+    gateway = Gateway(["prose only", '{"queries":["source"]}', "finished"])
+    executed = []
+
+    async def search(args):
+        executed.append(args)
+        return {"accepted": True}
+
+    async with HarnessGateway(gateway, max_calls=3) as harness:
+        await harness.run_task(
+            request(), session_id=uuid.uuid4().hex, archive={}, prompt="ground the answer",
+            schemas=SCHEMA, handlers={"web_search": search}, is_complete=lambda: bool(executed),
+            repair_tool_call=lambda: ("web_search", {"question": "bounded question"}, SCHEMA[0]["parameters"]),
+        )
+    assert executed == [{"queries": ["source"]}]
+    repair = gateway.requests[1]
+    assert repair.json_mode and not repair.tools and "bounded question" in repair.messages[-1].content
+    assert repair.response_schema == SCHEMA[0]["parameters"]

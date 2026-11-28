@@ -1,4 +1,4 @@
-"""Deterministic chapter-KC bootstrap for stub ingestion.
+"""Deterministic chapter-KC bootstrap for heading imports and stub ingestion.
 
 The stub gateway must still leave a real, tenant-scoped KC graph behind so a
 new learner can start a diagnostic flow.  This module deliberately does not

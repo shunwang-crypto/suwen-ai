@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
+
 import xxhash
 
 from .base import ChatRequest, message_text
 
 _STUB_BANNER = "【开发桩响应 · 非真实模型输出】"
+
+
+def cited_excerpt(sources):
+    return _STUB_BANNER + "\n" + "\n".join(
+        f"[来源 {i}] {source['text'][:120]}" for i, source in enumerate(sources, 1)
+    )
 
 
 def stub_text(req: ChatRequest) -> str:
@@ -14,6 +22,14 @@ def stub_text(req: ChatRequest) -> str:
         (message_text(m.content) for m in reversed(req.messages) if m.role == "user"), ""
     )
     digest = xxhash.xxh64_hexdigest(f"{req.tier.value}|{last_user}".encode())[:8]
+    if req.feature == "qa_verify_support":
+        try:
+            data = json.loads(last_user)
+            sources = data["sources"]
+            verified = bool(sources) and data["answer"] == cited_excerpt(sources)
+        except (ValueError, KeyError, TypeError):
+            verified = False
+        return json.dumps({"supported": verified, "unsupported_claims": [] if verified else ["缺少原文依据"]})
     if req.json_mode:
         # Valid JSON so downstream parsers don't crash in dev pipelines.
         safe = last_user[:80].replace('"', "'").replace("\n", " ")

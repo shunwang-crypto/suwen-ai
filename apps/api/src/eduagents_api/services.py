@@ -12,6 +12,7 @@ from eduagents_core.mastery.bkt import BktParams, bkt_update
 from fastapi import HTTPException
 from sqlalchemy import delete, select, text, update
 
+from .budget import CN_TZ
 from .db import tenant_session
 from .deps import AuthContext
 from .metacognition import confidence_snapshot
@@ -112,6 +113,7 @@ def assess_quiz_kc_readiness(
     kc_rows: Sequence[tuple[str, str | None, str | None]],
     child_kc_ids: Sequence[Sequence[str]],
     has_source_kind: bool = True,
+    headings_only: bool = False,
 ) -> KcReadiness:
     """Pure readiness policy used by the API barrier and unit tests.
 
@@ -128,7 +130,8 @@ def assess_quiz_kc_readiness(
     if "failed" in statuses:
         return KcReadiness("not_ready", "QUIZ_KC_NOT_READY", reason="document_failed")
 
-    if gateway_mode == "stub":
+    chapter_kcs = headings_only or gateway_mode == "stub"
+    if chapter_kcs:
         terminal_statuses = {"ready", "partial_ready", "enriched"}
         if not statuses <= terminal_statuses:
             return KcReadiness("preparing", "QUIZ_KC_PREPARING", reason="document_processing")
@@ -137,12 +140,13 @@ def assess_quiz_kc_readiness(
 
     effective = _effective_kc_map(kc_rows)
     row_by_id = {str(row[0]): row for row in kc_rows}
-    allowed_kinds = (
-        {"chapter_fallback"} if gateway_mode == "stub" else {"enrichment"}
-    )
+    allowed_kinds = {"chapter_fallback"} if chapter_kcs else {"enrichment"}
+    bound = {effective.get(str(raw)) for ids in child_kc_ids for raw in ids}
     eligible: list[str] = []
     for raw_id, effective_id in effective.items():
         if raw_id != effective_id:
+            continue
+        if headings_only and effective_id not in bound:
             continue
         source_kind = row_by_id[raw_id][1]
         # Before the Wave 1B migration there is no source_kind column.  Treat
@@ -206,7 +210,9 @@ async def quiz_kc_readiness(
         return KcReadiness("not_ready", "KB_NOT_FOUND", reason="org_membership_missing")
 
     documents = (
-        await session.scalars(select(Document.status).where(Document.kb_id == kb_uuid))
+        await session.execute(select(
+            Document.id, Document.status, Document.recognition_meta_json["enrichment_policy"].astext
+        ).where(Document.kb_id == kb_uuid))
     ).all()
     kc_rows_orm = (
         await session.scalars(
@@ -217,8 +223,8 @@ async def quiz_kc_readiness(
         )
     ).all()
     children = (
-        await session.scalars(
-            select(Chunk.kc_ids).where(
+        await session.execute(
+            select(Chunk.doc_id, Chunk.kc_ids).where(
                 Chunk.doc_id.in_(
                     select(Document.id).where(Document.kb_id == kb_uuid)
                 ),
@@ -237,13 +243,31 @@ async def quiz_kc_readiness(
         )
         for row in kc_rows_orm
     ]
-    return assess_quiz_kc_readiness(
-        gateway_mode=gateway_mode,
-        document_statuses=[str(status) for status in documents],
-        kc_rows=kc_rows,
-        child_kc_ids=[list(ids or []) for ids in children],
-        has_source_kind=has_source_kind,
-    )
+    if not documents:
+        return KcReadiness("not_applicable", None, reason="no_documents")
+    if any(status == "failed" for _, status, _ in documents):
+        return KcReadiness("not_ready", "QUIZ_KC_NOT_READY", reason="document_failed")
+    bindings = {}
+    for doc_id, ids in children:
+        bindings.setdefault(doc_id, []).append(ids or [])
+    # An explicit heading import is complete once its chapters are bound. A
+    # later semantic enrichment switches that document to the normal policy.
+    groups = {}
+    for doc_id, status, policy in documents:
+        headings_only = policy == "headings" and status != "enriched"
+        statuses, ids = groups.setdefault(headings_only, ([], []))
+        statuses.append(status)
+        ids.extend(bindings.get(doc_id) or [[]])
+    eligible = {}
+    for headings_only, (statuses, ids) in groups.items():
+        result = assess_quiz_kc_readiness(
+            gateway_mode=gateway_mode, document_statuses=statuses, kc_rows=kc_rows,
+            child_kc_ids=ids, has_source_kind=has_source_kind, headings_only=headings_only,
+        )
+        if result.status != "ready":
+            return result
+        eligible.update(dict.fromkeys(result.eligible_kc_ids))
+    return KcReadiness("ready", None, tuple(eligible), reason="kc_ready")
 
 
 async def write_learning_event(
@@ -1613,7 +1637,8 @@ async def record_attempts(
                 ctx,
                 accuracy,
                 quiz_kb_id=quiz.kb_id,
-                attributed_plan_id=attributed_plan_id,
+                attributed_plan_id=attributed_plan_id, submission_id=submission.id,
+                business_date=business_now.astimezone(CN_TZ).date(),
                 evidence_policy=evidence_policy,
                 session=session,
             )

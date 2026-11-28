@@ -229,3 +229,23 @@ async def test_cleanup_deletes_only_stale_points(tmp_path):
         assert await cache.cleanup_older_than(now - timedelta(days=7)) == 0
     finally:
         cache.close()
+
+
+async def test_formulae_keep_grouping_and_fill_once(cache):
+    assert cache.l1_key(TENANT, KB, 1, "2*(3+4)") != cache.l1_key(TENANT, KB, 1, "2*3+4")
+    assert not guard_consistent("2*(3+4)", "2*3+4")
+    assert not guard_consistent("x < Y", "x < y")
+    calls = 0
+
+    async def ask():
+        nonlocal calls
+        async with cache.filling(TENANT, KB, 1, "牛顿第一定律是什么"):
+            hit = await cache.get(TENANT, KB, 1, "牛顿第一定律是什么", MapEmbedder(), semantic_timeout_seconds=0)
+            if hit:
+                return hit.answer
+            calls += 1
+            await asyncio.sleep(0)
+            await _put(cache, "牛顿第一定律是什么")
+            return "answer of 牛顿第一定律是什么"
+    assert len(set(await asyncio.gather(*(ask() for _ in range(20))))) == 1
+    assert calls == 1

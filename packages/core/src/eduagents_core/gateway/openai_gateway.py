@@ -15,6 +15,7 @@ from ..logging import get_logger
 from .base import (
     BudgetExceeded,
     BudgetGuard,
+    BudgetReservation,
     ChatRequest,
     ChatResult,
     CredentialResolver,
@@ -246,7 +247,7 @@ class OpenAIGateway(
         # forgot to set credential_policy="platform".
         if self._route_for(req) in (BusinessRoute.vision, BusinessRoute.plan):
             return None
-        if self._credential_resolver is None or req.credential_policy != "text":
+        if self._s.ollama_chat_model or self._credential_resolver is None or req.credential_policy != "text":
             return None
         return await self._credential_resolver(req)
 
@@ -298,7 +299,7 @@ class OpenAIGateway(
         skip: bool = False,
         reserve_tier: str | None = None,
         apply_soft_downgrade: bool = True,
-    ) -> tuple[ChatRequest, str | None]:
+    ) -> tuple[ChatRequest, BudgetReservation | str | None]:
         """live/record 入口预检 (预算强制唯一 choke point; stub/replay 零成本不预检)。
 
         返回 (req, reserved_tier): reserved_tier 非 None 表示 guard 已按该档位原子
@@ -313,7 +314,13 @@ class OpenAIGateway(
             return req, None
         reserved_tier = reserve_tier or req.tier.value
         try:
-            verdict = await self._guard.precheck(req.tenant_id, req.user_id, tier=reserved_tier)
+            reserve = getattr(self._guard, "reserve", None)
+            if reserve is None:
+                verdict = await self._guard.precheck(req.tenant_id, req.user_id, tier=reserved_tier)
+            else:
+                verdict, reserved_tier = await reserve(
+                    req.tenant_id, req.user_id, reserved_tier, req.billing_reference or req.request_id,
+                )
         except BudgetExceeded:
             raise
         except Exception:  # noqa: BLE001 — 预算预检故障不阻断业务, 只记日志
@@ -332,7 +339,7 @@ class OpenAIGateway(
                 req = replace(req, tier=target_tier, max_tokens=max_tokens)
         return req, reserved_tier
 
-    async def _refund_reservation(self, req: ChatRequest, reserved_tier: str | None) -> None:
+    async def _refund_reservation(self, req: ChatRequest, reserved_tier: BudgetReservation | str | None) -> None:
         """调用彻底失败时返还 precheck 的预扣额 (settle 收到零成本事件即整额返还)。"""
         if self._guard is None or reserved_tier is None:
             return
@@ -342,7 +349,7 @@ class OpenAIGateway(
             user_id=req.user_id,
             feature=req.feature,
             model="",
-            tier=reserved_tier,
+            tier=reserved_tier.tier if isinstance(reserved_tier, BudgetReservation) else reserved_tier,
             prompt_tokens=0,
             completion_tokens=0,
             cached_tokens=0,
@@ -403,7 +410,12 @@ class OpenAIGateway(
                 kwargs["tool_choice"] = req.tool_choice
         if req.max_tokens:
             kwargs["max_tokens"] = req.max_tokens
-        if req.json_mode and (candidate is None or candidate.supports_json):
+        if req.response_schema and self._s.ollama_chat_model:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "tool_arguments", "schema": req.response_schema},
+            }
+        elif req.json_mode and (candidate is None or candidate.supports_json):
             kwargs["response_format"] = {"type": "json_object"}
         thinking = cfg.enable_thinking if candidate is None else (
             candidate.enable_thinking if candidate.supports_thinking else None

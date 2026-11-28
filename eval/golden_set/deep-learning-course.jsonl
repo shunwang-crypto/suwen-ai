@@ -1,0 +1,18 @@
+{"id":"dl01","chapter":"chapter_introduction","section":"机器学习中的关键组件","q":"教材把机器学习任务中的数据、模型、目标函数和优化算法分别用来做什么？"}
+{"id":"dl02","chapter":"chapter_preliminaries","section":"自动微分","q":"PyTorch 中为什么要让张量记录梯度？对标量调用 backward 后从哪里读取导数？"}
+{"id":"dl03","chapter":"chapter_linear-networks","section":"线性回归","q":"线性回归用平方误差作为损失时，预测值和真实标签怎样进入公式？","live":true,"terms":[["平方","二次","^2","²"],["预测"],["真实","标签","观测"]]}
+{"id":"dl04","chapter":"chapter_multilayer-perceptrons","section":"前向传播、反向传播和计算图","q":"反向传播为什么需要前向传播时保存的中间变量？链式法则在其中起什么作用？","live":true,"terms":[["链式"],["梯度","导数"],["中间"]]}
+{"id":"dl05","chapter":"chapter_deep-learning-computation","section":"延后初始化","q":"网络在创建全连接层时还不知道输入的特征数，框架何时才能决定权重的形状？"}
+{"id":"dl06","chapter":"chapter_convolutional-neural-networks","section":"汇聚层","q":"最大汇聚层和平均汇聚层从同一个局部窗口中分别取什么值？","live":true,"terms":[["最大"],["均值","平均"]]}
+{"id":"dl07","chapter":"chapter_convolutional-modern","section":"残差网络","q":"ResNet 的残差块为什么要把输入直接加到变换结果上，二者形状不同时怎么办？"}
+{"id":"dl08","chapter":"chapter_recurrent-neural-networks","section":"通过时间反向传播","q":"训练循环神经网络时，通过时间反向传播为什么需要截断？"}
+{"id":"dl09","chapter":"chapter_recurrent-modern","section":"长短期记忆网络","q":"LSTM 的遗忘门、输入门和输出门各自控制哪一部分信息？"}
+{"id":"dl10","chapter":"chapter_attention-mechanisms","section":"注意力评分函数","q":"缩放点积注意力为什么要将查询与键的点积除以键维度的平方根？","live":true,"terms":[["维","d_k","d_"],["方差","稳定","过大","梯度","饱和"]]}
+{"id":"dl11","chapter":"chapter_optimization","section":"Adam算法","q":"Adam 如何用梯度的一阶矩和二阶矩调节更新？前几步为什么要做偏差修正？"}
+{"id":"dl12","chapter":"chapter_computational-performance","section":"异步计算","q":"测量 GPU 实际执行耗时时，为什么仅在提交运算前后读取 CPU 时钟可能低估耗时？"}
+{"id":"dl13","chapter":"chapter_computer-vision","section":"锚框","q":"目标检测中，两个边界框的交并比如何计算？完全重合和没有交集时各取多少？","live":true,"terms":[["交集","重叠"],["并集","联合"],["1","一"],["0","零"]],"contradictions":["交集面积等于两个边界框的面积之和","交集面积等于两者面积之和","交集面积是两个边界框的面积之和"]}
+{"id":"dl14","chapter":"chapter_natural-language-processing-pretraining","section":"BERT","q":"BERT 预训练时，遮蔽语言模型和下一句预测分别向编码器提供怎样的训练信号？"}
+{"id":"dl15","chapter":"chapter_natural-language-processing-applications","section":"自然语言推断与数据集","q":"自然语言推断给出前提和假设后，SNLI 中的三种关系标签是什么？"}
+{"id":"dl16","q":"这门课程内部编号 ZK-741 的期末闭卷考试，具体安排在哪个教室、几点开始？","live":true}
+{"id":"dl17","q":"课程实验记录里，专用数据集青岚-37在实验编号 QL37-R9 上的准确率小数点后四位是多少？","live":true}
+{"id":"dl18","q":"请列出本班本周三助教答疑时段的会议号与入会密码。","live":true}

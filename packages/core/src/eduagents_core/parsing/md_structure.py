@@ -7,6 +7,7 @@ import re
 from .base import Element
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 # pymupdf4llm 在页尾/分节处输出 ----- 水平线, 不是内容
 _RULE_RE = re.compile(r"^-{3,}\s*$")
 _PAGE_META_RE = re.compile(r"^<!--\s*(?:page|extraction)\s*:[^>]*-->$", re.IGNORECASE)
@@ -38,6 +39,7 @@ def parse_markdown_elements(md_text: str, page: int | None = None) -> list[Eleme
     table: list[str] = []
     formula: list[str] = []
     in_formula = False
+    fence = ""
 
     def flush_para() -> None:
         text = "\n".join(para).strip()
@@ -53,6 +55,22 @@ def parse_markdown_elements(md_text: str, page: int | None = None) -> list[Eleme
 
     for raw in md_text.splitlines():
         line = raw.strip()
+
+        if fence:
+            para.append(raw)
+            closing = _FENCE_RE.match(raw)
+            if closing and closing[1].startswith(fence) and not closing[2].strip():
+                flush_para()
+                fence = ""
+            continue
+
+        opening = _FENCE_RE.match(raw)
+        if opening and not in_formula:
+            flush_table()
+            flush_para()
+            fence = opening[1]
+            para.append(raw)
+            continue
 
         if _PAGE_META_RE.match(line):
             flush_para()
@@ -77,7 +95,7 @@ def parse_markdown_elements(md_text: str, page: int | None = None) -> list[Eleme
 
         if line.startswith("$$"):
             flush_para()
-            if len(line) > 3 and line.endswith("$$"):
+            if "$$" in line[2:]:
                 elements.append(Element(type="formula", text=line, page=page))
             else:  # 只有开定界符, 进入多行公式块
                 formula.append(line)

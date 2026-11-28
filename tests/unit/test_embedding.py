@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import httpx
+import pytest
 import xxhash
 from eduagents_core.config import Settings
 from eduagents_core.embedding.providers import (
@@ -119,3 +121,58 @@ async def test_create_reranker_live_mode_returns_siliconflow():
     reranker = create_reranker(make_settings(rerank_mode="live"))
     assert isinstance(reranker, SiliconFlowReranker)
     assert await SiliconFlowReranker(make_settings()).rerank("q", []) == []
+
+
+async def test_ollama_embedding_keeps_batch_order_and_rejects_wrong_space(monkeypatch):
+    import json
+
+    settings = make_settings(embedding_mode="ollama", qdrant_collection="school")
+    provider = create_embedder(settings)
+    batches = []
+
+    def respond(request):
+        batch = json.loads(request.content)["input"]
+        batches.append(batch)
+        return httpx.Response(200, json={"embeddings": [[int(text)] * (1 if text == "9" else 1024)
+                                                        for text in batch]})
+
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: factory(transport=httpx.MockTransport(respond), **kw))
+    vectors = await provider.embed(["1", "2", "3", "4", "5"])
+    assert batches == [["1", "2", "3", "4"], ["5"]]
+    assert [v[0] for v in vectors] == [1, 2, 3, 4, 5]
+    assert settings.retired_chunk_collection == "school" and settings.qdrant_collection != "school"
+    with pytest.raises(ValueError, match="dimension"):
+        await provider.embed(["9"])
+
+
+@pytest.mark.parametrize("resident", [4096, 2048, 0])
+async def test_strict_gpu_checks_each_loaded_model_and_context(monkeypatch, resident):
+    import json
+
+    from eduagents_core.gateway.ollama import verify_ollama_gpu
+
+    settings = make_settings(
+        gateway_mode="live", embedding_mode="ollama", ollama_chat_model="local-qa",
+        ollama_require_gpu=True, harness_context_window_tokens=16384,
+    )
+    loaded = []
+
+    def respond(request):
+        if request.method == "POST":
+            model = json.loads(request.content)["model"]
+            loaded.append((request.url.path, model))
+            return httpx.Response(200, json={"model": model})
+        row = {"name": loaded[-1][1], "size": 4096, "size_vram": resident, "context_length": 8192}
+        return httpx.Response(200, json={"models": [row]})
+
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: factory(transport=httpx.MockTransport(respond), **kw))
+    if resident < 4096:
+        with pytest.raises(RuntimeError, match="fully resident"):
+            await verify_ollama_gpu(settings)
+        return
+    verified = await verify_ollama_gpu(settings)
+    assert loaded == [("/api/embed", settings.embedding_model), ("/api/generate", "local-qa")]
+    assert set(verified) == {settings.embedding_model, "local-qa"}
+    assert settings.harness_context_window_tokens == 8192

@@ -1,4 +1,4 @@
-"""F3 "计划是活的": 任务状态 + 依据学情自动插入补强任务。
+"""F3 "计划是活的": 任务状态 + 依据学情建议补强任务并在确认后应用。
 
 任务状态内嵌在 structure_json 任务对象的 ``status`` 字段中，计划结构是任务与进度的
 唯一权威载体。每次变更都深拷贝并整体回写 JSONB，避免原地修改无法被 ORM 识别。
@@ -27,7 +27,17 @@ from eduagents_core.mastery.thresholds import (
 )
 from sqlalchemy import func, select
 
-from .models import KnowledgeComponent, MasteryLog, MasteryRecord, Plan, PlanAdjustment
+from .budget import CN_TZ
+from .models import (
+    Chunk,
+    Document,
+    KnowledgeComponent,
+    MasteryLog,
+    MasteryRecord,
+    Plan,
+    PlanAdjustment,
+    PlanResource,
+)
 
 log = get_logger("plan_adjust")
 
@@ -50,8 +60,8 @@ class PlanTaskAttributionError(Exception):
 # 薄弱判据 = REINFORCE_THRESHOLD (掌握度阈值唯一来源 eduagents_core.mastery.thresholds)
 _REINFORCE_PCT = round(REINFORCE_THRESHOLD * 100)  # 中文理由里的百分数表述
 LOW_SCORE_THRESHOLD = 0.6  # 单次测评正确率 < 0.6 视为低分, 触发自动调整 (非掌握度阈值)
-REINFORCE_MINUTES = 30  # 补强任务时长 (固定, 与 F3-A1 日预算校验解耦)
-MAX_INSERTS_PER_ADJUST = 5  # 单次调整最多插入的补强任务数 (防一次灌满计划)
+REINFORCE_MINUTES = 30  # 每个知识点的补强时间上限
+MAX_TOPICS_PER_ADJUST = 5  # 每个知识点可按剩余预算分到多个学习日
 
 
 def new_task_id() -> str:
@@ -417,6 +427,8 @@ def _existing_kc_keys(structure: dict | None) -> set[str]:
     """计划里已被任务覆盖的 KC 名 (归一化)。"""
     keys: set[str] = set()
     for *_idx, task in iter_tasks(structure):
+        if task_status(task) != "pending" or task.get("action_type") not in {"practice", "mixed", "review_errors"}:
+            continue
         for name in task.get("kc_names") or []:
             if isinstance(name, str) and name.strip():
                 keys.add(normalize_kc_name(name))
@@ -426,10 +438,9 @@ def _existing_kc_keys(structure: dict | None) -> set[str]:
 def _pending_day_slots(structure: dict | None) -> list[tuple[int, int]]:
     """未完成日 (有未勾选任务或空任务的日) 的 (stage_idx, day_idx), 按时间先后。
 
-    全部日程都已完成时退回最后一日 —— 补强任务宁可挤在最后一天, 也不能凭空丢弃。
+    已完成的日程不再追加任务。
     """
     pending: list[tuple[int, int]] = []
-    last: tuple[int, int] | None = None
     for si, stage in enumerate(_stages(structure)):
         if not isinstance(stage, dict):
             continue
@@ -437,16 +448,13 @@ def _pending_day_slots(structure: dict | None) -> list[tuple[int, int]]:
         for di, day in enumerate(days if isinstance(days, list) else []):
             if not isinstance(day, dict):
                 continue
-            last = (si, di)
             tasks = day.get("tasks")
             tasks = tasks if isinstance(tasks, list) else []
             if not tasks or any(
                 isinstance(t, dict) and task_status(t) == "pending" for t in tasks
             ):
                 pending.append((si, di))
-    if pending:
-        return pending
-    return [last] if last is not None else []
+    return sorted(pending, key=lambda slot: _day_number(structure, *slot))
 
 
 def _day_number(structure: dict, stage_idx: int, day_idx: int) -> int:
@@ -504,120 +512,310 @@ async def active_plan(session, tenant_id: uuid.UUID, user_id: uuid.UUID) -> Plan
     )
 
 
+def reinforcement_slots(structure: dict, daily_minutes: int, first_day: int = 1):
+    """Allocate only free time, or explicitly propose replacing an optional leaf."""
+    dependencies = {
+        dep for *_, task in iter_tasks(structure) for dep in (task.get("depends_on") or [])
+    }
+    for si, di in _pending_day_slots(structure):
+        day = structure["stages"][si]["days"][di]
+        number = _day_number(structure, si, di)
+        if number < first_day:
+            continue
+        active = [
+            task
+            for task in day.get("tasks", [])
+            if isinstance(task, dict) and task_status(task) != "skipped"
+        ]
+        if any(
+            not isinstance(task.get("minutes"), (int, float)) or task["minutes"] < 0
+            for task in active
+        ):
+            continue
+        free = int(daily_minutes - sum(task["minutes"] for task in active))
+        replacement = None
+        if free < 5:
+            optional = [
+                task
+                for task in active
+                if task_status(task) == "pending"
+                and (task.get("optional") is True or task.get("learning_phase") == "review")
+                and task_identity(task)
+                and task.get("step_key") not in dependencies
+                and free + task["minutes"] >= 5
+            ]
+            if optional:
+                replacement = min(optional, key=lambda task: task["minutes"])
+                free += int(replacement["minutes"])
+        if free >= 5:
+            yield number, structure["stages"][si].get("name", ""), free, replacement
+
+
 async def adjust_plan(
     session,
-    user_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-    plan: Plan,
+    user_id,
+    tenant_id,
+    plan,
     *,
-    trigger: str = "manual",
-    reason_prefix: str = "",
-) -> dict:
-    """依据当前学情调整计划: 薄弱 KC 无对应任务 → 在最近未完成日插入补强任务。
+    trigger="manual",
+    reason_prefix="",
+    submission_id=None,
+    first_day=1,
+):
+    """Save a versioned proposal. Only explicit confirmation changes the plan."""
 
-    - 薄弱判据: mastery_records.p_mastery < REINFORCE_THRESHOLD (由弱到强, 最多插 5 个);
-    - 已覆盖判据: 计划中任一任务的 kc_names 归一化后命中该 KC 名 → 跳过 (不重复插);
-    - 落点: 未完成日按时间先后轮转分配 (避免全部堆在同一天); 计划已全部完成则落最后一日;
-    - 有插入才写 plan_adjustments (无插入不是一次调整, 不留噪声审计)。
+    def empty(message):
+        return {
+            "inserted": [],
+            "reason": reason_prefix + message,
+            "adjustment_id": None,
+            "status": "none",
+        }
 
-    调用方负责事务 (session 由外部 tenant_session 提供)。
-    """
     if plan.plan_mode != "course_bound" or plan.kb_id is None:
-        return {
-            "inserted": [],
-            "reason": reason_prefix + "目标计划处于校准阶段，不读取其他课程的掌握度自动补强，计划无需调整。",
-            "adjustment_id": None,
-        }
-    structure = plan.structure_json or {}
+        return empty("目标计划处于校准阶段，计划无需调整。")
     weak = await _weak_kcs(session, user_id, plan.kb_id)
-    covered = _existing_kc_keys(structure)
+    covered = _existing_kc_keys(plan.structure_json)
     candidates = [
-        (kc_id, name, p) for kc_id, name, p in weak if normalize_kc_name(name) not in covered
-    ][:MAX_INSERTS_PER_ADJUST]
-
+        (kc, name, score) for kc, name, score in weak if normalize_kc_name(name) not in covered
+    ]
     if not candidates:
-        reason = (
-            f"当前没有掌握度低于 {_REINFORCE_PCT}% 且计划未覆盖的知识点, 计划无需调整。"
-            if weak
-            else f"当前没有掌握度低于 {_REINFORCE_PCT}% 的知识点, 计划无需调整。"
+        return empty("当前没有未覆盖的薄弱知识点，计划无需调整。")
+
+    slots = list(
+        reinforcement_slots(plan.structure_json, int(round(plan.budget_hours * 60)), first_day)
+    )
+    inserted = []
+    for kc, name, score in candidates[:MAX_TOPICS_PER_ADJUST]:
+        remaining = REINFORCE_MINUTES
+        evidence = (
+            await session.execute(
+                select(MasteryLog.evidence_type, MasteryLog.evidence_id)
+                .where(
+                    MasteryLog.user_id == user_id,
+                    MasteryLog.kc_id == uuid.UUID(kc),
+                    MasteryLog.evidence_id.is_not(None),
+                    MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                )
+                .order_by(MasteryLog.at.desc(), MasteryLog.id)
+                .limit(1)
+            )
+        ).first()
+        source = (
+            await session.execute(
+                select(Chunk.id, Document.id, Document.filename, Chunk.heading_path)
+                .join(Document, Chunk.doc_id == Document.id)
+                .where(
+                    Document.kb_id == plan.kb_id,
+                    Chunk.parent_id.is_not(None),
+                    Chunk.kc_ids.contains([kc]),
+                )
+                .order_by(Chunk.id)
+                .limit(1)
+            )
+        ).first()
+        for index, (day, stage, free, replacement) in enumerate(slots):
+            minutes = min(remaining, free)
+            if minutes < 5:
+                continue
+            count = max(1, minutes // 10)
+            inserted.append(
+                {
+                    "task_id": new_task_id(),
+                    "day": day,
+                    "stage_name": stage,
+                    "kc_id": kc,
+                    "kc_names": [name],
+                    "title": f"补强: {name}",
+                    "minutes": minutes,
+                    "practice_count": count,
+                    "action_type": "practice",
+                    "difficulty": "mid",
+                    "objective": f"独立应用{name}",
+                    "instructions": [f"回顾{name}的适用条件", f"完成 {count} 道练习并订正"],
+                    "completion_criteria": "能说明解题依据并订正错误",
+                    "p_mastery": round(score, 4),
+                    "evidence": {"type": evidence[0], "id": str(evidence[1])} if evidence else None,
+                    "material": {
+                        "chunk_id": str(source[0]),
+                        "doc_id": str(source[1]),
+                        "title": source[2],
+                        "heading": source[3],
+                    }
+                    if source
+                    else None,
+                    "replaces": {"id": replacement["task_id"], "title": replacement["title"]}
+                    if replacement
+                    else None,
+                }
+            )
+            slots[index] = (day, stage, free - minutes, None)
+            remaining -= minutes
+            if remaining < 5:
+                break
+    if not inserted:
+        return empty("剩余日程没有足够时间安排补强，请先调整每日预算或腾出时间。")
+    diff = {
+        "status": "proposed",
+        "base_version": plan.version,
+        "trigger": trigger,
+        "submission_id": str(submission_id) if submission_id else None,
+        "inserted": inserted,
+    }
+    existing = await session.scalar(
+        select(PlanAdjustment)
+        .where(
+            PlanAdjustment.plan_id == plan.id,
+            PlanAdjustment.diff_json["status"].astext == "proposed",
+            PlanAdjustment.diff_json["base_version"].astext == str(plan.version),
+            PlanAdjustment.diff_json["trigger"].astext == trigger,
         )
-        return {"inserted": [], "reason": reason_prefix + reason, "adjustment_id": None}
+        .order_by(PlanAdjustment.at.desc())
+        .limit(1)
+    )
+    if existing:
 
-    new_structure = copy.deepcopy(structure)
-    slots = _pending_day_slots(new_structure)
-    if not slots:  # 空计划 (无任何日) → 无处可插, 如实返回
-        return {
-            "inserted": [],
-            "reason": reason_prefix + "计划中没有可插入的日程, 未做调整。",
-            "adjustment_id": None,
-        }
+        def content(tasks):
+            return [{k: v for k, v in task.items() if k != "task_id"} for task in tasks]
 
-    inserted: list[dict[str, Any]] = []
-    for i, (kc_id, name, p) in enumerate(candidates):
-        stage_idx, day_idx = slots[i % len(slots)]
-        tasks = new_structure["stages"][stage_idx]["days"][day_idx].setdefault("tasks", [])
-        task = {
-            "task_id": new_task_id(),
-            "title": f"补强: {name}",
-            "objective": f"补强{name}，把掌握度从当前薄弱状态提升到可以独立应用",
-            "instructions": [
-                f"回顾{name}的定义、条件和典型错误",
-                "完成 3 道由易到难的针对性练习并订正",
-                "用一句话说明仍然容易出错的地方",
-            ],
-            "completion_criteria": f"能独立完成至少 2 道{name}相关题，并解释关键步骤",
-            "minutes": REINFORCE_MINUTES,
-            "kc_names": [name],
-            "resource_ref": None,
-            "action_type": "practice",
-            "practice_count": 3,
-            "difficulty": "mid",
-            "status": "pending",
-            "source": "adjust",  # 前端据此高亮"本次插入"
-        }
-        tasks.append(task)
-        inserted.append(
-            {
-                "task_id": task["task_id"],
-                "day": _day_number(new_structure, stage_idx, day_idx),
-                "stage_name": new_structure["stages"][stage_idx].get("name", ""),
-                "title": task["title"],
-                "objective": task["objective"],
-                "instructions": task["instructions"],
-                "completion_criteria": task["completion_criteria"],
-                "minutes": REINFORCE_MINUTES,
-                "kc_id": kc_id,
-                "kc_names": [name],
-                "action_type": task["action_type"],
-                "practice_count": task["practice_count"],
-                "difficulty": task["difficulty"],
-                "p_mastery": round(p, 4),
+        if existing.diff_json.get("submission_id") == diff["submission_id"] and content(
+            existing.diff_json["inserted"]
+        ) == content(inserted):
+            return {
+                "inserted": existing.diff_json["inserted"],
+                "reason": existing.reason,
+                "adjustment_id": str(existing.id),
+                "status": "proposed",
             }
-        )
-
-    detail = "、".join(f"{it['kc_names'][0]}({round(it['p_mastery'] * 100)}%)" for it in inserted)
+    names = "、".join(dict.fromkeys(t["kc_names"][0] for t in inserted))
     reason = (
-        f"{reason_prefix}检测到 {len(inserted)} 个掌握度低于 {_REINFORCE_PCT}% 的知识点: {detail}; "
-        f"已在最近未完成的日程中插入 {len(inserted)} 个补强任务 (每个 {REINFORCE_MINUTES} 分钟)。"
+        reason_prefix
+        + f"针对{names}，建议安排 {len(inserted)} 个补强任务，共 {sum(t['minutes'] for t in inserted)} 分钟。"
     )
-    plan.structure_json = new_structure
-    plan.version = (plan.version or 1) + 1
-    adjustment = PlanAdjustment(
-        tenant_id=tenant_id,
-        plan_id=plan.id,
-        reason=reason,
-        diff_json={
-            "trigger": trigger,
-            "threshold": REINFORCE_THRESHOLD,
-            "inserted": inserted,
-        },
-    )
+    adjustment = PlanAdjustment(tenant_id=tenant_id, plan_id=plan.id, reason=reason, diff_json=diff)
     session.add(adjustment)
     await session.flush()
-    log.info(
-        "plan_adjusted", plan_id=str(plan.id), trigger=trigger, inserted=len(inserted)
+    return {
+        "inserted": inserted,
+        "reason": reason,
+        "adjustment_id": str(adjustment.id),
+        "status": "proposed",
+    }
+
+
+def adjustment_status(diff, plan, first_day, weak_ids, material_ids):
+    if diff.get("status", "applied") != "proposed":
+        return diff.get("status", "applied")
+    if plan.status != "active" or diff["base_version"] != plan.version:
+        return "stale"
+    for task in diff["inserted"]:
+        material = task.get("material")
+        if task["day"] < first_day or task["kc_id"] not in weak_ids:
+            return "stale"
+        if material and material["chunk_id"] not in material_ids:
+            return "stale"
+    return "proposed"
+
+
+async def adjustment_evidence(session, plan, diffs):
+    pending = [diff for diff in diffs if diff.get("status") == "proposed"]
+    if not pending or plan.status != "active" or plan.kb_id is None:
+        return set(), set()
+    weak_ids = {kc for kc, _name, _score in await _weak_kcs(session, plan.user_id, plan.kb_id)}
+    referenced = {
+        uuid.UUID(t["material"]["chunk_id"])
+        for diff in pending
+        for t in diff["inserted"]
+        if t.get("material")
+    }
+    materials = (
+        await session.scalars(
+            select(Chunk.id)
+            .join(Document)
+            .where(Document.kb_id == plan.kb_id, Chunk.id.in_(referenced))
+        )
+        if referenced
+        else []
     )
-    return {"inserted": inserted, "reason": reason, "adjustment_id": str(adjustment.id)}
+    return weak_ids, {str(chunk_id) for chunk_id in materials}
+
+
+async def confirm_adjustment(session, plan, adjustment_id, *, first_day=1):
+    # The caller holds the plan row lock, including for idempotent replay.
+    row = await session.scalar(
+        select(PlanAdjustment).where(
+            PlanAdjustment.plan_id == plan.id, PlanAdjustment.id == adjustment_id
+        )
+    )
+    if row is None:
+        raise PlanTaskAttributionError("PLAN_ADJUSTMENT_NOT_FOUND")
+    diff = row.diff_json
+    if diff.get("status", "applied") != "applied":
+        weak_ids, material_ids = await adjustment_evidence(session, plan, [diff])
+        if adjustment_status(diff, plan, first_day, weak_ids, material_ids) != "proposed":
+            raise PlanTaskAttributionError("PLAN_ADJUSTMENT_STALE")
+        structure = copy.deepcopy(plan.structure_json)
+        days = {
+            _day_number(structure, si, di): structure["stages"][si]["days"][di]
+            for si, di in _pending_day_slots(structure)
+        }
+        for proposed in diff["inserted"]:
+            tasks = days[proposed["day"]]["tasks"]
+            if proposed["replaces"]:
+                previous = next(t for t in tasks if t["task_id"] == proposed["replaces"]["id"])
+                previous["status"] = "skipped"
+            task = {
+                key: proposed[key]
+                for key in (
+                    "task_id",
+                    "title",
+                    "objective",
+                    "instructions",
+                    "completion_criteria",
+                    "minutes",
+                    "kc_names",
+                    "action_type",
+                    "difficulty",
+                    "practice_count",
+                )
+            }
+            material = proposed.get("material")
+            if material:
+                source = await session.scalar(
+                    select(Chunk)
+                    .join(Document)
+                    .where(
+                        Chunk.id == uuid.UUID(material["chunk_id"]), Document.kb_id == plan.kb_id
+                    )
+                )
+                if source is None:
+                    raise PlanTaskAttributionError("PLAN_ADJUSTMENT_STALE")
+                resource = PlanResource(
+                    tenant_id=plan.tenant_id,
+                    plan_id=plan.id,
+                    source_type="kb_chunk",
+                    kb_id=plan.kb_id,
+                    doc_id=source.doc_id,
+                    chunk_id=source.id,
+                    title=material["title"],
+                )
+                session.add(resource)
+                await session.flush()
+                task["resource_id"] = str(resource.id)
+            tasks.append(
+                dict(task, status="pending", source="adjust", evidence=proposed.get("evidence"))
+            )
+        plan.structure_json = structure
+        plan.version += 1
+        row.diff_json = {**diff, "status": "applied"}
+        await session.flush()
+    return {
+        "inserted": diff["inserted"],
+        "adjustment_id": str(row.id),
+        "reason": row.reason,
+        "status": "applied",
+        "progress": plan_progress(plan.structure_json),
+    }
 
 
 async def adjust_on_low_score(
@@ -627,6 +825,8 @@ async def adjust_on_low_score(
     quiz_kb_id: uuid.UUID | None,
     attributed_plan_id: uuid.UUID | None,
     evidence_policy: str,
+    submission_id=None,
+    business_date=None,
     session=None,
 ) -> dict | None:
     """低分测评 (正确率 < 0.6) 自动触发一次计划调整; 无活跃计划或异常时返回 None。
@@ -660,12 +860,16 @@ async def adjust_on_low_score(
                 or (attributed_plan_id is not None and attributed_plan_id != plan.id)
             ):
                 return None
+            await adjust_session.refresh(plan, with_for_update=True)
+            if plan.status != "active":
+                return None
             result = await adjust_plan(
                 adjust_session,
                 ctx.user_id,
                 ctx.tenant_id,
                 plan,
-                trigger="low_score_attempt",
+                trigger="low_score_attempt", submission_id=submission_id,
+                first_day=max(1, (business_date - plan.created_at.astimezone(CN_TZ).date()).days + 1) if business_date else 1,
                 reason_prefix=f"本次测评正确率 {round(accuracy * 100)}% 低于 60% 阈值; ",
             )
             result["plan_id"] = str(plan.id)

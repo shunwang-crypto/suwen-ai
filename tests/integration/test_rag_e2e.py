@@ -154,7 +154,7 @@ async def test_rag_pipeline_end_to_end(client):
     assert any(f.startswith("qa_") for f in features), features
 
 
-async def test_chunk_context_endpoint(client):
+async def test_chunk_context_endpoint(client, monkeypatch):
     """引用回原文定位 (包A): chunk 上下文接口 — 命中块全文 + 同 parent 相邻子块
     + 父块全文; 不存在/越权一律 404 不泄漏存在性。"""
     user_id, headers = await _register_login(client)
@@ -163,19 +163,30 @@ async def test_chunk_context_endpoint(client):
     )
     kb_id = r.json()["id"]
     r = await client.post(
-        f"/api/kb/{kb_id}/documents",
+        f"/api/kb/{kb_id}/documents?enrichment=headings",
         files={"file": ("calculus.md", _CALCULUS_MD.encode(), "text/markdown")},
         headers=headers,
     )
     doc_id = r.json()["id"]
+    from eduagents_core.config import get_settings
     from eduagents_worker.ingestion import ingest_document
 
+    settings = get_settings().model_copy(update={"gateway_mode": "live"})
+    monkeypatch.setattr("eduagents_worker.ingestion.get_settings", lambda: settings)
     assert await ingest_document({}, user_id, doc_id) == "ready"
 
     r = await client.get(f"/api/kb/{kb_id}/documents/{doc_id}/chunks", headers=headers)
     chunks = r.json()
     children = [c for c in chunks if c["parent_id"]]
     assert children, "应存在子块"
+    assert all(c["kc_ids"] for c in children)
+    from eduagents_api.db import tenant_session
+    from eduagents_api.services import quiz_kc_readiness
+
+    async with tenant_session(user_id) as session:
+        readiness = await quiz_kc_readiness(session, tenant_id=user_id, kb_id=kb_id, gateway_mode="live")
+    assert readiness.status == "ready"
+    assert set(readiness.eligible_kc_ids) == {k for c in children for k in c["kc_ids"]}
     # 选子块最多的 parent, 取其文档序第 2 个子块以便断言 prev 相邻块存在。
     # 列表接口按 created_at 排序而同事务入库时间戳相同, 平序不稳定; 与 context
     # 端点同款规则 (子块文本在父块全文中的起始偏移) 复原文档序, 保证取块确定。

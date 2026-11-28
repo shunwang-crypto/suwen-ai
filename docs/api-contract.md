@@ -134,7 +134,9 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 `research` 由原生 Agent 根据资料缺口决定补查或提交，单 turn 最多 8 次新查询，每次工具
 调用最多 3 个查询，资料足够时提前提交。`trace_event` 实时报告 `research/web_search` 进度；来源编号与最终引用一致。
 最终回答经资料支持核验，提交缺少支持时最多要求修正两次；核验不可用或仍无支持时明确提示。
-`kb_ids` 是独立资料范围，可与 `fast/think` 组合；`web/research` 使用网页范围。
+`kb_ids` 是独立资料范围，可与 `fast/think` 组合。绑定教材的普通问答仅开放教材检索，`web/research` 使用网页范围。
+教材问答的 `done` 返回 `selected_citations`、`refused` 和可空的 `refusal_reason`。
+`verification_unavailable` 表示核验服务失败，`insufficient_evidence` 表示检索资料不足。
 旧客户端的 `kb` 模式及“未发送 mode 但携带知识库 ID”仍兼容。助手消息的 `meta.chat_mode`
 记录本轮用户选择，和网关执行态 `meta.mode`（live/replay/stub）分开保存。
 
@@ -144,7 +146,7 @@ HMAC 摘要，最多错误 5 次、10 分钟过期、成功后单次消费。注
 | POST | /api/kb | {name, subject} 建库 |
 | GET | /api/kb | 课程列表；每项带 `summary`：资料就绪/处理中/失败数、题目核验数、最近计划进度、最近活动时间与确定性 `next_action` |
 | DELETE | /api/kb/{id} | 删库 + 异步物理清理（向量/对象） |
-| POST | /api/kb/{id}/documents | multipart 上传；后缀白名单+魔数+配额三重校验；同哈希幂等；入 ARQ 摄取队列 |
+| POST | /api/kb/{id}/documents | multipart 上传，校验后缀、魔数和配额，同库同哈希幂等。可选查询参数 `enrichment=semantic\|headings`，默认 semantic。headings 将子块绑定到教材章节知识点，后续可手动请求语义增强 |
 | GET | /api/kb/{id}/documents | 文档列表（含两阶段状态机 status/error_msg） |
 | DELETE | /api/kb/{id}/documents/{doc} | 删除文档并异步清理向量与对象 |
 | POST | /api/kb/{id}/documents/{doc}/reindex | 重新摄取 |
@@ -260,8 +262,9 @@ Chunk/向量。重试先清理本文档旧向量与 Chunk，并在落库和向�
 | POST | /api/plans/{id}/tasks/{task_id}/toggle | `{status: pending|done|skipped}` 显式更新任务状态；状态内嵌 `structure_json`，不另建列；响应含 `version`，用于拒绝乱序旧快照 |
 | POST | /api/plans/{id}/tasks/{task_id}/complete | 资料阅读显式完成；仅接受带持久化资料的 `read/mixed` 任务，保存 `manual_read` 安全完成证据；打开链接不会自动完成 |
 | POST | /api/plans/{id}/archive | 放弃唯一 active 计划并置为 archived；completed/archived 计划只读，不可隐式恢复 |
-| POST | /api/plans/{id}/adjust | 仅课程资料计划可依学情调整；候选必须来自同一 KB、`evidence_state=observed` 且低于补强阈值，并且尚未被计划覆盖。目标起步计划返回空调整，不读取其他课程掌握度 |
-| GET | /api/plans/{id}/adjustments | 调整历史（倒序）：{reason(中文), trigger: manual\|low_score_attempt, inserted[]} |
+| POST | /api/plans/{id}/adjust | 为同课程、具有真实学习证据的薄弱知识点生成建议，返回 `status=proposed\|none`、`adjustment_id`、`inserted`。明细含日期、用时、依据和可用教材，可指定替换的任选任务。确认前保留当前日程。 |
+| POST | /api/plans/{id}/adjustments/{adjustment_id}/confirm | 在计划行锁内确认，返回 `status=applied` 和进度。相同建议重复确认只应用一次。计划版本、日期、学情或材料已变得不适用时返回 `409 PLAN_ADJUSTMENT_STALE`。 |
+| GET | /api/plans/{id}/adjustments | 按时间倒序列出 `reason`、`trigger`、`inserted` 和当前状态 `proposed\|applied\|stale`。 |
 | POST | /api/tutor | {problem, message, thread_local_id?, plan_id?, task_id?} 苏格拉底辅导单轮；同 thread 多轮推进 hint_level，只有 `summarize` 完成后回写归因任务 |
 | GET | /api/tutor/entrypoints | 返回今日未完成计划任务的安全 `plan_id/task_id`，以及本人已核验可用错题的安全 `error_id` 列表；无上下文时返回稳定空状态，不返回题干、答案或完整任务文本 |
 

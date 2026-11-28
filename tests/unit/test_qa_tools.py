@@ -162,6 +162,19 @@ def qa_tools(*, state=None, scripts=None, retrieval=None, web=None):
     return (tools, record, events)
 
 
+async def test_course_scope_limits_recovery_to_retrieved_material():
+    tools, _, _ = qa_tools(
+        state=init_state("导数", "kb") | {"requested_route": "kb"},
+        retrieval=FakeRetrieval([rr([chunk("current-course")])]), web=make_web_search([]),
+    )
+    assert "web_search" not in tools.handlers
+    assert tools.repair_tool_call()[0] == "search_knowledge_base"
+    await tools.handlers["search_knowledge_base"]({"queries": ["导数"]})
+    name, evidence, parameters = tools.repair_tool_call()
+    assert name == "submit_answer" and evidence["sources"][0]["id"] == "current-course"
+    assert parameters["properties"]["source_ids"]["items"]["enum"] == ["current-course"]
+
+
 @pytest.mark.parametrize("route", ["kb", "web", "direct"])
 async def test_answer_requires_actual_evidence_and_checked_sources(route):
     web = make_web_search(
@@ -221,7 +234,8 @@ async def test_support_review_rejects_or_marks_unverified_answer(review):
         assert not result["accepted"]
         await tools.submit(args)
         await tools.submit(args)
-        assert "未能在网页资料" in record.state["answer"]
+        assert record.state["refused"] and record.state["source_ids"] == []
+        assert "当前资料无法支持" in record.state["answer"]
     elif review == {"supported": True}:
         assert record.state["answer"] == "回答"
     else:
@@ -282,3 +296,34 @@ async def test_followups_deduplicate_and_only_selected_sources_reach_reviewer():
     )
     assert record.state["followups"] == ["一", "二", "三"]
     assert "不引用的原文" not in tools.deps.gateway.requests[0].messages[1].content
+
+
+async def test_reference_numbers_follow_submitted_source_order():
+    tools, record, _ = qa_tools(
+        web=make_web_search([
+            {"url": "https://example.com/a", "title": "第一篇", "content": "甲的定义"},
+            {"url": "https://example.com/b", "title": "第二篇", "content": "乙的定义"},
+        ]),
+        scripts={"qa_verify_support": [json.dumps({"supported": True})]},
+    )
+    await tools.search_web({"queries": ["定义"]})
+    ids = ["https://example.com/b", "https://example.com/a"]
+    assert not (await tools.submit({"answer": "[来源 3]", "source_ids": ids}))["accepted"]
+    assert not tools.deps.gateway.requests
+    assert (await tools.submit({"answer": "乙的定义[来源 1]，甲的定义[https://example.com/a]。", "source_ids": ids}))["accepted"]
+    assert record.state["answer"] == "乙的定义[1]，甲的定义[2]。"
+    payload = json.loads(tools.deps.gateway.requests[0].messages[1].content)
+    assert [source["text"] for source in payload["sources"]] == ["乙的定义", "甲的定义"]
+    assert record.state["source_ids"] == ids
+
+
+async def test_irrelevant_search_hits_allow_explicit_refusal_without_caching_sources():
+    tools, record, _ = qa_tools(state=init_state("化学键", "kb"),
+                                retrieval=FakeRetrieval([rr([chunk("c1", "数列极限")])]))
+    args = {"answer": "资料不足", "insufficient_evidence": True, "followups": ["多想想"]}
+    assert not (await tools.handlers["submit_answer"](args))["accepted"]
+    await tools.search_kb({"queries": ["化学键"]})
+    assert (await tools.handlers["submit_answer"](args))["accepted"]
+    assert record.state["refusal_reason"] == "insufficient_evidence"
+    assert record.state["refused"] and record.state["source_ids"] == record.state["followups"] == []
+    assert not tools.deps.gateway.requests

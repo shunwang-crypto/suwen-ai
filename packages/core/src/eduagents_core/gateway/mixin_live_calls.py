@@ -31,6 +31,7 @@ from ..logging import get_logger
 from ..observability import observe_generation
 from .base import (
     BudgetExceeded,
+    BudgetReservation,
     ChatMessage,
     ChatResult,
     CredentialSource,
@@ -287,7 +288,7 @@ class GatewayLiveCallsMixin:
             breaker = self._candidate_breakers[candidate.id]
             if not breaker.allow():
                 continue
-            reserved_tier: str | None = None
+            reserved_tier: BudgetReservation | str | None = None
             try:
                 candidate_req = req
                 if not candidate.free:
@@ -372,7 +373,7 @@ class GatewayLiveCallsMixin:
             breaker = self._candidate_breakers[candidate.id]
             if not breaker.allow():
                 continue
-            reserved_tier: str | None = None
+            reserved_tier: BudgetReservation | str | None = None
             parts: list[str] = []
             started = perf_counter()
             metadata = StreamMetadata()
@@ -459,7 +460,7 @@ class GatewayLiveCallsMixin:
         candidate: ProviderCandidate,
         text: str,
         started: float,
-        reserved_tier: str | None,
+        reserved_tier: BudgetReservation | str | None,
     ) -> None:
         p_tok = sum(estimate_tokens(message_text(m.content)) for m in req.messages)
         c_tok = estimate_tokens(text)
@@ -877,7 +878,7 @@ class GatewayLiveCallsMixin:
     async def _live_stream(
         self,
         req: ChatRequest,
-        reserved_tier: str | None = None,
+        reserved_tier: BudgetReservation | str | None = None,
         *,
         allow_cassette: bool = True,
         allow_record: bool = True,
@@ -1021,7 +1022,7 @@ class GatewayLiveCallsMixin:
         tier: Tier,
         text: str,
         started: float,
-        reserved_tier: str | None,
+        reserved_tier: BudgetReservation | str | None,
     ) -> None:
         """客户端断流的部分消耗结算 (P0-6): token 用估算 (上游 usage 帧未到达),
         degraded=True 标记这是部分/非常规结果; 走 _emit_usage 统一进预算与 usage_log。"""
@@ -1055,7 +1056,7 @@ class GatewayLiveCallsMixin:
         self,
         req: ChatRequest,
         result: ChatResult,
-        reserved_tier: str | None = None,
+        reserved_tier: BudgetReservation | str | None = None,
         billing_reference: str | None = None,
     ) -> None:
         event = UsageEvent(
@@ -1080,6 +1081,7 @@ class GatewayLiveCallsMixin:
                 else result.platform_billed_cost_cny
             ),
             billing_reference=billing_reference or req.billing_reference or req.request_id,
+            settlement_id=reserved_tier.id if isinstance(reserved_tier, BudgetReservation) else "",
         )
         # 预算结算: live 结果按实际成本与预扣差额结算; 非 live 但有预扣 (降级兜底
         # stub/cassette, cost=0) 也必须结算一次以返还预扣 (P1-12)。

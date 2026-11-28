@@ -453,13 +453,20 @@ class WalletBudgetGuard:
     async def precheck(
         self, tenant_id: str, user_id: str, tier: str = "standard"
     ) -> str | None:
+        await self._check_wallet(user_id)
+        return await self._inner.precheck(tenant_id, user_id, tier)
+
+    async def _check_wallet(self, user_id):
         try:
             await self._wallet.precheck_balance(user_id)
         except BudgetExceeded:
             raise  # InsufficientCredits 冒头 -> API 层 402
         except Exception:  # noqa: BLE001 — 钱包预检故障 fail-open, 预算预检照常
             log.exception("wallet_precheck_failed_open")
-        return await self._inner.precheck(tenant_id, user_id, tier)
+
+    async def reserve(self, tenant_id, user_id, tier, reference):
+        await self._check_wallet(user_id)
+        return await self._inner.reserve(tenant_id, user_id, tier, reference)
 
     async def settle(self, event: UsageEvent, reserved_tier: str | None = None) -> None:
         await self._inner.settle(event, reserved_tier)

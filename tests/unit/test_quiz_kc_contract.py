@@ -87,3 +87,13 @@ def test_no_document_is_not_applicable_for_legacy_quiz_paths():
     )
     assert result.status == "not_applicable"
     assert result.code is None
+
+
+def test_explicit_heading_policy_in_live_mode_selects_only_bound_chapters():
+    result = assess_quiz_kc_readiness(
+        gateway_mode="live", headings_only=True, document_statuses=["ready"],
+        kc_rows=[("current", "chapter_fallback", None), ("old", "chapter_fallback", None)],
+        child_kc_ids=[["current"]],
+    )
+    assert result.status == "ready"
+    assert result.eligible_kc_ids == ("current",)

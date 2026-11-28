@@ -3,6 +3,7 @@
 import json
 
 from .base import message_text
+from .stub import cited_excerpt
 
 BANNER = "【开发桩响应 · 非真实模型输出】"
 
@@ -161,10 +162,11 @@ def agent_stub(req):
         return call("submit_research_report", {"summary": BANNER + "资料收集完成", "source_ids": list(dict.fromkeys(s["id"] for s in sources if s.get("id")))[:8]})
     if req.feature == "agent_qa":
         sources = [source for result in results for source in result.get("sources", [])]
+        sources = list({s["id"]: s for s in sources if s.get("id")}.values())[:8]
         return call(
             "submit_answer",
             {
-                "answer": BANNER + "\n学习资料中的相关说明。",
+                "answer": cited_excerpt(sources),
                 "source_ids": list(dict.fromkeys(s.get("id") for s in sources if s.get("id")))[:8],
                 "followups": ["需要一个例子吗？"],
             },

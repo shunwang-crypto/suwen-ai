@@ -55,3 +55,14 @@ def test_summary_separates_completion_quality_contracts_and_cost():
     report = summarize(rows)["team"]
     assert report["samples"] == 2 and report["completed"] == 1 and report["clean"] == 0
     assert report["judge_scored"] == 1 and report["calls"] == 22 and report["mean_wall_ms"] == 2000
+
+
+def test_cross_document_relevance_requires_matching_book():
+    from eduagents_core.retrieval.base import RetrievedChunk
+
+    from eval.run_retrieval_eval import GoldenItem, is_relevant
+
+    item = GoldenItem("q", "变化率", "微积分.md", ["导数"], "", relevant_chunk_hints=["瞬时变化率"])
+    hit = RetrievedChunk("a", "瞬时变化率", "导数", "doc", 1, 1, 0.9, "dense")
+    assert not is_relevant(hit, item, {"doc": "其他资料.md"})
+    assert is_relevant(hit, item, {"doc": "微积分.md"})

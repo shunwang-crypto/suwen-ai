@@ -4,6 +4,7 @@ import uuid
 
 from eduagents_core.gateway import UsageEvent
 from eduagents_core.logging import get_logger
+from sqlalchemy.dialects.postgresql import insert
 
 from .db import tenant_session
 from .models import UsageLog
@@ -11,7 +12,7 @@ from .models import UsageLog
 log = get_logger("usage")
 
 
-async def persist_usage(event: UsageEvent) -> None:
+async def persist_usage(event: UsageEvent) -> bool:
     """Gateway usage sink -> usage_log row. 每次 LLM 调用都可按 user/feature/model
     三维归因 (F10-A1 / M1-D4)。失败只记日志, 不打断业务链路。
 
@@ -23,11 +24,13 @@ async def persist_usage(event: UsageEvent) -> None:
     """
     if not event.tenant_id:
         log.warning("usage_event_without_tenant", feature=event.feature)
-        return
+        return False
     try:
         async with tenant_session(event.tenant_id) as session:
-            session.add(
-                UsageLog(
+            stmt = (
+                insert(UsageLog)
+                .values(
+                    id=uuid.UUID(event.settlement_id) if event.settlement_id else uuid.uuid4(),
                     tenant_id=uuid.UUID(event.tenant_id),
                     request_id=event.request_id or "",
                     user_id=uuid.UUID(event.user_id),
@@ -44,7 +47,11 @@ async def persist_usage(event: UsageEvent) -> None:
                     provider=event.provider or event.credential_source,
                     platform_billed_cost_cny=event.platform_billed_cost_cny,
                 )
+                .on_conflict_do_nothing(index_elements=[UsageLog.id])
+                .returning(UsageLog.id)
             )
+            if await session.scalar(stmt) is None:
+                return True
             if (
                 event.user_id
                 and event.credential_source == "platform"
@@ -59,5 +66,7 @@ async def persist_usage(event: UsageEvent) -> None:
                     request_id=event.billing_reference or event.request_id,
                     feature=event.feature,
                 )
+        return True
     except Exception:
         log.exception("usage_persist_failed")
+        return False

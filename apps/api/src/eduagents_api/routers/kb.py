@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 import xxhash
 from eduagents_core.logging import get_logger
@@ -303,6 +304,7 @@ async def upload_document(
     kb_id: uuid.UUID,
     file: UploadFile,
     request: Request,
+    enrichment: Literal["semantic", "headings"] = "semantic",
     ctx: AuthContext = Depends(api_rate_limited),
     settings=Depends(get_app_settings),
 ):
@@ -354,6 +356,7 @@ async def upload_document(
         await session.flush()
         ingest_job_id = f"ingest:{doc.id}:v{doc.version}"
         doc.recognition_meta_json = {
+            "enrichment_policy": enrichment,
             "ingest_job_id": ingest_job_id,
             "ingest_document_version": doc.version,
             "ingest_job_state": "queued",
@@ -378,7 +381,7 @@ async def upload_document(
             if failed_doc is not None:
                 failed_doc.status = "failed"
                 failed_doc.error_msg = "文档处理任务提交失败，请重新上传"
-                failed_doc.recognition_meta_json = {}
+                failed_doc.recognition_meta_json = {"enrichment_policy": enrichment}
         raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
     log.info("document_uploaded", doc_id=str(doc_out.id), size=len(data))
     return doc_out
@@ -612,7 +615,9 @@ async def reindex_document(
             ):
                 failed_doc.status = "failed"
                 failed_doc.error_msg = "文档处理任务提交失败，请稍后重试"
-                failed_doc.recognition_meta_json = {}
+                failed_doc.recognition_meta_json = {
+                    key: value for key, value in failed_meta.items() if not key.startswith("ingest_")
+                }
         raise HTTPException(status_code=503, detail="BACKGROUND_JOB_UNAVAILABLE") from exc
     return {"status": "queued"}
 
@@ -787,7 +792,7 @@ async def preview_chunks(
             await session.scalars(
                 select(Chunk)
                 .where(Chunk.doc_id == doc_id)
-                .order_by(Chunk.created_at)
+                .order_by(Chunk.created_at, Chunk.id)
                 .offset(offset)
                 .limit(min(limit, 200))
             )

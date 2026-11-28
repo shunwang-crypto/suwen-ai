@@ -111,6 +111,8 @@ class HarnessGateway:
         self._checkpoint = None
         self._policy = None
         self._task_complete: Callable[[], bool] | None = None
+        self._repair_tool_call = None
+        self._repairing = False
         self.context_window = 32768
         self._workspace = None
         self._chat_overlay = None
@@ -330,6 +332,22 @@ class HarnessGateway:
                 json_mode=False if compaction else self._req.json_mode,
                 max_tokens=2048 if compaction else self._req.max_tokens,
             )
+            submission = self._repair_tool_call() if self._repairing and tools and self._repair_tool_call else None
+            if submission:
+                name, evidence, argument_schema = submission
+                spec = next(s for s in self._schemas if s["name"] == name)
+                feedback = messages[-1].content if messages and messages[-1].role == "tool" else ""
+                req = replace(
+                    req, tools=(), tool_choice=None, json_mode=True, temperature=0.0,
+                    response_schema=argument_schema, max_tokens=min(req.max_tokens or 1000, 1000),
+                    messages=(
+                        ChatMessage("system", policy + "\n输出工具参数 JSON，只填参数本身。简明回答。"),
+                        ChatMessage("user", json.dumps(
+                            {"instructions": spec["description"], "input": evidence, "last_tool_feedback": feedback[:1200]},
+                            ensure_ascii=False,
+                        )),
+                    ),
+                )
             text = ""
             await emit({"type": "block-start", "index": 0, "blockType": "text"})
             if (
@@ -338,6 +356,13 @@ class HarnessGateway:
                 or not hasattr(self.gateway, "stream_chat")
             ):
                 result = await self.gateway.chat(req)
+                if submission:
+                    # Ollama may ignore required tool choice. Its JSON-mode output
+                    # goes back through DSH's normal dispatch and host validation.
+                    result = replace(result, text="", tool_calls=({
+                        "id": uuid.uuid4().hex, "type": "function",
+                        "function": {"name": name, "arguments": result.text},
+                    },))
                 text = result.text
                 if text:
                     if self._streaming and not compaction:
@@ -432,23 +457,22 @@ class HarnessGateway:
         await response.write_eof()
         return response
 
-    def _prompt(self, session_id: str):
+    def _prompt(self, session_id: str, *, repair: bool = False):
         # session/prompt deliberately bypasses coding-agent slash commands.
         from deepseek_harness.api import final_response
 
-        if self.native_session_id and self.native_archive:
+        if self.native_session_id and self.native_archive and not repair:
             self._harness.client.resume_session(session_id)
+        prompt = self._native_prompt if self.native_session_id else "Complete the host educational task."
+        if repair:
+            prompt = (
+                "任务仍未提交有效结果。检查上一次工具反馈，继续在本会话调用可用的领域工具，"
+                "直到交付物通过核验、提交给用户确认或按工具协议报告失败。"
+            )
         with self._harness.client.subscribe_session_notifications(session_id) as subscription:
             self._harness.client.session_prompt(
                 session_id,
-                [
-                    {
-                        "type": "text",
-                        "text": self._native_prompt
-                        if self.native_session_id
-                        else "Complete the host educational task.",
-                    }
-                ],
+                [{"type": "text", "text": prompt}],
             )
             events = []
             while True:
@@ -474,14 +498,19 @@ class HarnessGateway:
         try:
             async with asyncio.timeout(self.timeout):
                 await self._start()
-                prompt = asyncio.create_task(
-                    asyncio.to_thread(self._prompt, self.native_session_id or uuid.uuid4().hex)
-                )
+                session_id = self.native_session_id or uuid.uuid4().hex
                 failed = asyncio.create_task(self._failed.wait())
-                await asyncio.wait([prompt, failed], return_when=asyncio.FIRST_COMPLETED)
-                if self._error:
-                    raise self._error
-                text = await prompt
+                # Some providers end the turn with prose despite required tool choice.
+                # Continue once in the same native transcript, under the same limits.
+                for repair in (False, True):
+                    self._repairing = repair
+                    prompt = asyncio.create_task(asyncio.to_thread(self._prompt, session_id, repair=repair))
+                    await asyncio.wait([prompt, failed], return_when=asyncio.FIRST_COMPLETED)
+                    if self._error:
+                        raise self._error
+                    text = await prompt
+                    if self._task_complete is None or self._task_complete() or self._calls >= self.max_calls:
+                        break
             if self._error:
                 raise self._error
             if not self._results:
@@ -518,6 +547,7 @@ class HarnessGateway:
         checkpoint=None,
         context_window=32768,
         is_complete: Callable[[], bool] | None = None,
+        repair_tool_call=None,
     ):
         """Run one turn of a durable native agent; DSH chooses and dispatches tools."""
         self.native_session_id = session_id
@@ -528,6 +558,7 @@ class HarnessGateway:
         self._policy = policy
         self._checkpoint = checkpoint
         self._task_complete = is_complete
+        self._repair_tool_call = repair_tool_call
         self.context_window = context_window
         return await self._run(req)
 

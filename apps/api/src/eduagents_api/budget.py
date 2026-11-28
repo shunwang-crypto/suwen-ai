@@ -26,14 +26,17 @@ admin 豁免 (100%~150% 区间): 默认经 users.role 查询 (plain_session, 非
 
 from __future__ import annotations
 
+import json
 import uuid as _uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from zoneinfo import ZoneInfo
 
 from eduagents_core.config import Settings
 from eduagents_core.gateway import BudgetExceeded, UsageEvent
+from eduagents_core.gateway.base import BudgetReservation
 from eduagents_core.logging import get_logger
 
 log = get_logger("budget")
@@ -98,8 +101,99 @@ if est > 0 then
   redis.call('INCRBYFLOAT', global_key, est)
   redis.call('EXPIRE', global_key, ttl)
 end
+if KEYS[3] then
+  redis.call('HSET', KEYS[3], 'status', 'reserved', 'reference', ARGV[7], 'day', ARGV[8],
+             'tier', ARGV[9], 'user', ARGV[10], 'tenant', ARGV[11])
+  redis.call('ZADD', KEYS[4], ARGV[12], KEYS[3])
+end
 return verdict
 """
+
+_USAGE_OUTBOX = "budget:usage:outbox"
+_PENDING_CALLS = "budget:calls:pending"
+_UNKNOWN_CALLS = "budget:calls:unknown"
+_MARK_UNKNOWN_LUA = """
+if redis.call('HGET', KEYS[1], 'status') == 'reserved' then
+  redis.call('HSET', KEYS[1], 'status', 'usage_unknown')
+  redis.call('ZADD', KEYS[3], ARGV[1], KEYS[1])
+end
+redis.call('ZREM', KEYS[2], KEYS[1])
+"""
+
+_SETTLE_LUA = """
+local status = redis.call('HGET', KEYS[3], 'status')
+if status ~= 'reserved' and status ~= 'usage_unknown' then return 0 end
+if tonumber(ARGV[1]) ~= 0 then
+  if ARGV[3] == '1' and redis.call('EXISTS', KEYS[1]) == 1 then
+    redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
+  end
+  if redis.call('EXISTS', KEYS[2]) == 1 then
+    redis.call('INCRBYFLOAT', KEYS[2], ARGV[1])
+  end
+end
+redis.call('HSET', KEYS[3], 'status', 'settled')
+redis.call('EXPIRE', KEYS[3], ARGV[2])
+redis.call('ZREM', KEYS[5], KEYS[3])
+redis.call('ZREM', KEYS[6], KEYS[3])
+if ARGV[4] ~= '' then redis.call('HSET', KEYS[4], ARGV[5], ARGV[4]) end
+return 1
+"""
+
+
+async def replay_budget_usage(ctx):
+    """Retry completed settlements after an API exit or a failed database commit."""
+    from .usage import persist_usage
+
+    redis = ctx["redis"]
+    now = int(datetime.now(UTC).timestamp())
+    for key in await redis.zrangebyscore(_PENDING_CALLS, "-inf", now - 3600, start=0, num=100):
+        await redis.eval(_MARK_UNKNOWN_LUA, 3, key, _PENDING_CALLS, _UNKNOWN_CALLS, now)
+    cursor = 0
+    while True:
+        cursor, rows = await redis.hscan(_USAGE_OUTBOX, cursor=cursor, count=50)
+        for key, payload in rows.items():
+            if await persist_usage(UsageEvent(**json.loads(payload))):
+                await redis.hdel(_USAGE_OUTBOX, key)
+        if not cursor:
+            return
+
+
+async def purge_budget_calls(redis, tenant_id: str) -> None:
+    """Remove an erased tenant's pending and settled call references in bounded pages."""
+    cursor = 0
+    while True:
+        cursor, keys = await redis.scan(cursor=cursor, match="budget:call:*", count=100)
+        if keys:
+            owners = redis.pipeline(transaction=False)
+            for key in keys:
+                owners.hget(key, "tenant")
+            mine = [
+                key
+                for key, owner in zip(keys, await owners.execute(), strict=True)
+                if owner in (tenant_id, tenant_id.encode())
+            ]
+            if mine:
+                pipe = redis.pipeline()
+                pipe.zrem(_PENDING_CALLS, *mine)
+                pipe.zrem(_UNKNOWN_CALLS, *mine)
+                pipe.delete(*mine)
+                await pipe.execute()
+        if not cursor:
+            break
+    # A completed event can outlive its ticket if the database was unavailable.
+    cursor = 0
+    while True:
+        cursor, rows = await redis.hscan(_USAGE_OUTBOX, cursor=cursor, count=100)
+        fields = [
+            field
+            for field, payload in rows.items()
+            if json.loads(payload)["tenant_id"] == tenant_id
+        ]
+        if fields:
+            await redis.hdel(_USAGE_OUTBOX, *fields)
+        if not cursor:
+            return
+
 
 # admin 角色进程内缓存: user_id -> (记录时刻 monotonic, is_admin)
 _ADMIN_CACHE: dict[str, tuple[float, bool]] = {}
@@ -169,42 +263,64 @@ class RedisBudgetGuard:
         return datetime.now(UTC).astimezone(CN_TZ)
 
     def _retry_after(self, cn_now: datetime) -> int:
-        midnight = (cn_now + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        midnight = (cn_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         return max(1, int((midnight - cn_now).total_seconds()))
 
     async def _run_precheck_script(
-        self, user_id: str, cn_now: datetime, tier: str, is_admin: bool
+        self,
+        user_id: str,
+        cn_now: datetime,
+        tier: str,
+        is_admin: bool,
+        ticket=None,
+        reference="",
+        tenant_id="",
     ) -> str:
         raw = await self._precheck_script(
             keys=[
                 budget_key(user_id or "-", cn_now),
                 global_budget_key(cn_now),
-            ],
+            ]
+            + ([f"budget:call:{ticket.id}", _PENDING_CALLS] if ticket else []),
             args=[
-                RESERVE_CNY_PER_TIER.get(tier, RESERVE_CNY_PER_TIER["standard"])
-                * MICRO_PER_CNY,
+                RESERVE_CNY_PER_TIER.get(tier, RESERVE_CNY_PER_TIER["standard"]) * MICRO_PER_CNY,
                 self._daily_micro,
                 self._global_daily_micro,
                 KEY_TTL_SECONDS,
                 1 if is_admin else 0,
                 1 if user_id else 0,
+                reference,
+                cn_now.strftime("%Y%m%d"),
+                tier,
+                user_id,
+                tenant_id,
+                int(cn_now.timestamp()),
             ],
         )
         return raw.decode() if isinstance(raw, bytes) else str(raw)
 
-    async def precheck(
-        self, tenant_id: str, user_id: str, tier: str = "standard"
-    ) -> str | None:
+    async def precheck(self, tenant_id: str, user_id: str, tier: str = "standard") -> str | None:
         cn_now = await self._now_cn()
-        verdict = await self._run_precheck_script(user_id, cn_now, tier, is_admin=False)
+        return await self._precheck_at(tenant_id, user_id, tier, cn_now)
+
+    async def reserve(
+        self, tenant_id: str, user_id: str, tier: str, reference: str
+    ) -> tuple[str | None, BudgetReservation]:
+        cn_now = await self._now_cn()
+        ticket = BudgetReservation(_uuid.uuid4().hex, cn_now.strftime("%Y%m%d"), tier)
+        verdict = await self._precheck_at(tenant_id, user_id, tier, cn_now, ticket, reference)
+        return verdict, ticket
+
+    async def _precheck_at(self, tenant_id, user_id, tier, cn_now, ticket=None, reference=""):
+        verdict = await self._run_precheck_script(
+            user_id, cn_now, tier, False, ticket, reference, tenant_id
+        )
         if verdict == "global_exceeded" and user_id:
             # 100%~150% 区间 admin 豁免: 只在越限时才查角色 (正常路径零 DB 开销);
             # admin 确认后带 is_admin=1 重跑脚本完成预扣 (仍强制 cheap)
             if await self._is_admin_fn(user_id):
                 verdict = await self._run_precheck_script(
-                    user_id, cn_now, tier, is_admin=True
+                    user_id, cn_now, tier, True, ticket, reference, tenant_id
                 )
         if verdict == "global_killed":
             log.error("budget_global_killed", user_id=user_id)
@@ -220,32 +336,50 @@ class RedisBudgetGuard:
             )
         if verdict == "user_exceeded":
             log.warning("budget_exceeded", user_id=user_id)
-            raise BudgetExceeded(
-                retry_after_seconds=self._retry_after(cn_now)
-            )
+            raise BudgetExceeded(retry_after_seconds=self._retry_after(cn_now))
         return "cheap" if verdict == "cheap" else None
 
     async def settle(
-        self, event: UsageEvent, reserved_tier: str | None = None
+        self, event: UsageEvent, reserved_tier: BudgetReservation | str | None = None
     ) -> None:
         """差额结算: delta = 实际成本 - 预扣额 (可负 = 返还)。
 
         - live 事件按实际成本结算; 非 live (stub/replay/cache/error) 实际成本按 0,
           若有预扣则整额返还;
         - 无预扣 (reserved_tier=None, 兼容旧调用方) 退化为纯累加, 语义同旧版。
-        跨午夜的极端情况: 预扣与结算可能落在不同日期键, 漂移 ≤ 一次预扣额, 可接受。
+        带凭据的网关调用按预扣日差额结算，重复返回同一凭据只结算一次。
         """
+        ticket = reserved_tier if isinstance(reserved_tier, BudgetReservation) else None
+        if ticket:
+            reserved_tier = ticket.tier
         reserved_micro = (
-            RESERVE_CNY_PER_TIER.get(reserved_tier, 0.0) * MICRO_PER_CNY
-            if reserved_tier
-            else 0.0
+            RESERVE_CNY_PER_TIER.get(reserved_tier, 0.0) * MICRO_PER_CNY if reserved_tier else 0.0
         )
         actual_micro = (
-            event.cost_cny * MICRO_PER_CNY
-            if event.mode == "live" and event.cost_cny > 0
-            else 0.0
+            event.cost_cny * MICRO_PER_CNY if event.mode == "live" and event.cost_cny > 0 else 0.0
         )
         delta = actual_micro - reserved_micro
+        if ticket:
+            payload = ""
+            if event.mode != "error" and event.tenant_id and event.user_id:
+                event.settlement_id = ticket.id
+                payload = json.dumps(asdict(event))
+            await self._redis.eval(
+                _SETTLE_LUA,
+                6,
+                f"budget:{event.user_id or '-'}:{ticket.date}",
+                f"budget:global:{ticket.date}",
+                f"budget:call:{ticket.id}",
+                _USAGE_OUTBOX,
+                _PENDING_CALLS,
+                _UNKNOWN_CALLS,
+                delta,
+                KEY_TTL_SECONDS,
+                int(bool(event.user_id)),
+                payload,
+                ticket.id,
+            )
+            return
         if delta == 0:
             return
         cn_now = await self._now_cn()

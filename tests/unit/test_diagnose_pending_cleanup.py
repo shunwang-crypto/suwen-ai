@@ -29,7 +29,7 @@ def _ref(*, doc_id: str | None = DOC) -> SimpleNamespace:
 
 
 def _settings(collection: str = "eduagents_chunks") -> SimpleNamespace:
-    return SimpleNamespace(qdrant_collection=collection)
+    return SimpleNamespace(qdrant_collection=collection, retired_chunk_collection=None)
 
 
 @pytest.mark.asyncio

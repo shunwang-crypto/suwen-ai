@@ -87,3 +87,23 @@ def test_invalid_or_missing_task_is_rejected():
         set_task_status(_structure(), _structure()["stages"][0]["days"][0]["tasks"][0]["task_id"], "ignored")
     with pytest.raises(KeyError):
         set_task_status(_structure(), str(uuid.UUID(int=99)), "done")
+
+
+def test_reinforcement_slots_respect_daily_capacity_and_protect_dependencies():
+    from eduagents_api.plan_adjust import reinforcement_slots
+
+    def task(key, minutes, status="pending", **extra):
+        return dict(task_id=str(uuid.uuid4()), step_key=key, title=key, minutes=minutes,
+                    status=status, **extra)
+
+    optional = task("optional", 8, optional=True)
+    days = [
+        {"day": 1, "tasks": []},
+        {"day": 2, "tasks": [task("learn", 10, optional=True), task("use", 10, depends_on=["learn"])]},
+        {"day": 3, "tasks": [task("studied", 12, status="done"), optional]},
+        {"day": 4, "tasks": [task("start", 6), task("old", 10, status="skipped")]},
+        {"day": 5, "tasks": [task("finished", 10, status="done")]},
+    ]
+    slots = list(reinforcement_slots({"stages": [{"name": "复习", "days": days}]}, 20, first_day=2))
+    assert slots == [(3, "复习", 8, optional), (4, "复习", 14, None)]
+    assert optional["status"] == "pending"

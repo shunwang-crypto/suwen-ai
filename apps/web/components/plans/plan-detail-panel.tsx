@@ -184,22 +184,27 @@ function PlanDetailContent({
     }
   };
 
-  /** 根据学情调整计划：插入补强任务 → 重拉详情并高亮新任务。 */
-  const runAdjust = async () => {
+  /** 生成建议或确认已有建议，应用后高亮新增任务。 */
+  const runAdjust = async (proposalId?: string) => {
     if (!detail || detail.status !== "active" || adjusting) return;
     setAdjusting(true);
     setTaskBanner(null);
     try {
       const res = await apiJson<PlanAdjustResult>(
-        `/api/plans/${detail.id}/adjust`,
+        proposalId ? `/api/plans/${detail.id}/adjustments/${proposalId}/confirm` : `/api/plans/${detail.id}/adjust`,
         { method: "POST", body: {} },
       );
       setAdjustResult(res);
-      setHighlightKeys(new Set(res.inserted.map((t) => t.task_id)));
+      setHighlightKeys(new Set(res.status === "applied" ? res.inserted.map((t) => t.task_id) : []));
       setDetailKey((k) => k + 1);
       onChanged?.();
     } catch (err) {
-      setTaskBanner(err instanceof ApiError ? err.message : "计划调整失败，请重试");
+      if (err instanceof ApiError && err.code === "PLAN_ADJUSTMENT_STALE") {
+        setDetailKey((key) => key + 1);
+        setTaskBanner("计划、学情或教材已经变化，请根据当前学情重新生成建议。");
+      } else {
+        setTaskBanner(err instanceof ApiError ? err.message : "计划调整失败，请重试");
+      }
     } finally {
       setAdjusting(false);
     }
@@ -448,7 +453,7 @@ function PlanDetailContent({
             type="button"
             disabled={!view || view.status !== "active" || adjusting || view.plan_mode !== "course_bound"}
             onClick={() => void runAdjust()}
-            title={view?.plan_mode === "goal_only" ? "目标起步计划不读取其他课程掌握度自动调整" : "按当前课程的真实学习证据插入补强任务"}
+            title={view?.plan_mode === "goal_only" ? "目标起步计划不读取其他课程掌握度自动调整" : "根据课程作答记录生成补强建议"}
             className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {adjusting && <Spinner className="h-3.5 w-3.5" />}
@@ -715,11 +720,30 @@ function PlanDetailContent({
                         {TRIGGER_LABELS[a.trigger] ?? a.trigger}
                       </span>
                       <span className="rounded-full bg-amber-50 px-2 py-0.5 text-caption font-medium text-amber-700">
-                        插入 {a.inserted.length} 个任务
+                        {a.status === "proposed" ? "待确认" : a.status === "stale" ? "已过期" : "已应用"} · {a.inserted.length} 个任务
                       </span>
                     </p>
                     <div className="mt-1 text-sm leading-relaxed text-ink-secondary">
                       <ModelMarkdown text={a.reason} />
+                      {a.status === "proposed" && (
+                        <>
+                          <ul className="my-2 space-y-1">
+                            {a.inserted.map((task) => (
+                              <li key={task.task_id}>
+                                第 {task.day} 天 · {task.title} · {task.minutes} 分钟
+                                {task.replaces && <span>，替换「{task.replaces.title}」</span>}
+                                {task.material && <span>，教材《{task.material.title}》{task.material.heading}</span>}
+                                {task.evidence && <span>，依据最近一次学习记录</span>}
+                              </li>
+                            ))}
+                          </ul>
+                          <button type="button" disabled={adjusting || view?.status !== "active"}
+                            onClick={() => void runAdjust(a.id)}
+                            className="rounded-control bg-indigo-600 px-3 py-1.5 text-white">
+                            确认调整计划
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </li>

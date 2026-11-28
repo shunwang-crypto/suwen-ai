@@ -850,7 +850,8 @@ class PlanTools(EducationTools):
             + (
                 "你负责学习规划。读取真实学情，根据目标决定需要哪些资料并调用工具。"
                 "goal_outline 可包含 subject、key_topics、skills、goal_analysis。"
-                "plan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,instructions,completion_criteria}]}]}。"
+                "plan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,instructions,completion_criteria,step_key,learning_phase,depends_on}]}]}。"
+                "step_key 为唯一英文任务键，learning_phase 使用 baseline/learn/practice/review/assessment，depends_on 列出先前步骤键。教学先于练习，复习引用已安排练习。"
                 "必须覆盖用户要求的全部天数，每日任务时长符合预算。缺少学习证据的主题安排基线练习。"
                 "resource_ref 是工具返回 resources 的下标；没有资料时使用 null。"
                 "提交草案后等待用户确认。已确认时只调用 publish_plan，不修改内容。"

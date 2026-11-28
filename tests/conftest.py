@@ -25,8 +25,11 @@ os.environ.setdefault("CAPTCHA_REQUIRED_REGISTER", "0")
 os.environ.setdefault("EMAIL_VERIFICATION_REQUIRED", "0")
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ["GATEWAY_MODE"] = "stub"
+os.environ["OLLAMA_CHAT_MODEL"] = ""
+os.environ["OLLAMA_REQUIRE_GPU"] = "false"
 os.environ["EMBEDDING_MODE"] = "stub"
 os.environ["RERANK_MODE"] = "stub"
+os.environ["RETRIEVAL_ENABLE_RERANK"] = "true"
 os.environ["MEMORY_SEMANTIC_MODE"] = "disabled"
 os.environ.setdefault("HARNESS_MAX_CONCURRENCY", "2")
 os.environ.setdefault("AGENT_COLLABORATION_MAX_PARALLEL", "1")

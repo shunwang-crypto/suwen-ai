@@ -36,6 +36,7 @@ def _get_client(settings: Settings) -> QdrantClient:
 class QdrantStore:
     def __init__(self, settings: Settings) -> None:
         self._collection = settings.qdrant_collection
+        self._retired = settings.retired_chunk_collection
         self._dim = settings.embedding_dim
         self._local = bool(settings.qdrant_local_path)
         self._client = _get_client(settings)
@@ -136,12 +137,10 @@ class QdrantStore:
         await self._delete(self._filter(tenant_id=tenant_id, kb_id=kb_id))
 
     async def _delete(self, flt: models.Filter) -> None:
-        await asyncio.to_thread(
-            self._client.delete,
-            self._collection,
-            points_selector=models.FilterSelector(filter=flt),
-            wait=True,
-        )
+        selector = models.FilterSelector(filter=flt)
+        await asyncio.to_thread(self._client.delete, self._collection, points_selector=selector, wait=True)
+        if self._retired and await asyncio.to_thread(self._client.collection_exists, self._retired):
+            await asyncio.to_thread(self._client.delete, self._retired, points_selector=selector, wait=True)
 
     # --- read path ---
 

@@ -86,11 +86,89 @@ stub 输出不能用来判断模型质量。真实模型、嵌入、重排和联
 和 plan 四个档位，并关闭可选的 `MODEL_ROUTING_ENABLED` 路由。密钥只保存在本地 `.env`；
 token 单价用于预算估算，实际费用以模型提供方账单为准。
 
+## 教材检索与本地 GPU
+
+在 WSL 终端用 `nvidia-smi` 确认显卡，使用 WSL 能访问的 Ollama 服务。新知识库可先
+运行 `ollama pull bge-m3` 和 `ollama pull qwen3:4b-instruct-2507-q4_K_M`。
+在本地 `.env` 使用以下配置并重启 API 和 Worker。
+
+~~~dotenv
+EMBEDDING_MODE=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+GATEWAY_MODE=live
+OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M
+OLLAMA_REQUIRE_GPU=true
+MEMORY_SEMANTIC_MODE=auto
+RETRIEVAL_ENABLE_RERANK=false
+WORKER_MAX_JOBS=1
+~~~
+
+教材和语义记忆共享 Ollama。嵌入客户端按四条一批串行请求 1024 维向量。
+API 和 Worker 启动时分别预热并核对已加载模型的 `size_vram` 和 `size`，发现 CPU 分层即停止启动。
+可在服务日志查 `ollama_gpu_verified`，或在运行时访问 `/api/ps`。单模型调度时两种模型轮流占用显存。
+设置 `OLLAMA_CHAT_MODEL` 后，文本生成和来源核验均使用本地模型，关闭该模型开关即可使用配置的云网关。
+模型用法见 [Ollama embed](https://docs.ollama.com/api/embed) 和
+[运行中模型的显存字段](https://docs.ollama.com/api/ps)。
+
+启动本机服务并登录演示账号后，可从一个新知识库导入《动手学深度学习》中文教材，再运行真实课程评测。
+
+~~~bash
+py="$HOME/miniforge3/envs/eduagents/bin/python"
+"$py" scripts/import_d2l_course.py --demo
+"$py" -m eval.run_course_rag --demo --output /tmp/eduagents-deep-learning-course.json
+~~~
+
+导入器按固定版本的官方目录获取 140 份 Markdown 和一份书目文件，合并为 20 份课程资料。代码、公式和原文链接随章节保存。
+默认收据位于 `~/.local/share/eduagents/course-imports/d2l-zh/import.json`，重跑使用同一收据续传。使用其他账号时提供环境变量
+`EDUAGENTS_TOKEN`，每个课程可用单独的 `--work-dir` 并在评测端传 `--receipt`。题集覆盖 15 个教学章节和 3 个资料外问题；
+其中 5 道课程题和 3 道资料外题串行经过实际聊天接口。评测分别记录指定小节排名、答案关键词、引用打开结果、拒答原因和缓存命中。
+原文与许可证见 [D2L 中文教材仓库](https://github.com/d2l-ai/d2l-zh/tree/e6b18ccea71451a55fcd861d7b96fddf2587b09a)。
+
+本机这次导入生成 1585 个父块和 3374 个可检索子块，逐个核对了 PostgreSQL 与 Qdrant 的子块 ID 和租户。
+15 道章节题中，14 道的指定小节排在第一；GPU 异步计时题未进入前三。8 道聊天均未使用答案缓存，5 道课内题
+通过内容检查并引用了可打开的指定章节，3 道资料外题在检索后以 `insufficient_evidence` 拒答。
+首次测量发现关键词检查漏掉交并比解释中的错误，复测增加了矛盾表述检查。这组结果用于回归，样本数量不足以估计整门课的教学正确率。
+本轮串行测试用了 272 秒。RTX 5060 Laptop 的整卡显存采样峰值为 3839 MiB，
+WSL 的 7797 MiB 内存中最低有 3496 MiB 可用。API、Worker、评测及其子进程合计 PSS 的采样峰值为 1154 MiB。
+
+已有教材切换时先停写入索引的 API 和 Worker，保留原配置，执行
+`EMBEDDING_MODE=ollama $HOME/miniforge3/envs/eduagents/bin/python scripts/reembed_ollama.py`。
+脚本分页重建独立集合，并复核新旧所有片段的 ID 与内容散列。核对成功后切换配置、重启服务。
+原集合保留迁移时的内容，后续新增资料需在回切时重新索引。
+
+以下两次运行分别重建独立临时索引。评测先检查教材文件名，再匹配标注片段或章节。
+稠密向量取自 BGE-M3，关键词使用分词与 BM25 稀疏权重，排序使用 RRF 融合。
+模型和融合方法见 [M3-Embedding](https://arxiv.org/abs/2402.03216) 和
+[Qdrant Hybrid Queries](https://qdrant.tech/documentation/concepts/hybrid-queries/)。
+
+~~~bash
+py="$HOME/miniforge3/envs/eduagents/bin/python"
+EMBEDDING_MODE=ollama "$py" eval/run_retrieval_eval.py --golden eval/golden_set/v2.jsonl --corpus-dir corpus --no-rerank --no-sparse --output /tmp/eduagents-dense.md
+EMBEDDING_MODE=ollama "$py" eval/run_retrieval_eval.py --golden eval/golden_set/v2.jsonl --corpus-dir corpus --no-rerank --output /tmp/eduagents-hybrid.md
+~~~
+
+本机 RTX 5060 Laptop 实测，三本合成教材共 60 题，其中 54 题有答案。
+
+| 检索方式 | 正确来源排第 1 | 正确来源进前 3 | MRR |
+|---|---:|---:|---:|
+| BGE-M3 | 41/54 | 51/54 | 0.8500 |
+| BGE-M3 + 关键词 | 48/54 | 53/54 | 0.9290 |
+
+剩余 6 题缺少教材依据。关闭精排时不给融合分数套用精排器的拒答阈值。引用是否支持回答
+由问答 Agent 单独核验。区分召回质量与答案依据的方法可参见 [Ragas](https://arxiv.org/abs/2309.15217)。
+两轮预热条件不同，本表只比较检索质量。
+
+在临时索引上可直接运行真实教材问答。例如，给上述混合检索命令添加
+`--qa-ollama-model qwen3:4b-instruct-2507-q4_K_M --qa-case-id q01 --qa-case-id q55`，
+即可分别检查一道可答题与一道缺资料题。省略题号会覆盖整套题。模型从问答工具读取检索结果，
+报告记录是否拒答、是否引用标注来源、有没有交付成功。核验服务失败单独记为失败。
+
 ## Harness 运行与旧会话迁移
 
 教育任务由原生 DSH 运行，领域工具定义教学规则；单次评分/评审服务仍可直接使用网关。
 `HARNESS_TIMEOUT_SECONDS` 默认 180 秒，`HARNESS_MAX_CONCURRENCY` 默认 8，
 `HARNESS_MAX_MODEL_CALLS` 默认 16，`HARNESS_CONTEXT_WINDOW_TOKENS` 默认 32768。
+本地 `.env.example` 将根会话并发设为 2、全局子 Agent 并发设为 1、后台 Worker 同时运行的作业设为 2，适合低内存 WSL。
 自动压缩请求也计入模型调用上限。超时和取消回收子进程并保存可用原生检查点。
 SDK 处于预览阶段，升级时同时验证 profile patch、原生日志、压缩及工具协议。
 
@@ -146,7 +224,8 @@ $HOME/miniforge3/envs/eduagents/bin/python eval/run_prompt_evolution.py \
 已有候选可用 `--candidate /tmp/edu-v3-candidate.json` 代替 `--propose-version` 和 `--candidate-output`。
 edu-v2 的进化候选必须保留四个协作角色策略；固定权限与程序检查不由模型修改。
 
-架构对照使用自编合成集，默认只运行留出案例，可用 `--case-id` 选择代表案例：
+架构对照借鉴协调者与工作 Agent、独立评审的设计，用同一组输入分别跑直接生成、单 Harness
+和协作 Harness。默认选留出案例，可用 `--case-id` 指定案例。[Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
 
 ~~~bash
 make eval-agents-smoke
@@ -159,6 +238,22 @@ $HOME/miniforge3/envs/eduagents/bin/python eval/run_agent_ablation.py \
 直接生成不具有工具确认/恢复能力；比较的质量来自同一评审对实际成果的匿名评分。
 报告另列契约检查、失败、调用和墙钟耗时。所有真实调用包括评审都消耗预算，报告不会写
 入学习历史；开发桩仅覆盖协议，不能用于宣称协作质量提升。
+
+本机生成模型也能走同一评测入口。以下命令预热模型后，串行跑直接生成、单 Harness 和协作
+Harness。12 个计划约束案例各自声明了天数、可用时间、教材和验收标准，可按 ID 选择。
+报告分别记录生成和评审的调用次数、费用与耗时，本机费用字段表示云供应商收费。
+
+~~~bash
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+"$HOME/miniforge3/envs/eduagents/bin/python" eval/run_agent_ablation.py \
+  --ollama-model qwen3:4b-instruct-2507-q4_K_M --golden eval/golden_set/plan-constraints.jsonl \
+  --case-id plan-simple-units --case-id plan-complex-short --repetitions 1 --max-calls 250 \
+  --output /tmp/eduagents-plan-gpu.json
+~~~
+
+模型预算按原预扣日期结算。Redis Lua 原子写入预算差额和待落账用量，Worker 每分钟重放。
+PostgreSQL 通过用量 ID 去重，用量和钱包流水在同一事务提交。超过一小时仍缺少结果的
+调用标为 `usage_unknown`，等待取得上游凭据，未确认费用保留估算。此恢复机制依赖 Redis 数据可用。
 
 记忆回归使用合成数据，不调用真实模型、不写应用历史：
 

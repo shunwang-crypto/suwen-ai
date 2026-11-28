@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
@@ -119,6 +120,9 @@ class EvaluationGateway:
         self.requests = []
         self.cost_cny = 0.0
         self.reasoning_response_count = 0
+        self.judge_calls = 0
+        self.judge_cost_cny = 0.0
+        self.judge_seconds = 0.0
 
     def clear_trace(self):
         """Release model transcripts after collecting the case's evidence and metrics."""
@@ -132,7 +136,17 @@ class EvaluationGateway:
         # Provider fallback must not disguise a prompt comparison as a model change.
         request = replace(request, allow_tier_fallback=False)
         self.requests.append(request)
-        result = await self.gateway.chat(request)
+        judge = request.feature == "prompt_evolution_judge"
+        started = time.monotonic()
+        if judge:
+            self.judge_calls += 1
+        try:
+            result = await self.gateway.chat(request)
+        finally:
+            if judge:
+                self.judge_seconds += time.monotonic() - started
+        if judge:
+            self.judge_cost_cny += result.cost_cny
         self.results.append(result)
         self.cost_cny += result.cost_cny
         self.reasoning_response_count += bool(result.reasoning_content)

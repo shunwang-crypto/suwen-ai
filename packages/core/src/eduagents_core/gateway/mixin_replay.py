@@ -33,6 +33,7 @@ class GatewayReplayMixin:
                 "model": req.model_override or self._s.tier(req.tier.value).model,
                 "messages": [m.to_wire() for m in req.messages],
                 "json_mode": req.json_mode,
+                **({"response_schema": req.response_schema} if req.response_schema else {}),
                 **({"tools": list(req.tools)} if req.tools else {}),
                 **({"tool_choice": req.tool_choice} if req.tool_choice is not None else {}),
                 "temperature": req.temperature,

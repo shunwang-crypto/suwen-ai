@@ -339,3 +339,54 @@ async def test_missing_user_or_disabled_budget_passes(redis):
     disabled, _ = make_guard(redis, daily_cny=0.0)
     # 用户预算=0 视为未启用 (而非全员封禁)
     assert await disabled.precheck("tenant-1", "user-9") is None
+
+
+async def test_reservation_replayed_after_midnight(redis):
+    guard, clock = make_guard(redis)
+    _, ticket = await guard.reserve("tenant-1", "user-1", "standard", "call-A")
+    assert await redis.hget(f"budget:call:{ticket.id}", "status") == "reserved"
+    clock["now"] += timedelta(days=1)
+    result = event(0.08)
+    await guard.settle(result, ticket)
+    await guard.settle(result, ticket)
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == 80
+    assert not await redis.exists("budget:user-1:20260727")
+    assert await redis.hlen("budget:usage:outbox") == 1
+    assert await redis.hget(f"budget:call:{ticket.id}", "status") == "settled"
+
+
+async def test_unknown_call_keeps_reservation_and_late_usage_does_not_revive_expired_day(redis):
+    from eduagents_api.budget import replay_budget_usage
+
+    guard, _ = make_guard(redis)
+    _, ticket = await guard.reserve("tenant-1", "user-1", "standard", "lost-call")
+    key = f"budget:call:{ticket.id}"
+    await redis.zadd("budget:calls:pending", {key: 0})
+    await replay_budget_usage({"redis": redis})
+    assert await redis.hget(key, "status") == "usage_unknown"
+    assert await redis.zscore("budget:calls:unknown", key) is not None
+    assert float(await redis.get(f"budget:user-1:{DAY}")) == EST_STANDARD
+    assert not await redis.hlen("budget:usage:outbox")
+
+    await redis.delete(f"budget:user-1:{DAY}", f"budget:global:{DAY}")
+    await guard.settle(event(0.008), ticket)
+    assert not await redis.exists(f"budget:user-1:{DAY}", f"budget:global:{DAY}")
+    assert await redis.hget(key, "status") == "settled"
+    assert await redis.zscore("budget:calls:unknown", key) is None
+    assert await redis.hexists("budget:usage:outbox", ticket.id)
+
+
+async def test_purge_budget_data_only_removes_owned_tickets(redis):
+    from eduagents_api.budget import purge_budget_calls
+
+    guard, _ = make_guard(redis)
+    _, lost = await guard.reserve("tenant-1", "user-1", "cheap", "unknown")
+    _, finished = await guard.reserve("tenant-1", "user-1", "cheap", "completed")
+    _, other = await guard.reserve("another-tenant", "another-user", "cheap", "keep")
+    await guard.settle(event(0.01), finished)
+    await redis.delete(f"budget:call:{finished.id}")
+    await purge_budget_calls(redis, "tenant-1")
+    assert not await redis.exists(f"budget:call:{lost.id}")
+    assert not await redis.hexists("budget:usage:outbox", finished.id)
+    assert await redis.zcard("budget:calls:pending") == 1
+    assert await redis.exists(f"budget:call:{other.id}")

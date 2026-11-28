@@ -181,6 +181,10 @@ class AgentTask:
                         checkpoint=checkpoint,
                         context_window=self.deps.settings.harness_context_window_tokens,
                         is_complete=lambda: record.status != "running",
+                        repair_tool_call=(
+                            getattr(tools, "repair_tool_call", None)
+                            if self.deps.settings.ollama_chat_model else None
+                        ),
                     )
                 if record.status == "running":
                     raise GatewayError("HARNESS_RESULT_REQUIRED", "AI 未提交经过校验的任务结果")

@@ -104,6 +104,31 @@ describe("plan editing sessions", () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
   });
 
+  it("shows a proposal and applies it only after the learner confirms", async () => {
+    let status = "proposed";
+    const proposal = {
+      id: "p1", reason: "根据课程测验补强", trigger: "low_score_attempt", at: "2026-11-22T00:00:00Z",
+      inserted: [{ task_id: "new", title: "补强单位换算", day: 2, minutes: 10,
+        replaces: { id: "r1", title: "任选复习" }, material: { title: "物理讲义", heading: "速度" } }],
+    };
+    vi.mocked(apiJson).mockImplementation((path) => {
+      if (path.endsWith("/agents")) return Promise.resolve({ events: [] });
+      if (path.endsWith("/adjustments")) return Promise.resolve([{ ...proposal, status }]);
+      if (path.endsWith("/confirm")) {
+        status = "applied";
+        return Promise.resolve({ ...proposal, status, adjustment_id: proposal.id });
+      }
+      return Promise.resolve(plan());
+    });
+    render(<PlanDetailPanel {...props} />);
+    const confirm = await screen.findByRole("button", { name: "确认调整计划" });
+    expect(screen.getByText(/替换「任选复习」/)).toBeInTheDocument();
+    expect(status).toBe("proposed");
+    fireEvent.click(confirm);
+    await screen.findByText(/已应用 · 1 个任务/);
+    expect(screen.queryByRole("button", { name: "确认调整计划" })).not.toBeInTheDocument();
+  });
+
   it("also retains both updates in today's plan card after reversed responses and a stale refresh", async () => {
     const first = deferred<PlanToggleResult>();
     const second = deferred<PlanToggleResult>();

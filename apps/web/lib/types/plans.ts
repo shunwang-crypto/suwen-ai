@@ -220,10 +220,14 @@ export interface PlanInsertedTask {
   /** 题量契约：服务端只接受 1–20。 */
   practice_count?: number;
   difficulty?: string | null;
+  evidence?: { type: string; id: string } | null;
+  material?: { title: string; heading: string; chunk_id: string } | null;
+  replaces?: { title: string; id: string } | null;
   p_mastery: number;
 }
 
 export interface PlanAdjustResult {
+  status?: "proposed" | "applied" | "none";
   inserted: PlanInsertedTask[];
   reason: string;
   adjustment_id: string | null;
@@ -231,6 +235,7 @@ export interface PlanAdjustResult {
 }
 
 export interface PlanAdjustmentItem {
+  status?: "proposed" | "applied" | "stale";
   id: string;
   reason: string;
   /** manual | low_score_attempt */

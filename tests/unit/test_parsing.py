@@ -197,3 +197,14 @@ def test_registry_supported_suffixes():
 def test_registry_rejects_unknown_suffix():
     with pytest.raises(ParseError):
         get_parser(".xls")
+
+
+def test_code_and_labeled_formula_preserve_chapter_boundaries():
+    from eduagents_core.parsing.md_structure import parse_markdown_elements
+
+    block = "````python\n# model comment\n    print(42)\n```\n\n| a | b |\n````"
+    formula = "$$a=b$$ :eqlabel:loss"
+    elements = parse_markdown_elements(f"# Chapter\n{block}\n{formula}\n## Next")
+    assert [(e.type, e.text) for e in elements] == [
+        ("heading", "Chapter"), ("paragraph", block), ("formula", formula), ("heading", "Next"),
+    ]

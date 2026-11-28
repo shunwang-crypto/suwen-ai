@@ -22,9 +22,11 @@ import re
 import unicodedata
 import uuid
 import warnings
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from weakref import WeakValueDictionary
 
 from qdrant_client import models
 
@@ -43,17 +45,19 @@ L1_TTL_SECONDS = 24 * 3600
 SCORE_THRESHOLD = 0.95
 CLEANUP_MAX_AGE_DAYS = 7
 
-# 归一化只去空白与标点 (不动数字/否定词, 它们是复核的信号)
-_PUNCT = set("，。！？!?,.;；:：、\"'“”‘’()（）[]【】《》<>…·~～")
+# Only fold presentation in ordinary Chinese prose. Code, formulae and identifiers
+# need case, spacing, grouping, decimal points and operators to remain significant.
+_SYNTAX = re.compile(r"[A-Za-z0-9_()（）<>≤≥≠≈×÷±∫∑∏√=+*/^\\{}\[\]`$|%−-]")
+
 # 数字序列: ASCII 数字 (NFKC 后全角已折叠) + 中文数字 ("牛顿第一/第三定律"不互相命中)
 _NUM_RE = re.compile(r"[0-9]+|[〇零一二三四五六七八九十百千万亿两]+")
 _NEG_WORDS = ("不", "没", "非", "无", "别")
 
 
 def normalize_query(query: str) -> str:
-    """NFKC 折叠 + casefold + 去所有空白与常见标点。数字与否定词原样保留。"""
-    text = unicodedata.normalize("NFKC", query).casefold()
-    return "".join(ch for ch in text if not ch.isspace() and ch not in _PUNCT)
+    if _SYNTAX.search(query):
+        return query if "\n" in query or query.startswith((" ", "\t")) else query.rstrip()
+    return unicodedata.normalize("NFKC", query).strip().rstrip("。!?！？").rstrip()
 
 
 def guard_consistent(query_a: str, query_b: str) -> bool:
@@ -63,6 +67,8 @@ def guard_consistent(query_a: str, query_b: str) -> bool:
     可能超阈值, 这道复核是最后防线。
     """
     norm_a, norm_b = normalize_query(query_a), normalize_query(query_b)
+    if _SYNTAX.search(query_a) or _SYNTAX.search(query_b):
+        return norm_a == norm_b
     if _NUM_RE.findall(norm_a) != _NUM_RE.findall(norm_b):
         return False
     for word in _NEG_WORDS:
@@ -97,10 +103,15 @@ class AnswerCache:
     def __init__(self, settings: Settings, redis: Any = None) -> None:
         self._s = settings
         self._redis = redis
+        self._space = settings.embedding_mode if settings.embedding_mode == "stub" else hashlib.sha256(
+            f"kb-source-review-v3:{settings.embedding_mode}:{settings.embedding_model}:"
+            f"{settings.embedding_dim}:{settings.standard_model}".encode()
+        ).hexdigest()[:16]
         self._dim = settings.embedding_dim
         self._local = bool(settings.qdrant_local_path)
         self._client = _get_client(settings)
         self._ready = False
+        self._fills: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     def close(self) -> None:
         """关闭共享 client (与 QdrantStore 共用, 只应在进程退出/测试清理时调用)。"""
@@ -114,10 +125,19 @@ class AnswerCache:
     # ---------- keys ----------
 
     @staticmethod
-    def l1_key(tenant_id: str, kb_id: str, kb_version: int, query: str) -> str:
-        return "anscache:" + _key_material(
+    def l1_key(tenant_id: str, kb_id: str, kb_version: int, query: str, *, space: str = "stub") -> str:
+        return f"anscache:v2:{space}:" + _key_material(
             tenant_id, kb_id, int(kb_version), normalize_query(query)
         )
+
+    @asynccontextmanager
+    async def filling(self, owner, kb, version, query):
+        # One event loop per API process. Waiters keep a strong reference to the
+        # lock; a weak map releases the entry after the last waiter leaves.
+        key = self.l1_key(owner, kb, version, query, space=self._space)
+        lock = self._fills.setdefault(key, asyncio.Lock())
+        async with lock:
+            yield
 
     # ---------- schema ----------
 
@@ -180,7 +200,7 @@ class AnswerCache:
         kb_version = int(kb_version)
         # L1 精确命中: 不触发向量化
         if self._redis is not None:
-            raw = await self._redis.get(self.l1_key(tenant_id, kb_id, kb_version, query))
+            raw = await self._redis.get(self.l1_key(tenant_id, kb_id, kb_version, query, space=self._space))
             if raw:
                 try:
                     data = json.loads(raw)
@@ -231,7 +251,7 @@ class AnswerCache:
         for point in response.points:
             payload = point.payload or {}
             cached_query = str(payload.get("query", ""))
-            if not guard_consistent(query, cached_query):
+            if payload.get("cache_space") != self._space or not guard_consistent(query, cached_query):
                 log.info("answer_cache_guard_rejected", query=query, cached=cached_query)
                 continue
             return self._to_hit(
@@ -288,7 +308,7 @@ class AnswerCache:
         }
         if self._redis is not None:
             await self._redis.set(
-                self.l1_key(tenant_id, kb_id, kb_version, query),
+                self.l1_key(tenant_id, kb_id, kb_version, query, space=self._space),
                 json.dumps(value, ensure_ascii=False),
                 ex=L1_TTL_SECONDS,
             )
@@ -306,6 +326,7 @@ class AnswerCache:
             vector={"dense": vector},
             payload={
                 **value,
+                "cache_space": self._space,
                 "query": query,
                 "tenant_id": tenant_id,
                 "kb_id": kb_id,
@@ -364,14 +385,14 @@ class AnswerCache:
             )
         return int(count)
 
-    @staticmethod
-    def _scope_filter(tenant_id: str, kb_id: str, kb_version: int) -> models.Filter:
+    def _scope_filter(self, tenant_id: str, kb_id: str, kb_version: int) -> models.Filter:
         return models.Filter(
             must=[
                 models.FieldCondition(
                     key="tenant_id", match=models.MatchValue(value=tenant_id)
                 ),
                 models.FieldCondition(key="kb_id", match=models.MatchValue(value=kb_id)),
+                models.FieldCondition(key="cache_space", match=models.MatchValue(value=self._space)),
                 models.FieldCondition(
                     key="kb_version", match=models.MatchValue(value=kb_version)
                 ),

@@ -406,6 +406,23 @@ async def test_plan_alive_and_error_book(client):
     assert ins["kc_id"] == kc_weak_id
     assert "洛必达法则" in body["reason"] and "补强任务" in body["reason"]
 
+    preview = (await client.get(f"/api/plans/{plan_id}", headers=headers)).json()
+    assert preview["progress"]["total"] == 5 and body["status"] == "proposed"
+    confirm_url = f"/api/plans/{plan_id}/adjustments/{body['adjustment_id']}/confirm"
+    async with tenant_session(uid) as session:
+        record = await session.scalar(select(MasteryRecord).where(
+            MasteryRecord.user_id == uid, MasteryRecord.kc_id == uuid.UUID(kc_weak_id)))
+        record.p_mastery = 0.95
+    assert (await client.post(confirm_url, headers=headers)).status_code == 409
+    history = (await client.get(f"/api/plans/{plan_id}/adjustments", headers=headers)).json()
+    assert history[0]["status"] == "stale"
+    async with tenant_session(uid) as session:
+        record = await session.scalar(select(MasteryRecord).where(
+            MasteryRecord.user_id == uid, MasteryRecord.kc_id == uuid.UUID(kc_weak_id)))
+        record.p_mastery = 0.15
+    for _ in range(2):
+        confirmed = await client.post(confirm_url, headers=headers)
+        assert confirmed.status_code == 200 and confirmed.json()["status"] == "applied"
     # 补强任务真的进了计划结构 (且落在第一个未完成日)
     r = await client.get(f"/api/plans/{plan_id}", headers=headers)
     detail = r.json()

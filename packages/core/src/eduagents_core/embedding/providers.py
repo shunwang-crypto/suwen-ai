@@ -2,6 +2,7 @@
 
 - StubEmbedder: 确定性哈希向量, 零网络, dev/CI 专用 (embedding_mode=stub)。
 - SiliconFlowEmbedder: OpenAI 兼容 /embeddings 端点 (BGE-M3), embedding_mode=live。
+- OllamaEmbedder: 共享本机 Ollama 服务，按四条一批串行生成 BGE-M3 向量。
 - create_embedder: 按 settings.embedding_mode 选择实现。
 """
 
@@ -139,7 +140,43 @@ class SiliconFlowEmbedder:
         return vectors
 
 
+class OllamaEmbedder:
+    """Small serial batches sent to the shared local Ollama model server."""
+
+    def __init__(self, settings: Settings):
+        self.dim = settings.embedding_dim
+        self.model = settings.embedding_model
+        self.url = settings.ollama_base_url.rstrip("/") + "/api/embed"
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors = []
+        if not texts:
+            return vectors
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            for start in range(0, len(texts), 4):
+                batch = texts[start : start + 4]
+                response = await client.post(
+                    self.url,
+                    json={
+                        "model": self.model,
+                        "input": batch,
+                        "keep_alive": "5m",
+                    },
+                )
+                response.raise_for_status()
+                values = response.json()["embeddings"]
+                if len(values) != len(batch) or any(
+                    len(vector) != self.dim or not all(math.isfinite(x) for x in vector)
+                    for vector in values
+                ):
+                    raise ValueError("Unexpected Ollama embedding count, dimension or value")
+                vectors.extend(values)
+        return vectors
+
+
 def create_embedder(settings: Settings) -> EmbeddingProvider:
     if settings.embedding_mode == "stub":
         return StubEmbedder(settings.embedding_dim)
+    if settings.embedding_mode == "ollama":
+        return OllamaEmbedder(settings)
     return SiliconFlowEmbedder(settings)

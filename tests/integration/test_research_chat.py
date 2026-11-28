@@ -187,10 +187,10 @@ async def test_research_progress_citations_regeneration_and_history(research_cli
     history = await client.get(f"/api/chat/sessions/{done['session_id']}/messages", headers=headers)
     assert history.status_code == 200, history.text
     assistant = history.json()[-1]
-    assert "原始资料与独立评测" in assistant["content"]
-    assert ("网页资料中找到直接依据" in assistant["content"]) is unsupported
+    assert ("原始资料与独立评测" in assistant["content"]) is not unsupported
+    assert ("当前资料无法支持" in assistant["content"]) is unsupported
     assert assistant["meta"]["chat_mode"] == "research"
-    assert len(assistant["meta"]["citations"]) == 2
+    assert len(assistant["meta"]["citations"]) == (0 if unsupported else 2)
 
 
 async def test_research_initial_search_outage_reports_search_error(research_client):

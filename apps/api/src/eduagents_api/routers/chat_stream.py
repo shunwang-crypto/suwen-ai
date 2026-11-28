@@ -8,6 +8,7 @@ _event_stream 以显式 _ChatStreamContext 取代闭包捕获 (函数顶部统�
 from __future__ import annotations
 
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 from eduagents_core.gateway import (
@@ -122,6 +123,7 @@ async def _event_stream(c: _ChatStreamContext):
     answer_parts: list[str] = []  # 已下发给客户端的 token 累积 (断流落库依据)
     final: ChatResult | None = None
     persisted = False  # P0-6: 本轮助手消息是否已落库
+    fill = AsyncExitStack()
     route_label = chat_mode
 
     try:
@@ -131,7 +133,7 @@ async def _event_stream(c: _ChatStreamContext):
             # 多轮上下文相关答案禁止缓存) ----
             cache = getattr(request.app.state, "answer_cache", None)
             cache_embedder = getattr(request.app.state, "embedder", None)
-            cacheable = bool(kb_ids) and chat_mode == "fast" and _cache_admissible(
+            cacheable = not minor and bool(kb_ids) and chat_mode == "fast" and _cache_admissible(
                 kb_ids, history, cache, cache_embedder, profile
             )
             memory = getattr(getattr(runtime, "deps", None), "memory", None)
@@ -147,6 +149,10 @@ async def _event_stream(c: _ChatStreamContext):
                     "event": "node_update",
                     "data": _sse({"node": "cache_lookup", "status": "running"}),
                 }
+                if hasattr(cache, "filling"):
+                    await fill.enter_async_context(cache.filling(
+                        cache_scope, str(kb_ids[0]), kb_versions[str(kb_ids[0])], body.message,
+                    ))
                 try:
                     hit = await cache.get(
                         cache_scope,
@@ -164,6 +170,7 @@ async def _event_stream(c: _ChatStreamContext):
                     "data": _sse({"node": "cache_lookup", "status": "done"}),
                 }
                 if hit is not None:
+                    await fill.aclose()
                     # P0-6: 命中答案先落库再下发, 中途断流也不丢
                     await _persist_assistant(c,
                         hit.answer,
@@ -571,6 +578,7 @@ async def _event_stream(c: _ChatStreamContext):
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("answer_cache_put_failed")
+            await fill.aclose()
             # 追问 chips (包A): done 前固定下发; 生成失败降级为空列表, 不阻塞
             yield {
                 "event": "followups",
@@ -584,6 +592,7 @@ async def _event_stream(c: _ChatStreamContext):
                         "citations": len(citations),
                         "selected_citations": citations,
                         "refused": state.get("refused", False),
+                        "refusal_reason": state.get("refusal_reason"),
                         "route": state.get("route", ""),
                         "usage": {},
                     }
@@ -804,6 +813,7 @@ async def _event_stream(c: _ChatStreamContext):
         }
         await _maybe_enqueue_reflection(request, ctx, session_id)
     finally:
+        await fill.aclose()
         # P0-6: 断流不丢答案 — 客户端断开 (GeneratorExit/CancelledError) 或
         # 持久化前异常退出时, 已下发的部分落库并标 truncated (前端据此显示
         # "回答未完成"角标 + 重问入口)。finally 里禁止 yield; 取消上下文中

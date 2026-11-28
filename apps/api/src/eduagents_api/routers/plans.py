@@ -40,8 +40,11 @@ from ..plan_adjust import (
     PlanTaskAttributionError,
     active_plan,
     adjust_plan,
+    adjustment_evidence,
+    adjustment_status,
     complete_plan_task,
     compute_task_locks,
+    confirm_adjustment,
     enrich_structure,
     iter_tasks,
     plan_progress,
@@ -1013,22 +1016,45 @@ async def complete_reading_task(
 
 
 @router.post("/{plan_id}/adjust")
-async def adjust(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
-    """依据当前学情调整计划 (F3-A3): 薄弱 KC 无对应任务 → 插补强任务 + 写调整审计。"""
+async def adjust(plan_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    """为尚待补强的课程知识点生成可确认的日程建议。"""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
         plan = await _load_plan(session, plan_id, ctx, for_update=True)
         if plan.status != "active":
             raise HTTPException(status_code=409, detail="PLAN_NOT_ACTIVE")
-        result = await adjust_plan(session, ctx.user_id, ctx.tenant_id, plan, trigger="manual")
+        today = (await timectl.now(request.app.state.redis)).astimezone(CN_TZ).date()
+        first_day = max(1, (today - plan.created_at.astimezone(CN_TZ).date()).days + 1)
+        result = await adjust_plan(session, ctx.user_id, ctx.tenant_id, plan, first_day=first_day)
         result["progress"] = plan_progress(plan.structure_json)
         return result
 
 
+@router.post("/{plan_id}/adjustments/{adjustment_id}/confirm")
+async def apply_adjustment(
+    plan_id: uuid.UUID,
+    adjustment_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(api_rate_limited),
+):
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        plan = await _load_plan(session, plan_id, ctx, for_update=True)
+        today = (await timectl.now(request.app.state.redis)).astimezone(CN_TZ).date()
+        first_day = max(1, (today - plan.created_at.astimezone(CN_TZ).date()).days + 1)
+        try:
+            return await confirm_adjustment(session, plan, adjustment_id, first_day=first_day)
+        except PlanTaskAttributionError as exc:
+            raise HTTPException(
+                409 if exc.code.endswith("STALE") else 404, detail=exc.code
+            ) from None
+
+
 @router.get("/{plan_id}/adjustments")
-async def list_adjustments(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_rate_limited)):
+async def list_adjustments(
+    plan_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)
+):
     """调整历史 (时间倒序): 每条含中文理由与插入明细。"""
     async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
-        await _load_plan(session, plan_id, ctx)
+        plan = await _load_plan(session, plan_id, ctx)
         rows = (
             await session.scalars(
                 select(PlanAdjustment)
@@ -1037,11 +1063,19 @@ async def list_adjustments(plan_id: uuid.UUID, ctx: AuthContext = Depends(api_ra
                 .limit(_ADJUSTMENT_LIMIT)
             )
         ).all()
+        today = (await timectl.now(request.app.state.redis)).astimezone(CN_TZ).date()
+        first_day = max(1, (today - plan.created_at.astimezone(CN_TZ).date()).days + 1)
+        weak_ids, material_ids = await adjustment_evidence(
+            session, plan, [r.diff_json or {} for r in rows]
+        )
         return [
             {
                 "id": str(r.id),
                 "reason": r.reason,
                 "trigger": (r.diff_json or {}).get("trigger", ""),
+                "status": adjustment_status(
+                    r.diff_json or {}, plan, first_day, weak_ids, material_ids
+                ),
                 "inserted": (r.diff_json or {}).get("inserted", []),
                 "at": r.at,
             }

@@ -186,3 +186,33 @@ async def test_global_kill_switch_blocks_even_fresh_user(redis, tmp_path):
     assert float(await r.get(gkey)) == pytest.approx(
         1.5 * settings.global_daily_budget_cny * MICRO_PER_CNY
     )
+
+
+
+async def test_worker_replays_completed_usage_once_after_api_exit(redis, client):
+    from eduagents_api.budget import replay_budget_usage
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import UsageLog, WalletLedger
+    from eduagents_api.usage import persist_usage
+    from sqlalchemy import func, select
+
+    response = await client.post("/api/auth/register", json={
+        "email": f"billing-{uuid.uuid4().hex[:12]}@test.eduagents.cn", "password": "pass-12345",
+    })
+    assert response.status_code == 201
+    user = response.json()["id"]
+    db, created = redis
+    guard = RedisBudgetGuard(db, _settings(), now_fn=_fixed_now)
+    _, ticket = await guard.reserve(user, user, "standard", "model-turn-1")
+    created.extend([f"budget:call:{ticket.id}", f"budget:{user}:{DAY}", f"budget:global:{DAY}"])
+    event = UsageEvent("request", user, user, "chat", "flash", "standard", 10, 10, 0, .04, 30,
+                       "live", platform_billed_cost_cny=.04, billing_reference="model-turn-1")
+    await guard.settle(event, ticket)
+    await replay_budget_usage({"redis": db})
+    # A late original sink invocation must not duplicate the worker commit.
+    assert await persist_usage(event)
+    async with tenant_session(user) as session:
+        assert await session.scalar(select(func.count()).where(UsageLog.id == uuid.UUID(ticket.id))) == 1
+        assert await session.scalar(select(func.count()).where(
+            WalletLedger.user_id == uuid.UUID(user), WalletLedger.ref == "model-turn-1")) == 1
+    assert not await db.hexists("budget:usage:outbox", ticket.id)

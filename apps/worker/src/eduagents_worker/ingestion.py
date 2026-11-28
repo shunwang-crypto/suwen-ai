@@ -363,6 +363,7 @@ async def ingest_document(
             if doc is None:
                 return "missing"
             meta = dict(doc.recognition_meta_json or {})
+            use_headings = meta.get("enrichment_policy") == "headings" or settings.gateway_mode == "stub"
             persisted_job_id = meta.get("ingest_job_id")
             if persisted_job_id:
                 # Local/integration callers may execute the queued row directly
@@ -671,12 +672,12 @@ async def ingest_document(
                     .where(Chunk.doc_id == uuid.UUID(doc_id), Chunk.parent_id.isnot(None))
                     .values(embedding_status="done")
                 )
-        # Stub has no semantic enrichment call to wait for, but it must not
+        # Structural imports have no semantic enrichment call to wait for and must not
         # expose a ready document with empty child KC bindings.  Bootstrap is
         # intentionally before the terminal status write: a missing/invalid
         # child set follows the normal failed-ingestion path instead of being
         # presented as a usable cold-start source.
-        if settings.gateway_mode == "stub":
+        if use_headings:
             from .kc_bootstrap import KcBootstrapStale, bootstrap_document_kcs
 
             try:
@@ -721,9 +722,8 @@ async def ingest_document(
         log.info(
             "ingest_done", doc_id=doc_id, parents=len(parents), children=len(child_rows)
         )
-        # Stage 2 自动串联: live/record/replay retain the enrichment barrier;
-        # stub was completed synchronously by chapter bootstrap above.
-        if redis is not None and settings.gateway_mode != "stub":
+        # Only semantic imports need the second-stage model call.
+        if redis is not None and not use_headings:
             enrich_job_id = f"enrich:{doc_id}:v{document_version}"
             try:
                 job = await redis.enqueue_job(

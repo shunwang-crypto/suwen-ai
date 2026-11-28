@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from arq import cron
 from arq.connections import RedisSettings
+from eduagents_api.budget import replay_budget_usage
 from eduagents_api.vector_audit import run_vector_audit
 from eduagents_core.cache.answer_cache import cleanup_answer_cache
 from eduagents_core.config import get_settings
@@ -34,6 +35,10 @@ log = get_logger("worker")
 async def startup(ctx: dict) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    from eduagents_core.gateway.ollama import verify_ollama_gpu
+
+    if gpu_models := await verify_ollama_gpu(settings):
+        log.info("ollama_gpu_verified", models=gpu_models)
     ctx["settings"] = settings
     log.info(
         "worker_started",
@@ -83,6 +88,7 @@ class WorkerSettings:
         # 语义缓存 L2 无原生 TTL: 每日凌晨清 7 天前点位 (L1 Redis 自带 24h TTL)
         cron(cleanup_answer_cache, hour=4, minute=30, name="cleanup_answer_cache_daily"),
         # P1-5 outbox: 删除的物理清理消费 (幂等, 毒行不阻塞)
+        cron(replay_budget_usage, minute=set(range(60)), name="budget_usage_replay"),
         cron(process_pending_cleanup, minute=set(range(60)), name="cleanup_outbox_minutely"),
         # A3/A4: metadata-only full vector audit; Redis lock prevents overlap.
         cron(run_vector_audit, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}, name="vector_audit_5m"),
@@ -96,7 +102,7 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _redis_settings()
-    max_jobs = 10
+    max_jobs = get_settings().worker_max_jobs
     job_timeout = 600
     # P1-7: 成本敏感任务不自动重试 (LLM 调用后崩溃的重投会重复扣费);
     # 摄取的受控重试由 reap_stale_ingestion cron 显式管理 (≤3 次)

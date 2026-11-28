@@ -566,7 +566,7 @@ async def _scan_qdrant(
         scanned = 0
         # Preserve order while avoiding a second scan when a misconfigured
         # primary collection is already named answer_cache.
-        collections = tuple(dict.fromkeys((settings.qdrant_collection, "answer_cache")))
+        collections = tuple(dict.fromkeys(filter(None, (settings.qdrant_collection, settings.retired_chunk_collection, "answer_cache"))))
         for collection in collections:
             remaining = max_points - scanned
             if remaining <= 0:

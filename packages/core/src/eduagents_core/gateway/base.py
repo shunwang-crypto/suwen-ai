@@ -96,6 +96,8 @@ class ChatRequest:
     tool_choice: Literal["auto", "required", "none"] | None = None
     # Internal per-model-call identity, separate from the public request ID.
     billing_reference: str = ""
+    # Optional decoder constraint for local models that support structured outputs.
+    response_schema: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,13 @@ class ResolvedCredential:
     key_version: int = 0
 
 
+@dataclass(frozen=True)
+class BudgetReservation:
+    id: str
+    date: str
+    tier: str
+
+
 @dataclass
 class ChatResult:
     text: str
@@ -134,7 +143,7 @@ class ChatResult:
     platform_billed_cost_cny: float = 0.0
     # Internal hand-off when a BYOK request explicitly falls back to platform
     # after the initial gateway precheck was intentionally skipped.
-    reserved_tier: str | None = None
+    reserved_tier: BudgetReservation | str | None = None
     # Provider completion reason when the compatible API exposes it.  This is
     # diagnostic metadata only; response bodies are never persisted here.
     finish_reason: str | None = None
@@ -169,8 +178,10 @@ class UsageEvent:
     # user-facing request ID and never contains credentials or request text.
     billing_reference: str = ""
 
+    settlement_id: str = ""
 
-UsageSink = Callable[[UsageEvent], Awaitable[None]]
+
+UsageSink = Callable[[UsageEvent], Awaitable[bool | None]]
 CredentialResolver = Callable[[ChatRequest], Awaitable[ResolvedCredential | None]]
 
 
@@ -189,7 +200,7 @@ class BudgetGuard(Protocol):
         self, tenant_id: str, user_id: str, tier: str = "standard"
     ) -> str | None: ...
 
-    async def settle(self, event: UsageEvent, reserved_tier: str | None = None) -> None: ...
+    async def settle(self, event: UsageEvent, reserved_tier: BudgetReservation | str | None = None) -> None: ...
 
 
 class ModelGateway(Protocol):
