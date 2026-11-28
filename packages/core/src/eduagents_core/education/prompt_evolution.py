@@ -13,6 +13,7 @@ import math
 import time
 import uuid
 from collections import Counter
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from typing import Literal
 
@@ -96,6 +97,12 @@ class CaseOutcome:
     live: bool
     agent_runs: list[dict] = field(default_factory=list)
     error_detail: str = ""
+    observed_architecture: str | None = None
+    plan_draft: dict | None = None
+    plan_resources: list[dict] = field(default_factory=list)
+    draft_events: list[dict] = field(default_factory=list)
+    generation_live: bool = False
+    judge_status: str = "not_requested"
 
     def to_dict(self):
         return asdict(self)
@@ -201,7 +208,46 @@ def _tool_errors(requests):
     return sorted(errors)[:10]
 
 
-async def evaluate_case(case, bundle, settings, gateway, *, repetition=0, judge=True):
+def all_live_results(results, count):
+    return bool(results) and len(results) == count and all(
+        result.mode in {"live", "record"} and not result.degraded for result in results
+    )
+
+
+def _anonymous_plan(value):
+    if isinstance(value, dict):
+        return {key: _anonymous_plan(item) for key, item in value.items() if key not in {"task_id", "status"}}
+    if isinstance(value, list):
+        return [_anonymous_plan(item) for item in value]
+    return value
+
+
+async def judge_artifact(
+    case, artifact, gateway, *, rubric=(), resources=(), hint_level=None, request_id="", require_live=True,
+):
+    body = {
+        "task": case.task,
+        "input": case.payload,
+        "sources": [source.model_dump() for source in case.sources],
+        "rubric": (*case.rubric, *rubric),
+        "artifact": _anonymous_plan(artifact) if case.task == "plan" else artifact,
+        "hint_level": hint_level,
+    }
+    if case.task == "plan":
+        body["resources"] = resources
+    response = await gateway.chat(ChatRequest(
+        messages=(ChatMessage("system", JUDGE_POLICY), ChatMessage("user", json.dumps(body, ensure_ascii=False))),
+        tier=Tier.strong, temperature=0, max_tokens=1000, json_mode=True,
+        feature="prompt_evolution_judge", request_id=request_id,
+    ))
+    if require_live and not all_live_results([response], 1):
+        raise GatewayError("EVAL_JUDGE_NON_LIVE", "独立评审未获得有效的真实模型响应")
+    return Judgment.model_validate(parse_json_object(response.text))
+
+
+async def evaluate_case(
+    case, bundle, settings, gateway, *, repetition=0, judge=True, judge_rubric=(), require_live_judge=False,
+):
     result_start, request_start = len(gateway.results), len(gateway.requests)
     request_id = uuid.uuid4().hex
     payload = {**case.payload, "request_id": request_id, "user_id": "offline-evaluator"}
@@ -210,8 +256,16 @@ async def evaluate_case(case, bundle, settings, gateway, *, repetition=0, judge=
     )
     task = AgentTask(case.task, deps)
     error_code, error_detail, record, judgment = "", "", None, None
+    plan_draft, plan_resources, draft_events = None, [], []
     try:
         record = await task.run(request_id, payload)
+        if case.task == "plan" and record.status == "awaiting_confirmation":
+            plan_draft = deepcopy(record.state.get("plan"))
+            plan_resources = deepcopy(record.state.get("resources") or [])
+            draft_events = deepcopy([
+                event for event in record.state.get("trace") or []
+                if event.get("node") == "draft_plan" or "fallback" in str(event.get("event"))
+            ])
         if record.status == "awaiting_confirmation" and case.confirm:
             record = await task.run(request_id, resume={"approved": True})
         if record.status == "failed":
@@ -225,26 +279,26 @@ async def evaluate_case(case, bundle, settings, gateway, *, repetition=0, judge=
     completed = bool(record and record.status == "completed")
     key = {"qa": "answer", "quiz": "questions", "plan": "plan", "tutor": "reply"}[case.task]
     artifact = record.state.get(key) if record else None
-    if completed and judge:
-        body = {
-            "task": case.task,
-            "input": case.payload,
-            "sources": [source.model_dump() for source in case.sources],
-            "rubric": case.rubric,
-            "artifact": artifact,
-            "hint_level": record.state.get("hint_level") if case.task == "tutor" else None,
-        }
+    generation_live = all_live_results(
+        gateway.results[result_start:], len(gateway.requests) - request_start,
+    )
+    judge_status = "unobserved" if judge else "not_requested"
+    judgeable = plan_draft is not None if case.task == "plan" else completed and artifact is not None
+    if judgeable and judge:
+        judge_start = len(gateway.results)
         try:
-            response = await gateway.chat(ChatRequest(
-                messages=(ChatMessage("system", JUDGE_POLICY), ChatMessage("user", json.dumps(body, ensure_ascii=False))),
-                tier=Tier.strong, temperature=0, max_tokens=1000, json_mode=True,
-                feature="prompt_evolution_judge", request_id=request_id,
-            ))
-            judgment = Judgment.model_validate(parse_json_object(response.text))
+            judgment = await judge_artifact(
+                case, plan_draft if case.task == "plan" else artifact, gateway,
+                rubric=judge_rubric, resources=plan_resources, request_id=request_id,
+                hint_level=record.state.get("hint_level") if case.task == "tutor" else None,
+                require_live=require_live_judge,
+            )
+            judge_status = "scored" if all_live_results(gateway.results[judge_start:], 1) else "non_live"
         except BudgetExceeded:
             raise
         except (ValueError, GatewayError) as exc:
-            error_code = exc.code if isinstance(exc, GatewayError) else "EVAL_JUDGE_INVALID"
+            judge_status = exc.code if isinstance(exc, GatewayError) else "EVAL_JUDGE_INVALID"
+            error_code = error_code or judge_status
     results = gateway.results[result_start:]
     requests = gateway.requests[request_start:]
     return CaseOutcome(
@@ -257,10 +311,13 @@ async def evaluate_case(case, bundle, settings, gateway, *, repetition=0, judge=
         sum(result.latency_ms for result in results),
         sum(result.prompt_tokens + result.completion_tokens for result in results),
         sorted({f"{r.provider}:{r.model}:{r.tier}" for r in results}),
-        bool(results) and all(r.mode in {"live", "record"} and not r.degraded for r in results),
+        all_live_results(results, len(requests)),
         [{k: task.get(k) for k in ("id", "name", "role", "status", "duration_ms", "error_code")}
          for task in (record.state.get("team_tasks") or {}).values()] if record else [],
         error_detail,
+        observed_architecture=record.state.get("_architecture") if record else None,
+        plan_draft=plan_draft, plan_resources=plan_resources, draft_events=draft_events,
+        generation_live=generation_live, judge_status=judge_status,
     )
 
 
