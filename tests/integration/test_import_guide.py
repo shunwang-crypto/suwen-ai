@@ -107,8 +107,10 @@ class _FakeGateway:
             text = _VOCAB_JSON
         elif req.json_mode:
             self.calls["extract"] += 1
+            body = prompt.split("<文本块>\n", 1)[-1].split("\n</文本块>", 1)[0]
+            quote = body if "小节候选标题：拉格朗日余项" in prompt else None
             text = json.dumps(
-                {"kcs": ["拉格朗日余项" if "余项" in prompt else "泰勒公式"]},
+                {"kcs": ["泰勒公式"], "section_quote": quote},
                 ensure_ascii=False,
             )
         else:

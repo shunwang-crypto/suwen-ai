@@ -8,6 +8,7 @@ stub 网关的 {"stub": true, ...} 缺业务字段, 同样按解析失败处理 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -23,6 +24,27 @@ _MAX_ATTEMPTS = 2  # 首次 + 重试一次
 # (词条上限, 先修边上限, 输出 token 上限)。重试使用同一教材，缩小输出。
 _VOCAB_LIMITS = ((30, 24, 4800), (16, 12, 3000))
 _KC_NAME = {"type": "string", "minLength": 1, "maxLength": 80}
+_CHUNK_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["kcs", "section_quote"],
+    "properties": {
+        "kcs": {"type": "array", "maxItems": 3, "items": _KC_NAME},
+        "section_quote": {"type": ["null", "string"], "maxLength": 500},
+    },
+}
+_SECTION_PREFIX = re.compile(
+    r"^\s*(?:第[\d一二三四五六七八九十百零〇]+[章节篇][\s:：、.-]*"
+    r"|\d+(?:\.\d+)+(?:\.\s*|[\s:：、-]+)|\d+[.、:：]\s*"
+    r"|[（(][\d一二三四五六七八九十]+[）)]\s*)"
+)
+_GENERIC_HEADINGS = {
+    "来源", "图源", "资料来源", "图片来源", "版权", "版权页", "目录", "参考资料", "参考文献",
+    "附录", "前言", "引言", "正文", "概述", "简介", "定义", "例题", "练习", "习题",
+    "思考", "小结", "总结", "其他章节", "未分章节", "目次", "鸣谢",
+    "source", "sources", "references", "contents", "preface", "introduction", "summary",
+    "exercises", "examples", "appendix", "chapter",
+}
 
 
 class KcExtractionError(Exception):
@@ -144,19 +166,64 @@ def _parse_vocab_payload(
     return vocab, edges
 
 
-def _parse_chunk_payload(data: dict[str, Any]) -> list[str] | None:
+def section_heading_names(heading_path: str) -> tuple[str, str]:
+    """Return the actual leaf heading and its name without section numbering."""
+    leaf = heading_path.rsplit(" > ", 1)[-1].strip()
+    return leaf, _SECTION_PREFIX.sub("", leaf).strip(" \t:：")
+
+
+def section_topic_name(heading_path: str, document_name: str) -> str:
+    """Select a candidate worth asking the model to verify against the body."""
+    _, topic = section_heading_names(heading_path)
+    key = normalize_kc_name(topic.strip("：:。.!?"))
+    if (
+        len(topic) > 80
+        or not any(char.isalpha() for char in key)
+        or key in _GENERIC_HEADINGS
+        or topic.startswith("《") and topic.endswith("》")
+        or key == normalize_kc_name(Path(document_name).stem)
+        or key == normalize_kc_name(document_name)
+        or re.match(r"^(?:来源|图源|资料来源|图片来源|sources?)\s*[:：]", topic, re.IGNORECASE)
+    ):
+        return ""
+    return topic
+
+
+def _confirmed_section_quote(value: object, text: str, title: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    quote = value.strip()
+    if (
+        len(quote) > 500
+        or sum(char.isalnum() for char in quote) < 10
+        or normalize_kc_name(section_heading_names(quote.strip("。.!?！？"))[1])
+        == normalize_kc_name(title)
+    ):
+        return False
+    boundaries = "\n。！？.!?；;"
+    for match in re.finditer(re.escape(quote), text):
+        before = text[:match.start()].rstrip(" \t")
+        after = text[match.end():].lstrip(" \t")
+        if (not before or before[-1] in boundaries) and (
+            not after or quote[-1] in boundaries or after[0] in boundaries
+        ):
+            return True
+    return False
+
+
+def _parse_chunk_payload(data: dict[str, Any], excluded_names: set[str]) -> list[str] | None:
     """校验 chunk 抽取 payload: {"kcs": [str]}; 去重去空, 截断至 3 个。"""
     raw_kcs = data.get("kcs")
     if not isinstance(raw_kcs, list):
         return None
     names: list[str] = []
-    seen: set[str] = set()
+    seen = set(excluded_names)
     for item in raw_kcs:
         if not isinstance(item, str):
             return None
         name = item.strip()
         key = normalize_kc_name(name)
-        if not name or key in seen:
+        if not key or key in seen:
             continue
         seen.add(key)
         names.append(name)
@@ -221,36 +288,50 @@ async def extract_chunk_kcs(
     chunk_text: str,
     vocab_names: list[str],
     *,
+    heading_path: str = "",
+    document_name: str = "",
     tier: Tier = Tier.cheap,
     tenant_id: str = "",
     user_id: str = "",
 ) -> list[str]:
-    """chunk 级知识点名称抽取 (≤3 个), 优先复用受控词表已有名称。
+    """抽取至多三个细粒度知识点，加上一个由 child 正文证实的小节主题。
 
     只返回名称列表; kc_id 归并由调用方经 KcNormalizer.match_or_create 完成。
     tenant_id/user_id 必须透传 (P0-2a): 缺省空串会被 usage sink 丢弃 = 不计量不扣预算。
     """
+    heading_names = section_heading_names(heading_path)
+    section_name = section_topic_name(heading_path, document_name)
+    excluded = {normalize_kc_name(name) for name in heading_names}
     names_block = "\n".join(f"- {name}" for name in vocab_names) or "(词表暂为空)"
     prompt = (
         _load_prompt("kc_extract_chunk.md")
         .replace("{{VOCAB_NAMES}}", names_block)
+        .replace("{{SECTION_TITLE}}", section_name or "(无候选标题)")
         .replace("{{CHUNK_TEXT}}", chunk_text)
     )
     request = ChatRequest(
         messages=(ChatMessage(role="user", content=prompt),),
         tier=tier,
         temperature=0.0,
+        max_tokens=800,
         json_mode=True,
+        response_schema=_CHUNK_SCHEMA,
         feature="kc_extract_chunk",
         tenant_id=tenant_id,
         user_id=user_id,
     )
     for _ in range(_MAX_ATTEMPTS):
         result = await gateway.chat(request)
+        if result.finish_reason == "length":
+            continue
         data = parse_json_object(result.text)
         if data is None:
             continue
-        names = _parse_chunk_payload(data)
+        names = _parse_chunk_payload(data, excluded)
         if names is not None:
+            if section_name and _confirmed_section_quote(
+                data.get("section_quote"), chunk_text, section_name
+            ):
+                names.append(section_name)
             return names
     raise KcExtractionError("chunk KC 抽取输出无法解析为约定 JSON schema (已重试一次)")

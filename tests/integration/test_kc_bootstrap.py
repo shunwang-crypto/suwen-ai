@@ -45,12 +45,14 @@ async def _register_login(client, suffix: str) -> tuple[str, str]:
     return token, me.json()["id"]
 
 
-async def _create_document(client, headers: dict[str, str], name: str) -> tuple[str, str]:
+async def _create_document(
+    client, headers: dict[str, str], name: str, content: str = _DOC,
+) -> tuple[str, str]:
     kb = await client.post("/api/kb", json={"name": name, "subject": "math"}, headers=headers)
     kb_id = kb.json()["id"]
     document = await client.post(
         f"/api/kb/{kb_id}/documents",
-        files={"file": ("chapters.md", _DOC.encode(), "text/markdown")},
+        files={"file": ("chapters.md", content.encode(), "text/markdown")},
         headers=headers,
     )
     return kb_id, document.json()["id"]
@@ -191,10 +193,14 @@ async def test_failed_live_enrichment_keeps_fallback_and_does_not_claim_enriched
     assert all(child.kc_ids for child in children)
 
 
-async def test_fallback_is_promoted_in_place_when_semantic_name_matches(client):
+async def test_fallback_is_promoted_in_place_when_body_verifies_a_section_topic(client):
     token, tenant_id = await _register_login(client, "promotion")
     headers = {"Authorization": f"Bearer {token}"}
-    kb_id, doc_id = await _create_document(client, headers, "原位提升库")
+    title = "气体的等温变化"
+    quote = "当温度保持不变时，一定量的气体压强随体积增大而减小。"
+    kb_id, doc_id = await _create_document(
+        client, headers, "原位提升库", f"# 基础实验\n\n## {title}\n\n{quote}\n",
+    )
 
     from eduagents_worker.enrichment import enrich_document
     from eduagents_worker.ingestion import ingest_document
@@ -209,7 +215,7 @@ async def test_fallback_is_promoted_in_place_when_semantic_name_matches(client):
             await session.scalars(
                 select(KnowledgeComponent).where(
                     KnowledgeComponent.kb_id == uuid.UUID(kb_id),
-                    KnowledgeComponent.canonical_name == "定义",
+                    KnowledgeComponent.canonical_name == title,
                 )
             )
         ).first()
@@ -222,11 +228,11 @@ async def test_fallback_is_promoted_in_place_when_semantic_name_matches(client):
 
             if request.json_mode and "章节结构" in request.messages[-1].content:
                 text = json.dumps(
-                    {"kcs": [{"canonical_name": "定义", "description": "语义定义"}]},
+                    {"kcs": [{"canonical_name": title, "description": "恒温下气体状态的变化"}]},
                     ensure_ascii=False,
                 )
             elif request.json_mode:
-                text = json.dumps({"kcs": ["定义"]}, ensure_ascii=False)
+                text = json.dumps({"kcs": ["气体压强"], "section_quote": quote}, ensure_ascii=False)
             else:
                 text = "章节上下文摘要"
             return ChatResult(

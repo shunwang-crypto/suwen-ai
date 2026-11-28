@@ -63,11 +63,17 @@ class FakeGateway:
         elif req.json_mode:
             self.calls["extract"] += 1
             self.extract_prompts.append(prompt)
+            body = prompt.split("<文本块>\n", 1)[-1].split("\n</文本块>", 1)[0]
+            quote = None
             if self.return_fallback and "未映射片段" in prompt:
-                kcs = ["定义"]
+                kcs = ["Taylor 公式", "定义"]
+                quote = body
+            elif "小节候选标题：拉格朗日余项" in prompt:
+                kcs = ["导数"]
+                quote = body
             else:
-                kcs = ["拉格朗日余项"] if "余项" in prompt else ["Taylor 公式"]
-            text = json.dumps({"kcs": kcs}, ensure_ascii=False)
+                kcs = ["Taylor 公式"]
+            text = json.dumps({"kcs": kcs, "section_quote": quote}, ensure_ascii=False)
         else:
             self.calls["prefix"] += 1
             text = "该片段位于泰勒公式章节, 说明多项式逼近的核心结论。"
@@ -145,7 +151,8 @@ async def test_enrich_stage_full_cycle(client):
     assert {"泰勒公式", "拉格朗日余项", "导数"} <= enrichment_names
     assert "定义" in fallback_names
     assert gw.extract_prompts
-    assert all(name in gw.extract_prompts[0] for name in ("泰勒公式", "拉格朗日余项", "导数"))
+    assert all(f"- {name}" in gw.extract_prompts[0] for name in ("泰勒公式", "导数"))
+    assert any("小节候选标题：拉格朗日余项" in prompt for prompt in gw.extract_prompts)
     # KC-A1 归一化路径: chunk 抽取返回 "Taylor 公式" 但挂载的是已有"泰勒公式"的 kc_id, 无新建
     assert len(enrichment_names) == 3
     # 成环边 (拉格朗日余项→导数) 被丢弃: 只入 2 条
@@ -157,7 +164,7 @@ async def test_enrich_stage_full_cycle(client):
         assert set(c.kc_ids) <= kc_ids
         assert c.context_prefix  # 前缀已生成
 
-    fallback = next(k for k in kcs if k.source_kind == "chapter_fallback")
+    fallback = next(k for k in kcs if k.canonical_name == "定义")
     parent_id = children[0].parent_id
     async with tenant_session(tenant_id) as session:
         session.add(
@@ -176,4 +183,4 @@ async def test_enrich_stage_full_cycle(client):
     assert await enrich_document({}, tenant_id, doc_id, gateway=gw) == "enriched"
     async with tenant_session(tenant_id) as session:
         promoted = await session.get(KnowledgeComponent, fallback.id)
-    assert promoted.source_kind == "enrichment"
+    assert promoted.source_kind == "chapter_fallback"

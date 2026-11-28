@@ -314,3 +314,46 @@ async def test_extract_chunk_kcs_empty_list_is_valid():
     gateway = FakeGateway(['{"kcs": []}'])
     assert await extract_chunk_kcs(gateway, "版权页", ["导数"]) == []
     assert len(gateway.requests) == 1
+
+
+async def test_chunk_adds_verified_leaf_without_replacing_three_details():
+    quote = "冷却液流经散热器，将部件产生的热量传递给周围空气。"
+    gateway = FakeGateway([json.dumps({
+        "kcs": ["2.1 冷却液循环", "循环泵", "散热器", "冷却液箱"],
+        "section_quote": quote,
+    })])
+    names = await extract_chunk_kcs(
+        gateway, quote, [], heading_path="维护手册 > 2.1 冷却液循环", document_name="维护手册.pdf",
+    )
+    assert names == ["循环泵", "散热器", "冷却液箱", "冷却液循环"]
+    request = gateway.requests[0]
+    assert "小节候选标题：冷却液循环" in request.messages[0].content
+    assert request.response_schema["required"] == ["kcs", "section_quote"]
+
+
+@pytest.mark.parametrize("quote", [
+    None,
+    "齿轮传动机构通过齿形啮合传递运动。",
+    "通过调整叶片角度改变流量。",
+    "1.2 变桨机构的角度调节原理",
+])
+async def test_leaf_requires_a_complete_original_body_sentence(quote):
+    gateway = FakeGateway([json.dumps({
+        "kcs": ["角度估算", "变桨机构的角度调节原理"],
+        "section_quote": quote,
+    })])
+    body = "1.2 变桨机构的角度调节原理\n操作者可通过调整叶片角度改变流量。"
+    names = await extract_chunk_kcs(gateway, body, [], heading_path="讲义 > 1.2 变桨机构的角度调节原理")
+    assert names == ["角度估算"]
+
+
+@pytest.mark.parametrize("heading", [
+    "资料 > 来源", "资料 > 1. 来源：公开数据", "资料 > 概述", "操作手册", "《设备维修手册》",
+])
+async def test_non_teaching_headings_cannot_be_promoted_even_with_quote(heading):
+    body = "调节阀开口大小会改变管路中的液体流量。"
+    gateway = FakeGateway([json.dumps({"kcs": ["调节阀"], "section_quote": body})])
+    assert await extract_chunk_kcs(
+        gateway, body, [], heading_path=heading, document_name="操作手册.pdf",
+    ) == ["调节阀"]
+    assert "小节候选标题：(无候选标题)" in gateway.requests[0].messages[0].content

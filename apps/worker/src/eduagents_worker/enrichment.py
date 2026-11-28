@@ -134,8 +134,13 @@ async def enrich_document(
         add_edge_safe,
         build_vocabulary,
         extract_chunk_kcs,
+        normalize_kc_name,
     )
-    from eduagents_core.kc.extraction import KcExtractionError
+    from eduagents_core.kc.extraction import (
+        KcExtractionError,
+        section_heading_names,
+        section_topic_name,
+    )
     from eduagents_core.vectorstore.base import VectorPoint
     from eduagents_core.vectorstore.qdrant_store import QdrantStore
 
@@ -211,6 +216,7 @@ async def enrich_document(
         if fallback_status != "enriched":
             doc.status = "enriching"
         kb_id = str(doc.kb_id)
+        document_name = doc.filename
         # Personal jobs can use the owner credential; org jobs without a
         # request user deliberately remain platform-only.
         effective_user_id = user_id or (str(doc.uploaded_by) if doc.uploaded_by else "")
@@ -289,6 +295,7 @@ async def enrich_document(
                 "id": str(c.id),
                 "text": c.text,
                 "heading_path": c.heading_path,
+                "section_candidate": section_topic_name(c.heading_path, document_name),
                 "page_start": c.page_start,
                 "page_end": c.page_end,
                 "parent_id": str(c.parent_id),
@@ -304,8 +311,14 @@ async def enrich_document(
         # evidence that semantic enrichment completed.  Build the semantic
         # vocabulary in that case, while retaining fallback rows in the
         # normalizer so a high-confidence match can promote them in place.
-        new_edges: list[PrereqEdge] = []
+        generated_edges: list[PrereqEdge] = []
         generated_id_map: dict[str, str] = {}
+        deferred_headings: list[KcEntry] = []
+        heading_keys = {
+            normalize_kc_name(name)
+            for child in child_data for name in section_heading_names(child["heading_path"])
+            if name
+        }
         embedder = create_embedder(settings)
         semantic_ids = set(existing_enrichment_ids)
         if not existing_enrichment_ids:
@@ -327,12 +340,16 @@ async def enrich_document(
             if not generated_vocab.entries:
                 raise _EnrichmentIncomplete("semantic vocabulary is empty")
 
-        normalizer = KcNormalizer(vocab, embedder)
+        # Heading fallback rows remain stored. Only section evidence can
+        # promote them, so keep them out of ordinary embedding matching.
+        fallback_vocab = KcVocabulary(entries=[e for e in vocab.entries if e.kc_id in fallback_ids])
+        semantic_vocab = KcVocabulary(entries=[e for e in vocab.entries if e.kc_id not in fallback_ids])
+        normalizer = KcNormalizer(semantic_vocab, embedder)
         if not existing_enrichment_ids:
-            # Merge model vocabulary through the normalizer rather than
-            # replacing fallback rows.  Exact/embedding matches therefore
-            # preserve the fallback UUID and can be promoted below.
             for generated in generated_vocab.entries:
+                if normalize_kc_name(generated.canonical_name) in heading_keys:
+                    deferred_headings.append(generated)
+                    continue
                 target_id, _created = await normalizer.match_or_create(
                     generated.canonical_name, generated.description
                 )
@@ -342,17 +359,10 @@ async def enrich_document(
                     entry for entry in normalizer.vocab.entries if entry.kc_id == target_id
                 )
                 for alias in generated.aliases:
-                    if alias not in target.aliases:
+                    if alias not in target.aliases and normalize_kc_name(alias) not in heading_keys:
                         target.aliases.append(alias)
                 if not target.description and generated.description:
                     target.description = generated.description
-            new_edges = [
-                PrereqEdge(
-                    from_kc=generated_id_map.get(edge.from_kc, edge.from_kc),
-                    to_kc=generated_id_map.get(edge.to_kc, edge.to_kc),
-                )
-                for edge in generated_edges
-            ]
         # The first live pass may have started with only chapter fallback rows.
         # Feed the generated semantic vocabulary to chunk extraction as well;
         # using the pre-bootstrap snapshot here would make the model blind to
@@ -367,21 +377,31 @@ async def enrich_document(
             async with sem:
                 kc_ids: list[str] = []
                 semantic_kc_ids: list[str] = []
+                confirmed_section = ""
                 try:
                     names = await extract_chunk_kcs(
                         gateway,
                         child["text"],
                         vocab_names,
+                        heading_path=child["heading_path"],
+                        document_name=document_name,
                         tenant_id=tenant_id,
                         user_id=effective_user_id,
                     )
-                    for name in names[:3]:
+                    for name in names:
+                        if name == child["section_candidate"]:
+                            confirmed_section = name
+                            continue
                         # KcNormalizer mutates its in-memory vocabulary and
                         # lazily populates embeddings; serialize that small
                         # critical section while retaining concurrent model IO.
                         async with normalizer_lock:
+                            if (
+                                normalize_kc_name(name) in heading_keys or fallback_vocab.by_name(name)
+                            ) and semantic_vocab.by_name(name) is None:
+                                continue
                             kc_id, created = await normalizer.match_or_create(name)
-                            if created or kc_id in fallback_ids:
+                            if created:
                                 semantic_ids.add(kc_id)
                         kc_ids.append(kc_id)
                         if kc_id in semantic_ids:
@@ -408,10 +428,46 @@ async def enrich_document(
                     **child,
                     "kc_ids": merged_kc_ids,
                     "semantic_kc_ids": list(dict.fromkeys(semantic_kc_ids)),
+                    "confirmed_section": confirmed_section,
                     "prefix": prefix,
                 }
 
         enriched = await asyncio.gather(*(process(c) for c in child_data))
+        confirmed_headings = {}
+        for child in enriched:
+            name = child["confirmed_section"]
+            if not name:
+                continue
+            leaf, _ = section_heading_names(child["heading_path"])
+            entry = semantic_vocab.by_name(name)
+            if entry is None:
+                # A chapter and its details can be highly similar. Match the
+                # verified chapter lexically so it keeps its own identity.
+                entry = fallback_vocab.by_name(leaf) or fallback_vocab.by_name(name)
+                if entry is None:
+                    entry = KcEntry(str(uuid.uuid4()), name)
+                elif normalize_kc_name(name) != normalize_kc_name(entry.canonical_name):
+                    if name not in entry.aliases:
+                        entry.aliases.append(name)
+                semantic_vocab.entries.append(entry)
+            semantic_ids.add(entry.kc_id)
+            confirmed_headings[normalize_kc_name(name)] = entry
+            confirmed_headings[normalize_kc_name(leaf)] = entry
+            for key in ("kc_ids", "semantic_kc_ids"):
+                if entry.kc_id not in child[key]:
+                    child[key].append(entry.kc_id)
+
+        for generated in deferred_headings:
+            entry = confirmed_headings.get(normalize_kc_name(generated.canonical_name))
+            if entry is not None:
+                generated_id_map[generated.kc_id] = entry.kc_id
+                if not entry.description:
+                    entry.description = generated.description
+        new_edges = [
+            PrereqEdge(from_kc=generated_id_map[edge.from_kc], to_kc=generated_id_map[edge.to_kc])
+            for edge in generated_edges
+            if edge.from_kc in generated_id_map and edge.to_kc in generated_id_map
+        ]
         # Do not turn a vocabulary row count into a false readiness signal.  A
         # successful live enrichment must produce at least one semantic KC for
         # every child; otherwise the original fallback bindings stay in place
