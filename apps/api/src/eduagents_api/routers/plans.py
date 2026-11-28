@@ -860,6 +860,17 @@ async def get_plan(
         return await _plan_detail(session, plan, now_dt.astimezone(CN_TZ).date())
 
 
+@router.get("/{plan_id}/agents")
+async def plan_agents(plan_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    async with tenant_session(ctx.tenant_id, org_ids=ctx.org_ids) as session:
+        await _load_plan(session, plan_id, ctx)
+    runtime = getattr(request.app.state, "harness", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="HARNESS_UNAVAILABLE")
+    from .threads import task_agents
+    return await task_agents(runtime.thread_id("plan", str(ctx.user_id), str(plan_id)), request, ctx)
+
+
 @router.get("/{plan_id}/tasks/{task_id}/tutor-context")
 async def get_plan_task_tutor_context(
     plan_id: uuid.UUID,

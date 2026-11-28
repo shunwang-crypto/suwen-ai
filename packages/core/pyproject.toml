@@ -28,6 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+memory-local = ["fastembed>=0.7,<0.8"]
 legacy-migration = ["langgraph-checkpoint-postgres>=3.0", "langgraph>=1.0"]
 
 [build-system]

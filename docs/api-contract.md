@@ -509,9 +509,24 @@ Key 哈希、密文或 nonce。
 
 DSH 接入保持出题/计划的 `interrupt` 与 `/api/threads/{thread_id}/resume` 契约。
 完成后的重复确认返回相同持久化结果，不再重复调用模型、生成题目或重建计划。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/threads/{thread_id}/agents | 本人根任务的状态、委派 Agent、实际事件、团队预算、审查、失败类型及待确认载荷；不存在、他人或内部子角色返回 404 |
+| POST | /api/threads/{thread_id}/cancel | 停止本人运行中的根任务并取消子任务，保留已完成交付物；已完成任务保持 completed |
+| POST | /api/threads/{thread_id}/retry | 仅 failed/cancelled 可重试，否则 409 TASK_NOT_FAILED；复用已准入输入、身份、范围、版本和已完成成果，忽略替换输入的请求体，返回 SSE |
+| GET | /api/plans/{id}/agents | 检查计划所有权后返回原规划任务活动及后续关联的 quiz/tutor；历史会话已清理时可返回 404 |
+
+SSE 首先发送 `task_started {thread_id,status}`，使界面在中断前即可保留权威线程标识。
+协作事件是 `trace_event`，其 `type=agent` 且含角色、父子任务标识、事件、摘要；
+计划 interrupt 另含 `review` 的六项检查和修改建议。确认编辑需要新版本独立审查；
+未解决时回到确认并返回问题。内部子任务不能通过公共 resume/retry 接口直接改变状态。
+前端保留已准入线程的表单与草案最多七天，刷新后查询服务端活动恢复；未准入表单保留半小时。
 AI 运行错误支持 `HARNESS_TIMEOUT`、`HARNESS_STEP_LIMIT`、`HARNESS_PHASE_LIMIT`、
 `HARNESS_TOOL_DENIED`、`HARNESS_PROTOCOL_ERROR`、`HARNESS_NOT_PAUSED` 和
 `HARNESS_CONFIRMATION_REQUIRED`，均有中文提示；预算/BYOK 的既有错误码继续保留。
+平台供应商返回余额不足时使用 `MODEL_BALANCE_INSUFFICIENT`，与应用钱包和请求格式错误区分；
+充值后才能继续真实模型请求，不能用开发桩替代成功结果。
 历史 `GRAPHS_UNAVAILABLE` 错误码为 API 兼容继续保留，表示 AI 运行服务不可用。
 
 教育任务内部由原生 DSH 会话驱动，SSE 继续使用 `node_update/trace_event/token/interrupt/done`

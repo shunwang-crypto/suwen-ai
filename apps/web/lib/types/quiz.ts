@@ -1,4 +1,4 @@
-import type { PlanAdjustResult, PlanGoalAnalysis, PlanResource, PlanSkillGap, PlanStructure } from "./plans";
+import type { PlanAdjustResult, PlanGoalAnalysis, PlanResource, PlanReview, PlanSkillGap, PlanStructure } from "./plans";
 
 // 与 apps/api/src/eduagents_api/schemas.py 及 docs/api-contract.md 对齐的类型定义。
 
@@ -144,6 +144,7 @@ export interface ExplainBackResult {
 // ---- 图工作流 SSE（stream_graph_run：interrupt 负载平铺在顶层）----
 
 export interface GraphInterruptData {
+  review?: PlanReview;
   kind: string;
   thread_id: string;
   resume_url: string;

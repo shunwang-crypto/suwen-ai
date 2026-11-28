@@ -27,6 +27,12 @@ os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ["GATEWAY_MODE"] = "stub"
 os.environ["EMBEDDING_MODE"] = "stub"
 os.environ["RERANK_MODE"] = "stub"
+os.environ["MEMORY_SEMANTIC_MODE"] = "disabled"
+os.environ.setdefault("HARNESS_MAX_CONCURRENCY", "2")
+os.environ.setdefault("AGENT_COLLABORATION_MAX_PARALLEL", "1")
+# Existing regression fixtures pin their historical instruction contract;
+# collaboration tests explicitly select edu-v2.
+os.environ["EDUCATION_PROMPT_VERSION"] = "edu-v1"
 # Integration tests must never inherit the developer's SMTP configuration.
 # The password-reset suite uses DevEmailSender and reads its debug link from
 # the isolated Redis instance instead of attempting network delivery.

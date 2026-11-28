@@ -64,7 +64,8 @@ def effective_status(item: dict, now: datetime) -> str:
     return "active"
 
 
-def recall(items: list[dict], query: str, kc_names: list[str], *, now=None, limit=MAX_MEMORIES) -> dict:
+def recall(items: list[dict], query: str, kc_names: list[str], *, now=None, limit=MAX_MEMORIES,
+           semantic_scores=None, semantic_threshold=0.65) -> dict:
     now = now or datetime.now(UTC)
     wanted = {unicodedata.normalize("NFKC", name).casefold().strip() for name in kc_names if name.strip()}
     search = tokens(query + " " + " ".join(kc_names))
@@ -76,9 +77,10 @@ def recall(items: list[dict], query: str, kc_names: list[str], *, now=None, limi
         exact = bool(wanted & {unicodedata.normalize("NFKC", n).casefold().strip() for n in names})
         overlap = search & tokens(item["text"] + " " + " ".join(names))
         name_overlap = search & tokens(" ".join(names))
-        if not exact and not name_overlap and len(overlap) < 2:
+        semantic = (semantic_scores or {}).get(item["id"], 0.0)
+        if not exact and not name_overlap and len(overlap) < 2 and semantic < semantic_threshold:
             continue
-        score = 10 * exact + len(overlap) / max(1, len(search))
+        score = 10 * exact + len(overlap) / max(1, len(search)) + 0.5 * max(0.0, semantic)
         ranked.append((score, item.get("observed_at") or item["created_at"], item["id"], item))
     result = {"memories": [], "interpretation": "historical_observation_not_mastery_evidence"}
     for _, _, _, item in sorted(ranked, reverse=True)[:max(1, min(limit, MAX_MEMORIES))]:

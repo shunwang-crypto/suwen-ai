@@ -12,6 +12,13 @@ export type FlowItem =
   | { kind: "trace"; data: GraphTraceData };
 
 const NODE_LABELS: Record<string, string> = {
+  agent_collaboration: "协作规划",
+  delegate_agents: "分配任务",
+  collect_agent_results: "汇总成果",
+  submit_reviewed_plan: "提交合格计划",
+  publish_plan: "保存确认版本",
+  read_learning_context: "读取学习起点",
+  search_learning_memories: "检索相关学习记忆",
   weak_points: "画像定向",
   make_blueprint: "生成蓝图",
   confirm_blueprint: "蓝图确认",

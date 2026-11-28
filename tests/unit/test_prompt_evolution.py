@@ -186,3 +186,27 @@ async def test_evaluator_scores_the_real_native_artifact_without_showing_prompt_
     body = json.loads(judgment.messages[-1].content)
     assert body["artifact"] == "函数在一点的瞬时变化率"
     assert "policies" not in body and "version" not in body
+
+
+def test_legacy_prompt_hash_matches_pre_team_serialization():
+    import hashlib
+
+    bundle = load_prompt_bundle("edu-v1")
+    legacy = bundle.model_dump(mode="json", exclude={"team_policies"})
+    encoded = json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    assert bundle.identity["sha256"] == hashlib.sha256(encoded).hexdigest()
+
+
+async def test_team_reflection_preserves_all_roles_and_rejects_dropping_them():
+    baseline = load_prompt_bundle("edu-v2")
+    example = outcome("plan", "plan-tune", 0)
+    example.split = "tune"
+    teams = baseline.team_policies.model_copy(update={"reviewer": (*baseline.team_policies.reviewer, "核对混合练习的每个知识点。")})
+    value = {"policies": baseline.policies.model_dump(mode="json"), "team_policies": teams.model_dump(mode="json"), "rationale": "加强混合练习审查"}
+    model = JsonModel(value)
+    result, _ = await propose_candidate(baseline, [example], "edu-v3-test", EvaluationGateway(model))
+    assert result.team_policies == teams and result.parent_version == baseline.version
+    assert "team_policies" in json.loads(model.requests[0].messages[-1].content)
+    value.pop("team_policies")
+    with pytest.raises(ValueError, match="retain team"):
+        await propose_candidate(baseline, [example], "edu-v3-test", EvaluationGateway(JsonModel(value)))

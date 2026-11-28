@@ -116,3 +116,42 @@ async def test_delete_during_reflection_prevents_stale_write(client):
         assert (await session.scalars(select(LearnerInsight))).all() == []
         archive = await session.get(HarnessSession, thread)
         assert archive.native_archive == {}
+
+
+async def test_hybrid_recall_falls_back_and_discards_results_after_concurrent_control_change(client):
+    user, headers = await _register_login(client, "hybrid-memory")
+    _, sid = await _seed_kc_and_chat(uuid.UUID(user))
+    await reflect_session({}, user, user, sid, gateway=_FakeGateway())
+    state = {"user_id": user, "tenant_id": user}
+
+    class Embedder:
+        async def embed(self, texts):
+            return [[1.0, 0.0] for _ in texts]
+
+    service = LearnerMemoryService(Embedder(), semantic_enabled=True)
+    # A paraphrase with no lexical match is found semantically.
+    result = await service.search(state, "瞬间的变化快慢", [], 4)
+    assert result["retrieval_mode"] == "hybrid" and result["memories"]
+
+    class BrokenEmbedder:
+        async def embed(self, texts):
+            raise ValueError("embedding unavailable")
+
+    fallback = await LearnerMemoryService(BrokenEmbedder(), semantic_enabled=True).search(state, "导数定义", [], 4)
+    assert fallback["retrieval_mode"] == "lexical" and fallback["memories"]
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class SlowEmbedder(Embedder):
+        async def embed(self, texts):
+            started.set()
+            await release.wait()
+            return await super().embed(texts)
+
+    pending = asyncio.create_task(LearnerMemoryService(SlowEmbedder(), semantic_enabled=True).search(state, "导数定义", [], 4))
+    try:
+        await asyncio.wait_for(started.wait(), 10)
+        assert (await client.post("/api/preferences/personalization", headers=headers, json={"enabled": False})).status_code == 200
+    finally:
+        release.set()
+    result = await asyncio.wait_for(pending, 10)
+    assert result["memory_changed"] and not result["memories"]

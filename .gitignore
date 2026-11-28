@@ -27,6 +27,7 @@ exports/
 
 # data / artifacts
 *.lock.tmp
+.eduagents-check.lock
 gui-test-screenshots/
 # Local browser test artifacts
 test-results/

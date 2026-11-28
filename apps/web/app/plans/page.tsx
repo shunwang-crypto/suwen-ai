@@ -27,7 +27,8 @@ import {
 } from "@/components/common";
 import { FlowTimeline, type FlowItem } from "@/components/flow-timeline";
 import { PlanDetailPanel } from "@/components/plans/plan-detail-panel";
-import { ApiError } from "@/lib/api";
+import { AgentActivity, PlanReviewCard } from "@/components/plans/agent-activity";
+import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
   PLAN_GOAL_EXAMPLES,
@@ -74,6 +75,8 @@ function PlansView() {
   const [flowError, setFlowError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
 
   // 计划列表只有一个请求入口；reload 会使旧响应失效（latest-wins）。
   const plansListRes = useApiResource<PlanListItem[]>("/api/plans", {
@@ -132,6 +135,7 @@ function PlansView() {
     if (requestedCreate === "1" && (requestedMode || requestedKbId)) return;
     const pending = Parts.readPendingPlan(userId);
     if (!pending) return;
+    setActiveThread(pending.thread_id ?? pending.interrupt?.thread_id ?? null);
     setGoal(pending.form.goal);
     setCurrentLevel(pending.form.currentLevel ?? "");
     setTargetOutcome(pending.form.targetOutcome ?? "");
@@ -144,7 +148,9 @@ function PlansView() {
     setShowCreate(true);
     setInterruptData(pending.interrupt ?? null);
     setPhase(
-      pending.status === "generating"
+      pending.status === "interrupted"
+        ? "idle"
+        : pending.status === "generating"
         ? "streaming"
         : pending.status === "resuming"
           ? "resuming"
@@ -188,6 +194,14 @@ function PlansView() {
           signal: controller.signal,
         })) {
           switch (msg.event) {
+            case "task_started": {
+              const data = msg.data as { thread_id: string };
+              setActiveThread(data.thread_id);
+              setTaskStatus("running");
+              const pending = Parts.readPendingPlan(userId);
+              if (pending) Parts.writePendingPlan(userId, { ...pending, thread_id: data.thread_id });
+              break;
+            }
             case "node_update":
               setTimeline((prev) => [
                 ...prev,
@@ -205,6 +219,7 @@ function PlansView() {
                 const interrupt = msg.data as GraphInterruptData;
                 const pending = Parts.readPendingPlan(userId);
                 Parts.writePendingPlan(userId, {
+                  thread_id: interrupt.thread_id,
                   status: "await_confirm",
                   interrupt,
                   startedAt: pending?.startedAt ?? Date.now(),
@@ -222,12 +237,14 @@ function PlansView() {
                 setInterruptData(interrupt);
               }
               setPhase("await_confirm");
+              setTaskStatus("awaiting_confirmation");
               break;
             case "done": {
               const d = msg.data as GraphDoneData;
               const planId = d.result?.plan_id;
               Parts.clearPendingPlan(userId);
               setPhase("idle");
+              setTaskStatus("completed");
               setInterruptData(null);
               if (planId) {
                 setNotice(null);
@@ -241,14 +258,11 @@ function PlansView() {
             case "error": {
               const d = msg.data as ErrorEventData;
               setFlowError(d.message || d.code);
+              setTaskStatus("failed");
               const pending = Parts.readPendingPlan(userId);
-              if (path.includes("/api/threads/") && pending?.interrupt) {
-                Parts.writePendingPlan(userId, { ...pending, status: "await_confirm" });
-                setPhase("await_confirm");
-              } else {
-                Parts.clearPendingPlan(userId);
-                setPhase("idle");
-              }
+              if (pending?.thread_id) Parts.writePendingPlan(userId, { ...pending, status: "interrupted" });
+              else Parts.clearPendingPlan(userId);
+              setPhase("idle");
               break;
             }
             default:
@@ -265,13 +279,10 @@ function PlansView() {
               : "网络异常，请稍后重试",
         );
         const pending = Parts.readPendingPlan(userId);
-        if (path.includes("/api/threads/") && pending?.interrupt) {
-          Parts.writePendingPlan(userId, { ...pending, status: "await_confirm" });
-          setPhase("await_confirm");
-        } else {
-          Parts.clearPendingPlan(userId);
-          setPhase("idle");
-        }
+        setTaskStatus("failed");
+        if (pending?.thread_id) Parts.writePendingPlan(userId, { ...pending, status: "interrupted" });
+        else Parts.clearPendingPlan(userId);
+        setPhase("idle");
       } finally {
         abortRef.current = null;
         // 流意外结束（无 done/interrupt）时兜底回到空闲态
@@ -291,6 +302,61 @@ function PlansView() {
       planMode,
     ],
   );
+
+  useEffect(() => {
+    if (!activeThread) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const value = await apiJson<{ status: string; events: GraphTraceData[]; pending?: Omit<GraphInterruptData, "thread_id" | "resume_url"> | null }>(`/api/threads/${encodeURIComponent(activeThread)}/agents`);
+        if (disposed) return;
+        setTaskStatus(value.status);
+        if (!abortRef.current) {
+          setTimeline(value.events.map((data) => ({ kind: "trace", data })));
+          const pending = Parts.readPendingPlan(userId);
+          if (value.status === "awaiting_confirmation" && value.pending?.plan) {
+            const interrupt = { ...value.pending, thread_id: activeThread, resume_url: `/api/threads/${activeThread}/resume` } as GraphInterruptData;
+            setInterruptData(interrupt);
+            setPhase("await_confirm");
+            if (pending) Parts.writePendingPlan(userId, { ...pending, status: "await_confirm", interrupt });
+          } else if (value.status === "failed" || value.status === "cancelled") {
+            setPhase("idle");
+          } else if (value.status === "running") {
+            setPhase("streaming");
+          } else if (value.status === "completed" && pending) {
+            Parts.clearPendingPlan(userId);
+            setPhase("idle");
+            reloadPlans();
+          }
+        }
+        if (["completed", "failed", "cancelled", "awaiting_confirmation"].includes(value.status)) clearInterval(timer);
+      } catch { /* A missing historical task has no collaboration activity. */ }
+    };
+    const timer = setInterval(() => void poll(), 2000);
+    void poll();
+    return () => { disposed = true; clearInterval(timer); };
+  }, [activeThread, reloadPlans, userId, phase]);
+
+  const stopTask = async () => {
+    if (!activeThread) return;
+    try {
+      await apiJson(`/api/threads/${encodeURIComponent(activeThread)}/cancel`, { method: "POST" });
+      abortRef.current?.abort();
+      const pending = Parts.readPendingPlan(userId);
+      if (pending?.thread_id) Parts.writePendingPlan(userId, { ...pending, status: "interrupted" });
+      setTaskStatus("cancelled");
+      setPhase("idle");
+      setNotice("已停止生成，已完成的研究记录仍可用于重试。");
+    } catch (error) { setFlowError(error instanceof Error ? error.message : "停止失败，请重试"); }
+  };
+
+  const retryTask = () => {
+    if (!activeThread) return;
+    setFlowError(null);
+    setNotice(null);
+    setPhase("streaming");
+    void consume(`/api/threads/${encodeURIComponent(activeThread)}/retry`, {});
+  };
 
   const startPlan = (e: FormEvent) => {
     e.preventDefault();
@@ -331,6 +397,8 @@ function PlansView() {
       },
     });
     setTimeline([]);
+    setActiveThread(null);
+    setTaskStatus(null);
     setInterruptData(null);
     setFlowError(null);
     setNotice(null);
@@ -679,8 +747,14 @@ function PlansView() {
 
         {/* 右：流程 / 日历 */}
         <div className="min-w-0 flex-1 space-y-4">
+          <AgentActivity items={timeline} />
+          <PlanReviewCard review={interruptData?.review} />
+          {activeThread && !selected && <div className="flex gap-2">
+            {busy && <button type="button" onClick={() => void stopTask()} className="rounded-control border border-line px-3 py-2 text-body-sm text-ink-secondary">停止生成</button>}
+            {!busy && (taskStatus === "failed" || taskStatus === "cancelled") && <button type="button" onClick={retryTask} className="rounded-control bg-brand-600 px-3 py-2 text-body-sm text-white">继续已有任务</button>}
+          </div>}
           {(timeline.length > 0 || busy) && (
-            <FlowTimeline items={timeline} streaming={busy} />
+            <FlowTimeline items={timeline.filter((item) => item.kind !== "trace" || item.data.type !== "agent")} streaming={busy} />
           )}
 
           {phase === "await_confirm" && interruptData?.plan && (
@@ -696,7 +770,7 @@ function PlansView() {
           )}
           {phase === "resuming" && (
             <p className="flex items-center gap-2 text-sm text-ink-muted">
-              <Spinner /> 正在保存计划…
+              <Spinner /> 正在核验确认版本并保存计划…
             </p>
           )}
 

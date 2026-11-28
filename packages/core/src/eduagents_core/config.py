@@ -158,6 +158,15 @@ class Settings(BaseSettings):
     harness_max_concurrency: int = Field(default=8, ge=1, le=32)
     harness_max_model_calls: int = Field(default=16, ge=2, le=40)
     harness_context_window_tokens: int = Field(default=32768, ge=4096, le=262144)
+    agent_collaboration_enabled: bool = True
+    agent_collaboration_max_agents: int = Field(default=8, ge=3, le=24)
+    agent_collaboration_max_parallel: int = Field(default=3, ge=1, le=8)
+    agent_collaboration_max_calls: int = Field(default=96, ge=12, le=600)
+    agent_collaboration_max_cost_cny: float = Field(default=3.0, gt=0, le=100)
+    agent_collaboration_max_revisions: int = Field(default=2, ge=0, le=5)
+    agent_collaboration_timeout_seconds: float = Field(default=360.0, gt=0, le=1200)
+    memory_semantic_mode: Literal["auto", "local", "disabled"] = "auto"
+    memory_model_cache_dir: str = "~/.cache/eduagents/models"
     # Immutable prompt resources: select a new version for new tasks; existing
     # sessions keep the version and digest saved in their checkpoint.
     education_prompt_version: str = Field(default="edu-v1", pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")

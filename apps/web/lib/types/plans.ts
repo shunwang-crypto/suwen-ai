@@ -26,6 +26,9 @@ export interface PlanSkillGap {
 }
 
 export interface PlanTask {
+  step_key?: string;
+  learning_phase?: "baseline" | "learn" | "practice" | "review" | "assessment";
+  depends_on?: string[];
   title: string;
   objective?: string;
   instructions?: string[];
@@ -51,6 +54,14 @@ export interface PlanTask {
   /** 目标起步计划的练习只做校准，不更新正式掌握度。 */
   evidence_policy?: "mastery_eligible" | "calibration_only";
   concept_status?: "course_grounded" | "provisional";
+}
+
+export interface PlanReview {
+  approved: boolean;
+  summary: string;
+  checks?: Record<string, "pass" | "fail" | "not_applicable">;
+  issues?: Array<{ code: string; message: string; task_keys: string[]; suggestion: string }>;
+  draft_digest?: string;
 }
 
 export interface PlanTaskLockBlocker {

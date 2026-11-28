@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
 import uuid
 from datetime import UTC, datetime
 
-from eduagents_core.education.memory import fingerprint, recall
+from eduagents_core.education.memory import (
+    effective_status,
+    fingerprint,
+    latest_observations,
+    recall,
+)
 from sqlalchemy import select, text
 
 from .db import tenant_session
@@ -63,6 +70,9 @@ def insight_payload(row, name="", aliases=None):
 
 
 class LearnerMemoryService:
+    def __init__(self, embedder=None, *, semantic_enabled=False, timeout=4.0):
+        self.embedder, self.semantic_enabled, self.timeout = embedder, semantic_enabled, timeout
+
     async def snapshot(self, state):
         uid, tid = uuid.UUID(state["user_id"]), uuid.UUID(state["tenant_id"])
         async with tenant_session(tid) as session:
@@ -86,6 +96,8 @@ class LearnerMemoryService:
             pref = await session.get(UserPreference, uid)
             if pref is not None and not pref.personalization_enabled:
                 return {"memories": [], "disabled": True}
+            policy = await session.get(LearnerMemoryPolicy, uid)
+            revision = policy.revision if policy else 0
             stmt = (
                 select(LearnerInsight, KnowledgeComponent.canonical_name, KnowledgeComponent.aliases)
                 .outerjoin(KnowledgeComponent, KnowledgeComponent.id == LearnerInsight.kc_id)
@@ -96,4 +108,33 @@ class LearnerMemoryService:
             if kb_ids:
                 stmt = stmt.where(KnowledgeComponent.kb_id.in_([uuid.UUID(k) for k in kb_ids]))
             items = [insight_payload(row, name, aliases) for row, name, aliases in (await session.execute(stmt)).all()]
-        return recall(items, query[:500], kc_names[:8], limit=limit)
+        scores, mode = {}, "lexical"
+        if self.semantic_enabled and self.embedder is not None and query.strip():
+            eligible = [v for v in latest_observations(items) if effective_status(v, datetime.now(UTC)) == "active"]
+            if eligible:
+                try:
+                    vectors = await asyncio.wait_for(self.embedder.embed(
+                        [query[:500], *[(v.get("kc_name", "") + " " + v["text"])[:800] for v in eligible]]
+                    ), self.timeout)
+                    if len(vectors) != len(eligible) + 1:
+                        raise ValueError("memory embedding count mismatch")
+                    query_vector = vectors[0]
+                    query_norm = math.sqrt(sum(v * v for v in query_vector))
+                    for item, vector in zip(eligible, vectors[1:], strict=True):
+                        if len(vector) != len(query_vector):
+                            raise ValueError("memory embedding dimension mismatch")
+                        norm = math.sqrt(sum(v * v for v in vector))
+                        value = sum(a * b for a, b in zip(query_vector, vector, strict=True)) / max(query_norm * norm, 1e-12)
+                        if not math.isfinite(value):
+                            raise ValueError("invalid memory embedding")
+                        scores[item["id"]] = value
+                    mode = "hybrid"
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Retrieval is optional; no secret-bearing provider errors enter the response.
+                    scores = {}
+                current = await self.snapshot(state)
+                if current["revision"] != revision or not current["enabled"]:
+                    return {"memories": [], "memory_changed": True, "retrieval_mode": mode}
+        return {**recall(items, query[:500], kc_names[:8], limit=limit, semantic_scores=scores), "retrieval_mode": mode}

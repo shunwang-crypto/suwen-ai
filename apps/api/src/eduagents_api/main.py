@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from arq import create_pool
@@ -140,12 +141,22 @@ async def lifespan(app: FastAPI):
             )
             return (results, from_cache) if results else None
 
+        memory_embedder = getattr(app.state, "embedder", None)
+        semantic_enabled = settings.embedding_mode == "live" and settings.memory_semantic_mode != "disabled"
+        if settings.memory_semantic_mode == "local":
+            try:
+                from eduagents_core.embedding.memory_local import LocalMemoryEmbedder
+                memory_embedder = await asyncio.to_thread(LocalMemoryEmbedder, settings.memory_model_cache_dir)
+                semantic_enabled = True
+            except Exception:
+                log.warning("local_memory_embeddings_unavailable")
+                memory_embedder, semantic_enabled = None, False
         deps = EducationDeps(
             settings=settings,
             gateway=app.state.gateway,
             retrieval=app.state.retrieval,
             web_search=_web_search if tavily.available else None,
-            memory=LearnerMemoryService(),
+            memory=LearnerMemoryService(memory_embedder, semantic_enabled=semantic_enabled),
         )
         app.state.harness = HarnessRuntime(settings, deps)
         await app.state.harness.start()

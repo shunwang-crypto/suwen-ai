@@ -208,6 +208,7 @@ def install_error_handlers(app: FastAPI) -> None:
             "VISION_ROUTE_UNAVAILABLE": "视觉模型通道暂时不可用，请稍后重试",
             "PLAN_ROUTE_UNAVAILABLE": "学习计划模型通道暂时不可用，请稍后重试",
             "MODEL_REQUEST_INVALID": "模型请求格式无效，请修改后重试",
+            "MODEL_BALANCE_INSUFFICIENT": "模型供应商账户余额不足，请充值后重试",
             "MODEL_STREAM_INTERRUPTED": "模型输出已中断，请重试",
             "FILE_SIGNATURE_MISMATCH": "文件内容与扩展名不一致",
             "EMPTY_FILE": "不能上传空文件",

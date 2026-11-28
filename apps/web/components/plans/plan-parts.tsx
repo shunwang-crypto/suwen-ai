@@ -19,7 +19,8 @@ export type Phase = "idle" | "streaming" | "await_confirm" | "resuming";
 export const PENDING_PLAN_KEY = "suwen:pending-plan-draft";
 
 export interface PendingPlanDraft {
-  status: "generating" | "await_confirm" | "resuming";
+  thread_id?: string;
+  status: "generating" | "await_confirm" | "resuming" | "interrupted";
   interrupt?: GraphInterruptData;
   startedAt: number;
   form: {
@@ -44,12 +45,13 @@ export function readPendingPlan(userId: string): PendingPlanDraft | null {
     const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<PendingPlanDraft>;
-    const validStatus = ["generating", "await_confirm", "resuming"].includes(
+    const validStatus = ["generating", "await_confirm", "resuming", "interrupted"].includes(
       value.status ?? "",
     );
-    const stale = !value.startedAt || Date.now() - value.startedAt > 30 * 60 * 1000;
+    const retention = value.thread_id ? 7 * 24 * 60 * 60 * 1000 : 30 * 60 * 1000;
+    const stale = !value.startedAt || Date.now() - value.startedAt > retention;
     const invalidInterrupt =
-      value.status !== "generating" &&
+      (value.status === "await_confirm" || value.status === "resuming") &&
       (!value.interrupt?.thread_id?.startsWith("plan:") ||
         !value.interrupt.resume_url ||
         !value.interrupt.plan);

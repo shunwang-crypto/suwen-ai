@@ -45,6 +45,7 @@ describe("plan editing sessions", () => {
     const second = deferred<PlanToggleResult>();
     let reads = 0;
     vi.mocked(apiJson).mockImplementation((path) => {
+      if (path.endsWith("/agents")) return Promise.resolve({ events: [] });
       if (path.endsWith("/adjustments")) return Promise.resolve([]);
       if (path.includes("task-1/toggle")) return first.promise;
       if (path.includes("task-2/toggle")) return second.promise;
@@ -72,6 +73,7 @@ describe("plan editing sessions", () => {
     const toggle = deferred<PlanToggleResult>();
     const replacement = deferred<PlanDetail>();
     vi.mocked(apiJson).mockImplementation((path) => {
+      if (path.endsWith("/agents")) return Promise.resolve({ events: [] });
       if (path.endsWith("/adjustments")) return Promise.resolve([]);
       if (path.includes("/toggle")) return toggle.promise;
       if (path === "/api/plans/plan-b") return replacement.promise;
@@ -90,6 +92,7 @@ describe("plan editing sessions", () => {
 
   it("notifies course summaries after an adjustment", async () => {
     vi.mocked(apiJson).mockImplementation((path) => {
+      if (path.endsWith("/agents")) return Promise.resolve({ events: [] });
       if (path.endsWith("/adjustments")) return Promise.resolve([]);
       if (path.endsWith("/adjust")) return Promise.resolve({ inserted: [], reason: "无需调整", adjustment_id: null });
       return Promise.resolve(plan());

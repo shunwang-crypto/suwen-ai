@@ -18,6 +18,7 @@ import {
   fmtPct,
 } from "@/components/common";
 import { KcDependencyPath } from "@/components/plans/kc-dependency-path";
+import { SavedAgentActivity } from "@/components/plans/agent-activity";
 import {
   PlanCalendar,
   STAGE_COLORS,
@@ -321,6 +322,7 @@ function PlanDetailContent({
 
   return (
     <>
+      <SavedAgentActivity planId={planId} />
       <Card
         title={<span className="block max-w-100 truncate">{goal}</span>}
         extra={

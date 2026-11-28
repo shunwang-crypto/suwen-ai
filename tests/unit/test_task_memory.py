@@ -130,3 +130,19 @@ async def test_memory_tool_cannot_request_another_user_or_unbounded_results():
     result = await AgentTask("qa", deps(model, memory=memory)).run("denied-memory", {"user_id": "owner", "query": "导数"})
     assert result.status == "completed"
     assert memory.searches == []
+
+
+def test_semantic_recall_adds_paraphrases_without_reviving_suppressed_or_corrected_history():
+    now = datetime.now(UTC)
+    def item(id, kc, text, **extra):
+        return dict(id=id, kc_id=kc, kc_name="", text=text, kind="confused", created_at=now,
+                    observed_at=now, source="chat_reflection", **extra)
+    items = [item("related", "kc-a", "分母被我直接相加"),
+             item("suppressed", "kc-b", "相加", suppressed=True),
+             item("old", "kc-c", "老错误"),
+             item("correction", "kc-c", "已经学会", user_corrected=True, status="obsolete")]
+    assert not recall(items, "异分母分数的通分", [], now=now)["memories"]
+    result = recall(items, "异分母分数的通分", [], now=now,
+                    semantic_scores=dict.fromkeys([v["id"] for v in items], 0.9))
+    assert [v["id"] for v in result["memories"]] == ["related"]
+    assert result["interpretation"] == "historical_observation_not_mastery_evidence"

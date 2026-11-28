@@ -129,6 +129,34 @@ async def test_stub_mode_is_deterministic_and_banner_marked(tmp_path):
     assert r1.prompt_tokens > 0
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_provider_balance_failure_is_explicit_and_never_served_as_stub(tmp_path, streaming):
+    from dataclasses import replace
+
+    import httpx
+    from openai import AsyncOpenAI
+
+    secret = "private-test-credential"
+    settings = make_settings(tmp_path, gateway_mode="live", standard_api_key=secret,
+                             standard_base_url="https://api.deepseek.com", gateway_replay_fallback_stub=True)
+    def respond(request):
+        return httpx.Response(402, json={"error": {"message": "Insufficient Balance " + secret}})
+    client = AsyncOpenAI(api_key=secret, base_url=settings.standard_base_url,
+                         http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)))
+    gateway = OpenAIGateway(settings)
+    gateway._clients[Tier.standard] = client
+    try:
+        with pytest.raises(GatewayError, match="MODEL_BALANCE_INSUFFICIENT") as caught:
+            request = replace(req(), allow_tier_fallback=False)
+            if streaming:
+                _ = [v async for v in gateway.stream_chat(request)]
+            else:
+                await gateway.chat(request)
+        assert secret not in str(caught.value)
+    finally:
+        await client.close()
+
+
 async def test_stub_json_mode_returns_valid_json(tmp_path):
     import json
 

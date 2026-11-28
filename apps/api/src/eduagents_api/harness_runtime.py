@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+import weakref
 from contextlib import asynccontextmanager
 
 from eduagents_core.gateway.base import ChatResult, StreamDelta
@@ -15,12 +16,14 @@ from sqlalchemy import text
 
 from .db import tenant_session
 
-_KINDS = ("qa", "quiz", "plan", "tutor", "chat")
+_KINDS = ("qa", "quiz", "plan", "tutor", "chat", "researcher", "planner", "reviewer")
 
 
 class PostgresTaskStore:
-    def __init__(self, pool):
+    def __init__(self, pool, child_slots=None):
         self.pool = pool
+        self.child_slots = child_slots
+        self._save_locks = weakref.WeakValueDictionary()
 
     async def load(self, thread_id):
         _, user_id, _ = HarnessRuntime.parse_thread_id(thread_id)
@@ -51,9 +54,19 @@ class PostgresTaskStore:
         )
 
     async def save(self, thread_id, record):
+        # Parent checkpoints and concurrent child completions share one record.
+        # Serialize snapshots so an earlier transaction cannot overwrite a later one.
+        lock = self._save_locks.setdefault(thread_id, asyncio.Lock())
+        async with lock:
+            await self._save(thread_id, record)
+
+    async def _save(self, thread_id, record):
         kind, user_id, _ = HarnessRuntime.parse_thread_id(thread_id)
         if record.state.get("user_id", user_id) != user_id:
             raise ValueError("harness owner mismatch")
+        parent = record.state.get("_parent_thread_id")
+        if parent and HarnessRuntime.parse_thread_id(parent)[1] != user_id:
+            raise ValueError("harness parent owner mismatch")
         async with tenant_session(user_id) as session:
             from .learner_memory import lock_memory
             from .models import LearnerMemoryPolicy
@@ -67,11 +80,12 @@ class PostgresTaskStore:
             await session.execute(
                 text("""
                 INSERT INTO harness_sessions
-                    (thread_id,tenant_id,user_id,kind,state,status,pending,native_session_id,native_archive)
-                VALUES (:id,:uid,:uid,:kind,CAST(:state AS jsonb),:status,CAST(:pending AS jsonb),:native_id,CAST(:archive AS jsonb))
+                    (thread_id,tenant_id,user_id,kind,state,status,pending,native_session_id,native_archive,parent_thread_id,agent_name)
+                VALUES (:id,:uid,:uid,:kind,CAST(:state AS jsonb),:status,CAST(:pending AS jsonb),:native_id,CAST(:archive AS jsonb),:parent,:agent_name)
                 ON CONFLICT (thread_id) DO UPDATE SET state=EXCLUDED.state,status=EXCLUDED.status,
                     pending=EXCLUDED.pending,native_session_id=EXCLUDED.native_session_id,
-                    native_archive=EXCLUDED.native_archive,updated_at=now()
+                    native_archive=EXCLUDED.native_archive,parent_thread_id=EXCLUDED.parent_thread_id,
+                    agent_name=EXCLUDED.agent_name,updated_at=now()
                 WHERE harness_sessions.user_id=EXCLUDED.user_id
             """),
                 {
@@ -85,6 +99,8 @@ class PostgresTaskStore:
                     else None,
                     "native_id": record.native_session_id,
                     "archive": json.dumps(record.native_archive),
+                    "parent": record.state.get("_parent_thread_id") or None,
+                    "agent_name": record.state.get("_agent_name") or "",
                 },
             )
 
@@ -111,7 +127,9 @@ class HarnessRuntime:
         self.settings, self.deps = settings, deps
         self._pool = None
         self._slots = asyncio.Semaphore(settings.harness_max_concurrency)
+        self._child_slots = asyncio.Semaphore(settings.agent_collaboration_max_parallel)
         self._store = None
+        self._active = {}
 
     async def start(self):
         validate_installation()
@@ -119,31 +137,84 @@ class HarnessRuntime:
             self.settings.database_url.replace("postgresql+asyncpg://", "postgresql://"),
             open=False,
             min_size=1,
-            max_size=self.settings.harness_max_concurrency,
+            # Parents hold advisory-lock connections while awaiting children.
+            # Reserve separate capacity so children never wait for parent slots.
+            max_size=self.settings.harness_max_concurrency + self.settings.agent_collaboration_max_parallel,
             kwargs={"autocommit": True},
         )
         await self._pool.open()
-        self._store = PostgresTaskStore(self._pool)
+        self._store = PostgresTaskStore(self._pool, self._child_slots)
 
     async def stop(self):
+        active = {task for tasks in self._active.values() for task in tasks}
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
         if self._pool:
             await self._pool.close()
 
     async def load_task(self, thread_id):
         return await self._store.load(thread_id)
 
+    async def task_for(self, kind, thread_id, payload):
+        parent, name = "", ""
+        if kind in {"quiz", "tutor"} and (payload or {}).get("plan_id"):
+            _kind, uid, local = self.parse_thread_id(thread_id)
+            candidate = self.thread_id("plan", uid, str(payload["plan_id"]))
+            original = await self.load_task(candidate)
+            if original.state.get("plan_confirmed") and original.status == "completed":
+                parent, name = candidate, f"{kind}-{local.replace('-', '')[:12]}"
+        return AgentTask(kind, self.deps, self._store, parent_thread_id=parent, agent_name=name)
+
+    async def learning_children(self, thread_id):
+        _, uid, _ = self.parse_thread_id(thread_id)
+        async with tenant_session(uid) as session:
+            rows = (await session.execute(text(
+                "SELECT thread_id,kind,agent_name,status,native_session_id FROM harness_sessions "
+                "WHERE parent_thread_id=:parent AND user_id=:uid AND kind IN ('quiz','tutor') ORDER BY updated_at"
+            ), {"parent": thread_id, "uid": uid})).mappings().all()
+        return [{"id": r["thread_id"], "name": r["agent_name"], "role": r["kind"], "status": r["status"],
+                 "native_session_id": r["native_session_id"], "summary": "计划关联的练习" if r["kind"] == "quiz" else "计划关联的分级辅导"} for r in rows]
+
     async def run_task(self, kind, thread_id, payload=None, *, resume=None):
-        async with self._slots:
-            return await AgentTask(kind, self.deps, self._store).run(
+        async with self._activity(thread_id), self._slots:
+            task = await self.task_for(kind, thread_id, payload)
+            return await task.run(
                 thread_id, payload, resume=resume
             )
 
-    async def stream_task(self, kind, thread_id, payload=None, *, resume=None):
-        async with self._slots:
-            async for event in AgentTask(kind, self.deps, self._store).stream(
-                thread_id, payload, resume=resume
-            ):
+    async def stream_task(self, kind, thread_id, payload=None, *, resume=None, retry=False):
+        async with self._activity(thread_id), self._slots:
+            task = await self.task_for(kind, thread_id, payload)
+            async for event in task.stream(thread_id, payload, resume=resume, retry=retry):
                 yield event
+
+    @asynccontextmanager
+    async def _activity(self, thread_id):
+        current = asyncio.current_task()
+        self._active.setdefault(thread_id, set()).add(current)
+        try:
+            yield
+        finally:
+            tasks = self._active.get(thread_id)
+            if tasks is not None:
+                tasks.discard(current)
+                if not tasks:
+                    self._active.pop(thread_id, None)
+
+    async def cancel_task(self, thread_id):
+        active = set(self._active.get(thread_id) or ()) - {asyncio.current_task()}
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+        async with self._store.lock(thread_id):
+            record = await self._store.load(thread_id)
+            if record.status not in {"completed", "cancelled"}:
+                record.status, record.pending = "cancelled", None
+                await self._store.save(thread_id, record)
+            return record
 
     async def stream_chat(self, req, *, thread_id, gateway=None, kb_ids=()):
         async with self._slots, self._store.lock(thread_id):

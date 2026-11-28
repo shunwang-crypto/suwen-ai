@@ -371,7 +371,8 @@ class HarnessGateway:
             for index, call in enumerate(result.tool_calls, 2 if result.reasoning_content else 1):
                 fn = call["function"]
                 if fn["name"] not in self._tools:
-                    raise GatewayError("HARNESS_TOOL_DENIED", "模型请求了未授权的工具")
+                    name = fn["name"] if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", fn["name"]) else "unknown"
+                    raise GatewayError("HARNESS_TOOL_DENIED", "模型请求了未授权的工具：" + name)
                 await emit({"type": "block-start", "index": index, "blockType": "tool-call"})
                 await emit(
                     {

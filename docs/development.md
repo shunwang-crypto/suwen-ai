@@ -94,11 +94,20 @@ token 单价用于预算估算，实际费用以模型提供方账单为准。
 自动压缩请求也计入模型调用上限。超时和取消回收子进程并保存可用原生检查点。
 SDK 处于预览阶段，升级时同时验证 profile patch、原生日志、压缩及工具协议。
 
+新协作计划使用 `EDUCATION_PROMPT_VERSION=edu-v2` 和 `AGENT_COLLABORATION_ENABLED=true`。
+默认最多 8 个子 Agent、全局 3 个并发子任务、96 次共享逻辑调用、3 元估算费用和 2 次规划
+返工。父子 Agent 的实际循环均由 DSH 执行；`edu-v1` 和已准入的单会话任务继续按原架构恢复。
+协调任务的整体超时默认 360 秒（`AGENT_COLLABORATION_TIMEOUT_SECONDS`），单个子会话仍
+使用 Harness 的 180 秒限制，避免多个角色串联时过早终止。
+配置详见 `.env.example`。本地语义记忆可执行 `make install-memory` 后设置
+`MEMORY_SEMANTIC_MODE=local`，首次启动下载中文模型到 `MEMORY_MODEL_CACHE_DIR`；嵌入
+不可用时保持词法召回。auto 使用已配置 live 嵌入，disabled 关闭语义计算。
+
 ~~~bash
 make migrate
 ~~~
 
-`make migrate` 只应用 Alembic，包括 `0040` 原生任务和 `0041` 记忆迁移。已有旧 LangGraph checkpoint
+`make migrate` 只应用 Alembic，包括 `0040` 原生任务、`0041` 记忆和 `0042` 协作者迁移。已有旧 LangGraph checkpoint
 且需要恢复其待确认业务状态时，停 API/Worker 后显式执行离线导入：
 
 ~~~bash
@@ -127,14 +136,29 @@ make test-unit
 make eval-prompts-smoke
 # 显式调用已配置的真实模型；候选与报告保存在临时目录。
 $HOME/miniforge3/envs/eduagents/bin/python eval/run_prompt_evolution.py \
-  --live --propose-version edu-v2 --candidate-output /tmp/edu-v2.json \
+  --live --propose-version edu-v3-candidate --candidate-output /tmp/edu-v3-candidate.json \
   --repetitions 2 --max-calls 600 --max-cost-cny 10 \
   --output /tmp/eduagents-prompt-comparison.json
 ~~~
 
 `--live` 的费用上限覆盖主 Agent、压缩、独立评审和候选反思；达到上限后停止新调用，
 最后一个在途调用仍按实际费用计入。CLI 在固定合成资料上比较教学策略，不访问应用数据库。
-已有候选可用 `--candidate /tmp/edu-v2.json` 代替 `--propose-version` 和 `--candidate-output`。
+已有候选可用 `--candidate /tmp/edu-v3-candidate.json` 代替 `--propose-version` 和 `--candidate-output`。
+edu-v2 的进化候选必须保留四个协作角色策略；固定权限与程序检查不由模型修改。
+
+架构对照使用自编合成集，默认只运行留出案例，可用 `--case-id` 选择代表案例：
+
+~~~bash
+make eval-agents-smoke
+$HOME/miniforge3/envs/eduagents/bin/python eval/run_agent_ablation.py \
+  --live --case-id plan-holdout-prerequisite --case-id plan-holdout-observable \
+  --repetitions 2 --max-calls 600 --max-cost-cny 10 \
+  --output /tmp/eduagents-agent-ablation.json
+~~~
+
+直接生成不具有工具确认/恢复能力；比较的质量来自同一评审对实际成果的匿名评分。
+报告另列契约检查、失败、调用和墙钟耗时。所有真实调用包括评审都消耗预算，报告不会写
+入学习历史；开发桩仅覆盖协议，不能用于宣称协作质量提升。
 
 记忆回归使用合成数据，不调用真实模型、不写应用历史：
 
@@ -186,7 +210,13 @@ INTEGRATION=1 "$HOME/miniforge3/envs/eduagents/bin/python" -m pytest tests/integ
 make test-web
 ~~~
 
-该命令运行 Web 单测、TypeScript、ESLint 和 Next.js 构建。直接修改 `apps/web` 前先读
+该命令运行 Web 单测、TypeScript 和 ESLint。Web 单测按文件串行运行，生产构建用
+`make build-web` 单独执行。单测、集成、迁移测试、评测入口和构建通过 Linux/WSL 的 `flock`
+共用当前工作区的锁，即使从不同终端运行也会排队。可用 `make test-unit TEST=路径` 或
+`make test-integration TEST=路径` 只验证改动涉及的测试。测试使用开发替身，不加载本地记忆
+嵌入模型，Harness 默认两条顶层并发、一个协作子任务并发。
+
+直接修改 `apps/web` 前先读
 `apps/web/AGENTS.md`，并按要求查阅当前安装版本的 Next.js 本地文档。
 
 ## Migration 规则

@@ -505,6 +505,12 @@ def _coerce_task(raw: object) -> dict | None:
         result["practice_count"] = practice_count
     if difficulty is not None:
         result["difficulty"] = difficulty
+    # Stable model-facing keys express dependencies independently of server UUIDs.
+    for key in ("step_key", "learning_phase"):
+        if isinstance(raw.get(key), str):
+            result[key] = raw[key][:64]
+    if isinstance(raw.get("depends_on"), list):
+        result["depends_on"] = [v[:64] for v in raw["depends_on"][:12] if isinstance(v, str)]
     return result
 
 

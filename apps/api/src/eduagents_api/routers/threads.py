@@ -101,6 +101,7 @@ async def stream_task_run(
     payload: dict | None,
     resume=None,
     trace_prelude: list[dict] | None = None,
+    retry=False,
 ):
     """原生任务 → SSE 事件流 (§6 协议): node_update/trace_event/interrupt/done。
     quiz/plan 完成时在 done 前落库并回传结果。M3-D2 的 interrupt→resume 协议载体。
@@ -110,10 +111,14 @@ async def stream_task_run(
     """
 
     async def gen():
+        yield {"event": "task_started", "data": _sse({"thread_id": thread_id, "status": "running"})}
         for tr in trace_prelude or []:
             yield {"event": "trace_event", "data": _sse(tr)}
         try:
-            async for ev in runtime.stream_task(kind, thread_id, payload, resume=resume):
+            options = {"resume": resume}
+            if retry:
+                options["retry"] = True
+            async for ev in runtime.stream_task(kind, thread_id, payload, **options):
                 if ev["kind"] == "token":
                     # 图内真流式 token (目前 qa generate 写出; 其余图无 writer 即无此事件)
                     yield {
@@ -150,6 +155,9 @@ async def stream_task_run(
                     return
                 else:  # end
                     state = ev["state"]
+                    if kind != "quiz" and state.get("failure_code"):
+                        from eduagents_core.gateway.base import GatewayError
+                        raise GatewayError(state["failure_code"], state.get("failure_message") or "任务未完成，请查看审查问题后重试")
                     _kind, _uid, local_id = runtime.parse_thread_id(thread_id)
                     result: dict | None = None
                     outcome: str | None = None
@@ -256,4 +264,61 @@ async def resume_thread(
         raise HTTPException(status_code=404, detail="NOT_FOUND") from None
     if user_id != str(ctx.user_id):
         raise HTTPException(status_code=404, detail="NOT_FOUND")  # 不泄漏存在性
+    if kind not in {"plan", "quiz", "qa", "tutor", "chat"}:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
     return await stream_task_run(runtime, kind, thread_id, ctx, None, resume=body.value)
+
+
+def _owned_root(runtime, thread_id, ctx):
+    try:
+        kind, uid, _ = runtime.parse_thread_id(thread_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="NOT_FOUND") from None
+    if uid != str(ctx.user_id) or kind not in {"plan", "quiz", "qa", "tutor", "chat"}:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return kind
+
+
+@router.get("/{thread_id}/agents")
+async def task_agents(thread_id: str, request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    runtime = getattr(request.app.state, "harness", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="HARNESS_UNAVAILABLE")
+    _owned_root(runtime, thread_id, ctx)
+    record = await runtime.load_task(thread_id)
+    if not record.state:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    fields = ("id", "name", "role", "status", "input_task_ids", "summary", "error_code", "duration_ms", "native_session_id")
+    children = await runtime.learning_children(thread_id) if hasattr(runtime, "learning_children") else []
+    child_events = [{"type": "agent", "node": "agent_collaboration", "event": "started" if v["status"] == "running" else v["status"],
+                     "agent_name": v["name"], "agent_role": v["role"], "task_id": v["id"], "parent_task_id": thread_id, "summary": v["summary"]} for v in children]
+    return {"thread_id": thread_id, "status": record.status,
+            "agents": [{k: v.get(k) for k in fields} for v in (record.state.get("team_tasks") or {}).values() if v["role"] != "user"] + children,
+            "events": (record.state.get("agent_events") or []) + child_events, "budget": record.state.get("team_budget") or {},
+            "review": record.state.get("plan_review"), "failure_code": record.state.get("failure_code"), "pending": record.pending}
+
+
+@router.post("/{thread_id}/cancel")
+async def cancel_task(thread_id: str, request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    runtime = getattr(request.app.state, "harness", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="HARNESS_UNAVAILABLE")
+    _owned_root(runtime, thread_id, ctx)
+    if not (await runtime.load_task(thread_id)).state:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    record = await runtime.cancel_task(thread_id)
+    return {"thread_id": thread_id, "status": record.status}
+
+
+@router.post("/{thread_id}/retry")
+async def retry_task(thread_id: str, request: Request, ctx: AuthContext = Depends(api_rate_limited)):
+    runtime = getattr(request.app.state, "harness", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="HARNESS_UNAVAILABLE")
+    kind = _owned_root(runtime, thread_id, ctx)
+    record = await runtime.load_task(thread_id)
+    if record.status not in {"failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="TASK_NOT_FAILED")
+    # Original host-admitted inputs and completed children survive; the caller
+    # cannot replace task ownership, evidence scope, or the pinned prompt bundle.
+    return await stream_task_run(runtime, kind, thread_id, ctx, {}, retry=True)

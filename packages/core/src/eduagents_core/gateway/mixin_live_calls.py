@@ -319,7 +319,7 @@ class GatewayLiveCallsMixin:
                     failure_code=last_failure_code,
                 )
                 if not self._is_routing_retryable(exc):
-                    raise self._route_request_error(route) from exc
+                    raise self._route_request_error(route, last_failure_code) from exc
         raise self._route_unavailable(route, last_failure_code)
 
     async def _routed_stream(self, req: ChatRequest) -> AsyncIterator[StreamDelta | ChatResult]:
@@ -450,7 +450,7 @@ class GatewayLiveCallsMixin:
                 last_failure_code = self._failure_code(exc)
                 self._candidate_failures[candidate.id] = last_failure_code
                 if not self._is_routing_retryable(exc):
-                    raise self._route_request_error(route) from exc
+                    raise self._route_request_error(route, last_failure_code) from exc
         raise self._route_unavailable(route, last_failure_code)
 
     async def _settle_partial_candidate(
@@ -488,6 +488,8 @@ class GatewayLiveCallsMixin:
         status = getattr(exc, "status_code", None)
         if status == 429:
             return "UPSTREAM_RATE_LIMITED"
+        if status == 402:
+            return "MODEL_BALANCE_INSUFFICIENT"
         if status in (401, 403):
             return "PUBLIC_AUTH_UNAVAILABLE"
         if status == 404:
@@ -530,8 +532,10 @@ class GatewayLiveCallsMixin:
         return GatewayError(code, message)
 
     @staticmethod
-    def _route_request_error(route: BusinessRoute) -> GatewayError:
+    def _route_request_error(route: BusinessRoute, failure_code=None) -> GatewayError:
         del route
+        if failure_code == "MODEL_BALANCE_INSUFFICIENT":
+            return GatewayError(failure_code, "模型供应商账户余额不足，请充值后重试")
         return GatewayError("MODEL_REQUEST_INVALID", "模型请求格式无效，请修改后重试")
 
     @staticmethod
@@ -708,6 +712,8 @@ class GatewayLiveCallsMixin:
                 last_error = exc
                 log.error("tier_call_failed", tier=tier.value, failure_code=self._failure_code(exc))
         # all live providers failed -> cassette, then (optionally) stub
+        if last_error is not None and self._failure_code(last_error) == "MODEL_BALANCE_INSUFFICIENT":
+            raise GatewayError("MODEL_BALANCE_INSUFFICIENT", "模型供应商账户余额不足，请充值后重试") from last_error
         hit = self._cassette.get(self._cassette_key(req)) if allow_cassette else None
         if hit is not None:
             log.warning("live_failed_served_from_cassette")
@@ -971,6 +977,8 @@ class GatewayLiveCallsMixin:
                         ) from exc
                     streaming_tier = None  # 本档尚未输出, 才允许进入兼容降级链
                     if not self._is_routing_retryable(exc):
+                        if self._failure_code(exc) == "MODEL_BALANCE_INSUFFICIENT":
+                            raise GatewayError("MODEL_BALANCE_INSUFFICIENT", "模型供应商账户余额不足，请充值后重试") from exc
                         raise GatewayError(
                             "MODEL_REQUEST_INVALID", "模型请求格式无效，请修改后重试"
                         ) from exc

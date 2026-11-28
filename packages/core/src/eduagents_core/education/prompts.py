@@ -28,18 +28,30 @@ class TeachingPolicies(BaseModel):
     tutor_hint3: tuple[str, ...]
 
 
+class TeamTeachingPolicies(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    coordinator: tuple[str, ...]
+    researcher: tuple[str, ...]
+    planner: tuple[str, ...]
+    reviewer: tuple[str, ...]
+
+
 class PromptBundle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
     parent_version: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
     policies: TeachingPolicies
+    team_policies: TeamTeachingPolicies | None = None
 
     @property
     def identity(self) -> dict[str, str]:
-        encoded = json.dumps(
-            self.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode()
+        payload = self.model_dump(mode="json")
+        # Preserve the byte-level identity of pre-team bundles and their checkpoints.
+        if self.team_policies is None:
+            payload.pop("team_policies")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         return {"version": self.version, "sha256": hashlib.sha256(encoded).hexdigest()}
 
     def text(self, role: str) -> str:
@@ -52,6 +64,12 @@ class PromptBundle(BaseModel):
 
     def validate_instructions(self) -> PromptBundle:
         texts = [self.text(role) for role in TeachingPolicies.model_fields]
+        if self.team_policies is not None:
+            for role in TeamTeachingPolicies.model_fields:
+                instructions = getattr(self.team_policies, role)
+                if not 1 <= len(instructions) <= 24 or any(not t.strip() or len(t) > 2000 for t in instructions):
+                    raise ValueError(f"invalid team teaching instructions: {role}")
+                texts.append("\n".join(instructions))
         if sum(len(text) for text in texts) > 12000:
             raise ValueError("teaching bundle exceeds its context budget")
         return self

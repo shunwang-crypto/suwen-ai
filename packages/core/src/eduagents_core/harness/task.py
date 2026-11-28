@@ -7,7 +7,7 @@ import copy
 import json
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..gateway.base import ChatRequest, GatewayError, Tier
 from .gateway import HarnessGateway
@@ -57,18 +57,29 @@ async def refresh_memory_context(deps, record):
 class AgentTask:
     """Submit one task turn to DSH; domain tools decide which results are valid."""
 
-    def __init__(self, kind, deps, store=None):
+    def __init__(self, kind, deps, store=None, *, parent_thread_id="", agent_name=""):
         self.kind, self.deps = kind, deps
         self.store = store or MemoryTaskStore()
+        self.parent_thread_id, self.agent_name = parent_thread_id, agent_name
 
-    async def run(self, thread_id, payload=None, *, resume=None, emit=None):
+    async def run(self, thread_id, payload=None, *, resume=None, emit=None, retry=False):
         from ..education.tools import create_tools
 
         emit = emit or (lambda _event: None)
         async with self.store.lock(thread_id):
             record = await self.store.load(thread_id)
+            if retry:
+                if record.status not in {"failed", "cancelled"}:
+                    raise GatewayError("TASK_NOT_FAILED", "任务当前不需要重试")
+                record.status = "failed"
+                for child in (record.state.get("team_tasks") or {}).values():
+                    if child["status"] in {"failed", "cancelled"}:
+                        child["status"] = "queued"
+            if record.status == "failed":
+                record.state.pop("failure_code", None)
+                record.state.pop("failure_message", None)
             incoming = dict(payload or {})
-            if "_prompt_bundle" in incoming:
+            if any(key in incoming for key in ("_prompt_bundle", "_parent_thread_id", "_agent_name", "_architecture")):
                 raise GatewayError("HARNESS_PROMPT_OVERRIDE_DENIED", "请求不能修改教学提示词版本")
             old_owner = record.state.get("user_id")
             if old_owner and incoming.get("user_id", old_owner) != old_owner:
@@ -101,13 +112,29 @@ class AgentTask:
                 record.native_session_id
                 or uuid.uuid5(uuid.NAMESPACE_URL, f"eduagents:{thread_id}").hex
             )
-            tools = create_tools(self.kind, self.deps, record, emit)
+            if self.parent_thread_id:
+                if record.state.get("_parent_thread_id", self.parent_thread_id) != self.parent_thread_id:
+                    raise GatewayError("HARNESS_OWNER_MISMATCH", "子任务归属不匹配")
+                record.state.update(_parent_thread_id=self.parent_thread_id, _agent_name=self.agent_name)
+            from ..education.prompts import pin_prompt_bundle
+            bundle = pin_prompt_bundle(record, self.deps.settings, self.deps.prompt_bundle)
+            if self.kind == "plan" and "_architecture" not in record.state:
+                record.state["_architecture"] = (
+                    "team" if self.deps.settings.agent_collaboration_enabled and bundle.team_policies is not None else "single"
+                )
+            collaboration = None
+            run_deps = self.deps
+            if self.kind == "plan" and record.state.get("_architecture") == "team":
+                from .collaboration import AgentCollaboration
+                collaboration = AgentCollaboration(replace(self.deps, prompt_bundle=bundle), self.store, record, thread_id, emit)
+                run_deps = collaboration.deps
+            tools = create_tools(self.kind, run_deps, record, emit, collaboration)
             if resume is not None:
                 tools.confirm(resume)
                 if record.status == "cancelled":
                     await self.store.save(thread_id, record)
                     return record
-                tools = create_tools(self.kind, self.deps, record, emit)
+                tools = create_tools(self.kind, run_deps, record, emit, collaboration)
             if not duplicate:
                 tools.prepare_turn()
                 record.state.pop("_accepted_tool", None)
@@ -136,8 +163,9 @@ class AgentTask:
                 ensure_ascii=False,
             )
             runtime = HarnessGateway(
-                self.deps.gateway,
-                timeout=self.deps.settings.harness_timeout_seconds,
+                run_deps.gateway,
+                timeout=(self.deps.settings.agent_collaboration_timeout_seconds if collaboration is not None
+                         else self.deps.settings.harness_timeout_seconds),
                 max_calls=self.deps.settings.harness_max_model_calls,
             )
             try:
@@ -161,20 +189,24 @@ class AgentTask:
                     record.status == "failed" and bool(record.state.get("failure_code"))
                 )
                 if record.status == "running":
-                    record.status = "failed"
+                    record.status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                    if isinstance(exc, GatewayError):
+                        record.state.update(failure_code=exc.code, failure_message=exc.message)
                 # A checked artifact is durable even if the final model
                 # acknowledgment fails. Cancellation still stops the caller.
                 if isinstance(exc, asyncio.CancelledError) or not terminal:
                     raise
             finally:
+                if collaboration is not None:
+                    await collaboration.close()
                 record.native_archive = runtime.native_archive or record.native_archive
                 await self.store.save(thread_id, record)
             return record
 
-    async def stream(self, thread_id, payload=None, *, resume=None):
+    async def stream(self, thread_id, payload=None, *, resume=None, retry=False):
         queue = asyncio.Queue()
         task = asyncio.create_task(
-            self.run(thread_id, payload, resume=resume, emit=queue.put_nowait)
+            self.run(thread_id, payload, resume=resume, emit=queue.put_nowait, retry=retry)
         )
         take = None
         try:
