@@ -231,8 +231,9 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
             ],
         }
     )
-    original = runtime.deps.gateway
+    original, original_settings = runtime.deps.gateway, runtime.deps.settings
     runtime.deps.gateway = fake
+    runtime.deps.settings = original_settings.model_copy(update={"plan_generation_mode": "single"})
     try:
         events = await _sse(
             client,
@@ -252,6 +253,7 @@ async def test_plan_create_uses_real_mastery_and_dag_order(client):
         )
     finally:
         runtime.deps.gateway = original
+        runtime.deps.settings = original_settings
 
     # 计划流走到 interrupt 确认 (F3), 计划已生成
     assert events.get("interrupt"), events

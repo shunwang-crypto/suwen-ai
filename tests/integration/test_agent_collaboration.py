@@ -22,7 +22,9 @@ pytestmark = requires_services
 
 def runtime_for(client, model):
     original = client._transport.app.state.harness
-    settings = original.settings.model_copy(update={"education_prompt_version": "edu-v2"})
+    settings = original.settings.model_copy(update={
+        "education_prompt_version": "edu-v2", "plan_generation_mode": "team",
+    })
     return HarnessRuntime(settings, replace(original.deps, settings=settings, gateway=model,
                                             memory=None, prompt_bundle=load_prompt_bundle("edu-v2")))
 

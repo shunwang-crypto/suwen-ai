@@ -159,6 +159,7 @@ class Settings(BaseSettings):
     harness_max_model_calls: int = Field(default=16, ge=2, le=40)
     harness_context_window_tokens: int = Field(default=32768, ge=4096, le=262144)
     worker_max_jobs: int = Field(default=10, ge=1, le=64)
+    plan_generation_mode: Literal["guided", "single", "team"] = "guided"
     agent_collaboration_enabled: bool = True
     agent_collaboration_max_agents: int = Field(default=8, ge=3, le=24)
     agent_collaboration_max_parallel: int = Field(default=3, ge=1, le=8)

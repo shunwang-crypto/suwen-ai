@@ -2,6 +2,7 @@
 
 
 def create_tools(kind, deps, record, emit, collaboration=None):
+    from .guided_plan import GuidedPlanTools
     from .plan import PlanTools
     from .qa import QuestionAnswerTools
     from .quiz import QuizTools
@@ -10,6 +11,8 @@ def create_tools(kind, deps, record, emit, collaboration=None):
 
     if kind == "plan" and collaboration is not None:
         return PlanCoordinatorTools(deps, record, emit, collaboration)
+    if kind == "plan" and record.state.get("_architecture") == "guided":
+        return GuidedPlanTools(deps, record, emit)
 
     factories = {
         "qa": QuestionAnswerTools,

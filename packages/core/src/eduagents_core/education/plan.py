@@ -41,7 +41,7 @@ LEARNING_PHASES = ("baseline", "learn", "practice", "review", "assessment")
 STEP_KEY_PATTERN = r"^[a-z][a-z0-9_-]{0,63}$"
 
 
-def _phased_draft_schema() -> dict:
+def _phased_draft_schema(*, allow_extra_fields: bool = False) -> dict:
     step_key = {"type": "string", "maxLength": 64, "pattern": STEP_KEY_PATTERN}
     properties = {
         "title": {"type": "string", "minLength": 1, "maxLength": _MAX_TASK_TITLE},
@@ -74,7 +74,7 @@ def _phased_draft_schema() -> dict:
         "type": "object",
         "properties": properties,
         "required": [name for name in properties if name not in {"practice_count", "difficulty"}],
-        "additionalProperties": False,
+        "additionalProperties": allow_extra_fields,
     }
     day = {
         "type": "object",
@@ -83,7 +83,7 @@ def _phased_draft_schema() -> dict:
             "tasks": {"type": "array", "items": task, "minItems": 1, "maxItems": _MAX_TASKS_PER_DAY},
         },
         "required": ["day", "tasks"],
-        "additionalProperties": False,
+        "additionalProperties": allow_extra_fields,
     }
     stage = {
         "type": "object",
@@ -92,13 +92,13 @@ def _phased_draft_schema() -> dict:
             "days": {"type": "array", "items": day, "minItems": 1, "maxItems": 90},
         },
         "required": ["name", "days"],
-        "additionalProperties": False,
+        "additionalProperties": allow_extra_fields,
     }
     return {
         "type": "object",
         "properties": {"stages": {"type": "array", "items": stage, "minItems": 1, "maxItems": 12}},
         "required": ["stages"],
-        "additionalProperties": False,
+        "additionalProperties": allow_extra_fields,
     }
 
 
@@ -986,13 +986,14 @@ class PlanTools(EducationTools):
         self.state["resources"] = resources
         known = {r.get("chunk_id") or r.get("url") for r in resources}
         for item in (self.state.get("evidences") or []) if course_bound else []:
-            if item["chunk_id"] not in known:
+            kb_id = item.get("kb_id") or self.state.get("kb_id")
+            if kb_id in allowed_kbs and item.get("doc_id") and item["chunk_id"] not in known:
                 known.add(item["chunk_id"])
                 resources.append(
                     {
                         "type": "kb",
                         "title": item["heading_path"][:512],
-                        "kb_id": item.get("kb_id") or self.state.get("kb_id", ""),
+                        "kb_id": kb_id,
                         "doc_id": item["doc_id"],
                         "chunk_id": item["chunk_id"],
                     }

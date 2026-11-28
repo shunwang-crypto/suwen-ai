@@ -119,9 +119,16 @@ class AgentTask:
             from ..education.prompts import pin_prompt_bundle
             bundle = pin_prompt_bundle(record, self.deps.settings, self.deps.prompt_bundle)
             if self.kind == "plan" and "_architecture" not in record.state:
-                record.state["_architecture"] = (
-                    "team" if self.deps.settings.agent_collaboration_enabled and bundle.team_policies is not None else "single"
-                )
+                architecture = self.deps.settings.plan_generation_mode
+                if record.state.get("team_tasks"):
+                    architecture = "team"
+                elif record.native_archive or record.pending is not None:
+                    architecture = "single"
+                elif architecture == "team" and (
+                    not self.deps.settings.agent_collaboration_enabled or bundle.team_policies is None
+                ):
+                    raise GatewayError("AGENT_COLLABORATION_UNAVAILABLE", "团队计划需要启用协作并使用包含角色策略的提示词")
+                record.state["_architecture"] = architecture
             collaboration = None
             run_deps = self.deps
             if self.kind == "plan" and record.state.get("_architecture") == "team":
@@ -131,7 +138,7 @@ class AgentTask:
             tools = create_tools(self.kind, run_deps, record, emit, collaboration)
             if resume is not None:
                 tools.confirm(resume)
-                if record.status == "cancelled":
+                if record.status in {"cancelled", "completed"}:
                     await self.store.save(thread_id, record)
                     return record
                 tools = create_tools(self.kind, run_deps, record, emit, collaboration)
@@ -158,10 +165,6 @@ class AgentTask:
                 json_mode=False,
                 allow_tier_fallback=tools.tier != Tier.strong,
             )
-            prompt = json.dumps(
-                {"task": self.kind, "input": tools.input(messages), "confirmation": resume},
-                ensure_ascii=False,
-            )
             runtime = HarnessGateway(
                 run_deps.gateway,
                 timeout=(self.deps.settings.agent_collaboration_timeout_seconds if collaboration is not None
@@ -169,6 +172,12 @@ class AgentTask:
                 max_calls=self.deps.settings.harness_max_model_calls,
             )
             try:
+                if self.kind == "plan" and record.state.get("_architecture") == "guided":
+                    await tools.prepare_context()
+                prompt = json.dumps(
+                    {"task": self.kind, "input": tools.input(messages), "confirmation": resume},
+                    ensure_ascii=False,
+                )
                 async with runtime:
                     await runtime.run_task(
                         request,

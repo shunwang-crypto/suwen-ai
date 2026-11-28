@@ -50,7 +50,9 @@ class TeamModel:
 
 
 def dependencies(model, **settings):
-    return EducationDeps(Settings(_env_file=None, education_prompt_version="edu-v2", **settings), model)
+    return EducationDeps(Settings(
+        _env_file=None, education_prompt_version="edu-v2", plan_generation_mode="team", **settings,
+    ), model)
 
 
 def payload():

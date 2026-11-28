@@ -202,6 +202,16 @@ def agent_stub(req):
     if req.feature == "agent_plan":
         if "publish_plan" in available:
             return call("publish_plan", {})
+        if "submit_learning_activities" in available:
+            unit = {
+                "topic": (payload.get("kc_order") or [topic])[0][:120],
+                "learn": BANNER + "查看示例并整理需要解释的概念",
+                "practice": BANNER + "选一个例子独立完成练习",
+                "check": BANNER + "能说出主要步骤并展示作答",
+            }
+            if payload.get("materials"):
+                unit["resource_ref"] = payload["materials"][0]["resource_ref"]
+            return call("submit_learning_activities", {"units": [unit]})
         if "read_learning_context" not in used:
             return call("read_learning_context", {})
         if "analyze_learning_goal" in available and "analyze_learning_goal" not in used:
