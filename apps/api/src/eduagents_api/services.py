@@ -1636,8 +1636,11 @@ async def record_attempts(
             plan_adjustment = await adjust_on_low_score(
                 ctx,
                 accuracy,
+                quiz_id=quiz.id,
                 quiz_kb_id=quiz.kb_id,
-                attributed_plan_id=attributed_plan_id, submission_id=submission.id,
+                attributed_plan_id=attributed_plan_id,
+                submission_id=submission.id,
+                grading_results=results,
                 business_date=business_now.astimezone(CN_TZ).date(),
                 evidence_policy=evidence_policy,
                 session=session,

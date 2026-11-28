@@ -29,6 +29,8 @@ from sqlalchemy import func, select
 
 from .budget import CN_TZ
 from .models import (
+    AssessmentSubmission,
+    Attempt,
     Chunk,
     Document,
     KnowledgeComponent,
@@ -37,6 +39,8 @@ from .models import (
     Plan,
     PlanAdjustment,
     PlanResource,
+    Question,
+    Quiz,
 )
 
 log = get_logger("plan_adjust")
@@ -60,6 +64,7 @@ class PlanTaskAttributionError(Exception):
 # 薄弱判据 = REINFORCE_THRESHOLD (掌握度阈值唯一来源 eduagents_core.mastery.thresholds)
 _REINFORCE_PCT = round(REINFORCE_THRESHOLD * 100)  # 中文理由里的百分数表述
 LOW_SCORE_THRESHOLD = 0.6  # 单次测评正确率 < 0.6 视为低分, 触发自动调整 (非掌握度阈值)
+_LOW_SCORE_TRIGGER = "low_score_attempt"
 REINFORCE_MINUTES = 30  # 每个知识点的补强时间上限
 MAX_TOPICS_PER_ADJUST = 5  # 每个知识点可按剩余预算分到多个学习日
 
@@ -501,6 +506,61 @@ async def _weak_kcs(
     ]
 
 
+def _stored_uuid(value: object) -> uuid.UUID | None:
+    if isinstance(value, str):
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            pass
+    return None
+
+
+async def _wrong_quiz_evidence(session, plan, quiz_results):
+    """Return (submission id, attempt id, KC id) for results that still support reinforcement."""
+    submissions_by_attempt: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], set[uuid.UUID]] = {}
+    for submission_id, quiz_id, results in quiz_results:
+        if not isinstance(results, list):
+            continue
+        for result in results:
+            if not isinstance(result, dict) or result.get("correct") is not False:
+                continue
+            attempt_id = _stored_uuid(result.get("attempt_id"))
+            question_id = _stored_uuid(result.get("question_id"))
+            if attempt_id is not None and question_id is not None:
+                key = (attempt_id, question_id, quiz_id)
+                submissions_by_attempt.setdefault(key, set()).add(submission_id)
+    if not submissions_by_attempt:
+        return set()
+
+    # The quiz mastery log records the normalized KC mapping used at grading time.
+    query = (
+        select(Attempt.id, Question.id, Quiz.id, MasteryLog.kc_id)
+        .select_from(Attempt)
+        .join(Question, Question.id == Attempt.question_id)
+        .join(Quiz, Quiz.id == Question.quiz_id)
+        .join(MasteryLog, MasteryLog.evidence_id == Attempt.id)
+        .where(
+            Attempt.id.in_({attempt_id for attempt_id, _, _ in submissions_by_attempt}),
+            Attempt.is_correct.is_(False),
+            Attempt.user_id == plan.user_id,
+            Attempt.tenant_id == plan.tenant_id,
+            Question.tenant_id == plan.tenant_id,
+            Quiz.user_id == plan.user_id,
+            Quiz.tenant_id == plan.tenant_id,
+            Quiz.kb_id == plan.kb_id,
+            MasteryLog.user_id == plan.user_id,
+            MasteryLog.tenant_id == plan.tenant_id,
+            MasteryLog.evidence_type == "quiz_attempt",
+        )
+    )
+    rows = (await session.execute(query)).all()
+    return {
+        (submission_id, attempt_id, str(kc_id))
+        for attempt_id, question_id, quiz_id, kc_id in rows
+        for submission_id in submissions_by_attempt.get((attempt_id, question_id, quiz_id), ())
+    }
+
+
 async def active_plan(session, tenant_id: uuid.UUID, user_id: uuid.UUID) -> Plan | None:
     """Return the explicitly active plan; creation time is not a lifecycle rule."""
     return await session.scalar(
@@ -560,6 +620,7 @@ async def adjust_plan(
     trigger="manual",
     reason_prefix="",
     submission_id=None,
+    wrong_attempts_by_kc=None,
     first_day=1,
 ):
     """Save a versioned proposal. Only explicit confirmation changes the plan."""
@@ -574,12 +635,18 @@ async def adjust_plan(
 
     if plan.plan_mode != "course_bound" or plan.kb_id is None:
         return empty("目标计划处于校准阶段，计划无需调整。")
+    automatic = trigger == _LOW_SCORE_TRIGGER
+    wrong_attempts_by_kc = wrong_attempts_by_kc or {}
     weak = await _weak_kcs(session, user_id, plan.kb_id)
     covered = _existing_kc_keys(plan.structure_json)
     candidates = [
-        (kc, name, score) for kc, name, score in weak if normalize_kc_name(name) not in covered
+        (kc, name, score)
+        for kc, name, score in weak
+        if (not automatic or kc in wrong_attempts_by_kc) and normalize_kc_name(name) not in covered
     ]
     if not candidates:
+        if automatic:
+            return empty("本次测评没有可安排补强的错题知识点，计划无需调整。")
         return empty("当前没有未覆盖的薄弱知识点，计划无需调整。")
 
     slots = list(
@@ -588,19 +655,23 @@ async def adjust_plan(
     inserted = []
     for kc, name, score in candidates[:MAX_TOPICS_PER_ADJUST]:
         remaining = REINFORCE_MINUTES
-        evidence = (
-            await session.execute(
-                select(MasteryLog.evidence_type, MasteryLog.evidence_id)
-                .where(
-                    MasteryLog.user_id == user_id,
-                    MasteryLog.kc_id == uuid.UUID(kc),
-                    MasteryLog.evidence_id.is_not(None),
-                    MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+        if automatic:
+            evidence = {"type": "quiz_attempt", "id": wrong_attempts_by_kc[kc]}
+        else:
+            latest = (
+                await session.execute(
+                    select(MasteryLog.evidence_type, MasteryLog.evidence_id)
+                    .where(
+                        MasteryLog.user_id == user_id,
+                        MasteryLog.kc_id == uuid.UUID(kc),
+                        MasteryLog.evidence_id.is_not(None),
+                        MasteryLog.evidence_type.in_(VALID_MASTERY_EVIDENCE_TYPES),
+                    )
+                    .order_by(MasteryLog.at.desc(), MasteryLog.id)
+                    .limit(1)
                 )
-                .order_by(MasteryLog.at.desc(), MasteryLog.id)
-                .limit(1)
-            )
-        ).first()
+            ).first()
+            evidence = {"type": latest[0], "id": str(latest[1])} if latest else None
         source = (
             await session.execute(
                 select(Chunk.id, Document.id, Document.filename, Chunk.heading_path)
@@ -635,7 +706,7 @@ async def adjust_plan(
                     "instructions": [f"回顾{name}的适用条件", f"完成 {count} 道练习并订正"],
                     "completion_criteria": "能说明解题依据并订正错误",
                     "p_mastery": round(score, 4),
-                    "evidence": {"type": evidence[0], "id": str(evidence[1])} if evidence else None,
+                    "evidence": evidence,
                     "material": {
                         "chunk_id": str(source[0]),
                         "doc_id": str(source[1]),
@@ -703,32 +774,87 @@ async def adjust_plan(
     }
 
 
-def adjustment_status(diff, plan, first_day, weak_ids, material_ids):
-    if diff.get("status", "applied") != "proposed":
-        return diff.get("status", "applied")
-    if plan.status != "active" or diff["base_version"] != plan.version:
+def adjustment_status(diff, plan, first_day, weak_ids, material_ids, quiz_evidence):
+    status = diff.get("status", "applied")
+    if status != "proposed":
+        return status
+    if plan.status != "active" or diff.get("base_version") != plan.version:
         return "stale"
-    for task in diff["inserted"]:
+    tasks = diff.get("inserted")
+    if not isinstance(tasks, list) or not tasks:
+        return "stale"
+    automatic = diff.get("trigger") == _LOW_SCORE_TRIGGER
+    submission_id = _stored_uuid(diff.get("submission_id")) if automatic else None
+    for task in tasks:
+        if not isinstance(task, dict):
+            return "stale"
+        day = task.get("day")
+        kc_id = task.get("kc_id")
         material = task.get("material")
-        if task["day"] < first_day or task["kc_id"] not in weak_ids:
+        if (
+            not isinstance(day, int) or day < first_day
+            or not isinstance(kc_id, str) or kc_id not in weak_ids
+        ):
             return "stale"
-        if material and material["chunk_id"] not in material_ids:
+        if material and (
+            not isinstance(material, dict) or _stored_uuid(material.get("chunk_id")) not in material_ids
+        ):
             return "stale"
+        if automatic:
+            evidence = task.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("type") != "quiz_attempt":
+                return "stale"
+            if (submission_id, _stored_uuid(evidence.get("id")), kc_id) not in quiz_evidence:
+                return "stale"
     return "proposed"
 
 
 async def adjustment_evidence(session, plan, diffs):
-    pending = [diff for diff in diffs if diff.get("status") == "proposed"]
-    if not pending or plan.status != "active" or plan.kb_id is None:
-        return set(), set()
-    weak_ids = {kc for kc, _name, _score in await _weak_kcs(session, plan.user_id, plan.kb_id)}
-    referenced = {
-        uuid.UUID(t["material"]["chunk_id"])
+    pending = [
+        diff for diff in diffs
+        if diff.get("status") == "proposed" and diff.get("base_version") == plan.version
+    ]
+    if (
+        not pending or plan.status != "active"
+        or plan.plan_mode != "course_bound" or plan.kb_id is None
+    ):
+        return set(), set(), set()
+
+    submission_ids = {
+        submission_id
         for diff in pending
-        for t in diff["inserted"]
-        if t.get("material")
+        if diff.get("trigger") == _LOW_SCORE_TRIGGER
+        and (submission_id := _stored_uuid(diff.get("submission_id"))) is not None
     }
-    materials = (
+    quiz_evidence = set()
+    if submission_ids:
+        quiz_results = (
+            await session.execute(
+                select(
+                    AssessmentSubmission.id,
+                    AssessmentSubmission.quiz_id,
+                    AssessmentSubmission.result_json["results"],
+                ).where(
+                    AssessmentSubmission.id.in_(submission_ids),
+                    AssessmentSubmission.tenant_id == plan.tenant_id,
+                    AssessmentSubmission.user_id == plan.user_id,
+                    AssessmentSubmission.kind == "quiz",
+                )
+            )
+        ).all()
+        quiz_evidence = await _wrong_quiz_evidence(session, plan, quiz_results)
+
+    weak_ids = {kc for kc, _name, _score in await _weak_kcs(session, plan.user_id, plan.kb_id)}
+    referenced = set()
+    for diff in pending:
+        tasks = diff.get("inserted")
+        if not isinstance(tasks, list):
+            continue
+        for task in tasks:
+            material = task.get("material") if isinstance(task, dict) else None
+            if isinstance(material, dict) and (chunk_id := _stored_uuid(material.get("chunk_id"))):
+                referenced.add(chunk_id)
+    material_ids = (
         await session.scalars(
             select(Chunk.id)
             .join(Document)
@@ -737,7 +863,7 @@ async def adjustment_evidence(session, plan, diffs):
         if referenced
         else []
     )
-    return weak_ids, {str(chunk_id) for chunk_id in materials}
+    return weak_ids, set(material_ids), quiz_evidence
 
 
 async def confirm_adjustment(session, plan, adjustment_id, *, first_day=1):
@@ -749,10 +875,10 @@ async def confirm_adjustment(session, plan, adjustment_id, *, first_day=1):
     )
     if row is None:
         raise PlanTaskAttributionError("PLAN_ADJUSTMENT_NOT_FOUND")
-    diff = row.diff_json
+    diff = row.diff_json or {}
     if diff.get("status", "applied") != "applied":
-        weak_ids, material_ids = await adjustment_evidence(session, plan, [diff])
-        if adjustment_status(diff, plan, first_day, weak_ids, material_ids) != "proposed":
+        evidence = await adjustment_evidence(session, plan, [diff])
+        if adjustment_status(diff, plan, first_day, *evidence) != "proposed":
             raise PlanTaskAttributionError("PLAN_ADJUSTMENT_STALE")
         structure = copy.deepcopy(plan.structure_json)
         days = {
@@ -810,7 +936,7 @@ async def confirm_adjustment(session, plan, adjustment_id, *, first_day=1):
         row.diff_json = {**diff, "status": "applied"}
         await session.flush()
     return {
-        "inserted": diff["inserted"],
+        "inserted": diff.get("inserted", []),
         "adjustment_id": str(row.id),
         "reason": row.reason,
         "status": "applied",
@@ -822,10 +948,12 @@ async def adjust_on_low_score(
     ctx,
     accuracy: float,
     *,
+    quiz_id: uuid.UUID,
     quiz_kb_id: uuid.UUID | None,
     attributed_plan_id: uuid.UUID | None,
     evidence_policy: str,
-    submission_id=None,
+    submission_id: uuid.UUID,
+    grading_results: list[dict],
     business_date=None,
     session=None,
 ) -> dict | None:
@@ -863,12 +991,20 @@ async def adjust_on_low_score(
             await adjust_session.refresh(plan, with_for_update=True)
             if plan.status != "active":
                 return None
+            quiz_evidence = await _wrong_quiz_evidence(
+                adjust_session, plan, [(submission_id, quiz_id, grading_results)]
+            )
+            wrong_attempts_by_kc = {}
+            for _, attempt_id, kc_id in sorted(quiz_evidence):
+                wrong_attempts_by_kc.setdefault(kc_id, str(attempt_id))
             result = await adjust_plan(
                 adjust_session,
                 ctx.user_id,
                 ctx.tenant_id,
                 plan,
-                trigger="low_score_attempt", submission_id=submission_id,
+                trigger=_LOW_SCORE_TRIGGER,
+                submission_id=submission_id,
+                wrong_attempts_by_kc=wrong_attempts_by_kc,
                 first_day=max(1, (business_date - plan.created_at.astimezone(CN_TZ).date()).days + 1) if business_date else 1,
                 reason_prefix=f"本次测评正确率 {round(accuracy * 100)}% 低于 60% 阈值; ",
             )

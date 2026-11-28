@@ -1065,7 +1065,7 @@ async def list_adjustments(
         ).all()
         today = (await timectl.now(request.app.state.redis)).astimezone(CN_TZ).date()
         first_day = max(1, (today - plan.created_at.astimezone(CN_TZ).date()).days + 1)
-        weak_ids, material_ids = await adjustment_evidence(
+        evidence = await adjustment_evidence(
             session, plan, [r.diff_json or {} for r in rows]
         )
         return [
@@ -1074,7 +1074,7 @@ async def list_adjustments(
                 "reason": r.reason,
                 "trigger": (r.diff_json or {}).get("trigger", ""),
                 "status": adjustment_status(
-                    r.diff_json or {}, plan, first_day, weak_ids, material_ids
+                    r.diff_json or {}, plan, first_day, *evidence
                 ),
                 "inserted": (r.diff_json or {}).get("inserted", []),
                 "at": r.at,
