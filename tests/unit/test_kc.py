@@ -41,8 +41,9 @@ class FakeEmbedder:
 class FakeGateway:
     """预置响应文本队列, 逐次弹出; 记录收到的 ChatRequest 供断言。"""
 
-    def __init__(self, texts: list[str]) -> None:
+    def __init__(self, texts: list[str], *, reasons: list[str] | None = None) -> None:
         self.texts = list(texts)
+        self.reasons = list(reasons or [])
         self.requests: list[ChatRequest] = []
 
     async def chat(self, req: ChatRequest) -> ChatResult:
@@ -56,6 +57,7 @@ class FakeGateway:
             cost_cny=0.0,
             latency_ms=0,
             mode="stub",
+            finish_reason=self.reasons.pop(0) if self.reasons else None,
         )
 
 
@@ -241,6 +243,9 @@ async def test_build_vocabulary_parses_llm_json():
     req = gateway.requests[0]
     assert req.json_mode is True
     assert req.tier is Tier.strong
+    assert req.max_tokens is not None
+    assert req.response_schema["required"] == ["kcs", "prerequisite_edges"]
+    assert req.response_schema["properties"]["kcs"]["minItems"] == 1
     assert "第一章 导数" in req.messages[-1].content  # 提示词已渲染进知识库内容
 
 
@@ -249,6 +254,14 @@ async def test_build_vocabulary_retries_once_on_bad_json_then_succeeds():
     vocab, _edges = await build_vocabulary(gateway, "x")
     assert len(gateway.requests) == 2
     assert len(vocab.entries) == 2
+    before, retry = gateway.requests
+    assert before.messages != retry.messages
+    assert "<知识库内容>\nx\n</知识库内容>" in retry.messages[0].content
+    assert retry.max_tokens < before.max_tokens
+    for kind in ("kcs", "prerequisite_edges"):
+        assert retry.response_schema["properties"][kind]["maxItems"] < (
+            before.response_schema["properties"][kind]["maxItems"]
+        )
 
 
 async def test_build_vocabulary_raises_after_two_failures():
@@ -256,6 +269,14 @@ async def test_build_vocabulary_raises_after_two_failures():
     with pytest.raises(KcExtractionError):
         await build_vocabulary(gateway, "x")
     assert len(gateway.requests) == 2  # 只重试一次
+
+
+async def test_build_vocabulary_rejects_length_finish_and_empty_terms():
+    gateway = FakeGateway([VOCAB_JSON, '{"kcs": [], "prerequisite_edges": []}'],
+                          reasons=["length", "stop"])
+    with pytest.raises(KcExtractionError, match=r"token_limit\(1\), invalid_vocabulary\(1\)"):
+        await build_vocabulary(gateway, "目录和正文没有可验证词条")
+    assert len(gateway.requests) == 2
 
 
 async def test_stub_gateway_payload_treated_as_parse_failure():

@@ -20,6 +20,9 @@ from .types import KcEntry, KcVocabulary, PrereqEdge, normalize_kc_name
 # 本文件位于 packages/core/src/eduagents_core/kc/ -> parents[5] 为仓库根
 _PROMPTS_DIR = Path(__file__).resolve().parents[5] / "prompts"
 _MAX_ATTEMPTS = 2  # 首次 + 重试一次
+# (词条上限, 先修边上限, 输出 token 上限)。重试使用同一教材，缩小输出。
+_VOCAB_LIMITS = ((30, 24, 4800), (16, 12, 3000))
+_KC_NAME = {"type": "string", "minLength": 1, "maxLength": 80}
 
 
 class KcExtractionError(Exception):
@@ -28,6 +31,41 @@ class KcExtractionError(Exception):
 
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+
+def _vocab_schema(max_kcs: int, max_edges: int) -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["kcs", "prerequisite_edges"],
+        "properties": {
+            "kcs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": max_kcs,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["canonical_name", "aliases", "description"],
+                    "properties": {
+                        "canonical_name": _KC_NAME,
+                        "aliases": {"type": "array", "maxItems": 2, "items": _KC_NAME},
+                        "description": {"type": "string", "maxLength": 50},
+                    },
+                },
+            },
+            "prerequisite_edges": {
+                "type": "array",
+                "maxItems": max_edges,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["from", "to"],
+                    "properties": {"from": _KC_NAME, "to": _KC_NAME},
+                },
+            },
+        },
+    }
 
 
 def _clean_aliases(canonical: str, raw: object) -> list[str]:
@@ -49,18 +87,18 @@ def _clean_aliases(canonical: str, raw: object) -> list[str]:
 
 
 def _parse_vocab_payload(
-    data: dict[str, Any],
+    data: dict[str, Any], *, max_kcs: int, max_edges: int,
 ) -> tuple[KcVocabulary, list[PrereqEdge]] | None:
     """校验并落地词表 payload; 结构不符 (含 stub 缺字段) 返回 None 触发重试。"""
     raw_kcs = data.get("kcs")
-    if not isinstance(raw_kcs, list):
+    if not isinstance(raw_kcs, list) or not 1 <= len(raw_kcs) <= max_kcs:
         return None
     vocab = KcVocabulary(entries=[])
     for item in raw_kcs:
         if not isinstance(item, dict):
             return None
         name = item.get("canonical_name")
-        if not isinstance(name, str) or not name.strip():
+        if not isinstance(name, str) or not normalize_kc_name(name):
             return None
         name = name.strip()
         description = item.get("description")
@@ -89,6 +127,8 @@ def _parse_vocab_payload(
     edges: list[PrereqEdge] = []
     raw_edges = data.get("prerequisite_edges")
     if isinstance(raw_edges, list):
+        if len(raw_edges) > max_edges:
+            return None
         for item in raw_edges:
             if not isinstance(item, dict):
                 continue  # 边允许稀疏: 坏边跳过, 不整体报废
@@ -137,27 +177,43 @@ async def build_vocabulary(
     embedding 留空, 由 KcNormalizer 惰性补算; 持久化由调用方负责。
     tenant_id/user_id 必须透传 (P0-2a): 缺省空串会被 usage sink 丢弃 = 不计量不扣预算。
     """
-    prompt = _load_prompt("kc_vocab_build.md").replace(
-        "{{KB_SUMMARY_TEXT}}", kb_summary_text
-    )
-    request = ChatRequest(
-        messages=(ChatMessage(role="user", content=prompt),),
-        tier=tier,
-        temperature=0.2,
-        json_mode=True,
-        feature="kc_vocab_build",
-        tenant_id=tenant_id,
-        user_id=user_id,
-    )
-    for _ in range(_MAX_ATTEMPTS):
+    template = _load_prompt("kc_vocab_build.md")
+    failures = []
+    for attempt, (max_kcs, max_edges, max_tokens) in enumerate(_VOCAB_LIMITS):
+        prompt = (
+            template.replace("{{MAX_KCS}}", str(max_kcs))
+            .replace("{{MAX_EDGES}}", str(max_edges))
+            .replace("{{KB_SUMMARY_TEXT}}", kb_summary_text)
+        )
+        if attempt:
+            prompt += (
+                "\n上一次没有得到有效的词表 JSON。"
+                "这次只提取教材中最关键的知识点，描述使用简短短语，省略不确定的先修边。"
+            )
+        request = ChatRequest(
+            messages=(ChatMessage(role="user", content=prompt),),
+            tier=tier,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            json_mode=True,
+            response_schema=_vocab_schema(max_kcs, max_edges),
+            feature="kc_vocab_build",
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         result = await gateway.chat(request)
+        if result.finish_reason == "length":
+            failures.append(f"token_limit({result.completion_tokens})")
+            continue
         data = parse_json_object(result.text)
         if data is None:
+            failures.append(f"invalid_json({result.completion_tokens})")
             continue
-        parsed = _parse_vocab_payload(data)
+        parsed = _parse_vocab_payload(data, max_kcs=max_kcs, max_edges=max_edges)
         if parsed is not None:
             return parsed
-    raise KcExtractionError("KC 词表构建输出无法解析为约定 JSON schema (已重试一次)")
+        failures.append(f"invalid_vocabulary({result.completion_tokens})")
+    raise KcExtractionError("KC 词表构建未得到有效结果 (已重试一次): " + ", ".join(failures))
 
 
 async def extract_chunk_kcs(
