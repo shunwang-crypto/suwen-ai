@@ -172,7 +172,10 @@ EMBEDDING_MODE=ollama "$py" eval/run_retrieval_eval.py --golden eval/golden_set/
 自动压缩请求也计入模型调用上限。超时和取消回收子进程并保存可用原生检查点。
 SDK 处于预览阶段，升级时同时验证 profile patch、原生日志、压缩及工具协议。
 
-新协作计划使用 `EDUCATION_PROMPT_VERSION=edu-v2` 和 `AGENT_COLLABORATION_ENABLED=true`。
+新计划默认使用 `PLAN_GENERATION_MODE=guided`。Harness 根据授权资料和学习证据提交教学活动，
+服务端分配时长、安排依赖并等待学生确认。选择 `PLAN_GENERATION_MODE=team` 可运行独立的研究、规划和审查会话，
+需同时设置 `EDUCATION_PROMPT_VERSION=edu-v2` 和 `AGENT_COLLABORATION_ENABLED=true`。
+`single` 可用于复现旧单会话方案，已开始的任务从原会话恢复。
 默认最多 8 个子 Agent、全局 3 个并发子任务、96 次共享逻辑调用、3 元估算费用和 2 次规划
 返工。父子 Agent 的实际循环均由 DSH 执行；`edu-v1` 和已准入的单会话任务继续按原架构恢复。
 协调任务的整体超时默认 360 秒（`AGENT_COLLABORATION_TIMEOUT_SECONDS`），单个子会话仍
@@ -241,7 +244,7 @@ $HOME/miniforge3/envs/eduagents/bin/python eval/run_agent_ablation.py \
 
 比较架构时先核对报告的 `case_ids`、`expected_runs`、`recorded_runs` 和 `status`。
 例如两题、三种架构、各跑一次应该有六条记录。只有完整运行才适合比较总成本。
-`clean` 统计已完成且没有评审违规、程序契约错误或运行错误的结果。每份合格成果的
+`clean` 要求实际架构与指定配置一致、真实生成完成、程序契约通过，且匿名裁判至少 3/4 分、没有违规。每份合格成果的
 `generation_calls_per_clean` 和 `generation_wall_ms_per_clean` 将该架构所有已记录尝试
 的生成开销除以合格数，包含失败尝试，单列评审开销；合格数为零时这两个值为 `null`。
 
@@ -261,6 +264,43 @@ ollama pull qwen3:4b-instruct-2507-q4_K_M
 `plan-simple-units` 和 `plan-complex-transfer` 各跑一轮，直接生成和单 Agent
 都交付了 2/2 份草案，三角色协作交付了 0/2 份。三种架构均有 0/2 份通过全部质量检查。
 这是两个开发用例的结果，该模型在这组题上的协作开销还没有带来合格交付。
+
+对照当前产品默认方案时可以指定两组，模型、目标和教材保持一致。命令固定串行运行。
+
+~~~bash
+OLLAMA_REQUIRE_GPU=true AGENT_COLLABORATION_MAX_PARALLEL=1 \
+flock .eduagents-check.lock "$HOME/miniforge3/envs/eduagents/bin/python" -m eval.run_agent_ablation \
+  --ollama-model qwen3:4b-instruct-2507-q4_K_M --golden eval/golden_set/plan-constraints.jsonl \
+  --architecture direct --architecture default --repetitions 1 --output /tmp/eduagents-paired-plan.json
+~~~
+
+本机 RTX 5060 Laptop、Qwen 4B Q4_K_M、8192 token 上下文的 12 题配对实测中，两组均生成了 12 份草案。
+直接生成有 8 份出现先练后学，6 份超出每日预算。按天数、预算、授权引用、学习顺序和可观察验收逐项核验，
+直接生成 0/12 份全部通过，默认 guided 12/12 份全部通过。两组的同模型匿名裁判都给 12/12 份及格；
+只用裁判分数会漏掉这些失败。guided 的 12 次交付共用 75 次生成调用，每份 6.25 次，
+另有 12 次评审调用。直接生成每份用 1 次生成、1 次评审。题目由项目作者设计，每题每组各一次。 再单独重复一轮 guided，仍有 12/12 通过，共 77 次生成调用。
+
+真实课程旅程使用独立普通学生账号。将其凭据置于 `EDUAGENTS_JOURNEY_EMAIL`、
+`EDUAGENTS_JOURNEY_PASSWORD`，也可以使用 `EDUAGENTS_JOURNEY_TOKEN`。每门课使用一个空白学员，
+脚本通过 HTTP 上传教材、执行学习活动，只读学习数据库核对用量与掌握度审计记录。
+
+~~~bash
+flock .eduagents-check.lock "$HOME/miniforge3/envs/eduagents/bin/python" -m eval.run_learning_journey \
+  --case eval/fixtures/learning_journey/lunar-geometry.json --output /tmp/eduagents-lunar.json
+flock .eduagents-check.lock "$HOME/miniforge3/envs/eduagents/bin/python" -m eval.run_learning_journey \
+  --case eval/fixtures/learning_journey/topographic-reading.json --output /tmp/eduagents-topography.json
+~~~
+
+同一入口还支持 `plane-mirrors.json` 和 `musical-rhythm.json`。每门课都有 18 项检查，包括打开出处、分级辅导、
+独立作答、错题的 FSRS 复习、确认调课和重复确认。四门课程最终各通过 18 项，选定运行分别记录 35、38、40、37 次
+已入账的语言模型调用，总计 150 次，不含嵌入、失败的供应商 HTTP 尝试及另行迭代的运行。
+共核对 20 条掌握度记录，每条均对应本轮可验证作答或复习，额外和缺失记录均为 0。地形图课当时使用了范围较宽的“等高线”知识点。
+教材、题集和作答由项目作者设计，结果衡量工作流交付与数据一致性。
+
+天文首轮辅导报错，地形图首轮词表解析失败，光学首轮只有细知识点可用，审计脚本拒绝把它们冒充用户选定的章节。
+修复后重新使用空白学员完成。最后冻结的音乐课首次调用即返回了正确的半拍算式，原评分器漏认 LaTeX 分数，记为 17/18；
+统一分数表示后对同一份回答重评为 18/18。原始题目、判定词和课程讲义均保持测试前的内容。
+各课程调用分布、对照与复评分数见[脱敏实测摘要](../eval/results/course-learning.json)。
 
 模型预算按原预扣日期结算。Redis Lua 原子写入预算差额和待落账用量，Worker 每分钟重放。
 PostgreSQL 通过用量 ID 去重，用量和钱包流水在同一事务提交。超过一小时仍缺少结果的
@@ -329,7 +369,7 @@ make test-web
 `make build-web` 单独执行。单测、集成、迁移测试、评测入口和构建通过 Linux/WSL 的 `flock`
 共用当前工作区的锁，即使从不同终端运行也会排队。可用 `make test-unit TEST=路径` 或
 `make test-integration TEST=路径` 只验证改动涉及的测试。测试使用开发替身，不加载本地记忆
-嵌入模型，Harness 默认两条顶层并发、一个协作子任务并发。
+嵌入模型，Harness 默认两条顶层并发、一个协作子任务并发。同机的 API 和 Worker 启动时依次核验 Ollama 的实际显存驻留，启动核验结束即释放进程锁。
 
 直接修改 `apps/web` 前先读
 `apps/web/AGENTS.md`，并按要求查阅当前安装版本的 Next.js 本地文档。

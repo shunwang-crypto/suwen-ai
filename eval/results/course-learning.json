@@ -1,0 +1,302 @@
+{
+  "date": "2026-11-28",
+  "runtime": "WSL, NVIDIA RTX 5060 Laptop, GPU-only local inference, one evaluation at a time",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "embedding": "bge-m3:latest",
+  "generator_digest": "0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0",
+  "context_tokens": 8192,
+  "plan": {
+    "golden": "eval/golden_set/plan-constraints.jsonl",
+    "golden_sha256": "8e6fdf949ce8addaeee8a3a5f8128cd118cb9370c590d6e3ab53b799991417ff",
+    "paired": {
+      "raw_report_sha256": "2252de6329f59b09a262b2554e82bc9ed4433bccfdc05efc62ba09dfdaf48fa1",
+      "runs": 24,
+      "groups": {
+        "direct": {
+          "samples": 12,
+          "clean": 0,
+          "contract_passed": 0,
+          "judge_passed": 12,
+          "judge_mean": 4.0,
+          "tool_error_cases": 0,
+          "generation_calls": 12,
+          "generation_calls_per_clean": null
+        },
+        "default": {
+          "samples": 12,
+          "clean": 12,
+          "contract_passed": 12,
+          "judge_passed": 12,
+          "judge_mean": 3.9166666666666665,
+          "tool_error_cases": 1,
+          "generation_calls": 75,
+          "generation_calls_per_clean": 6.25
+        }
+      }
+    },
+    "repeat_guided": {
+      "raw_report_sha256": "c1882d9bbbf8ceea0a16c04d6ff12c01b753338a0a73a8d864016d1715b888e1",
+      "runs": 12,
+      "groups": {
+        "default": {
+          "samples": 12,
+          "clean": 12,
+          "contract_passed": 12,
+          "judge_passed": 12,
+          "judge_mean": 3.9166666666666665,
+          "tool_error_cases": 3,
+          "generation_calls": 77,
+          "generation_calls_per_clean": 6.416666666666667
+        }
+      }
+    },
+    "program_recheck": {
+      "direct": {
+        "passed": 0,
+        "total": 12
+      },
+      "default": {
+        "passed": 12,
+        "total": 12
+      }
+    },
+    "judge": "Same local model graded anonymized outputs in separate requests. A pass also requires all program checks."
+  },
+  "journeys": [
+    {
+      "id": "lunar-geometry",
+      "case_sha256": "f9f32dda0bd42c10667e992bf39e4e215193e8fc3e3b2f8d7b1c63e41531de34",
+      "raw_report_sha256": "97b5bc4b173cd1c7cf4b781c857cd4234e84b00c52d4f17ac9ee82cc243fdd87",
+      "checks": 18,
+      "passed": 18,
+      "elapsed_seconds": 126.138,
+      "target": "月食条件",
+      "observed_kc": "月食条件",
+      "kc_mapping": "exact",
+      "error_items": {
+        "created": 4,
+        "reviewed": 1
+      },
+      "mastery_audit": {
+        "expected_records": 5,
+        "observed_records": 5,
+        "unexpected_records": 0,
+        "missing_records": 0,
+        "observed_by_source": {
+          "assessment_answer": 3,
+          "quiz_attempt": 1,
+          "review": 1
+        }
+      },
+      "committed_llm_calls": 35,
+      "request_linked_llm_calls": {
+        "qa_citations": 6,
+        "tutor_hints": 8,
+        "plan_draft": 6,
+        "targeted_quiz": 7
+      },
+      "unmatched_learner_calls_by_feature": {
+        "enrich_prefix": 3,
+        "kc_extract_chunk": 3,
+        "kc_vocab_build": 1,
+        "study_guide": 1
+      }
+    },
+    {
+      "id": "topographic-reading",
+      "case_sha256": "4d04e5ab226a97dac15aab0357528c6c81ef1fc8ad742942010a6e534893c09e",
+      "raw_report_sha256": "29910fb24586b9ca8d63e3fa1bfe04a3e64bbbf0b04512a9e47b120925548317",
+      "checks": 18,
+      "passed": 18,
+      "elapsed_seconds": 144.122,
+      "target": "等高线疏密与坡度",
+      "observed_kc": "等高线",
+      "kc_mapping": "unique_containment",
+      "error_items": {
+        "created": 4,
+        "reviewed": 1
+      },
+      "mastery_audit": {
+        "expected_records": 5,
+        "observed_records": 5,
+        "unexpected_records": 0,
+        "missing_records": 0,
+        "observed_by_source": {
+          "assessment_answer": 3,
+          "quiz_attempt": 1,
+          "review": 1
+        }
+      },
+      "committed_llm_calls": 38,
+      "request_linked_llm_calls": {
+        "qa_citations": 7,
+        "tutor_hints": 8,
+        "plan_draft": 4,
+        "targeted_quiz": 11
+      },
+      "unmatched_learner_calls_by_feature": {
+        "enrich_prefix": 3,
+        "kc_extract_chunk": 3,
+        "kc_vocab_build": 1,
+        "study_guide": 1
+      }
+    },
+    {
+      "id": "plane-mirrors",
+      "case_sha256": "f2583687341935dc8bd494f2e2063a9a1639e3006a524d2f36a4c8a253816e53",
+      "raw_report_sha256": "a657ece975b67903a4b36624e5a69cb8a304b677347ee2db6317cf733888943e",
+      "checks": 18,
+      "passed": 18,
+      "elapsed_seconds": 140.739,
+      "target": "平面镜成像",
+      "observed_kc": "平面镜成像",
+      "kc_mapping": "exact",
+      "error_items": {
+        "created": 4,
+        "reviewed": 1
+      },
+      "mastery_audit": {
+        "expected_records": 5,
+        "observed_records": 5,
+        "unexpected_records": 0,
+        "missing_records": 0,
+        "observed_by_source": {
+          "assessment_answer": 3,
+          "quiz_attempt": 1,
+          "review": 1
+        }
+      },
+      "committed_llm_calls": 40,
+      "request_linked_llm_calls": {
+        "qa_citations": 7,
+        "tutor_hints": 8,
+        "plan_draft": 8,
+        "targeted_quiz": 9
+      },
+      "unmatched_learner_calls_by_feature": {
+        "enrich_prefix": 3,
+        "kc_extract_chunk": 3,
+        "kc_vocab_build": 1,
+        "study_guide": 1
+      }
+    },
+    {
+      "id": "musical-rhythm",
+      "case_sha256": "497aa5b5b6375cbeb053a84e2e46fa7af3c35a41e519ffbf1226e8157fd6d19b",
+      "raw_report_sha256": "0f286bbbbebcba71fc00f0f626c8df5dae280522e0825c3d6965e1a85df9bdf6",
+      "checks": 18,
+      "passed": 18,
+      "elapsed_seconds": 141.1,
+      "target": "附点音符",
+      "observed_kc": "附点音符",
+      "kc_mapping": "exact",
+      "error_items": {
+        "created": 4,
+        "reviewed": 1
+      },
+      "mastery_audit": {
+        "expected_records": 5,
+        "observed_records": 5,
+        "unexpected_records": 0,
+        "missing_records": 0,
+        "observed_by_source": {
+          "assessment_answer": 3,
+          "quiz_attempt": 1,
+          "review": 1
+        }
+      },
+      "committed_llm_calls": 37,
+      "request_linked_llm_calls": {
+        "qa_citations": 5,
+        "tutor_hints": 8,
+        "plan_draft": 5,
+        "targeted_quiz": 11
+      },
+      "unmatched_learner_calls_by_feature": {
+        "enrich_prefix": 3,
+        "kc_extract_chunk": 3,
+        "kc_vocab_build": 1,
+        "study_guide": 1
+      },
+      "raw_checks_passed": 17,
+      "scoring_note": "Exact rational comparison applied to original, unchanged LaTeX answer. No further model generation."
+    }
+  ],
+  "first_attempts": [
+    {
+      "course": "lunar-geometry",
+      "version": "protocol-only journey before content & mastery audit checks",
+      "passed": 16,
+      "checks": 17,
+      "failure": "tutor_hints returned HTTP 500"
+    },
+    {
+      "course": "topographic-reading",
+      "passed": 2,
+      "checks": 18,
+      "failures": [
+        "semantic course vocabulary",
+        "hint progression"
+      ]
+    },
+    {
+      "course": "plane-mirrors",
+      "freeze_commit": "a4752f8",
+      "passed": 8,
+      "checks": 18,
+      "failures": [
+        "target chapter absent from semantic chunk bindings"
+      ]
+    },
+    {
+      "course": "musical-rhythm",
+      "freeze_commit": "6e509a1",
+      "passed_before_scorer_correction": 17,
+      "checks": 18,
+      "same_answer_rescore": {
+        "case_sha256": "497aa5b5b6375cbeb053a84e2e46fa7af3c35a41e519ffbf1226e8157fd6d19b",
+        "raw_status": "failed",
+        "reevaluated_check": "qa_citations",
+        "before": [
+          "一半",
+          null,
+          "一拍"
+        ],
+        "after": [
+          "一半",
+          "0.5拍",
+          "一拍"
+        ],
+        "result": "passed",
+        "checks": 18,
+        "additional_model_calls": 0
+      },
+      "answer_excerpt": "- 四分音符原值为一拍，其单附点延长一半，即延长 $\\frac{1}{2}$ 拍，总时值为 $1 + \\frac{1}{2} = 1.5$ 拍（一拍半）。",
+      "source_heading": "节拍与时值 > 附点音符"
+    }
+  ],
+  "limitations": [
+    "Developer-authored courses and fixed submissions, not a measure of learning gains.",
+    "Each scoped journey used a dedicated learner. Embeddings, failed provider HTTP requests, and uncommitted LLM usage are outside the call counts.",
+    "Unmatched usage is included only in the dedicated learner total, with no assignment to an individual HTTP step.",
+    "Successful runs were collected as fixes landed. The music case was frozen last and used once; its original answer was rescored without rerunning the product."
+  ],
+  "total_committed_llm_calls": 150,
+  "resource_observations": {
+    "elapsed_seconds": 2726,
+    "wsl_total_kib": 7984332,
+    "wsl_min_available_kib": 2420272,
+    "wsl_peak_swap_used_kib": 1535524,
+    "ollama_peak_reported_vram_bytes": 3877571133,
+    "models": {
+      "qwen3:4b-instruct-2507-q4_K_M": {
+        "samples": 471,
+        "fully_gpu_samples": 471
+      },
+      "bge-m3:latest": {
+        "samples": 15,
+        "fully_gpu_samples": 15
+      }
+    }
+  }
+}

@@ -522,8 +522,8 @@ DSH 接入保持出题/计划的 `interrupt` 与 `/api/threads/{thread_id}/resum
 
 SSE 首先发送 `task_started {thread_id,status}`，使界面在中断前即可保留权威线程标识。
 协作事件是 `trace_event`，其 `type=agent` 且含角色、父子任务标识、事件、摘要；
-计划 interrupt 另含 `review` 的六项检查和修改建议。确认编辑需要新版本独立审查；
-未解决时回到确认并返回问题。内部子任务不能通过公共 resume/retry 接口直接改变状态。
+团队模式的计划 interrupt 另含 `review` 的六项检查和修改建议。团队模式下编辑后需要重新独立审查。
+默认 guided 模式返回实际草案与所用资源，确认时校验编辑后的步骤、时长和引用，校验失败返回 `PLAN_EDIT_INVALID`。内部子任务不能通过公共 resume/retry 接口直接改变状态。
 前端保留已准入线程的表单与草案最多七天，刷新后查询服务端活动恢复；未准入表单保留半小时。
 AI 运行错误支持 `HARNESS_TIMEOUT`、`HARNESS_STEP_LIMIT`、`HARNESS_PHASE_LIMIT`、
 `HARNESS_TOOL_DENIED`、`HARNESS_PROTOCOL_ERROR`、`HARNESS_NOT_PAUSED` 和
