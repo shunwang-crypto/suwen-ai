@@ -433,10 +433,10 @@ class GatewayLiveCallsMixin:
                     if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
                         breaker.record(False)
                         self._candidate_failures[candidate.id] = self._failure_code(exc)
-                    if reserved_tier is not None:
-                        await self._refund_reservation(req, reserved_tier)
+                    # The original reservation also identifies the durable usage event.
                     await self._settle_partial_candidate(
-                        req, candidate, "".join(parts) + metadata.cost_text, started, reserved_tier=None
+                        req, candidate, "".join(parts) + metadata.cost_text, started,
+                        reserved_tier=reserved_tier,
                     )
                     if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
                         raise

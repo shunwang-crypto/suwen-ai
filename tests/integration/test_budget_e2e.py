@@ -10,8 +10,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from eduagents_api.budget import MICRO_PER_CNY, RedisBudgetGuard
@@ -20,7 +23,9 @@ from eduagents_core.gateway import (
     BudgetExceeded,
     ChatMessage,
     ChatRequest,
+    GatewayError,
     OpenAIGateway,
+    StreamDelta,
     Tier,
     UsageEvent,
 )
@@ -216,3 +221,115 @@ async def test_worker_replays_completed_usage_once_after_api_exit(redis, client)
         assert await session.scalar(select(func.count()).where(
             WalletLedger.user_id == uuid.UUID(user), WalletLedger.ref == "model-turn-1")) == 1
     assert not await db.hexists("budget:usage:outbox", ticket.id)
+
+
+async def test_interrupted_paid_stream_survives_failed_commit_and_concurrent_replay(
+    redis, client, monkeypatch, tmp_path,
+):
+    from eduagents_api import usage
+    from eduagents_api.budget import replay_budget_usage
+    from eduagents_api.db import tenant_session
+    from eduagents_api.models import UsageLog, WalletAccount, WalletLedger
+    from eduagents_api.wallet import WalletService
+    from sqlalchemy import select
+
+    registered = await client.post("/api/auth/register", json={
+        "email": f"stream-metering-{uuid.uuid4().hex[:12]}@test.eduagents.cn",
+        "password": "pass-12345",
+    })
+    assert registered.status_code == 201
+    user = uuid.UUID(registered.json()["id"])
+    owner = str(user)
+    request = ChatRequest(
+        messages=(ChatMessage("user", "导数"),),
+        tenant_id=owner,
+        user_id=owner,
+        request_id="paid-stream-test",
+        billing_reference="paid-stream-model-call",
+    )
+    db, created = redis
+    user_key, global_key = f"budget:{owner}:{DAY}", f"budget:global:{DAY}"
+    created.extend([user_key, global_key])
+    settings = _settings(
+        gateway_mode="live",
+        gateway_cassette_dir=str(tmp_path),
+        model_routing_enabled=True,
+        trenddao_api_key="test-key",
+        trenddao_input_price_per_m=5000,
+        trenddao_output_price_per_m=15000,
+        billing_markup=3.0,
+    )
+    monkeypatch.setattr("eduagents_api.wallet.get_wallet_service", lambda: WalletService(settings))
+    guard = RedisBudgetGuard(db, settings, now_fn=_fixed_now)
+
+    async def upstream(_request, _candidate):
+        async def response():
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="答案"))], usage=None)
+            raise TimeoutError("upstream timed out before sending final usage")
+
+        return response()
+
+    async def snapshot():
+        async with tenant_session(user) as session:
+            balance = await session.scalar(select(WalletAccount.balance).where(WalletAccount.user_id == user))
+            logs = (await session.scalars(select(UsageLog).where(UsageLog.user_id == user))).all()
+            charges = (await session.scalars(select(WalletLedger).where(
+                WalletLedger.user_id == user, WalletLedger.kind == "consume",
+            ))).all()
+        return balance, logs, charges
+
+    starting_balance, logs, charges = await snapshot()
+    assert not logs and not charges
+
+    async def fail_before_commit(service, *args, **kwargs):
+        await consume(service, *args, **kwargs)
+        raise ConnectionError("injected failure after wallet writes, before transaction commit")
+
+    persist_usage = usage.persist_usage
+    consume = WalletService.consume
+    online_events = []
+
+    async def online_sink(event):
+        online_events.append(event)
+        return await persist_usage(event)
+
+    gateway = OpenAIGateway(settings, usage_sink=online_sink, budget_guard=guard)
+    monkeypatch.setattr(gateway, "_create_candidate_stream", upstream)
+    with monkeypatch.context() as patch:
+        patch.setattr(WalletService, "consume", fail_before_commit)
+        stream = gateway.stream_chat(request)
+        assert await anext(stream) == StreamDelta("答案")
+        with pytest.raises(GatewayError, match="MODEL_STREAM_INTERRUPTED"):
+            await anext(stream)
+
+    assert await snapshot() == (starting_balance, [], [])
+    assert len(online_events) == 1
+    ticket_id = online_events[0].settlement_id
+    assert ticket_id, "partial usage must keep its reservation ID for outbox replay"
+    created.append(f"budget:call:{ticket_id}")
+    assert await db.hexists("budget:usage:outbox", ticket_id)
+
+    # Both worker instances must have read the same pending event before either commits it.
+    same_event = asyncio.Barrier(2)
+
+    async def replay_sink(event):
+        if event.settlement_id == ticket_id:
+            await same_event.wait()
+        return await persist_usage(event)
+
+    monkeypatch.setattr(usage, "persist_usage", replay_sink)
+    redis_url = Settings(_env_file=None).redis_url
+    async with Redis.from_url(redis_url, decode_responses=True) as second_worker, asyncio.timeout(10):
+        await asyncio.gather(replay_budget_usage({"redis": db}), replay_budget_usage({"redis": second_worker}))
+
+    balance, logs, charges = await snapshot()
+    assert len(logs) == len(charges) == 1
+    assert logs[0].id == uuid.UUID(ticket_id)
+    assert logs[0].tenant_id == logs[0].user_id == charges[0].user_id == user
+    assert logs[0].request_id == request.request_id and charges[0].ref == request.billing_reference
+    assert (logs[0].prompt_tokens, logs[0].completion_tokens) == (2, 2)
+    assert logs[0].platform_billed_cost_cny == pytest.approx(0.04)
+    assert charges[0].delta == Decimal("-0.1200")
+    assert charges[0].balance_after == balance == starting_balance - Decimal("0.1200")
+    assert float(await db.get(user_key)) == float(await db.get(global_key)) == 40
+    assert not await db.hexists("budget:usage:outbox", ticket_id)
