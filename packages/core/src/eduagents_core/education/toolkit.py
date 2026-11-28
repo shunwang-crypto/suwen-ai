@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import uuid
 
 from ..gateway.base import ChatMessage, ChatRequest, GatewayError, Tier
@@ -49,7 +50,7 @@ def argument_errors(value, spec, path="arguments"):
     if "enum" in spec and value not in spec["enum"]:
         return [f"{path}: invalid value"]
     errors = []
-    if isinstance(kind, str) and kind in {"integer", "number"} and isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         if value < spec.get("minimum", float("-inf")) or value > spec.get("maximum", float("inf")):
             errors.append(f"{path}: out of range")
     if isinstance(value, dict):
@@ -61,12 +62,19 @@ def argument_errors(value, spec, path="arguments"):
             elif spec.get("additionalProperties") is False:
                 errors.append(f"{path}.{key}: unknown argument")
     if isinstance(value, list):
+        if len(value) < spec.get("minItems", 0):
+            errors.append(f"{path}: too few items (minimum {spec['minItems']})")
         if len(value) > spec.get("maxItems", 1000):
             errors.append(f"{path}: too many items")
         for index, item in enumerate(value[:1000]):
             errors.extend(argument_errors(item, spec.get("items", {}), f"{path}[{index}]"))
-    if isinstance(value, str) and len(value) > spec.get("maxLength", 50000):
-        errors.append(f"{path}: too long")
+    if isinstance(value, str):
+        if len(value) < spec.get("minLength", 0):
+            errors.append(f"{path}: too short")
+        if len(value) > spec.get("maxLength", 50000):
+            errors.append(f"{path}: too long")
+        if "pattern" in spec and re.search(spec["pattern"], value) is None:
+            errors.append(f"{path}: must match {spec['pattern']}")
     return errors[:20]
 
 

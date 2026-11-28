@@ -2,7 +2,9 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from eduagents_core.education.prompt_evolution import (
     EvaluationGateway,
     EvolutionCase,
@@ -11,7 +13,7 @@ from eduagents_core.education.prompt_evolution import (
 from eduagents_core.education.prompts import load_prompt_bundle
 from eduagents_core.gateway.base import ChatResult
 
-from eval.run_agent_ablation import direct_case, summarize
+from eval.run_agent_ablation import direct_case, run, summarize
 
 
 class Model:
@@ -55,6 +57,34 @@ def test_summary_separates_completion_quality_contracts_and_cost():
     report = summarize(rows)["team"]
     assert report["samples"] == 2 and report["completed"] == 1 and report["clean"] == 0
     assert report["judge_scored"] == 1 and report["calls"] == 22 and report["mean_wall_ms"] == 2000
+    assert report["generation_calls_per_clean"] is None
+    rows[0].update(violations=[], generation_calls=8, generation_wall_ms=800)
+    rows[1].update(generation_calls=12, generation_wall_ms=2500)
+    report = summarize(rows)["team"]
+    assert report["clean"] == 1
+    assert report["generation_calls_per_clean"] == 20
+    assert report["generation_wall_ms_per_clean"] == 3300
+
+
+async def test_interrupted_ablation_records_selected_denominator(tmp_path, monkeypatch):
+    from eduagents_core.gateway.base import GatewayError
+
+    from eval import run_agent_ablation as runner
+
+    async def exhausted(*args, **kwargs):
+        raise GatewayError("BUDGET_EXCEEDED", "budget exhausted")
+
+    monkeypatch.setattr(runner, "direct_case", exhausted)
+    args = SimpleNamespace(smoke=True, ollama_model=None, prompt_version="edu-v2",
+                           golden=runner.ROOT / "eval/golden_set/plan-constraints.jsonl",
+                           case_id=["plan-simple-units"], split="holdout", repetitions=2,
+                           max_calls=1, max_cost_cny=1., output=tmp_path / "run.json")
+    with pytest.raises(GatewayError, match="BUDGET_EXCEEDED"):
+        await run(args)
+    report = json.loads(args.output.read_text())
+    assert report["case_ids"] == ["plan-simple-units"]
+    assert (report["recorded_runs"], report["expected_runs"]) == (0, 6)
+    assert report["status"] == "interrupted"
 
 
 def test_cross_document_relevance_requires_matching_book():

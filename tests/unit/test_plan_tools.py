@@ -131,7 +131,12 @@ def plan_tools(**overrides):
 @pytest.mark.parametrize("days,budget", [(1, 0.25), (2, 1), (7, 2), (30, 0.5)])
 async def test_plan_hardens_days_budget_and_user_confirmation(days, budget):
     tools, record = plan_tools(total_days=days, budget_hours_per_day=budget)
-    await tools.submit({"plan": copy.deepcopy(GOOD_DRAFT), "goal_outline": PARSE})
+    legacy = copy.deepcopy(GOOD_DRAFT)
+    stage = legacy["stages"][0]
+    del stage["name"]
+    del stage["days"][0]["day"]
+    stage["days"][0]["tasks"][0]["minutes"] = "60"
+    await tools.handlers["submit_plan_draft"]({"plan": legacy, "goal_outline": PARSE})
     assert record.status == "awaiting_confirmation"
     actual = flat_days(record.state["plan"])
     assert len(actual) == days and [d["day"] for d in actual] == list(range(1, days + 1))

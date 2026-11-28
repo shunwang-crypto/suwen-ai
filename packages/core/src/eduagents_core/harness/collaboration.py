@@ -16,6 +16,7 @@ from dataclasses import replace
 from ..gateway.base import BudgetExceeded, ChatResult, GatewayError
 
 ROLES = {"researcher", "planner", "reviewer"}
+CONFIRMED_PLAN_NAME = "confirmed-plan"
 INPUT_KEYS = (
     "tenant_id", "user_id", "goal", "current_level", "target_outcome", "success_criteria",
     "total_days", "budget_hours_per_day", "plan_mode", "kb_id", "kb_ids", "owner_ids",
@@ -82,10 +83,25 @@ class AgentCollaboration:
         del self.events[:-200]
         self.emit({"kind": "trace", "payload": payload})
 
-    def resolve(self, task_id):
-        task = self.tasks.get(task_id)
-        if task is None or task["status"] != "completed":
-            raise GatewayError("AGENT_RESULT_UNAVAILABLE", "指定子任务尚未完成或不属于本次任务")
+    def lookup(self, reference):
+        task = self.tasks.get(reference)
+        if task is not None:
+            return task
+        confirmed_id = self.record.state.get("confirmed_plan_task_id")
+        matches = [
+            task for task in self.tasks.values()
+            if task["name"] == reference and (task["role"] != "user" or task["id"] == confirmed_id)
+        ]
+        if len(matches) > 1:
+            raise GatewayError("AGENT_RESULT_AMBIGUOUS", f"任务名称 {reference} 有多个匹配，请指定返回的 id")
+        if not matches:
+            raise GatewayError("AGENT_RESULT_UNAVAILABLE", f"本次任务没有名为 {reference} 的交付，请使用返回的 name")
+        return matches[0]
+
+    def resolve(self, reference):
+        task = self.lookup(reference)
+        if task["status"] != "completed":
+            raise GatewayError("AGENT_RESULT_UNAVAILABLE", f"任务 {task['name']} 尚未成功完成，请先收集结果")
         return task
 
     def public(self, task, *, artifact=False):
@@ -94,18 +110,53 @@ class AgentCollaboration:
             result["artifact"] = copy.deepcopy(task["artifact"])
         return result
 
-    def _handoff_error(self, message):
+    def handoff_error(self, message):
         return {
             "accepted": False,
             "errors": [message],
             "available_inputs": [
-                {"id": item["id"], "role": item["role"]} for item in self.tasks.values()
+                {"name": item["name"], "role": item["role"], "id": item["id"]} for item in self.tasks.values()
                 if item["status"] == "completed"
             ],
             "awaiting_collection": [
-                item["id"] for item in self.tasks.values() if item["status"] in {"queued", "running"}
+                item["name"] for item in self.tasks.values() if item["status"] in {"queued", "running"}
             ],
         }
+
+    def _upstream_tasks(self, role):
+        candidates = [task for task in self.tasks.values() if task["role"] == role]
+        if role != "user":
+            return candidates
+        from ..education.plan_checks import plan_digest
+
+        state = self.record.state
+        digest = plan_digest(state.get("plan"))
+        return [
+            task for task in candidates
+            if task["id"] == state.get("confirmed_plan_task_id")
+            and (task.get("artifact") or {}).get("digest") == digest
+        ]
+
+    def _implicit_sources(self, role, upstream_role, upstream, batch_roles):
+        if role == "planner" and any(
+            task["role"] in {"planner", "reviewer"} and task["status"] == "completed"
+            for task in self.tasks.values()
+        ):
+            raise GatewayError("AGENT_INPUT_REQUIRED", "已有规划或审查交付物，请明确指定本次规划要使用的任务名称")
+        completed = [
+            task for task in upstream
+            if task["status"] == "completed" and isinstance(task.get("artifact"), dict)
+        ]
+        if (
+            len(completed) != 1
+            or any(task["status"] in {"queued", "running"} for task in upstream)
+            or upstream_role in batch_roles
+        ):
+            raise GatewayError(
+                "AGENT_INPUT_REQUIRED",
+                f"无法确定唯一已完成的 {upstream_role} 交付物，请收集结果后明确填写 input_task_ids",
+            )
+        return completed
 
     async def delegate(self, args):
         specs = args["tasks"]
@@ -114,24 +165,42 @@ class AgentCollaboration:
         # Validate the complete batch before admitting any child.
         validated, names = [], set()
         confirmed = bool(self.record.state.get("plan_confirmed"))
+        batch_roles = {spec["role"] for spec in specs}
         for spec in specs:
             role, name = spec["role"], spec["name"]
             if role not in ROLES or (confirmed and role != "reviewer") or name in names or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name) or not spec["instructions"].strip():
                 return {"accepted": False, "errors": ["子任务角色、名称或确认后的操作不合法"]}
             names.add(name)
-            inputs = spec.get("input_task_ids") or []
-            try:
-                sources = [self.resolve(value) for value in inputs]
-            except GatewayError as exc:
-                return self._handoff_error(exc.message)
-            if role == "planner" and not any(s["role"] == "researcher" for s in sources):
-                return self._handoff_error("先收集 researcher，再将研究任务 id 传入 planner 的 input_task_ids。")
-            if role == "reviewer" and len([s for s in sources if s["role"] in {"planner", "user"}]) != 1:
-                return self._handoff_error("先收集 planner，再将一个草案任务 id 传入 reviewer 的 input_task_ids。")
             identity = uuid.uuid5(uuid.NAMESPACE_URL, self.thread_id + ":" + name).hex
             task_id = f"{role}:{identity}"
             old = self.tasks.get(task_id)
-            if old and (old["instructions"] != spec["instructions"] or old["input_task_ids"] != inputs):
+            if old is None and (
+                name == CONFIRMED_PLAN_NAME or any(t["name"] == name for t in self.tasks.values())
+            ):
+                return self.handoff_error("子任务名称已被使用，请为新任务分配一个不同的名称")
+            inputs = spec.get("input_task_ids") or []
+            upstream_role = {"planner": "researcher", "reviewer": "user" if confirmed else "planner"}.get(role)
+            upstream = self._upstream_tasks(upstream_role) if upstream_role else []
+            try:
+                if old is not None and not inputs:
+                    inputs = old["input_task_ids"]
+                if inputs or old is not None or upstream_role is None:
+                    sources = [self.resolve(value) for value in inputs]
+                else:
+                    sources = self._implicit_sources(role, upstream_role, upstream, batch_roles)
+            except GatewayError as exc:
+                return self.handoff_error(exc.message)
+            input_ids = [source["id"] for source in sources]
+            if len(set(input_ids)) != len(input_ids):
+                return self.handoff_error("同一交付物只需引用一次")
+            if role == "planner" and not any(s["role"] == "researcher" for s in sources):
+                return self.handoff_error("先收集 researcher，再将研究任务的 name 传入 planner 的 input_task_ids。")
+            if role == "reviewer":
+                drafts = [source for source in sources if source["role"] in {"planner", "user"}]
+                if len(drafts) != 1 or drafts[0] not in upstream:
+                    message = "审查必须引用当前的 confirmed-plan" if confirmed else "审查必须引用一份已完成的 planner 草案"
+                    return self.handoff_error(message)
+            if old and (old["instructions"] != spec["instructions"] or old["input_task_ids"] != input_ids):
                 return {"accepted": False, "errors": ["同名子任务不能更换输入，请使用新的名称"]}
             validated.append((spec, task_id, sources))
         new_count = sum(task_id not in self.tasks for _, task_id, _ in validated)
@@ -145,13 +214,13 @@ class AgentCollaboration:
             task = self.tasks.get(task_id)
             if task is not None and (task["status"] == "completed" or task_id in self.running):
                 continue
-            task = task or {"id": task_id, "name": spec["name"], "role": spec["role"], "instructions": spec["instructions"], "input_task_ids": spec.get("input_task_ids") or []}
+            task = task or {"id": task_id, "name": spec["name"], "role": spec["role"], "instructions": spec["instructions"], "input_task_ids": [source["id"] for source in sources]}
             task.update(status="queued", error_code="", summary="等待执行")
             self.tasks[task_id] = task
             self.event(task, "queued", task["summary"])
             self.running[task_id] = asyncio.create_task(self.run_child(task, sources))
         await self.store.save(self.thread_id, self.record)
-        return {"accepted": True, "tasks": [self.public(self.tasks[tid]) for _, tid, _ in validated], "instruction": "使用 collect_agent_results 获取交付物"}
+        return {"accepted": True, "tasks": [self.public(self.tasks[tid]) for _, tid, _ in validated], "instruction": "将子任务的 name 填入 collect_agent_results.task_ids 获取交付物"}
 
     async def run_child(self, task, sources):
         from .task import AgentTask
@@ -201,11 +270,13 @@ class AgentCollaboration:
             self.event(task, "tool_" + event["status"], "调用教学工具", tool=event["tool"])
 
     async def collect(self, args):
-        ids = args["task_ids"]
-        if not ids:
+        references = args["task_ids"]
+        if not references:
             return {"accepted": False, "errors": ["至少指定一个子任务"]}
-        if any(value not in self.tasks for value in ids):
-            return {"accepted": False, "errors": ["只能收集本次任务委派的子任务"]}
+        try:
+            ids = list(dict.fromkeys(self.lookup(reference)["id"] for reference in references))
+        except GatewayError as exc:
+            return self.handoff_error(exc.message)
         # Re-admit previously admitted workers after process loss, using their
         # original identities and deliverables. Completed work is never rerun.
         for value in ids:
@@ -233,7 +304,7 @@ class AgentCollaboration:
         digest = plan_digest(plan)
         task_id = "user:" + digest[:32]
         self.tasks[task_id] = {
-            "id": task_id, "name": "confirmed-plan", "role": "user", "status": "completed",
+            "id": task_id, "name": CONFIRMED_PLAN_NAME, "role": "user", "status": "completed",
             "instructions": "用户确认的计划", "input_task_ids": [], "summary": "用户确认版本",
             "artifact": {"plan": copy.deepcopy(plan), "digest": digest,
                          "resources": copy.deepcopy(self.record.state.get("resources") or []),

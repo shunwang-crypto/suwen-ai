@@ -8,7 +8,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..gateway.base import GatewayError, Tier
-from .plan import PlanTools, _coerce_plan, _harden_plan
+from .plan import PlanTools
 from .plan_checks import CHECKS, plan_digest, plan_issues
 from .toolkit import STRINGS, TEXT, EducationTools, schema
 
@@ -73,6 +73,7 @@ class ResearchTools(EducationTools):
 
 class PlannerTools(PlanTools):
     feature = "agent_planner"
+    phased_draft = True
 
     def __init__(self, deps, record, emit):
         super().__init__(deps, record, emit)
@@ -88,8 +89,8 @@ class PlannerTools(PlanTools):
 
     def policy(self):
         return self.teaching_policy("plan") + team_policy(self, "planner") + (
-            "\nplan 格式为 stages:[{name,days:[{day,tasks:[{title,minutes,kc_names,resource_ref,action_type,objective,instructions,completion_criteria,step_key,learning_phase,depends_on}]}]}。"
-            "resource_ref 必须来自 read_assignment 返回的 resources，下标从0开始，无资料时填 null。"
+            "\n按 submit_plan_draft 的结构提交。resource_ref 来自 read_assignment 返回的 resources，下标从 0 开始，无合适资料填 null。"
+            "工具返回 issues 时，按 task_keys 定位步骤并处理 suggestion，再提交完整草案。"
         )
 
     def input(self, messages):
@@ -97,21 +98,17 @@ class PlannerTools(PlanTools):
 
     async def read_assignment(self, _args):
         self.state["assignment_read"] = True
-        return {**assignment(self), "resources": self.resources()}
+        return {
+            **assignment(self), "resources": self.resources(),
+            "total_days": self.state.get("total_days"),
+            "daily_minutes": float(self.state.get("budget_hours_per_day") or 1) * 60,
+            "kc_order": self.state.get("kc_order") or [],
+        }
 
     async def submit(self, args):
         if not self.state.get("assignment_read"):
             return {"accepted": False, "errors": ["先 read_assignment 阅读研究与审查交付物"]}
-        plan = _coerce_plan(args.get("plan"))
-        if plan is None:
-            return {"accepted": False, "errors": ["计划结构无效"]}
-        _harden_plan(plan, total_days=max(1, int(self.state.get("total_days") or 1)),
-                     budget_minutes=max(1.0, float(self.state.get("budget_hours_per_day") or 1) * 60),
-                     kc_order=self.state.get("kc_order") or [], n_resources=len(self.resources()), fixes=[])
-        issues = plan_issues(plan, self.state)
-        if issues:
-            return {"accepted": False, "errors": [v["message"] for v in issues], "issues": issues}
-        result = await super().submit({**args, "plan": plan})
+        result = await super().submit(args)
         if result["accepted"]:
             self.record.pending, self.record.status = None, "completed"
             self.state["artifact"] = {
@@ -168,8 +165,11 @@ class PlanReviewerTools(EducationTools):
         return {
             "input": super().input([]), "diagnosis": self.state.get("diagnosis") or {},
             "kc_order": self.state.get("kc_order") or [], "draft": self.draft,
-            "program_issues": plan_issues(self.draft["plan"], self.state), "required_checks": CHECKS,
+            "program_issues": self.program_issues(), "required_checks": CHECKS,
         }
+
+    def program_issues(self):
+        return plan_issues(self.draft["plan"], self.state, resources=self.draft.get("resources") or [])
 
     async def submit(self, args):
         if not self.state.get("review_context_read"):
@@ -184,7 +184,7 @@ class PlanReviewerTools(EducationTools):
             return {"accepted": False, "errors": ["先修、基线、时间与目标覆盖必须实际检查，不能标记为不适用"]}
         if self.draft.get("resources") and review.checks["resources"] == "not_applicable":
             return {"accepted": False, "errors": ["草案引用了资料，必须核验资源依据"]}
-        program = plan_issues(self.draft["plan"], self.state)
+        program = self.program_issues()
         if review.approved and (review.issues or program or "fail" in review.checks.values()):
             return {"accepted": False, "errors": ["存在程序问题、审查问题或 fail 时不能批准"], "program_issues": program}
         if not review.approved and not review.issues:
@@ -198,26 +198,32 @@ class PlanReviewerTools(EducationTools):
 
 class PlanCoordinatorTools(PlanTools):
     feature = "agent_plan_coordinator"
+    phased_draft = True
 
     def __init__(self, deps, record, emit, collaboration):
         EducationTools.__init__(self, deps, record, emit)
         self.collaboration = collaboration
         self.add_learning_context()
-        self.add(schema("delegate_agents", "先委派 researcher 并 collect，再将返回的研究 id 放入 planner.input_task_ids；收集草案后，将草案 id 放入 reviewer.input_task_ids。同一批仅可并行无依赖子任务。", {
+        self.add(schema("delegate_agents", "先委派并收集 researcher，再用研究任务的 name 委派 planner，收集草案后用草案的 name 委派 reviewer。同一批仅可并行无依赖子任务。", {
             "tasks": {"type": "array", "minItems": 1, "maxItems": 3, "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {"role": {"type": "string", "enum": ["researcher", "planner", "reviewer"]},
                                "name": {"type": "string", "maxLength": 64}, "instructions": TEXT,
-                               "input_task_ids": {**STRINGS, "description": "已收集交付物的任务 id。首次研究传 []，规划传研究 id，审查传一个草案 id。"}}, "required": ["role", "name", "instructions"]}},
+                               "input_task_ids": {**STRINGS, "description": "已收集任务的简短 name（也支持 id）。规划引用研究，审查引用一个草案。有多份上游交付物或正在执行时，应明确指定。返工时指定使用的草案和审查。"}}, "required": ["role", "name", "instructions"]}},
         }, ("tasks",)), collaboration.delegate)
-        self.add(schema("collect_agent_results", "等待指定子任务结束并读取交付物。", {"task_ids": STRINGS}, ("task_ids",)), collaboration.collect)
+        self.add(schema("collect_agent_results", "等待指定子任务结束并读取交付物。", {
+            "task_ids": {**STRINGS, "description": "子任务的简短 name 列表，也支持 id。"},
+        }, ("task_ids",)), collaboration.collect)
         self.add(schema("report_team_failure", "有限返工仍不能得到合格成果时如实结束任务。", {"message": TEXT}, ("message",)), self.failure)
         if self.state.get("plan_confirmed"):
             collaboration.confirmed_input()
-            self.add(schema("publish_plan", "只发布用户确认且对应审查通过的版本。", {}), self.publish)
+            self.add(schema("publish_plan", "发布用户确认且对应审查通过的版本。", {
+                "review_task_id": {"type": "string", "description": "如有多份符合条件的审查，必填选定 reviewer 的 name 或 id。"},
+            }), self.publish)
         else:
             self.add(schema("submit_reviewed_plan", "引用已完成规划和审查任务，提交同一版本合格草案等待用户确认。", {
-                "draft_task_id": {"type": "string"}, "review_task_id": {"type": "string"},
+                "draft_task_id": {"type": "string", "description": "选定 planner 的简短 name，也支持 id。"},
+                "review_task_id": {"type": "string", "description": "审核该草案并批准的 reviewer 的简短 name，也支持 id。"},
             }, ("draft_task_id", "review_task_id")), self.submit_reviewed)
 
     def policy(self):
@@ -225,7 +231,7 @@ class PlanCoordinatorTools(PlanTools):
         return team_policy(self, "coordinator") + json.dumps({
             "tasks": roster, "confirmed": bool(self.state.get("plan_confirmed")),
             "confirmed_plan_task_id": self.state.get("confirmed_plan_task_id"),
-            "instruction": "确认后不能修改计划；若用户编辑使版本变化，先委派 reviewer 审查 confirmed_plan_task_id，收集结果后再 publish_plan。",
+            "instruction": "所有任务引用参数（包括名称含 id 的参数）优先用返回的短 name。确认后不能修改计划；若用户编辑使版本变化，委派 reviewer 审查 confirmed-plan，收集结果后再 publish_plan。",
         }, ensure_ascii=False)
 
     async def submit_reviewed(self, args):
@@ -233,10 +239,10 @@ class PlanCoordinatorTools(PlanTools):
             draft = self.collaboration.resolve(args["draft_task_id"])
             review = self.collaboration.resolve(args["review_task_id"])
         except GatewayError as exc:
-            return {"accepted": False, "errors": [exc.message]}
+            return self.collaboration.handoff_error(exc.message)
         artifact, verdict = draft.get("artifact") or {}, review.get("artifact") or {}
         if draft["role"] != "planner" or review["role"] != "reviewer" or not verdict.get("approved") or verdict.get("draft_digest") != artifact.get("digest"):
-            return {"accepted": False, "errors": ["必须引用同一版本已通过独立审查的规划草案"]}
+            return self.collaboration.handoff_error("必须引用同一版本已通过独立审查的规划草案")
         self.state.update({k: copy.deepcopy(artifact.get(k) or []) for k in ("evidences", "web_results", "resources")})
         result = await PlanTools.submit(self, {"plan": artifact["plan"], "goal_outline": artifact.get("goal_outline") or {}})
         if result["accepted"]:
@@ -252,11 +258,26 @@ class PlanCoordinatorTools(PlanTools):
     async def publish(self, args):
         digest = plan_digest(self.state["plan"])
         if digest != self.state.get("approved_plan_digest"):
-            reviews = [task.get("artifact") or {} for task in self.collaboration.tasks.values() if task["role"] == "reviewer" and task["status"] == "completed"]
-            approved = next((r for r in reviews if r.get("approved") and r.get("draft_digest") == digest), None)
-            if not approved:
+            reviews = [task for task in self.collaboration.tasks.values()
+                       if task["role"] == "reviewer" and task["status"] == "completed"
+                       and (task.get("artifact") or {}).get("approved")
+                       and (task.get("artifact") or {}).get("draft_digest") == digest]
+            if not reviews:
                 return {"accepted": False, "errors": ["用户编辑后的确认版本尚未通过独立审查，请先委派 reviewer"]}
-            self.state["approved_plan_digest"], self.state["plan_review"] = digest, approved
+            reference = args.get("review_task_id")
+            if reference:
+                try:
+                    selected = self.collaboration.resolve(reference)
+                except GatewayError as exc:
+                    return self.collaboration.handoff_error(exc.message)
+                if selected not in reviews:
+                    return self.collaboration.handoff_error("选定的审查未批准当前确认版本")
+            elif len(reviews) == 1:
+                selected = reviews[0]
+            else:
+                return {"accepted": False, "errors": ["请通过 review_task_id 指定一份已通过的审查"],
+                        "reviews": [self.collaboration.public(task) for task in reviews]}
+            self.state["approved_plan_digest"], self.state["plan_review"] = digest, selected["artifact"]
         return await PlanTools.publish(self, args)
 
     async def failure(self, args):

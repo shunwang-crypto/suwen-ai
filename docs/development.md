@@ -239,6 +239,12 @@ $HOME/miniforge3/envs/eduagents/bin/python eval/run_agent_ablation.py \
 报告另列契约检查、失败、调用和墙钟耗时。所有真实调用包括评审都消耗预算，报告不会写
 入学习历史；开发桩仅覆盖协议，不能用于宣称协作质量提升。
 
+比较架构时先核对报告的 `case_ids`、`expected_runs`、`recorded_runs` 和 `status`。
+例如两题、三种架构、各跑一次应该有六条记录。只有完整运行才适合比较总成本。
+`clean` 统计已完成且没有评审违规、程序契约错误或运行错误的结果。每份合格成果的
+`generation_calls_per_clean` 和 `generation_wall_ms_per_clean` 将该架构所有已记录尝试
+的生成开销除以合格数，包含失败尝试，单列评审开销；合格数为零时这两个值为 `null`。
+
 本机生成模型也能走同一评测入口。以下命令预热模型后，串行跑直接生成、单 Harness 和协作
 Harness。12 个计划约束案例各自声明了天数、可用时间、教材和验收标准，可按 ID 选择。
 报告分别记录生成和评审的调用次数、费用与耗时，本机费用字段表示云供应商收费。
@@ -251,9 +257,23 @@ ollama pull qwen3:4b-instruct-2507-q4_K_M
   --output /tmp/eduagents-plan-gpu.json
 ~~~
 
+在 RTX 5060 Laptop 上用 `qwen3:4b-instruct-2507-q4_K_M` 对
+`plan-simple-units` 和 `plan-complex-transfer` 各跑一轮，直接生成和单 Agent
+都交付了 2/2 份草案，三角色协作交付了 0/2 份。三种架构均有 0/2 份通过全部质量检查。
+这是两个开发用例的结果，该模型在这组题上的协作开销还没有带来合格交付。
+
 模型预算按原预扣日期结算。Redis Lua 原子写入预算差额和待落账用量，Worker 每分钟重放。
 PostgreSQL 通过用量 ID 去重，用量和钱包流水在同一事务提交。超过一小时仍缺少结果的
 调用标为 `usage_unknown`，等待取得上游凭据，未确认费用保留估算。此恢复机制依赖 Redis 数据可用。
+
+以下命令使用一次性 PostgreSQL、Redis 和可控模型响应复核跨工作流的故障。第一组从提交测验
+走到确认学习计划，核对错答归属、改判后的失效和并发确认后的任务数。第二组模拟已输出部分内容的
+模型流断开、API 账务事务提交失败，再由两个消费者重放同一条用量，检查数据库流水和 Redis 日预算。
+
+~~~bash
+make test-integration TEST=tests/integration/test_plan_reinforcement_evidence.py
+make test-integration TEST='tests/integration/test_budget_e2e.py::test_interrupted_paid_stream_survives_failed_commit_and_concurrent_replay tests/integration/test_harness_recovery.py::test_parallel_api_runtimes_share_confirmation_lock_and_native_archive'
+~~~
 
 记忆回归使用合成数据，不调用真实模型、不写应用历史：
 

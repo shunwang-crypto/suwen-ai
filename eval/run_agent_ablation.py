@@ -9,6 +9,7 @@ import json
 import time
 from importlib.metadata import version
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import httpx
 from eduagents_core.config import get_settings
@@ -116,21 +117,46 @@ def summarize(rows):
     for mode in MODES:
         selected = [r for r in rows if r["architecture"] == mode]
         scores = [r["score"] for r in selected if r["score"] is not None]
+        clean = sum(
+            r["completed"] and not r["error_code"] and not r["violations"] and not r["contract_errors"]
+            for r in selected
+        )
+        generation_calls = sum(r.get("generation_calls", 0) for r in selected)
+        generation_ms = sum(r.get("generation_wall_ms", 0) for r in selected)
         summary[mode] = {
             "samples": len(selected), "completed": sum(r["completed"] for r in selected),
-            "clean": sum(r["completed"] and not r["error_code"] and not r["violations"] and not r["contract_errors"] for r in selected),
+            "clean": clean,
             "judge_mean": sum(scores) / len(scores) if scores else None,
             "judge_scored": len(scores), "quality_violations": sum(bool(r["violations"]) for r in selected),
             "tool_error_cases": sum(bool(r["tool_errors"]) for r in selected),
-            "generation_calls": sum(r.get("generation_calls", 0) for r in selected),
+            "generation_calls": generation_calls,
+            "generation_calls_per_clean": generation_calls / clean if clean else None,
+            "generation_wall_ms_per_clean": generation_ms / clean if clean else None,
             "generation_cost_cny": sum(r.get("generation_cost_cny", 0.) for r in selected),
-            "generation_mean_wall_ms": sum(r.get("generation_wall_ms", 0) for r in selected) / len(selected) if selected else None,
+            "generation_mean_wall_ms": generation_ms / len(selected) if selected else None,
             "judge_cost_cny": sum(r.get("judge_cost_cny", 0.) for r in selected),
             "calls": sum(r["model_calls"] for r in selected),
             "cost_cny": sum(r["cost_cny"] for r in selected),
             "mean_wall_ms": sum(r["wall_ms"] for r in selected) / len(selected) if selected else None,
         }
     return summary
+
+
+def save_report(path, report, gateway):
+    rows = report["outcomes"]
+    report.update(
+        recorded_runs=len(rows), summary=summarize(rows), calls=gateway.calls,
+        cost_cny=gateway.cost_cny, reasoning_response_count=gateway.reasoning_response_count,
+    )
+    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temp:
+        pending = Path(temp.name)
+        try:
+            json.dump(report, temp, ensure_ascii=False, indent=2)
+            temp.write("\n")
+            temp.close()
+            pending.replace(path)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 async def run(args):
@@ -157,7 +183,9 @@ async def run(args):
         settings, runtime_info = await prepare_ollama(settings, args.ollama_model)
     gateway = EvaluationGateway(OpenAIGateway(settings), max_calls=args.max_calls, max_cost_cny=args.max_cost_cny)
     report = {
-        "schema_version": 2, "mode": "smoke" if args.smoke else ("ollama" if args.ollama_model else "live"), "prompt": bundle.identity,
+        "schema_version": 3, "mode": "smoke" if args.smoke else ("ollama" if args.ollama_model else "live"), "prompt": bundle.identity,
+        "case_ids": [case.id for case in cases],
+        "expected_runs": len(cases) * args.repetitions * len(MODES), "status": "running",
         "golden_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "judge_sha256": hashlib.sha256(JUDGE_POLICY.encode()).hexdigest(),
         "harness_sdk": version("deepseek-harness-sdk"), "repetitions": args.repetitions,
@@ -168,6 +196,7 @@ async def run(args):
         "outcomes": [],
     }
     report.update(runtime_info)
+    save_report(args.output, report, gateway)
     try:
         for repetition in range(args.repetitions):
             for index, case in enumerate(cases):
@@ -194,17 +223,18 @@ async def run(args):
                     if case.task == "plan" and isinstance(outcome.artifact, dict):
                         row["contract_errors"] = [v["code"] for v in plan_issues(outcome.artifact, case.payload)]
                     report["outcomes"].append(row)
-                    report.update(summary=summarize(report["outcomes"]), calls=gateway.calls, cost_cny=gateway.cost_cny,
-                                  reasoning_response_count=gateway.reasoning_response_count)
-                    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", "utf-8")
+                    save_report(args.output, report, gateway)
                     print(json.dumps({"case": case.id, "architecture": mode, "completed": outcome.completed,
                                       "score": outcome.score, "calls": outcome.model_calls, "error": outcome.error_code}, ensure_ascii=False), flush=True)
                     if outcome.error_code in {"MODEL_BALANCE_INSUFFICIENT", "BYOK_BALANCE_INSUFFICIENT"}:
                         raise GatewayError(outcome.error_code, "供应商余额不足，已保存部分报告并停止评测")
+    except BaseException:
+        report["status"] = "interrupted"
+        raise
+    else:
+        report["status"] = "complete"
     finally:
-        report.update(summary=summarize(report["outcomes"]), calls=gateway.calls, cost_cny=gateway.cost_cny,
-                      reasoning_response_count=gateway.reasoning_response_count)
-        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", "utf-8")
+        save_report(args.output, report, gateway)
 
 
 def main():

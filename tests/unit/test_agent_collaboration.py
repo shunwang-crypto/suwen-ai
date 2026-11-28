@@ -8,7 +8,11 @@ import pytest
 from eduagents_core.config import Settings
 from eduagents_core.education.context import EducationDeps
 from eduagents_core.education.plan_checks import CHECKS, plan_digest, plan_issues
-from eduagents_core.education.team_tools import PlanCoordinatorTools, PlanReviewerTools
+from eduagents_core.education.team_tools import (
+    PlanCoordinatorTools,
+    PlannerTools,
+    PlanReviewerTools,
+)
 from eduagents_core.gateway import OpenAIGateway
 from eduagents_core.gateway.base import GatewayError
 from eduagents_core.harness.collaboration import AgentCollaboration
@@ -108,7 +112,7 @@ async def test_failed_worker_restarts_under_same_identity_and_owner():
     spec = {"tasks": [{"role": "researcher", "name": "research", "instructions": "收集资料", "input_task_ids": []}]}
     delegated = await first.delegate(spec)
     task_id = delegated["tasks"][0]["id"]
-    result = await first.collect({"task_ids": [task_id]})
+    result = await first.collect({"task_ids": ["research"]})
     assert result["tasks"][0]["status"] == "failed"
     await first.close()
     second = AgentCollaboration(dependencies(model), store, record, "plan:offline:retry", lambda _: None)
@@ -128,6 +132,77 @@ async def test_invalid_delegation_batch_and_foreign_results_are_rejected_before_
     assert not (await team.collect({"task_ids": ["other-root-task"]}))["accepted"]
 
 
+async def test_short_handoff_names_and_ids_use_the_same_persisted_artifacts():
+    store, record = MemoryTaskStore(), TaskRecord(state=payload(), status="running")
+    team = AgentCollaboration(dependencies(TeamModel()), store, record, "root", lambda _: None)
+    research = await team.delegate({"tasks": [
+        {"role": "researcher", "name": name, "instructions": "收集可核验资料"}
+        for name in ("research-a", "research-b")
+    ]})
+    ids = [task["id"] for task in research["tasks"]]
+    try:
+        collected = await team.collect({"task_ids": ["research-a", ids[1]]})
+        assert [task["id"] for task in collected["tasks"]] == ids
+        assert all(task["status"] == "completed" for task in collected["tasks"])
+        spec = {"role": "planner", "name": "draft", "instructions": "分析两份资料并制订计划"}
+        unspecified = await team.delegate({"tasks": [spec]})
+        assert not unspecified["accepted"]
+        assert {item["name"] for item in unspecified["available_inputs"]} == {"research-a", "research-b"}
+        duplicate = await team.delegate({"tasks": [{**spec, "input_task_ids": ["research-a", ids[0]]}]})
+        assert not duplicate["accepted"]
+        draft = await team.delegate({"tasks": [{**spec, "input_task_ids": ["research-a", ids[1]]}]})
+        assert draft["accepted"] and draft["tasks"][0]["input_task_ids"] == ids
+        for repetition in (spec, {**spec, "input_task_ids": ids}):
+            repeated = await team.delegate({"tasks": [repetition]})
+            assert repeated["tasks"][0]["id"] == draft["tasks"][0]["id"]
+            assert repeated["tasks"][0]["input_task_ids"] == ids
+    finally:
+        await team.close()
+
+
+async def test_blank_handoff_uses_one_completed_upstream_and_stops_for_running_competition():
+    store, record = MemoryTaskStore(), TaskRecord(state=payload(), status="running")
+    team = AgentCollaboration(dependencies(TeamModel()), store, record, "root", lambda _: None)
+    research = await team.delegate({"tasks": [
+        {"role": "researcher", "name": "research", "instructions": "找到可核验资料"},
+    ]})
+    research_id = research["tasks"][0]["id"]
+    try:
+        await team.collect({"task_ids": ["research"]})
+        planner = {"role": "planner", "name": "draft", "instructions": "按研究资料编写计划"}
+        explicit_wrong = await team.delegate({"tasks": [{**planner, "input_task_ids": ["missing"]}]})
+        assert not explicit_wrong["accepted"]
+        team.tasks["researcher:pending"] = {
+            "id": "researcher:pending", "name": "pending", "role": "researcher", "status": "running",
+        }
+        competing = await team.delegate({"tasks": [planner]})
+        assert not competing["accepted"] and competing["awaiting_collection"] == ["pending"]
+        team.tasks["researcher:pending"]["status"] = "failed"
+        result = await team.delegate({"tasks": [planner]})
+        assert result["accepted"] and result["tasks"][0]["input_task_ids"] == [research_id]
+        await team.collect({"task_ids": ["draft"]})
+        reviewer = {"role": "reviewer", "name": "review", "instructions": "独立审查该草案"}
+        result = await team.delegate({"tasks": [reviewer]})
+        assert result["accepted"] and result["tasks"][0]["input_task_ids"] == [team.lookup("draft")["id"]]
+        revision = await team.delegate({"tasks": [{**planner, "name": "revision"}]})
+        assert not revision["accepted"]
+    finally:
+        await team.close()
+
+
+async def test_legacy_duplicate_names_require_an_explicit_id():
+    record = TaskRecord(state=payload(), status="running")
+    team = AgentCollaboration(dependencies(TeamModel()), MemoryTaskStore(), record, "root", lambda _: None)
+    for role in ("researcher", "planner"):
+        task_id = f"{role}:old"
+        team.tasks[task_id] = {"id": task_id, "name": "legacy", "role": role, "status": "completed"}
+    ambiguous = await team.collect({"task_ids": ["legacy"]})
+    assert not ambiguous["accepted"]
+    assert {task["id"] for task in ambiguous["available_inputs"]} == set(team.tasks)
+    assert not (await team.collect({"task_ids": ["researcher"]}))["accepted"]
+    assert (await team.collect({"task_ids": ["planner:old"]}))["tasks"][0]["role"] == "planner"
+
+
 def phased_plan():
     def task(key, phase, names, deps=()):
         return {"step_key": key, "learning_phase": phase, "kc_names": names, "depends_on": list(deps)}
@@ -135,6 +210,32 @@ def phased_plan():
         task("baseline", "baseline", ["全等", "勾股"]), task("learn-a", "learn", ["全等"], ["baseline"]),
         task("mixed", "practice", ["全等", "勾股"], ["learn-a"]), task("learn-b", "learn", ["勾股"], ["baseline"]),
     ]}]}]}
+
+
+async def test_confirmation_handoff_can_only_reference_the_current_confirmed_digest():
+    state = {**payload(), "plan_confirmed": True, "plan": phased_plan()}
+    record = TaskRecord(state=state, status="running")
+    team = AgentCollaboration(dependencies(TeamModel()), MemoryTaskStore(), record, "root", lambda _: None)
+    team.confirmed_input()
+    old_id = state["confirmed_plan_task_id"]
+    state["plan"]["stages"][0]["name"] = "编辑后的计划"
+    team.confirmed_input()
+    current_id = state["confirmed_plan_task_id"]
+    assert current_id != old_id and team.lookup("confirmed-plan")["id"] == current_id
+
+    spec = {"role": "reviewer", "name": "confirm-review", "instructions": "审查确认后的计划"}
+    try:
+        stale = await team.delegate({"tasks": [{**spec, "input_task_ids": [old_id]}]})
+        assert not stale["accepted"]
+        artifact = team.tasks[current_id]["artifact"]
+        digest = artifact["digest"]
+        artifact["digest"] = plan_digest(team.tasks[old_id]["artifact"]["plan"])
+        assert not (await team.delegate({"tasks": [spec]}))["accepted"]
+        artifact["digest"] = digest
+        result = await team.delegate({"tasks": [spec]})
+        assert result["accepted"] and result["tasks"][0]["input_task_ids"] == [current_id]
+    finally:
+        await team.close()
 
 
 def test_all_topics_in_mixed_practice_require_earlier_learning_and_dependencies_cannot_cycle():
@@ -147,6 +248,48 @@ def test_all_topics_in_mixed_practice_require_earlier_learning_and_dependencies_
     assert not plan_issues(plan, payload())
     tasks[1]["depends_on"] = ["mixed"]
     assert any(v["code"] == "DEPENDENCY_NOT_EARLIER" for v in plan_issues(plan, payload()))
+
+
+async def test_planner_rejects_missing_step_fields_and_keeps_valid_mixed_practice_after_both_lessons():
+    record = TaskRecord(state={**payload(), "total_days": 1}, status="running")
+    tools = PlannerTools(dependencies(TeamModel()), record, lambda _: None)
+    await tools.handlers["read_assignment"]({})
+    plan = phased_plan()
+    tasks = plan["stages"][0]["days"][0]["tasks"]
+    tasks[2], tasks[3] = tasks[3], tasks[2]
+    tasks[3]["depends_on"].append("learn-b")
+    for task in tasks:
+        task.update(title="写出该任务的解题思路", objective="说明推理依据",
+                    instructions=["列出已知条件", "解释每一步用了什么性质"],
+                    completion_criteria="能独立逐步解释推理",
+                    resource_ref=None, action_type="practice", minutes=10)
+
+    missing = json.loads(json.dumps(plan))
+    missing_task = missing["stages"][0]["days"][0]["tasks"][0]
+    fields = ("step_key", "learning_phase", "depends_on")
+    for field in fields:
+        del missing_task[field]
+    rejected = await tools.handlers["submit_plan_draft"]({"plan": missing})
+    assert not rejected["accepted"]
+    assert {f"arguments.plan.stages[0].days[0].tasks[0].{field}: required" for field in fields} <= set(rejected["errors"])
+    assert record.status == "running" and "artifact" not in record.state
+
+    draft = await tools.handlers["submit_plan_draft"]({"plan": plan})
+    assert draft["accepted"] and record.status == "completed"
+    reviewed_tasks = record.state["artifact"]["plan"]["stages"][0]["days"][0]["tasks"]
+    assert [task["step_key"] for task in reviewed_tasks] == ["baseline", "learn-a", "learn-b", "mixed"]
+
+
+async def test_planner_requests_missing_days_and_invalid_resources_without_filling_them():
+    record = TaskRecord(state=payload(), status="running")
+    tools = PlannerTools(dependencies(TeamModel()), record, lambda _: None)
+    await tools.read_assignment({})
+    plan = phased_plan()
+    plan["stages"][0]["days"][0]["tasks"][0]["resource_ref"] = 42
+    result = await tools.submit({"plan": plan})
+    assert not result["accepted"] and record.pending is None
+    assert {issue["code"] for issue in result["issues"]} >= {"PLAN_DAY_COUNT", "RESOURCE_REF_UNAVAILABLE"}
+    assert "plan" not in record.state
 
 
 async def test_reviewer_cannot_approve_program_errors_or_skip_mandatory_checks():
@@ -168,8 +311,25 @@ async def test_coordinator_cannot_submit_a_review_for_another_draft_version():
     team.tasks.update(draft={"id": "draft", "name": "planner", "role": "planner", "status": "completed", "artifact": {"digest": "new"}},
                       review={"id": "review", "name": "reviewer", "role": "reviewer", "status": "completed", "artifact": {"approved": True, "draft_digest": "old"}})
     tools = PlanCoordinatorTools(team.deps, record, lambda _: None, team)
-    assert not (await tools.submit_reviewed({"draft_task_id": "draft", "review_task_id": "review"}))["accepted"]
+    assert not (await tools.submit_reviewed({"draft_task_id": "planner", "review_task_id": "review"}))["accepted"]
     assert record.status == "running" and record.pending is None
+
+
+async def test_publishing_an_edited_plan_with_multiple_approvals_requires_a_selected_review():
+    store, plan = MemoryTaskStore(), phased_plan()
+    record = TaskRecord(state={**payload(), "plan_confirmed": True, "plan": plan}, status="running")
+    team = AgentCollaboration(dependencies(TeamModel()), store, record, "root", lambda _: None)
+    for name in ("review-a", "review-b"):
+        task_id = f"reviewer:{name}"
+        team.tasks[task_id] = {"id": task_id, "name": name, "role": "reviewer", "status": "completed",
+                               "artifact": {"approved": True, "draft_digest": plan_digest(plan), "summary": name}}
+    tools = PlanCoordinatorTools(team.deps, record, lambda _: None, team)
+    result = await tools.publish({})
+    assert not result["accepted"] and record.status == "running"
+    assert {task["name"] for task in result["reviews"]} == {"review-a", "review-b"}
+    assert not (await tools.publish({"review_task_id": "foreign"}))["accepted"]
+    assert (await tools.publish({"review_task_id": "review-b"}))["accepted"]
+    assert record.state["plan_review"]["summary"] == "review-b"
 
 
 async def test_user_edit_is_reviewed_in_a_fresh_session_before_publication():

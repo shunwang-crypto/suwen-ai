@@ -37,6 +37,69 @@ _MAX_INSTRUCTIONS = 5
 _MAX_TASKS_PER_DAY = 12
 _ACTION_TYPES = {"read", "practice", "tutor", "review_errors", "mixed"}
 _DIFFICULTIES = {"easy", "mid", "hard"}
+LEARNING_PHASES = ("baseline", "learn", "practice", "review", "assessment")
+STEP_KEY_PATTERN = r"^[a-z][a-z0-9_-]{0,63}$"
+
+
+def _phased_draft_schema() -> dict:
+    step_key = {"type": "string", "maxLength": 64, "pattern": STEP_KEY_PATTERN}
+    properties = {
+        "title": {"type": "string", "minLength": 1, "maxLength": _MAX_TASK_TITLE},
+        "objective": {"type": "string", "minLength": 1, "maxLength": _MAX_TASK_OBJECTIVE},
+        "instructions": {
+            "type": "array", "minItems": 2, "maxItems": _MAX_INSTRUCTIONS,
+            "items": {"type": "string", "minLength": 1, "maxLength": _MAX_TASK_INSTRUCTION},
+        },
+        "completion_criteria": {"type": "string", "minLength": 1, "maxLength": _MAX_TASK_CRITERIA},
+        "minutes": {"type": "integer", "minimum": 1},
+        "kc_names": {"type": "array", "items": {"type": "string", "maxLength": 120}, "maxItems": 12},
+        "resource_ref": {
+            "type": ["integer", "null"], "minimum": 0,
+            "description": "工具返回的 resources 下标，从 0 开始；没有合适资料填 null。",
+        },
+        "action_type": {"type": "string", "enum": sorted(_ACTION_TYPES)},
+        "step_key": {**step_key, "description": "给本步骤起一个计划内唯一的简短英文键。"},
+        "learning_phase": {
+            "type": "string", "enum": list(LEARNING_PHASES),
+            "description": "未观测知识点先 baseline，再 learn，之后 practice 或 assessment；review 复习先前练习。",
+        },
+        "depends_on": {
+            "type": "array", "items": step_key, "maxItems": 12,
+            "description": "填写前面步骤的 step_key。练习须可追溯至对应教学，复习引用此前练习或测验；无依赖填 []。",
+        },
+        "practice_count": {"type": "integer", "minimum": 1, "maximum": 20},
+        "difficulty": {"type": "string", "enum": sorted(_DIFFICULTIES)},
+    }
+    task = {
+        "type": "object",
+        "properties": properties,
+        "required": [name for name in properties if name not in {"practice_count", "difficulty"}],
+        "additionalProperties": False,
+    }
+    day = {
+        "type": "object",
+        "properties": {
+            "day": {"type": "integer", "minimum": 1},
+            "tasks": {"type": "array", "items": task, "minItems": 1, "maxItems": _MAX_TASKS_PER_DAY},
+        },
+        "required": ["day", "tasks"],
+        "additionalProperties": False,
+    }
+    stage = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 120},
+            "days": {"type": "array", "items": day, "minItems": 1, "maxItems": 90},
+        },
+        "required": ["name", "days"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {"stages": {"type": "array", "items": stage, "minItems": 1, "maxItems": 12}},
+        "required": ["stages"],
+        "additionalProperties": False,
+    }
 
 
 def _topic_related(name: str, topics: list[str]) -> bool:
@@ -429,7 +492,7 @@ def _coerce_task(raw: object) -> dict | None:
     )
     try:
         minutes = int(round(float(raw.get("minutes", 0))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         minutes = 0
     if minutes <= 0:
         minutes = 30  # 无效分钟给中性值, 随后由日预算缩放兜底
@@ -469,7 +532,7 @@ def _coerce_task(raw: object) -> dict | None:
         else "能够独立完成本任务，并准确解释关键步骤或结论"
     )
     action_type = raw.get("action_type")
-    if action_type not in _ACTION_TYPES:
+    if not isinstance(action_type, str) or action_type not in _ACTION_TYPES:
         if any(word in title for word in ("阅读", "精读", "资料", "概念")):
             action_type = "read"
         elif any(word in title for word in ("练习", "测验", "测试", "习题", "自测")):
@@ -788,8 +851,14 @@ def _harden_plan(
     kc_order: list[str],
     n_resources: int,
     fixes: list[dict],
+    phased: bool = False,
 ) -> None:
     """对已结构化计划执行统一硬校验；生成与用户编辑路径必须共用此顺序。"""
+    if phased:
+        _renumber_days(plan)
+        if all(day["tasks"] for day in _iter_days(plan)):
+            _fix_day_minutes(plan, budget_minutes, fixes)
+        return
     _fix_total_days(plan, total_days, budget_minutes, fixes)
     _renumber_days(plan)
     _fix_kc_order(plan, kc_order, fixes)
@@ -804,6 +873,7 @@ class PlanTools(EducationTools):
     feature = "agent_plan"
     tier = Tier.plan
     max_tokens = 10000
+    phased_draft = False
 
     def __init__(self, deps, record, emit):
         super().__init__(deps, record, emit)
@@ -832,8 +902,11 @@ class PlanTools(EducationTools):
             self.add(
                 schema(
                     "submit_plan_draft",
-                    "提交目标拆解和可执行计划草案。服务端修正预算、天数、先修顺序及资料引用后等待用户确认。",
-                    {"goal_outline": OBJECT, "plan": OBJECT},
+                    "提交按教学阶段与前置步骤编写的可执行草案。"
+                    "每个任务包含 step_key、learning_phase、depends_on；每天安排符合预算的任务。"
+                    if self.phased_draft
+                    else "提交目标拆解和可执行计划草案。服务端修正预算、天数、先修顺序及资料引用后等待用户确认。",
+                    {"goal_outline": OBJECT, "plan": _phased_draft_schema() if self.phased_draft else OBJECT},
                     ("plan",),
                 ),
                 self.submit,
@@ -953,6 +1026,12 @@ class PlanTools(EducationTools):
             }
         fixes = []
         resources = self.resources()
+        if self.phased_draft:
+            from .plan_checks import plan_issues
+
+            issues = plan_issues(plan, self.state, resources=resources)
+            if issues:
+                return {"accepted": False, "errors": list(dict.fromkeys(v["message"] for v in issues)), "issues": issues}
         _harden_plan(
             plan,
             total_days=max(1, int(self.state.get("total_days") or 1)),
@@ -960,6 +1039,7 @@ class PlanTools(EducationTools):
             kc_order=self.state.get("kc_order") or [],
             n_resources=len(resources),
             fixes=fixes,
+            phased=self.phased_draft,
         )
         self.state["plan"] = plan
         self.record.pending = {
@@ -996,6 +1076,7 @@ class PlanTools(EducationTools):
                 kc_order=self.state.get("kc_order") or [],
                 n_resources=len(self.state.get("resources") or []),
                 fixes=[],
+                phased=self.phased_draft,
             )
             self.state["plan"] = modified
         self.state["plan_confirmed"] = True
