@@ -22,6 +22,7 @@ export interface PendingPlanDraft {
   thread_id?: string;
   status: "generating" | "await_confirm" | "resuming" | "interrupted";
   interrupt?: GraphInterruptData;
+  editedPlan?: PlanStructure;
   startedAt: number;
   form: {
     goal: string;
@@ -33,6 +34,10 @@ export interface PendingPlanDraft {
     hours: number | null;
     totalDays: number | null;
   };
+}
+
+export function draftTaskKey(plan?: PlanStructure): string {
+  return plan?.stages.flatMap((stage) => stage.days.flatMap((day) => day.tasks.map((task) => task.task_id))).join(",") ?? "";
 }
 
 export function pendingPlanKey(userId: string): string {
@@ -448,6 +453,7 @@ export function PlanCalendar({
  */
 export function PlanConfirmCard({
   plan,
+  initialEdits,
   resources,
   planMode,
   goalAnalysis,
@@ -460,14 +466,15 @@ export function PlanConfirmCard({
   planMode: PlanMode;
   goalAnalysis?: PlanGoalAnalysis;
   skillGaps?: PlanSkillGap[];
+  initialEdits?: PlanStructure;
   onConfirm: (edited: PlanStructure) => void;
   onCancel: () => void;
 }) {
   // 本地草案副本：编辑不影响 interrupt 原始负载（取消后重新打开仍是原稿）
   const [draft, setDraft] = useState<PlanStructure>(() =>
-    JSON.parse(JSON.stringify(plan)) as PlanStructure,
+    structuredClone(initialEdits ?? plan),
   );
-  const [touched, setTouched] = useState(false);
+  const [touched, setTouched] = useState(Boolean(initialEdits));
   const [showAllDays, setShowAllDays] = useState(false);
 
   const totalDays = draft.stages.reduce((s, st) => s + (st.days?.length ?? 0), 0);
@@ -626,7 +633,7 @@ export function PlanConfirmCard({
                     </p>
                     {d.tasks.length === 0 ? (
                       <p className="px-1 text-body-sm text-amber-600">
-                        本日已无任务，保存时服务端会按预算补一条自主复习
+                        当天已无任务，可恢复原草案后重新调整。
                       </p>
                     ) : (
                       <ul className="space-y-1">
@@ -759,6 +766,12 @@ export function PlanConfirmCard({
         >
           返回修改目标
         </button>
+        {touched && (
+          <button type="button" className="rounded-control border border-line px-3 py-2 text-body-sm text-ink-secondary"
+            onClick={() => { setDraft(structuredClone(plan)); setTouched(false); }}>
+            恢复原草案
+          </button>
+        )}
         <button
           type="button"
           disabled={invalid || emptied}

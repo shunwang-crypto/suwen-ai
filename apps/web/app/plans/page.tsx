@@ -72,6 +72,7 @@ function PlansView() {
   const [phase, setPhase] = useState<Parts.Phase>("idle");
   const [timeline, setTimeline] = useState<FlowItem[]>([]);
   const [interruptData, setInterruptData] = useState<GraphInterruptData | null>(null);
+  const [submittedEdits, setSubmittedEdits] = useState<PlanStructure>();
   const [flowError, setFlowError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -147,6 +148,7 @@ function PlansView() {
     setSelected(null);
     setShowCreate(true);
     setInterruptData(pending.interrupt ?? null);
+    setSubmittedEdits(pending.editedPlan);
     setPhase(
       pending.status === "interrupted"
         ? "idle"
@@ -170,6 +172,7 @@ function PlansView() {
       }
       if (pending.status === "await_confirm" && pending.interrupt) {
         setInterruptData(pending.interrupt);
+        setSubmittedEdits(pending.editedPlan);
         setPhase("await_confirm");
       }
     }, 1000);
@@ -186,7 +189,7 @@ function PlansView() {
   };
 
   const consume = useCallback(
-    async (path: string, body: unknown) => {
+    async (path: string, body: unknown, submission?: Parts.PendingPlanDraft) => {
       const controller = new AbortController();
       abortRef.current = controller;
       try {
@@ -235,6 +238,7 @@ function PlansView() {
                   },
                 });
                 setInterruptData(interrupt);
+                setSubmittedEdits(undefined);
               }
               setPhase("await_confirm");
               setTaskStatus("awaiting_confirmation");
@@ -258,6 +262,14 @@ function PlansView() {
             case "error": {
               const d = msg.data as ErrorEventData;
               setFlowError(d.message || d.code);
+              if (d.code === "PLAN_EDIT_INVALID" && submission?.interrupt && submission.editedPlan) {
+                Parts.writePendingPlan(userId, { ...submission, status: "await_confirm" });
+                setInterruptData(submission.interrupt);
+                setSubmittedEdits(submission.editedPlan);
+                setTaskStatus("awaiting_confirmation");
+                setPhase("await_confirm");
+                break;
+              }
               setTaskStatus("failed");
               const pending = Parts.readPendingPlan(userId);
               if (pending?.thread_id) Parts.writePendingPlan(userId, { ...pending, status: "interrupted" });
@@ -316,9 +328,13 @@ function PlansView() {
           const pending = Parts.readPendingPlan(userId);
           if (value.status === "awaiting_confirmation" && value.pending?.plan) {
             const interrupt = { ...value.pending, thread_id: activeThread, resume_url: `/api/threads/${activeThread}/resume` } as GraphInterruptData;
+            const draftKey = Parts.draftTaskKey(interrupt.plan);
+            const editedPlan = pending?.thread_id === activeThread && draftKey && draftKey === Parts.draftTaskKey(pending.interrupt?.plan)
+              ? pending.editedPlan : undefined;
             setInterruptData(interrupt);
+            setSubmittedEdits(editedPlan);
             setPhase("await_confirm");
-            if (pending) Parts.writePendingPlan(userId, { ...pending, status: "await_confirm", interrupt });
+            if (pending) Parts.writePendingPlan(userId, { ...pending, thread_id: activeThread, status: "await_confirm", interrupt, editedPlan });
           } else if (value.status === "failed" || value.status === "cancelled") {
             setPhase("idle");
           } else if (value.status === "running") {
@@ -429,17 +445,21 @@ function PlansView() {
       hours,
       totalDays,
     };
-    Parts.writePendingPlan(userId, {
+    const submission: Parts.PendingPlanDraft = {
+      thread_id: interruptData.thread_id,
       status: "resuming",
       interrupt: interruptData,
+      editedPlan: approved ? plan : undefined,
       startedAt: pending?.startedAt ?? Date.now(),
       form,
-    });
+    };
+    Parts.writePendingPlan(userId, submission);
+    setFlowError(null);
     setPhase("resuming");
     // 编辑版随 approved 一起回传; 服务端 confirm_plan 会重跑硬校验并以其结果为准
     void consume(interruptData.resume_url, {
       value: approved ? { approved: true, ...(plan ? { plan } : {}) } : { approved: false },
-    });
+    }, submission);
   };
 
   const busy = phase === "streaming" || phase === "resuming";
@@ -759,7 +779,9 @@ function PlansView() {
 
           {phase === "await_confirm" && interruptData?.plan && (
             <Parts.PlanConfirmCard
+              key={Parts.draftTaskKey(interruptData.plan)}
               plan={interruptData.plan}
+              initialEdits={submittedEdits}
               resources={interruptData.resources ?? []}
               planMode={interruptData.plan_mode === "course_bound" ? "course_bound" : planMode}
               goalAnalysis={interruptData.goal_analysis}
