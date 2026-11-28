@@ -51,8 +51,8 @@ async def _seed_fixture(database_url: str) -> dict[str, str]:
                 f"migration-{ids[key]}@test.invalid",
             )
         await conn.execute(
-            "INSERT INTO orgs (id, name, invite_code, created_by) "
-            "VALUES ($1, 'migration-org', $2, $3)",
+            "INSERT INTO orgs (id, name, invite_code, created_by, storage_quota_mb) "
+            "VALUES ($1, 'migration-org', $2, $3, 512)",
             ids["org"],
             f"INV{ids['org'][:8]}",
             ids["owner"],
@@ -92,9 +92,9 @@ async def _seed_fixture(database_url: str) -> dict[str, str]:
         await conn.execute(
             "INSERT INTO plans "
             "(id, tenant_id, user_id, goal, budget_hours, kb_id, plan_mode, "
-            "grounding_status, status, structure_json) "
+            "grounding_status, status, structure_json, version) "
             "VALUES ($1, $2, $2, 'migration plan', 1, $3, 'course_bound', "
-            "'kb_grounded', 'active', '{}'::jsonb)",
+            "'kb_grounded', 'active', '{}'::jsonb, 1)",
             ids["plan"],
             ids["owner"],
             ids["kb"],

@@ -307,10 +307,8 @@ async def enrich_document(
             raise _EnrichmentIncomplete("no child chunks")
 
         # ---- 首个真实 enrichment: 构建知识库级受控词表 + 先修 DAG ----
-        # A non-empty vocabulary made only of chapter_fallback rows is not
-        # evidence that semantic enrichment completed.  Build the semantic
-        # vocabulary in that case, while retaining fallback rows in the
-        # normalizer so a high-confidence match can promote them in place.
+        # Build a semantic vocabulary even when chapter placeholders exist.
+        # Promote a placeholder only after its own passage verifies the section topic.
         generated_edges: list[PrereqEdge] = []
         generated_id_map: dict[str, str] = {}
         deferred_headings: list[KcEntry] = []
