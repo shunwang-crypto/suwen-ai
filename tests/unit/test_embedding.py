@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 
 import httpx
@@ -19,6 +21,7 @@ from eduagents_core.embedding.rerankers import (
     create_reranker,
 )
 from eduagents_core.embedding.sparse import Bm25SparseEncoder
+from eduagents_core.gateway import ollama
 
 
 def make_settings(**overrides) -> Settings:
@@ -124,8 +127,6 @@ async def test_create_reranker_live_mode_returns_siliconflow():
 
 
 async def test_ollama_embedding_keeps_batch_order_and_rejects_wrong_space(monkeypatch):
-    import json
-
     settings = make_settings(embedding_mode="ollama", qdrant_collection="school")
     provider = create_embedder(settings)
     batches = []
@@ -147,11 +148,8 @@ async def test_ollama_embedding_keeps_batch_order_and_rejects_wrong_space(monkey
 
 
 @pytest.mark.parametrize("resident", [4096, 2048, 0])
-async def test_strict_gpu_checks_each_loaded_model_and_context(monkeypatch, resident):
-    import json
-
-    from eduagents_core.gateway.ollama import verify_ollama_gpu
-
+async def test_strict_gpu_checks_each_loaded_model_and_context(monkeypatch, tmp_path, resident):
+    monkeypatch.setattr(ollama, "gettempdir", lambda: str(tmp_path))
     settings = make_settings(
         gateway_mode="live", embedding_mode="ollama", ollama_chat_model="local-qa",
         ollama_require_gpu=True, harness_context_window_tokens=16384,
@@ -170,9 +168,94 @@ async def test_strict_gpu_checks_each_loaded_model_and_context(monkeypatch, resi
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: factory(transport=httpx.MockTransport(respond), **kw))
     if resident < 4096:
         with pytest.raises(RuntimeError, match="fully resident"):
-            await verify_ollama_gpu(settings)
+            await ollama.verify_ollama_gpu(settings)
+        assert loaded == [("/api/embed", settings.embedding_model)]
         return
-    verified = await verify_ollama_gpu(settings)
+    verified = await ollama.verify_ollama_gpu(settings)
     assert loaded == [("/api/embed", settings.embedding_model), ("/api/generate", "local-qa")]
     assert set(verified) == {settings.embedding_model, "local-qa"}
     assert settings.harness_context_window_tokens == 8192
+
+
+@pytest.mark.parametrize("resident_after", [3, 4, None])
+async def test_strict_gpu_rechecks_inventory_before_one_bounded_rewarm(
+    monkeypatch, tmp_path, resident_after,
+):
+    monkeypatch.setattr(ollama, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama, "_INVENTORY_DELAYS", (0, 0, 0))
+    settings = make_settings(embedding_mode="ollama", ollama_require_gpu=True)
+    warmed = samples = 0
+
+    def respond(request):
+        nonlocal warmed, samples
+        if request.method == "POST":
+            warmed += 1
+            return httpx.Response(200, json={"model": settings.embedding_model})
+        samples += 1
+        rows = []
+        if resident_after is not None and samples >= resident_after:
+            rows.append({"name": settings.embedding_model, "size": 4096, "size_vram": 4096})
+        elif samples == 2:
+            rows.append({"name": settings.embedding_model, "size": 0, "size_vram": 0})
+        return httpx.Response(200, json={"models": rows})
+
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: factory(transport=httpx.MockTransport(respond), **kw)
+    )
+    if resident_after is None:
+        with pytest.raises(RuntimeError, match="placement unavailable"):
+            await ollama.verify_ollama_gpu(settings)
+        assert (warmed, samples) == (2, 6)
+    else:
+        verified = await ollama.verify_ollama_gpu(settings)
+        assert verified[settings.embedding_model]["size_vram"] == 4096
+        assert (warmed, samples) == (1 if resident_after == 3 else 2, resident_after)
+
+
+async def test_strict_gpu_preflight_serializes_separate_clients(monkeypatch, tmp_path):
+    monkeypatch.setattr(ollama, "gettempdir", lambda: str(tmp_path))
+    first_warm = asyncio.Event()
+    release_warm = asyncio.Event()
+    active_model = None
+    calls = []
+
+    async def respond(request):
+        nonlocal active_model
+        if request.method == "POST":
+            active_model = json.loads(request.content)["model"]
+            calls.append(("warm", active_model))
+            if len(calls) == 1:
+                first_warm.set()
+                await release_warm.wait()
+            return httpx.Response(200, json={"model": active_model})
+        calls.append(("inventory", active_model))
+        return httpx.Response(200, json={"models": [
+            {"name": active_model, "size": 4096, "size_vram": 4096},
+        ]})
+
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: factory(transport=httpx.MockTransport(respond), **kw)
+    )
+    first = make_settings(
+        embedding_mode="ollama", ollama_chat_model="", ollama_require_gpu=True,
+    )
+    second = make_settings(
+        embedding_mode="stub", gateway_mode="live", ollama_chat_model="local-chat",
+        ollama_require_gpu=True,
+        ollama_base_url="http://localhost:11434",
+    )
+    first_check = asyncio.create_task(ollama.verify_ollama_gpu(first))
+    await asyncio.wait_for(first_warm.wait(), timeout=2)
+    second_check = asyncio.create_task(ollama.verify_ollama_gpu(second))
+    await asyncio.sleep(0)
+    try:
+        assert calls == [("warm", first.embedding_model)]
+    finally:
+        release_warm.set()
+        await asyncio.wait_for(asyncio.gather(first_check, second_check), timeout=2)
+    assert calls == [
+        ("warm", first.embedding_model), ("inventory", first.embedding_model),
+        ("warm", second.ollama_chat_model), ("inventory", second.ollama_chat_model),
+    ]
